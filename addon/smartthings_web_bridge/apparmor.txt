@@ -1,0 +1,17 @@
+#include <tunables/global>
+
+profile smartthings_web_bridge flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+
+  network inet stream,
+  network inet6 stream,
+
+  /app/** r,
+  /usr/** rix,
+  /bin/** rix,
+  /data/** rwk,
+  /run/** rw,
+  /tmp/** rw,
+  /var/log/** rw,
+}

@@ -1,0 +1,15 @@
+home_assistant:
+  repository: "home-assistant/core"
+  release_tag: "2026.8.2"
+  commit: "3fb456fa1fe4abbe6b89367b98f282043e9b02dd"
+  component_path: "homeassistant/components/smartthings"
+  test_path: "tests/components/smartthings"
+smartthings_customize:
+  repository: "oukene/smartthings_customize"
+  commit: "6373c7ed22d6d2f46bb551e9e31955893264554f"
+  license_status: "no-license-declared"
+  usage: "behavioral-reference-only"
+project:
+  project_license: "MIT"
+  production_bridge_modules: "not-created"
+  private_web_contracts: "observe-only"

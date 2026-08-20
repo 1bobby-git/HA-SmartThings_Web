@@ -1,0 +1,32 @@
+{
+  "name": "ha-smartthings-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.12.1",
+  "description": "Home Assistant SmartThings web observation tooling.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.15 <25"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:bridge": "vitest run bridge/tests",
+    "test:unit": "vitest run bridge/tests",
+    "test:integration": "vitest run tests",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json --noEmit",
+    "audit:api-free": "tsx tools/api-free-audit.ts",
+    "audit:secrets": "tsx tools/secret-scan.ts"
+  },
+  "dependencies": {
+    "playwright-core": "1.62.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "tsx": "4.23.12",
+    "typescript": "7.0.2",
+    "vitest": "4.1.11",
+    "yaml": "2.9.0"
+  }
+}

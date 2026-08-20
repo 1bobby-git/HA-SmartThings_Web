@@ -1,0 +1,2 @@
+#!/usr/bin/env sh
+exec x11vnc -display :99 -localhost -forever -shared -rfbport 5900 -nopw

@@ -1,0 +1,12 @@
+services:
+  smartthings-web-bridge:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      - smartthings-web-data:/data
+    ports:
+      - "127.0.0.1:8098:8098"
+
+volumes:
+  smartthings-web-data:
