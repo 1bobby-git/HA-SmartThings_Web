@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { basename, isAbsolute, relative, resolve } from "node:path";
 
 export interface PersistentContextPaths {
   dataDir: string;
@@ -30,15 +30,34 @@ const desktopProfilePatterns = [
   /\.config[\\/]+chromium/i
 ];
 
-export function validateDedicatedProfileDir(profileDir: string): void {
-  const normalized = profileDir.replaceAll("\\", "/");
+export function validateDedicatedProfileDir(profileDir: string, dataDir?: string): void {
+  const resolvedProfileDir = normalizeBridgePath(profileDir);
+  const normalized = resolvedProfileDir.replaceAll("\\", "/");
   if (desktopProfilePatterns.some((pattern) => pattern.test(normalized))) {
     throw new Error("SmartThings Web Bridge requires a dedicated Chromium profile directory");
+  }
+  if (basename(resolvedProfileDir) !== "chromium-profile") {
+    throw new Error("SmartThings Web Bridge requires a dedicated Chromium profile directory");
+  }
+  if (normalized.toLowerCase().includes("/desktop/") || normalized.toLowerCase().includes("/backup/")) {
+    throw new Error("SmartThings Web Bridge requires a dedicated Chromium profile directory");
+  }
+
+  if (dataDir !== undefined) {
+    const resolvedDataDir = normalizeBridgePath(dataDir);
+    const profileRelativeToData = relative(resolvedDataDir, resolvedProfileDir);
+    if (
+      profileRelativeToData !== "chromium-profile" ||
+      profileRelativeToData.startsWith("..") ||
+      isAbsolute(profileRelativeToData)
+    ) {
+      throw new Error("SmartThings Web Bridge requires a dedicated Chromium profile directory");
+    }
   }
 }
 
 export function createPersistentContextLaunch(paths: PersistentContextPaths): PersistentContextLaunch {
-  validateDedicatedProfileDir(paths.profileDir);
+  validateDedicatedProfileDir(paths.profileDir, paths.dataDir);
 
   return {
     userDataDir: normalizeBridgePath(paths.profileDir),
@@ -48,10 +67,7 @@ export function createPersistentContextLaunch(paths: PersistentContextPaths): Pe
       viewport: { width: 1440, height: 1000 },
       args: [
         "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-background-timer-throttling",
-        "--disable-backgrounding-occluded-windows",
-        "--disable-renderer-backgrounding"
+        "--no-default-browser-check"
       ]
     }
   };

@@ -14,19 +14,29 @@ export interface BrowserContextLike {
 }
 
 export class KeeperPageManager {
+  #keeper: BrowserPageLike | undefined;
+
   constructor(private readonly context: BrowserContextLike) {}
 
   async ensureKeeper(): Promise<BrowserPageLike> {
     const candidates = this.context
       .pages()
-      .filter((page) => !page.isClosed() && isKeeperUrl(page.url()));
+      .filter((page) => !page.isClosed() && isKeeperCandidateUrl(page.url()));
+    const loginPage = this.context
+      .pages()
+      .find((page) => !page.isClosed() && isSamsungLoginUrl(page.url()));
 
-    const keeper = candidates[0] ?? (await this.createKeeperPage());
-    for (const duplicate of candidates.slice(1)) {
+    const keeper =
+      this.#keeper && !this.#keeper.isClosed()
+        ? this.#keeper
+        : candidates[0] ?? loginPage ?? this.findReusableBlankPage() ?? (await this.createKeeperPage());
+    this.#keeper = keeper;
+
+    for (const duplicate of candidates.filter((candidate) => candidate !== keeper)) {
       await duplicate.close();
     }
 
-    if (!isKeeperUrl(keeper.url())) {
+    if (keeper.url() !== KEEPER_URL && !isSamsungLoginUrl(keeper.url())) {
       await keeper.goto(KEEPER_URL, { waitUntil: "domcontentloaded" });
     }
 
@@ -50,12 +60,24 @@ export class KeeperPageManager {
     await page.goto(KEEPER_URL, { waitUntil: "domcontentloaded" });
     return page;
   }
+
+  private findReusableBlankPage(): BrowserPageLike | undefined {
+    return this.context.pages().find((page) => !page.isClosed() && page.url() === "about:blank");
+  }
 }
 
-function isKeeperUrl(value: string): boolean {
+function isKeeperCandidateUrl(value: string): boolean {
   try {
     const url = new URL(value);
     return url.origin === "https://my.smartthings.com" && url.pathname === "/location";
+  } catch {
+    return false;
+  }
+}
+
+function isSamsungLoginUrl(value: string): boolean {
+  try {
+    return new URL(value).hostname === "account.samsung.com";
   } catch {
     return false;
   }

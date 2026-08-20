@@ -24,7 +24,7 @@ export function renderStatusPage(report: HealthReport): string {
   <main>
     <h1>SmartThings Web Bridge</h1>
     <p>live=${String(report.live)} ready=${String(report.ready)}</p>
-    <p><a href="/novnc/">Open browser login view</a></p>
+    <p><a href="novnc/vnc.html?autoconnect=1&amp;resize=scale&amp;path=novnc/websockify">Open browser login view</a></p>
     <table>${rows}</table>
   </main>
 </body>

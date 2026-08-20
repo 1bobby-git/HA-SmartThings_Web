@@ -31,6 +31,9 @@ export interface CaptureRow {
   payloadHash: string;
 }
 
+const sanitizedRecords = new WeakSet<object>();
+const maxRecentCaptureLimit = 1000;
+
 export function sanitizeCaptureRecord(
   source: CaptureSource,
   payload: unknown,
@@ -38,13 +41,15 @@ export function sanitizeCaptureRecord(
 ): SanitizedCaptureRecord {
   const sanitized = redact(payload);
   const serialized = JSON.stringify(sanitized);
-  return {
+  const record: SanitizedCaptureRecord = {
     __sanitized: true,
     source,
     receivedAt: new Date().toISOString(),
     payload: sanitized,
     payloadHash: createHash("sha256").update(serialized).digest("hex")
   };
+  sanitizedRecords.add(record);
+  return record;
 }
 
 export class CaptureStore {
@@ -65,7 +70,7 @@ export class CaptureStore {
   }
 
   write(record: SanitizedCaptureRecord): void {
-    if (record.__sanitized !== true) {
+    if (record.__sanitized !== true || !sanitizedRecords.has(record)) {
       throw new Error("capture records must pass through sanitizer before persistence");
     }
     this.#db
@@ -76,11 +81,19 @@ export class CaptureStore {
   }
 
   listRecent(limit: number): CaptureRow[] {
+    if (!Number.isInteger(limit) || limit < 1 || limit > maxRecentCaptureLimit) {
+      throw new Error(`capture list limit must be an integer between 1 and ${maxRecentCaptureLimit}`);
+    }
     return this.#db
       .prepare(
         "SELECT source, received_at AS receivedAt, payload_json AS payload, payload_hash AS payloadHash FROM captures ORDER BY id DESC LIMIT ?"
       )
       .all(limit) as unknown as CaptureRow[];
+  }
+
+  ping(): boolean {
+    this.#db.prepare("SELECT 1").get();
+    return true;
   }
 
   close(): void {

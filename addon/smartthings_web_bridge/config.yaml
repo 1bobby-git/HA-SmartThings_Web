@@ -14,8 +14,6 @@ watchdog: http://[HOST]:[PORT:8099]/health/live
 arch:
   - amd64
   - aarch64
-map:
-  - addon_config:rw
 options:
   log_level: info
 schema:

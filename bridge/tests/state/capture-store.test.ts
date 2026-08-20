@@ -27,4 +27,56 @@ describe("CaptureStore", () => {
       rmSync(root, { force: true, recursive: true });
     }
   });
+
+  test("rejects forged records that only copy the sanitizer marker", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-capture-"));
+    let store: CaptureStore | undefined;
+    try {
+      store = new CaptureStore(join(root, "capture.sqlite"));
+      const currentStore = store;
+
+      expect(() =>
+        currentStore.write({
+          __sanitized: true,
+          source: "unit",
+          receivedAt: new Date().toISOString(),
+          payload: { token: "secret" },
+          payloadHash: "forged"
+        })
+      ).toThrow(/sanitizer/);
+    } finally {
+      store?.close();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("validates recent capture limits before querying", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-capture-"));
+    let store: CaptureStore | undefined;
+    try {
+      store = new CaptureStore(join(root, "capture.sqlite"));
+      const currentStore = store;
+
+      expect(() => currentStore.listRecent(0)).toThrow(/limit/);
+      expect(() => currentStore.listRecent(1.5)).toThrow(/limit/);
+      expect(() => currentStore.listRecent(1001)).toThrow(/limit/);
+    } finally {
+      store?.close();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("pings the capture database without writing capture data", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-capture-"));
+    let store: CaptureStore | undefined;
+    try {
+      store = new CaptureStore(join(root, "capture.sqlite"));
+
+      expect(store.ping()).toBe(true);
+      expect(store.listRecent(5)).toHaveLength(0);
+    } finally {
+      store?.close();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
 });

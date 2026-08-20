@@ -25,12 +25,22 @@ describe("Phase 1 documentation gate", () => {
     const manual = readFileSync("MANUAL_TEST.md", "utf8");
     const fixtures = readFileSync("protocol/fixtures/README.md", "utf8");
 
-    expect(feasibility.trimEnd()).toMatch(/DECISION: (GO|LIMITED|STOP|PENDING)$/);
+    expect(feasibility.trimEnd()).toMatch(/DECISION: (GO|LIMITED|STOP)$/);
+    expect(feasibility).not.toContain("DECISION: PENDING");
+    expect(feasibility).toContain("DECISION: LIMITED");
+    expect(feasibility).toContain("bounded controlled Chrome sample");
+    expect(feasibility).toContain("not a GO decision");
     expect(feasibility).toContain("Phase 2 remains closed");
+    expect(protocol).toContain("111 requests");
+    expect(protocol).toContain("Socket.IO");
     expect(protocol).toContain("No synthetic SmartThings protocol payloads");
     expect(manual).toContain("Do not enter Samsung credentials into this repository");
+    expect(manual).toContain("location-only");
+    expect(manual).toContain("network outage");
+    expect(manual).toContain("decision rubric");
     expect(manual).toContain("real device event");
     expect(fixtures).toContain("sanitized real captures only");
+    expect(fixtures).toContain("Raw events remained transient");
     expect(`${feasibility}\n${protocol}`).not.toMatch(/DECISION: GO/);
   });
 });

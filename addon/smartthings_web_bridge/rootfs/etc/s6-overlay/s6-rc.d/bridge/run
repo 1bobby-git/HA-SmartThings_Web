@@ -1,4 +1,4 @@
 #!/usr/bin/env sh
 mkdir -p /data
 chmod 700 /data
-exec node --experimental-strip-types --experimental-sqlite /app/bridge/src/main.ts
+exec node --experimental-sqlite /app/dist/bridge/src/main.js

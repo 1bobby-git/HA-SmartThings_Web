@@ -1,55 +1,87 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+import { pathToFileURL } from "node:url";
 
-const patterns = [
-  /client_secret\s*[:=]/i,
-  /refresh_token\s*[:=]/i,
-  /access_token\s*[:=]/i,
-  /Bearer\s+[A-Za-z0-9._-]{20,}/
-];
+export type SecretRule = "secret-assignment" | "bearer-material";
 
-const roots = ["bridge/src", "addon", "docker", "tools", "package.json"];
-const skip = new Set([".git", "node_modules", "package-lock.json"]);
-const hits: string[] = [];
-
-for (const root of roots) {
-  walk(join(process.cwd(), root));
+export interface SecretFinding {
+  path: string;
+  rule: SecretRule;
+  line: number;
+  key?: string;
 }
 
-if (hits.length > 0) {
-  console.error(`Potential secret material found:\n${hits.join("\n")}`);
+export interface SecretScanOptions {
+  cwd?: string;
+  roots?: string[];
+}
+
+const productionRoots = ["bridge/src", "addon", "docker", "package.json"];
+const skipEntries = new Set([".git", "node_modules", "dist", "package-lock.json"]);
+const excludedPathPattern = /^(?:docs|tests|protocol\/fixtures|tools)\//;
+const sensitiveAssignment =
+  /\b(password|mfa|captcha|cookie|authorization|csrf|session(?:Token|_token|[-_]?id)?|access(?:Token|_token)?|refresh(?:Token|_token)?|client(?:Secret|_secret)?|bridge(?:Token|_token)|token|secret)\b\s*(?:[:=]|=>)\s*["'`][^"'`\n]{3,}["'`]/i;
+const bearerMaterial = /Bearer\s+[A-Za-z0-9._~+/=-]{20,}/;
+
+export function scanProductionSecrets(options: SecretScanOptions = {}): SecretFinding[] {
+  const cwd = options.cwd ?? process.cwd();
+  const roots = options.roots ?? productionRoots;
+  const findings: SecretFinding[] = [];
+
+  for (const root of roots) {
+    walk(join(cwd, root), cwd, (path) => {
+      const rel = relative(cwd, path).replace(/\\/g, "/");
+      if (excludedPathPattern.test(rel)) {
+        return;
+      }
+      const lines = readFileSync(path, "utf8").split(/\r?\n/);
+      for (const [index, line] of lines.entries()) {
+        const assignment = sensitiveAssignment.exec(line);
+        if (assignment) {
+          findings.push({ path: rel, rule: "secret-assignment", line: index + 1, key: assignment[1] ?? "unknown" });
+        }
+        if (bearerMaterial.test(line)) {
+          findings.push({ path: rel, rule: "bearer-material", line: index + 1 });
+        }
+      }
+    });
+  }
+
+  return findings;
+}
+
+function walk(path: string, cwd: string, onFile: (path: string) => void): void {
+  if (!existsSync(path)) {
+    return;
+  }
+  const stat = statSync(path);
+  if (stat.isDirectory()) {
+    for (const entry of readdirSync(path, { withFileTypes: true })) {
+      if (skipEntries.has(entry.name)) {
+        continue;
+      }
+      walk(join(path, entry.name), cwd, onFile);
+    }
+    return;
+  }
+  if (stat.isFile() && stat.size <= 1_000_000) {
+    onFile(path);
+  }
+}
+
+function runCli(): void {
+  const findings = scanProductionSecrets();
+  if (findings.length === 0) {
+    return;
+  }
+  console.error("Potential secret material found:");
+  for (const finding of findings) {
+    console.error(`${finding.path}:${finding.line} ${finding.rule}${finding.key ? ` ${finding.key}` : ""}`);
+  }
   process.exit(1);
 }
 
-function walk(dir: string): void {
-  if (!existsSync(dir)) {
-    return;
-  }
-  if (!statSync(dir).isDirectory()) {
-    scanFile(dir);
-    return;
-  }
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (skip.has(entry.name)) {
-      continue;
-    }
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      walk(path);
-      continue;
-    }
-    scanFile(path);
-  }
-}
-
-function scanFile(path: string): void {
-  if (statSync(path).size > 1_000_000) {
-    return;
-  }
-  const text = readFileSync(path, "utf8");
-  for (const pattern of patterns) {
-    if (pattern.test(text)) {
-      hits.push(`${path}: ${pattern}`);
-    }
-  }
+const executedPath = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
+if (executedPath && import.meta.url === executedPath) {
+  runCli();
 }

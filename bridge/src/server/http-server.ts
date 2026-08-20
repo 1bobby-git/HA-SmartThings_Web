@@ -33,7 +33,7 @@ export async function createBridgeHttpServer(options: BridgeHttpServerOptions): 
       return;
     }
     if (path === "/" || path === "/index.html") {
-      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      writeHeaders(response, 200, "text/html; charset=utf-8");
       response.end(renderStatusPage(report));
       return;
     }
@@ -51,8 +51,16 @@ export async function createBridgeHttpServer(options: BridgeHttpServerOptions): 
 }
 
 function writeJson(response: ServerResponse, status: number, value: unknown): void {
-  response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+  writeHeaders(response, status, "application/json; charset=utf-8");
   response.end(JSON.stringify(value));
+}
+
+function writeHeaders(response: ServerResponse, status: number, contentType: string): void {
+  response.writeHead(status, {
+    "cache-control": "no-store",
+    "content-type": contentType,
+    "x-content-type-options": "nosniff"
+  });
 }
 
 async function listen(server: Server, port: number, host: string): Promise<void> {

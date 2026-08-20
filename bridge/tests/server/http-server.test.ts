@@ -19,7 +19,7 @@ describe("createBridgeHttpServer", () => {
         dbAvailable: true,
         heartbeatAtMs: now,
         state: "LOGIN_REQUIRED",
-        urlCategory: "signin"
+        urlCategory: "samsung_login"
       }
     });
     const server = await createBridgeHttpServer({ store, host: "127.0.0.1", port: 0 });
@@ -32,11 +32,19 @@ describe("createBridgeHttpServer", () => {
     const page = await fetch(baseUrl).then((response) => response.text());
 
     expect(live.status).toBe(200);
+    expect(live.headers.get("cache-control")).toBe("no-store");
+    expect(live.headers.get("x-content-type-options")).toBe("nosniff");
     expect((await live.json()).live).toBe(true);
     expect(ready.status).toBe(503);
     expect((await ready.json()).ready).toBe(false);
     expect(details.details.state).toBe("LOGIN_REQUIRED");
     expect(page).toContain("SmartThings Web Bridge");
+    expect(page).toContain('href="novnc/vnc.html?autoconnect=1&amp;resize=scale&amp;path=novnc/websockify"');
+    expect(page).not.toContain('href="/novnc/"');
     expect(JSON.stringify([details, page])).not.toMatch(/https?:\/\/my\.smartthings\.com|deviceId|locationId|token|secret/i);
+
+    const missing = await fetch(`${baseUrl}/missing`);
+    expect(missing.status).toBe(404);
+    expect(missing.headers.get("cache-control")).toBe("no-store");
   });
 });

@@ -19,10 +19,10 @@ This repository contains MIT-licensed project code for Home Assistant and SmartT
 
 The `smartthings_customize` baseline is not a code source for this repository. It is retained only to document observed behavior and compatibility assumptions.
 
-## Initial Boundary
+## Production Modules
 
-No production bridge modules are included in this initial metadata baseline. SmartThings web behavior is treated as an observed private web contract, not as a guaranteed API surface.
+Phase 1 production bridge modules live under `bridge/src`: browser supervisor, persistent context, keeper page, runtime orchestration, CDP/browser observers, capture store, redactor, data-path policy, health routes, HTTP server, and status page.
 
-The Phase 1 bootstrap uses Vitest coverage for the bridge runtime state, health gates, browser keeper, persistent context, network observers, capture storage, and redaction boundaries. The `test`, `typecheck`, `audit:api-free`, and `audit:secrets` scripts are the current release gates for this repository.
+The emitted build is `dist/bridge/src/**/*.js` from `npm run build`. It is a bridge-only build; test files, docs, and audit tools are not emitted into `dist`.
 
-The current `build` script runs TypeScript in `--noEmit` mode for bootstrap validation. It will either emit compiled output once source modules exist and an output contract is defined, or remain a typecheck-only build gate for a TypeScript-executed toolchain.
+SmartThings web behavior is treated as an observed private web contract, not as a guaranteed API surface. The Phase 1 tests cover runtime state, health gates, browser keeper, persistent context, network observers, capture storage, redaction boundaries, add-on metadata, package build shape, documentation gates, and static audit tools.

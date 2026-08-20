@@ -17,7 +17,19 @@ export const RUNTIME_STATES = [
 
 export type RuntimeState = (typeof RUNTIME_STATES)[number];
 
-export type UrlCategory = "unknown" | "signin" | "map" | "account" | "error";
+export const URL_CATEGORIES = [
+  "none",
+  "smartthings_location",
+  "smartthings_advanced",
+  "samsung_login",
+  "other",
+  "error"
+] as const;
+
+export type UrlCategory = (typeof URL_CATEGORIES)[number];
+
+// Allows small ordering jitter between Chromium, DB, and daemon clocks without accepting synthetic future health.
+export const MAX_CLOCK_SKEW_MS = 5_000;
 
 export interface RuntimeStatusSnapshot {
   state: RuntimeState;
@@ -34,10 +46,14 @@ export interface RuntimeStatusSnapshot {
   protocolChangeCount: number;
   restartCount: number;
   bridgeVersion: string;
+  browserVersion: string;
   protocolVersion: string;
   heartbeatAtMs: number;
   updatedAtMs: number;
   initialSnapshotCompletedAtMs: number | undefined;
+  lastSnapshotAtMs: number | undefined;
+  lastFrameAtMs: number | undefined;
+  lastEventAtMs: number | undefined;
   lastPushAtMs: number | undefined;
   lastParserSuccessAtMs: number | undefined;
   lastBrowserStartAtMs: number | undefined;
@@ -54,6 +70,7 @@ export type RuntimeStatusListener = (
 export interface RuntimeStatusStoreOptions {
   now?: () => number;
   initial?: RuntimeStatusPatch;
+  onListenerError?: (error: unknown) => void;
 }
 
 const snapshotKeys = new Set<keyof RuntimeStatusSnapshot>([
@@ -71,10 +88,14 @@ const snapshotKeys = new Set<keyof RuntimeStatusSnapshot>([
   "protocolChangeCount",
   "restartCount",
   "bridgeVersion",
+  "browserVersion",
   "protocolVersion",
   "heartbeatAtMs",
   "updatedAtMs",
   "initialSnapshotCompletedAtMs",
+  "lastSnapshotAtMs",
+  "lastFrameAtMs",
+  "lastEventAtMs",
   "lastPushAtMs",
   "lastParserSuccessAtMs",
   "lastBrowserStartAtMs",
@@ -88,17 +109,50 @@ const counterKeys = new Set<keyof RuntimeStatusSnapshot>([
   "restartCount"
 ]);
 
+const booleanKeys = new Set<keyof RuntimeStatusSnapshot>([
+  "chromiumRunning",
+  "keeperPresent",
+  "authenticated",
+  "pushConnected",
+  "initialSnapshotComplete",
+  "parserHealthy",
+  "dbAvailable"
+]);
+
+const timestampKeys = new Set<keyof RuntimeStatusSnapshot>([
+  "heartbeatAtMs",
+  "updatedAtMs",
+  "initialSnapshotCompletedAtMs",
+  "lastSnapshotAtMs",
+  "lastFrameAtMs",
+  "lastEventAtMs",
+  "lastPushAtMs",
+  "lastParserSuccessAtMs",
+  "lastBrowserStartAtMs",
+  "lastStateChangeAtMs"
+]);
+
+const versionKeys = new Set<keyof RuntimeStatusSnapshot>([
+  "bridgeVersion",
+  "browserVersion",
+  "protocolVersion"
+]);
+
 export class RuntimeStatusStore {
   #snapshot: RuntimeStatusSnapshot;
   #listeners = new Set<RuntimeStatusListener>();
   readonly #now: () => number;
+  readonly #onListenerError: ((error: unknown) => void) | undefined;
 
   constructor(options: RuntimeStatusStoreOptions = {}) {
     this.#now = options.now ?? Date.now;
+    this.#onListenerError = options.onListenerError;
     const now = this.#now();
+    const initial = options.initial ?? {};
+    validatePatch(initial, now);
     this.#snapshot = freezeSnapshot({
       state: "STARTING",
-      urlCategory: "unknown",
+      urlCategory: "none",
       chromiumRunning: false,
       keeperPresent: false,
       authenticated: false,
@@ -111,15 +165,19 @@ export class RuntimeStatusStore {
       protocolChangeCount: 0,
       restartCount: 0,
       bridgeVersion: "0.0.0-dev",
+      browserVersion: "unknown",
       protocolVersion: "unknown",
       heartbeatAtMs: now,
       updatedAtMs: now,
       initialSnapshotCompletedAtMs: undefined,
+      lastSnapshotAtMs: undefined,
+      lastFrameAtMs: undefined,
+      lastEventAtMs: undefined,
       lastPushAtMs: undefined,
       lastParserSuccessAtMs: undefined,
       lastBrowserStartAtMs: undefined,
       lastStateChangeAtMs: now,
-      ...options.initial
+      ...initial
     });
   }
 
@@ -135,9 +193,9 @@ export class RuntimeStatusStore {
   }
 
   update(patch: RuntimeStatusPatch): RuntimeStatusSnapshot {
-    validatePatch(patch);
-
     const now = this.#now();
+    validatePatch(patch, now);
+
     const previous = this.#snapshot;
     const next = freezeSnapshot({
       ...previous,
@@ -153,7 +211,11 @@ export class RuntimeStatusStore {
 
     this.#snapshot = next;
     for (const listener of this.#listeners) {
-      listener(next, previous);
+      try {
+        listener(next, previous);
+      } catch (error) {
+        this.#onListenerError?.(error);
+      }
     }
     return next;
   }
@@ -163,7 +225,7 @@ export class RuntimeStatusStore {
   }
 }
 
-function validatePatch(patch: RuntimeStatusPatch): void {
+function validatePatch(patch: RuntimeStatusPatch, now: number): void {
   for (const key of Object.keys(patch) as (keyof RuntimeStatusSnapshot)[]) {
     if (!snapshotKeys.has(key)) {
       throw new Error(`unsupported runtime status field: ${String(key)}`);
@@ -172,11 +234,62 @@ function validatePatch(patch: RuntimeStatusPatch): void {
     if (value !== undefined && counterKeys.has(key) && !isSafeCount(value)) {
       throw new Error(`runtime status counter must be a non-negative integer: ${String(key)}`);
     }
+    if (value !== undefined && booleanKeys.has(key) && typeof value !== "boolean") {
+      throw new Error(`runtime status flag must be boolean: ${String(key)}`);
+    }
+    if (key === "state" && value !== undefined && !isRuntimeState(value)) {
+      throw new Error(`invalid runtime state: ${String(value)}`);
+    }
+    if (key === "urlCategory" && value !== undefined && !isUrlCategory(value)) {
+      throw new Error(`invalid URL category: ${String(value)}`);
+    }
+    if (value !== undefined && timestampKeys.has(key)) {
+      if (!isSafeTimestamp(value)) {
+        throw new Error(`runtime status timestamp must be a non-negative integer: ${String(key)}`);
+      }
+      if (value > now + MAX_CLOCK_SKEW_MS) {
+        throw new Error(`runtime status timestamp exceeds allowed clock skew: ${String(key)}`);
+      }
+    }
+    if (value !== undefined && versionKeys.has(key) && !isSafeVersion(value)) {
+      throw new Error(`unsafe runtime status version: ${String(key)}`);
+    }
   }
 }
 
 function isSafeCount(value: unknown): boolean {
   return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+function isSafeTimestamp(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+function isRuntimeState(value: unknown): value is RuntimeState {
+  return typeof value === "string" && RUNTIME_STATES.includes(value as RuntimeState);
+}
+
+function isUrlCategory(value: unknown): value is UrlCategory {
+  return typeof value === "string" && URL_CATEGORIES.includes(value as UrlCategory);
+}
+
+function isSafeVersion(value: unknown): boolean {
+  if (typeof value !== "string" || value.length === 0 || value.length > 120) {
+    return false;
+  }
+  if (/[\u0000-\u001f\u007f]/u.test(value)) {
+    return false;
+  }
+  if (/https?:\/\//i.test(value)) {
+    return false;
+  }
+  if (/[?&#=]/u.test(value)) {
+    return false;
+  }
+  if (/(?:authorization|cookie|password|token|secret|csrf|session)/i.test(value)) {
+    return false;
+  }
+  return true;
 }
 
 function freezeSnapshot(snapshot: RuntimeStatusSnapshot): RuntimeStatusSnapshot {

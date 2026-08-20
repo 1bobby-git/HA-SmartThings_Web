@@ -15,7 +15,7 @@
     "test:unit": "vitest run bridge/tests",
     "test:integration": "vitest run tests",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "tsc -p tsconfig.json --noEmit",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
     "audit:api-free": "tsx tools/api-free-audit.ts",
     "audit:secrets": "tsx tools/secret-scan.ts"
   },

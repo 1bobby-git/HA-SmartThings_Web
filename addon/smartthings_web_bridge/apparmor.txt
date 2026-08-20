@@ -4,14 +4,32 @@ profile smartthings_web_bridge flags=(attach_disconnected,mediate_deleted) {
   #include <abstractions/base>
   #include <abstractions/nameservice>
 
+  file,
+  signal (send) peer=unconfined,
+  signal (send) peer=smartthings_web_bridge,
+
   network inet stream,
   network inet6 stream,
 
   /app/** r,
-  /usr/** rix,
-  /bin/** rix,
+  /init ix,
+  /bin/** ix,
+  /usr/bin/** ix,
+  /usr/** r,
+  /run/{s6,s6-rc*,service}/** ix,
+  /package/** ix,
+  /command/** ix,
+  /etc/s6-overlay/** rix,
+  /dev/shm/** rw,
+  /dev/null rw,
+  /dev/random r,
+  /dev/urandom r,
+  /dev/pts/** rw,
+  /proc/** r,
+  /sys/devices/system/cpu/** r,
   /data/** rwk,
-  /run/** rw,
-  /tmp/** rw,
+  /run/{,**} rwk,
+  /tmp/.X11-unix/** rw,
+  /tmp/** rwk,
   /var/log/** rw,
 }

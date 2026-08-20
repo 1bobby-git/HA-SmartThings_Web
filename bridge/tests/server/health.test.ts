@@ -21,12 +21,13 @@ describe("createHealthReport", () => {
     expect(report.ready).toBe(false);
     expect(report.details).toMatchObject({
       state: "BROWSER_FAILED",
-      urlCategory: "unknown",
+      urlCategory: "none",
       activeConnections: 0,
       observedDeviceCount: 0,
       protocolChangeCount: 0,
       restartCount: 0,
       bridgeVersion: "0.0.0-dev",
+      browserVersion: "unknown",
       protocolVersion: "unknown",
       heartbeatAgeMs: 300,
       snapshotAgeMs: 200
@@ -45,6 +46,7 @@ describe("createHealthReport", () => {
       initialSnapshotComplete: true,
       parserHealthy: true,
       initialSnapshotCompletedAtMs: 1_200,
+      lastSnapshotAtMs: 1_200,
       lastParserSuccessAtMs: 1_800,
       lastPushAtMs: 1_900
     });
@@ -52,13 +54,16 @@ describe("createHealthReport", () => {
     expect(createHealthReport(snapshot, { nowMs: 32_000 }).live).toBe(true);
     expect(createHealthReport(snapshot, { nowMs: 32_001 }).live).toBe(false);
     expect(createHealthReport({ ...snapshot, dbAvailable: false }, { nowMs: 2_500 }).live).toBe(false);
+    const liveSnapshotAtBoundary = { ...snapshot, heartbeatAtMs: 121_100 };
+    expect(createHealthReport(liveSnapshotAtBoundary, { nowMs: 121_200 }).ready).toBe(true);
+    expect(createHealthReport(liveSnapshotAtBoundary, { nowMs: 121_201 }).ready).toBe(false);
   });
 
   test("requires all operational gates for readiness and exposes only safe details", () => {
     const store = new RuntimeStatusStore({ now: () => 10_000 });
     const snapshot = store.update({
       state: "CONNECTED",
-      urlCategory: "map",
+      urlCategory: "smartthings_advanced",
       dbAvailable: true,
       heartbeatAtMs: 9_900,
       chromiumRunning: true,
@@ -72,8 +77,12 @@ describe("createHealthReport", () => {
       restartCount: 1,
       protocolChangeCount: 2,
       bridgeVersion: "0.1.0",
+      browserVersion: "Chromium 141.0.7390.122",
       protocolVersion: "proto-4",
       initialSnapshotCompletedAtMs: 9_500,
+      lastSnapshotAtMs: 9_400,
+      lastFrameAtMs: 9_600,
+      lastEventAtMs: 9_650,
       lastParserSuccessAtMs: 9_700,
       lastPushAtMs: 9_800,
       lastBrowserStartAtMs: 8_000
@@ -82,7 +91,7 @@ describe("createHealthReport", () => {
     const ready = createHealthReport(snapshot, { nowMs: 10_000 });
     const missingKeeper = createHealthReport({ ...snapshot, keeperPresent: false }, { nowMs: 10_000 });
     const staleSnapshot = createHealthReport(
-      { ...snapshot, initialSnapshotCompletedAtMs: 1 },
+      { ...snapshot, lastSnapshotAtMs: 1, updatedAtMs: 10_000 },
       { nowMs: 10_000, snapshotFreshMs: 5_000 }
     );
 
@@ -93,19 +102,54 @@ describe("createHealthReport", () => {
     expect(JSON.stringify(ready.details)).not.toMatch(/https?:|deviceId|locationId|token|secret|raw-/i);
     expect(ready.details).toEqual({
       state: "CONNECTED",
-      urlCategory: "map",
+      urlCategory: "smartthings_advanced",
       activeConnections: 3,
       observedDeviceCount: 8,
       protocolChangeCount: 2,
       restartCount: 1,
       bridgeVersion: "0.1.0",
+      browserVersion: "Chromium 141.0.7390.122",
       protocolVersion: "proto-4",
       heartbeatAgeMs: 100,
       snapshotAgeMs: 0,
       initialSnapshotAgeMs: 500,
+      lastSnapshotAgeMs: 600,
+      frameAgeMs: 400,
+      eventAgeMs: 350,
       parserAgeMs: 300,
       pushAgeMs: 200,
       browserUptimeMs: 2_000
     });
+  });
+
+  test("treats future heartbeat and snapshot timestamps beyond clock skew as stale", () => {
+    const store = new RuntimeStatusStore({ now: () => 10_000 });
+    const snapshot = store.update({
+      state: "CONNECTED",
+      dbAvailable: true,
+      heartbeatAtMs: 9_900,
+      chromiumRunning: true,
+      keeperPresent: true,
+      authenticated: true,
+      pushConnected: true,
+      initialSnapshotComplete: true,
+      parserHealthy: true,
+      initialSnapshotCompletedAtMs: 9_500,
+      lastSnapshotAtMs: 9_400
+    });
+
+    const futureHeartbeat = createHealthReport(
+      { ...snapshot, heartbeatAtMs: 15_001 },
+      { nowMs: 10_000 }
+    );
+    const futureSnapshot = createHealthReport(
+      { ...snapshot, lastSnapshotAtMs: 15_001 },
+      { nowMs: 10_000 }
+    );
+
+    expect(futureHeartbeat.live).toBe(false);
+    expect(futureHeartbeat.ready).toBe(false);
+    expect(futureSnapshot.live).toBe(true);
+    expect(futureSnapshot.ready).toBe(false);
   });
 });

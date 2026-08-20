@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    "noEmit": false,
+    "types": ["node"]
+  },
+  "include": ["bridge/src/**/*.ts"],
+  "exclude": ["bridge/tests/**/*.ts", "tests/**/*.ts", "dist", "node_modules"]
+}

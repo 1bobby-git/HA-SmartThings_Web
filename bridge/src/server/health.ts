@@ -1,4 +1,4 @@
-import type { RuntimeStatusSnapshot } from "../state/runtime-state.js";
+import { MAX_CLOCK_SKEW_MS, type RuntimeStatusSnapshot } from "../state/runtime-state.js";
 
 export interface HealthReportOptions {
   nowMs?: number;
@@ -14,10 +14,14 @@ export interface HealthDetails {
   protocolChangeCount: number;
   restartCount: number;
   bridgeVersion: string;
+  browserVersion: string;
   protocolVersion: string;
   heartbeatAgeMs: number;
   snapshotAgeMs: number;
   initialSnapshotAgeMs?: number;
+  lastSnapshotAgeMs?: number;
+  frameAgeMs?: number;
+  eventAgeMs?: number;
   parserAgeMs?: number;
   pushAgeMs?: number;
   browserUptimeMs?: number;
@@ -34,7 +38,7 @@ export interface HealthReport {
 }
 
 const DEFAULT_HEARTBEAT_FRESH_MS = 31_000;
-const DEFAULT_SNAPSHOT_FRESH_MS = 60_000;
+const DEFAULT_SNAPSHOT_FRESH_MS = 120_000;
 
 export function createHealthReport(
   snapshot: RuntimeStatusSnapshot,
@@ -46,15 +50,23 @@ export function createHealthReport(
   const heartbeatAgeMs = ageMs(nowMs, snapshot.heartbeatAtMs);
   const snapshotAgeMs = ageMs(nowMs, snapshot.updatedAtMs);
   const initialSnapshotAgeMs = optionalAgeMs(nowMs, snapshot.initialSnapshotCompletedAtMs);
+  const lastSnapshotAgeMs = optionalAgeMs(nowMs, snapshot.lastSnapshotAtMs);
+  const frameAgeMs = optionalAgeMs(nowMs, snapshot.lastFrameAtMs);
+  const eventAgeMs = optionalAgeMs(nowMs, snapshot.lastEventAtMs);
   const parserAgeMs = optionalAgeMs(nowMs, snapshot.lastParserSuccessAtMs);
   const pushAgeMs = optionalAgeMs(nowMs, snapshot.lastPushAtMs);
   const browserUptimeMs = optionalAgeMs(nowMs, snapshot.lastBrowserStartAtMs);
 
-  const live = snapshot.dbAvailable && heartbeatAgeMs <= heartbeatFreshMs;
+  const live =
+    snapshot.dbAvailable &&
+    !isFutureBeyondSkew(nowMs, snapshot.heartbeatAtMs) &&
+    heartbeatAgeMs <= heartbeatFreshMs;
   const initialSnapshotFresh =
     snapshot.initialSnapshotComplete &&
-    initialSnapshotAgeMs !== undefined &&
-    initialSnapshotAgeMs <= snapshotFreshMs;
+    lastSnapshotAgeMs !== undefined &&
+    snapshot.lastSnapshotAtMs !== undefined &&
+    !isFutureBeyondSkew(nowMs, snapshot.lastSnapshotAtMs) &&
+    lastSnapshotAgeMs <= snapshotFreshMs;
 
   const ready =
     live &&
@@ -76,10 +88,14 @@ export function createHealthReport(
       protocolChangeCount: snapshot.protocolChangeCount,
       restartCount: snapshot.restartCount,
       bridgeVersion: snapshot.bridgeVersion,
+      browserVersion: snapshot.browserVersion,
       protocolVersion: snapshot.protocolVersion,
       heartbeatAgeMs,
       snapshotAgeMs,
       initialSnapshotAgeMs,
+      lastSnapshotAgeMs,
+      frameAgeMs,
+      eventAgeMs,
       parserAgeMs,
       pushAgeMs,
       browserUptimeMs
@@ -89,6 +105,10 @@ export function createHealthReport(
 
 function ageMs(nowMs: number, atMs: number): number {
   return Math.max(0, nowMs - atMs);
+}
+
+function isFutureBeyondSkew(nowMs: number, atMs: number): boolean {
+  return atMs > nowMs + MAX_CLOCK_SKEW_MS;
 }
 
 function optionalAgeMs(nowMs: number, atMs: number | undefined): number | undefined {

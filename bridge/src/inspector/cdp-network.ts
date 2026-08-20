@@ -1,5 +1,7 @@
 import { sanitizeCaptureRecord, type CaptureSource } from "../state/capture-store.js";
 import type { CaptureSink, Redact } from "./browser-observer.js";
+import { createHash } from "node:crypto";
+import { normalizeTextForCapture } from "./text-normalizer.js";
 
 export interface CdpSessionLike {
   send(method: string, params?: Record<string, unknown>): Promise<unknown>;
@@ -27,13 +29,16 @@ export async function installCdpNetworkObserver(
   await session.send("Network.enable");
 
   session.on("Network.webSocketFrameSent", (payload) =>
-    write(sink, redact, "cdp-websocket-frame", { direction: "sent", payload: normalizeFrame(payload) })
+    write(sink, redact, "cdp-websocket-frame", { direction: "sent", payload: normalizeFrame(payload, limit, redact) })
   );
   session.on("Network.webSocketFrameReceived", (payload) =>
-    write(sink, redact, "cdp-websocket-frame", { direction: "received", payload: normalizeFrame(payload) })
+    write(sink, redact, "cdp-websocket-frame", {
+      direction: "received",
+      payload: normalizeFrame(payload, limit, redact)
+    })
   );
   session.on("Network.eventSourceMessageReceived", (payload) =>
-    write(sink, redact, "cdp-eventsource", payload)
+    write(sink, redact, "cdp-eventsource", normalizeEventSource(payload, limit, redact))
   );
   session.on("Network.responseReceived", (payload) => {
     const requestId = readString(payload, "requestId");
@@ -55,16 +60,19 @@ export async function installCdpNetworkObserver(
     }
     const response = tracked.get(requestId);
     tracked.delete(requestId);
-    const body = (await session.send("Network.getResponseBody", { requestId })) as
-      | { body?: string; base64Encoded?: boolean }
-      | undefined;
-    const text = body?.base64Encoded ? `[base64:${body.body?.length ?? 0}]` : (body?.body ?? "");
-    write(sink, redact, "cdp-response-body", {
-      ...response,
-      requestId,
-      body: text.slice(0, limit),
-      truncated: text.length > limit
-    });
+    try {
+      const body = (await session.send("Network.getResponseBody", { requestId })) as
+        | { body?: string; base64Encoded?: boolean }
+        | undefined;
+      write(sink, redact, "cdp-response-body", normalizeBody(response, requestId, body, limit, redact));
+    } catch {
+      write(sink, redact, "cdp-response-body", {
+        ...response,
+        requestId,
+        bodyUnavailable: true,
+        error: "response body unavailable"
+      });
+    }
   });
 }
 
@@ -72,14 +80,81 @@ function write(sink: CaptureSink, redact: Redact, source: CaptureSource, payload
   sink.write(sanitizeCaptureRecord(source, payload, redact));
 }
 
-function normalizeFrame(payload: unknown): unknown {
+function normalizeFrame(payload: unknown, limitBytes: number, redact: Redact): unknown {
   const response = readObject(payload, "response");
   const payloadData = response ? readString(response, "payloadData") : undefined;
   const opcode = response ? readNumber(response, "opcode") : undefined;
   if (opcode !== undefined && opcode !== 1) {
-    return { opcode, byteLength: payloadData?.length ?? 0 };
+    const bytes = Buffer.from(payloadData ?? "", "base64");
+    return {
+      opcode,
+      binary: true,
+      byteLength: bytes.byteLength,
+      sha256: createHash("sha256").update(bytes).digest("hex")
+    };
+  }
+  if (opcode === 1 && payloadData !== undefined && response) {
+    return {
+      ...(typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {}),
+      response: {
+        ...response,
+        ...boundedText("payloadData", payloadData, limitBytes, redact)
+      }
+    };
   }
   return payload;
+}
+
+function normalizeEventSource(payload: unknown, limitBytes: number, redact: Redact): unknown {
+  const data = readString(payload, "data");
+  if (data === undefined || typeof payload !== "object" || payload === null) {
+    return payload;
+  }
+  return {
+    ...(payload as Record<string, unknown>),
+    ...boundedText("data", data, limitBytes, redact)
+  };
+}
+
+function normalizeBody(
+  response: TrackedResponse | undefined,
+  requestId: string,
+  body: { body?: string; base64Encoded?: boolean } | undefined,
+  limitBytes: number,
+  redact: Redact
+): Record<string, unknown> {
+  const text = body?.body ?? "";
+  if (body?.base64Encoded === true) {
+    const bytes = Buffer.from(text, "base64");
+    return {
+      ...response,
+      requestId,
+      body: {
+        binary: true,
+        byteLength: bytes.byteLength,
+        sha256: createHash("sha256").update(bytes).digest("hex")
+      }
+    };
+  }
+  return {
+    ...response,
+    requestId,
+    ...boundedText("body", text, limitBytes, redact)
+  };
+}
+
+function boundedText(
+  key: "body" | "data" | "payloadData",
+  value: string,
+  limitBytes: number,
+  redact: Redact
+): Record<"byteLength" | "truncated", number | boolean> & Record<typeof key, string> {
+  const normalized = normalizeTextForCapture(value, limitBytes, redact);
+  return { [key]: normalized.value, byteLength: normalized.byteLength, truncated: normalized.truncated } as Record<
+    "byteLength" | "truncated",
+    number | boolean
+  > &
+    Record<typeof key, string>;
 }
 
 function readObject(value: unknown, key: string): Record<string, unknown> | undefined {
