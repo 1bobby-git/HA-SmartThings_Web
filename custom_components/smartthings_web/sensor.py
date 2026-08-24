@@ -6,7 +6,15 @@ from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
-from homeassistant.const import PERCENTAGE, UnitOfElectricCurrent, UnitOfElectricPotential, UnitOfEnergy, UnitOfIlluminance, UnitOfPower, UnitOfTemperature
+from homeassistant.const import (
+    LIGHT_LUX,
+    PERCENTAGE,
+    UnitOfElectricCurrent,
+    UnitOfElectricPotential,
+    UnitOfEnergy,
+    UnitOfPower,
+    UnitOfTemperature,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -24,17 +32,42 @@ class SensorDescription:
 
 
 SENSOR_STATES = {
-    ("temperatureMeasurement", "temperature"): SensorDescription("Temperature", SensorDeviceClass.TEMPERATURE, default_unit=UnitOfTemperature.CELSIUS),
-    ("relativeHumidityMeasurement", "humidity"): SensorDescription("Humidity", SensorDeviceClass.HUMIDITY, default_unit=PERCENTAGE),
-    ("battery", "battery"): SensorDescription("Battery", SensorDeviceClass.BATTERY, default_unit=PERCENTAGE),
-    ("powerMeter", "power"): SensorDescription("Power", SensorDeviceClass.POWER, default_unit=UnitOfPower.WATT),
-    ("energyMeter", "energy"): SensorDescription("Energy", SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING, UnitOfEnergy.KILO_WATT_HOUR),
-    ("voltageMeasurement", "voltage"): SensorDescription("Voltage", SensorDeviceClass.VOLTAGE, default_unit=UnitOfElectricPotential.VOLT),
-    ("currentMeasurement", "current"): SensorDescription("Current", SensorDeviceClass.CURRENT, default_unit=UnitOfElectricCurrent.AMPERE),
-    ("illuminanceMeasurement", "illuminance"): SensorDescription("Illuminance", SensorDeviceClass.ILLUMINANCE, default_unit=UnitOfIlluminance.LUX),
-    ("carbonDioxideMeasurement", "carbonDioxide"): SensorDescription("Carbon dioxide", SensorDeviceClass.CO2, default_unit="ppm"),
-    ("fineDustSensor", "fineDustLevel"): SensorDescription("PM2.5", SensorDeviceClass.PM25, default_unit="µg/m³"),
-    ("veryFineDustSensor", "veryFineDustLevel"): SensorDescription("PM1", SensorDeviceClass.PM1, default_unit="µg/m³"),
+    "temperature": SensorDescription(
+        "Temperature", SensorDeviceClass.TEMPERATURE, default_unit=UnitOfTemperature.CELSIUS
+    ),
+    "humidity": SensorDescription(
+        "Humidity", SensorDeviceClass.HUMIDITY, default_unit=PERCENTAGE
+    ),
+    "battery": SensorDescription(
+        "Battery", SensorDeviceClass.BATTERY, default_unit=PERCENTAGE
+    ),
+    "power": SensorDescription(
+        "Power", SensorDeviceClass.POWER, default_unit=UnitOfPower.WATT
+    ),
+    "energy": SensorDescription(
+        "Energy",
+        SensorDeviceClass.ENERGY,
+        SensorStateClass.TOTAL_INCREASING,
+        UnitOfEnergy.KILO_WATT_HOUR,
+    ),
+    "voltage": SensorDescription(
+        "Voltage", SensorDeviceClass.VOLTAGE, default_unit=UnitOfElectricPotential.VOLT
+    ),
+    "current": SensorDescription(
+        "Current", SensorDeviceClass.CURRENT, default_unit=UnitOfElectricCurrent.AMPERE
+    ),
+    "illuminance": SensorDescription(
+        "Illuminance", SensorDeviceClass.ILLUMINANCE, default_unit=LIGHT_LUX
+    ),
+    "carbonDioxide": SensorDescription(
+        "Carbon dioxide", SensorDeviceClass.CO2, default_unit="ppm"
+    ),
+    "fineDustLevel": SensorDescription(
+        "PM2.5", SensorDeviceClass.PM25, default_unit="µg/m³"
+    ),
+    "veryFineDustLevel": SensorDescription(
+        "PM1", SensorDeviceClass.PM1, default_unit="µg/m³"
+    ),
 }
 
 
@@ -50,7 +83,7 @@ async def async_setup_entry(
         for device in runtime.inventory.devices.values()
         if device.location_id == runtime.location_id
         for state in device.states.values()
-        if (description := SENSOR_STATES.get((state.capability, state.attribute))) is not None
+        if (description := SENSOR_STATES.get(state.attribute)) is not None
     )
 
 
@@ -82,4 +115,3 @@ class SmartThingsWebSensor(SmartThingsWebEntity, SensorEntity):
         if state and state.unit:
             return {"C": "°C", "F": "°F"}.get(state.unit, state.unit)
         return self.description.default_unit
-

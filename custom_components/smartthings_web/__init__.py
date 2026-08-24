@@ -32,8 +32,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
         raise ConfigEntryAuthFailed from err
     except BridgeClientError as err:
         raise ConfigEntryNotReady from err
-    if not inventory.ready:
-        raise ConfigEntryNotReady("SmartThings Web Bridge is not ready")
+    if not inventory.ready and not inventory.devices:
+        raise ConfigEntryNotReady("SmartThings Web Bridge has no cached inventory")
 
     location_id = entry.data[CONF_LOCATION_ID]
     runtime = SmartThingsWebRuntime(client=client, location_id=location_id, inventory=inventory)

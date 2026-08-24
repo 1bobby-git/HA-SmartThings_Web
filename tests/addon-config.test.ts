@@ -92,10 +92,12 @@ describe("Home Assistant add-on metadata", () => {
 
     expect(nginx).toMatch(/^user root;/);
     expect(nginx).toContain("listen 8099;");
+    expect(nginx).toContain("listen 8100;");
     expect(nginx).toContain("include /etc/nginx/mime.types;");
     expect(nginx).toContain("access_log off;");
     expect(nginx).toContain("error_log /dev/stderr");
     expect(nginx).toContain("allow 172.30.32.2;");
+    expect(nginx).toContain("allow 172.30.32.1;");
     expect(nginx).toContain("deny all;");
     expect(nginx.indexOf("allow 172.30.32.2;")).toBeLessThan(nginx.indexOf("deny all;"));
     expect(nginx).toContain("location = /novnc/websockify {");

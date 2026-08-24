@@ -21,17 +21,18 @@ class BinaryDescription:
 
 
 BINARY_STATES = {
-    ("contactSensor", "contact"): BinaryDescription("Contact", "open", BinarySensorDeviceClass.DOOR),
-    ("motionSensor", "motion"): BinaryDescription("Motion", "active", BinarySensorDeviceClass.MOTION),
-    ("waterSensor", "water"): BinaryDescription("Moisture", "wet", BinarySensorDeviceClass.MOISTURE),
-    ("presenceSensor", "presence"): BinaryDescription("Presence", "present", BinarySensorDeviceClass.PRESENCE),
-    ("soundSensor", "sound"): BinaryDescription("Sound", "detected", BinarySensorDeviceClass.SOUND),
-    ("tamperAlert", "tamper"): BinaryDescription("Tamper", "detected", BinarySensorDeviceClass.TAMPER),
-    ("gasDetector", "gas"): BinaryDescription("Gas", "detected", BinarySensorDeviceClass.GAS),
-    ("smokeDetector", "smoke"): BinaryDescription("Smoke", "detected", BinarySensorDeviceClass.SMOKE),
-    ("carbonMonoxideDetector", "carbonMonoxide"): BinaryDescription(
+    "contact": BinaryDescription("Contact", "open", BinarySensorDeviceClass.DOOR),
+    "motion": BinaryDescription("Motion", "active", BinarySensorDeviceClass.MOTION),
+    "water": BinaryDescription("Moisture", "wet", BinarySensorDeviceClass.MOISTURE),
+    "presence": BinaryDescription("Presence", "present", BinarySensorDeviceClass.PRESENCE),
+    "sound": BinaryDescription("Sound", "detected", BinarySensorDeviceClass.SOUND),
+    "tamper": BinaryDescription("Tamper", "detected", BinarySensorDeviceClass.TAMPER),
+    "gas": BinaryDescription("Gas", "detected", BinarySensorDeviceClass.GAS),
+    "smoke": BinaryDescription("Smoke", "detected", BinarySensorDeviceClass.SMOKE),
+    "carbonMonoxide": BinaryDescription(
         "Carbon monoxide", "detected", BinarySensorDeviceClass.CO
     ),
+    "switch": BinaryDescription("Switch", "on", None),
 }
 
 
@@ -47,7 +48,7 @@ async def async_setup_entry(
         for device in runtime.inventory.devices.values()
         if device.location_id == runtime.location_id
         for state in device.states.values()
-        if (description := BINARY_STATES.get((state.capability, state.attribute))) is not None
+        if (description := BINARY_STATES.get(state.attribute)) is not None
     )
 
 
@@ -72,4 +73,3 @@ class SmartThingsWebBinarySensor(SmartThingsWebEntity, BinarySensorEntity):
         if state is None:
             return None
         return str(state.value).lower() == self.description.on_value.lower()
-
