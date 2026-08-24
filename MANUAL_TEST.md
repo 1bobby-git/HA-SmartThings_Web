@@ -63,6 +63,14 @@ At the beginning and end, separately verify Ingress HTTP 200, internal noVNC HTT
 
 This soak is passive. Do not combine it with a host reboot, network interruption, or physical device action; those remain independent controlled scenarios.
 
+Before packaging or installing the candidate, run:
+
+```powershell
+npm run soak:deployment-gate -- --run-dir <external-run-directory>
+```
+
+The gate is read-only and never opens `samples.jsonl`. Exit code `0` with `deploymentEligible=true` is required. A `pending`, failed, malformed, shorter-than-72-hour, over-five-minute interval, sparse/error-bearing, counter-invalid, or SHA-mismatched result exits nonzero and means the candidate must not be deployed. This gate does not deploy, restart, or modify Home Assistant or the add-on.
+
 ## Runtime API-Free Process Audit
 
 Run `npm run audit:api-free:runtime` from the repository root while the logged-in HAOS add-on is healthy. The collector reads only HAOS process/socket ownership and writes a hashed aggregate outside the repository. A passing bounded sample requires the Bridge listener in every sample, zero Bridge-owned external TCP connections, at least one Chromium-owned external TCP connection, and at least two samples. It never stores destination addresses, ports, process IDs, socket identifiers, or packet contents. Treat a pass as bounded process-separation evidence only, not complete network-history or public-API independence proof.

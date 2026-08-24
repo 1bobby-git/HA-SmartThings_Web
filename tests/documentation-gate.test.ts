@@ -110,6 +110,18 @@ describe("Phase 1 documentation gate", () => {
     expect(packageMetadata.scripts?.["probe:physical-action:haos"]).toBe(
       "tsx tools/haos-physical-action-probe.ts"
     );
+    expect(readme).toContain("npm run soak:deployment-gate");
+    expect(manual).toContain("npm run soak:deployment-gate");
+    expect(packageMetadata.scripts?.["soak:deployment-gate"]).toBe(
+      "tsx tools/haos-soak-deployment-gate.ts"
+    );
+    const soakDocs = readFileSync("docs/haos-soak.md", "utf8");
+    expect(soakDocs).toContain("It never reads `samples.jsonl`");
+    expect(soakDocs).toContain("Exit code `0` and `deploymentEligible=true`");
+    expect(soakDocs).toContain("at least 865 successful samples");
+    expect(`${readme}\n${manual}\n${soakDocs}`).toContain(
+      "final-summary.json.sha256"
+    );
     expect(manual).toContain(
       "Do not install or start 0.1.26 until the active 0.1.25 72-hour soak is sealed."
     );
