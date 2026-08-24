@@ -314,6 +314,13 @@ export function buildHaosHealthRemoteScript(
   ].join("; ");
 }
 
+export function buildHaosAddonUpdateRemoteScript(addonSlug: string): string {
+  if (!SAFE_SLUG_PATTERN.test(addonSlug)) {
+    throw new Error("haos_candidate_deploy_command_invalid");
+  }
+  return `set -eu; ha apps update ${addonSlug} >/dev/null 2>&1; printf 'addon_updated\\n'`;
+}
+
 export function buildHaosCleanupRemoteScript(layout: HaosDeploymentRemoteLayout): string {
   validateLayout(layout);
   return [

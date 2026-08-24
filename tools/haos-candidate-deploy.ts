@@ -17,6 +17,7 @@ import YAML from "yaml";
 
 import {
   buildHaosAddonRebuildRemoteScript,
+  buildHaosAddonUpdateRemoteScript,
   buildHaosActivateRemoteScript,
   buildHaosArchiveUploadRemoteCommand,
   buildHaosCandidateManifestHashRemoteCommand,
@@ -333,7 +334,7 @@ async function executeDeployment(
       "source_activated",
       120
     );
-    await reloadAndRebuild(options);
+    await reloadAndUpdate(options);
     const deployed = await verifyInstalledVersion(
       options,
       options.expectedCandidateVersion,
@@ -458,6 +459,21 @@ async function uploadArchive(
     180_000
   );
   parseGuestExecNoOutput(raw);
+}
+
+async function reloadAndUpdate(options: CliOptions): Promise<void> {
+  await runGuestMarker(
+    options,
+    buildHaosSupervisorReloadRemoteScript(),
+    "supervisor_reloaded",
+    300
+  );
+  await runGuestMarker(
+    options,
+    buildHaosAddonUpdateRemoteScript(options.addonSlug),
+    "addon_updated",
+    REBUILD_TIMEOUT_SECONDS
+  );
 }
 
 function parseGuestExecNoOutput(raw: string): void {
