@@ -110,6 +110,39 @@ describe("SafeCommandService", () => {
     });
     expect(resync).toHaveBeenCalledTimes(1);
   });
+
+  test("starts the confirmation timeout after browser interaction completes", async () => {
+    vi.useFakeTimers();
+    let finishInteraction: () => void = () => undefined;
+    const interaction = new Promise<void>((resolve) => {
+      finishInteraction = resolve;
+    });
+    const service = new SafeCommandService({
+      devices: readyDeviceStore(),
+      status: connectedStatus(),
+      executor: { executeSwitch: vi.fn(() => interaction) },
+      timeoutMs: 10,
+      resync: vi.fn(async () => undefined)
+    });
+
+    try {
+      const result = service.execute(command("on", "request_007"));
+      let settled = false;
+      void result.finally(() => {
+        settled = true;
+      }).catch(() => undefined);
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(settled).toBe(false);
+      finishInteraction();
+      await vi.advanceTimersByTimeAsync(11);
+      await expect(result).rejects.toMatchObject({
+        code: "command_confirmation_timeout"
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 function command(value: "on" | "off", clientRequestId: string) {

@@ -160,7 +160,6 @@ export class SafeCommandService {
       devices: this.options.devices,
       request,
       afterSequence: snapshot.sequence,
-      timeoutMs: this.options.timeoutMs,
       resync: this.options.resync
     });
     try {
@@ -172,6 +171,7 @@ export class SafeCommandService {
       throw new SafeCommandError("command_execution_failed");
     }
 
+    confirmation.startTimeout(this.options.timeoutMs);
     const sequence = await confirmation.result;
     return {
       schemaVersion: 1,
@@ -236,9 +236,8 @@ function waitForState(options: {
   devices: DeviceStore;
   request: SafeCommandRequest;
   afterSequence: number;
-  timeoutMs: number;
   resync: () => Promise<unknown>;
-}): { result: Promise<number>; cancel: () => void } {
+}): { result: Promise<number>; cancel: () => void; startTimeout: (timeoutMs: number) => void } {
   let settled = false;
   let unsubscribe: () => void = () => undefined;
   let timer: NodeJS.Timeout | undefined;
@@ -266,16 +265,19 @@ function waitForState(options: {
       cleanup();
       resolve(event.sequence);
     });
-    timer = setTimeout(() => {
-      cleanup();
-      void options
-        .resync()
-        .catch(() => undefined)
-        .finally(() => reject(new SafeCommandError("command_confirmation_timeout")));
-    }, options.timeoutMs);
   });
   return {
     result,
+    startTimeout: (timeoutMs) => {
+      if (settled || timer) return;
+      timer = setTimeout(() => {
+        cleanup();
+        void options
+          .resync()
+          .catch(() => undefined)
+          .finally(() => rejectResult(new SafeCommandError("command_confirmation_timeout")));
+      }, timeoutMs);
+    },
     cancel: () => {
       cleanup();
       rejectResult(new SafeCommandError("command_execution_failed"));
