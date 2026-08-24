@@ -15,6 +15,7 @@ export interface BrowserContextLike {
 
 export class KeeperPageManager {
   #keeper: BrowserPageLike | undefined;
+  readonly #commandPages = new WeakSet<BrowserPageLike>();
 
   constructor(private readonly context: BrowserContextLike) {}
 
@@ -25,7 +26,12 @@ export class KeeperPageManager {
   async ensureKeeper(): Promise<BrowserPageLike> {
     const candidates = this.context
       .pages()
-      .filter((page) => !page.isClosed() && isKeeperCandidateUrl(page.url()));
+      .filter(
+        (page) =>
+          !page.isClosed() &&
+          !this.#commandPages.has(page) &&
+          isKeeperCandidateUrl(page.url())
+      );
     const loginPage = this.context
       .pages()
       .find((page) => !page.isClosed() && isSamsungLoginUrl(page.url()));
@@ -57,6 +63,19 @@ export class KeeperPageManager {
     const page = await this.context.newPage();
     await page.goto(ADVANCED_URL, { waitUntil: "domcontentloaded" });
     return page;
+  }
+
+  async openCommandPage(): Promise<BrowserPageLike> {
+    const page = await this.context.newPage();
+    this.#commandPages.add(page);
+    try {
+      await page.goto(KEEPER_URL, { waitUntil: "domcontentloaded" });
+      return page;
+    } catch (error) {
+      this.#commandPages.delete(page);
+      await page.close().catch(() => undefined);
+      throw error;
+    }
   }
 
   private async createKeeperPage(): Promise<BrowserPageLike> {

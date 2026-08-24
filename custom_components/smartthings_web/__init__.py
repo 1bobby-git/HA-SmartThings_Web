@@ -9,13 +9,14 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .bridge_client import BridgeAuthError, BridgeClientError, SmartThingsWebBridgeClient
-from .const import CONF_BRIDGE_TOKEN, CONF_BRIDGE_URL, CONF_LOCATION_ID
-from .models import SmartThingsWebRuntime
+from .const import CONF_BRIDGE_TOKEN, CONF_BRIDGE_URL, CONF_LOCATION_ID, DOMAIN
+from .models import BridgeInventory, SmartThingsWebRuntime, entity_unique_id
 
-PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.LIGHT, Platform.SENSOR, Platform.SWITCH]
 SmartThingsWebConfigEntry = ConfigEntry[SmartThingsWebRuntime]
 
 
@@ -38,19 +39,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
     location_id = entry.data[CONF_LOCATION_ID]
     runtime = SmartThingsWebRuntime(client=client, location_id=location_id, inventory=inventory)
     entry.runtime_data = runtime
-    registry = dr.async_get(hass)
-    for device in inventory.devices.values():
-        if device.location_id != location_id:
-            continue
-        room = inventory.rooms.get(device.room_id) if device.room_id else None
-        registry.async_get_or_create(
-            config_entry_id=entry.entry_id,
-            identifiers={("smartthings_web", device.device_id)},
-            name=device.name,
-            model=device.device_type,
-            manufacturer="SmartThings Web",
-            suggested_area=room[1] if room and room[0] == location_id else None,
-        )
+    _migrate_entity_registry(hass, entry, inventory)
+
+    def register_devices() -> None:
+        registry = dr.async_get(hass)
+        for device in runtime.inventory.devices.values():
+            if device.location_id != location_id:
+                continue
+            room = runtime.inventory.rooms.get(device.room_id) if device.room_id else None
+            registry.async_get_or_create(
+                config_entry_id=entry.entry_id,
+                identifiers={(DOMAIN, device.device_id)},
+                name=device.name,
+                model=device.device_type,
+                suggested_area=room[1] if room and room[0] == location_id else None,
+            )
+
+    register_devices()
+    entry.async_on_unload(runtime.subscribe(register_devices))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_create_background_task(hass, _event_loop(entry), "smartthings_web_events")
@@ -77,3 +83,36 @@ async def _event_loop(entry: SmartThingsWebConfigEntry) -> None:
             raise
         except Exception:
             await asyncio.sleep(5)
+
+
+def _migrate_entity_registry(
+    hass: HomeAssistant,
+    entry: SmartThingsWebConfigEntry,
+    inventory: BridgeInventory,
+) -> None:
+    """Repair only this integration's old unique IDs and binary switch artifacts."""
+    registry = er.async_get(hass)
+    old_to_new: dict[str, str] = {}
+    switch_ids: set[str] = set()
+    for device in inventory.devices.values():
+        if device.location_id != entry.data[CONF_LOCATION_ID]:
+            continue
+        for state in device.states.values():
+            new_unique_id = entity_unique_id(device.device_id, state)
+            old_unique_id = f"{new_unique_id}_{state.attribute}"
+            old_to_new[old_unique_id] = new_unique_id
+            if state.attribute == "switch":
+                switch_ids.update((old_unique_id, new_unique_id))
+
+    for entity_entry in list(er.async_entries_for_config_entry(registry, entry.entry_id)):
+        if entity_entry.platform != DOMAIN:
+            continue
+        if entity_entry.domain == Platform.BINARY_SENSOR and entity_entry.unique_id in switch_ids:
+            registry.async_remove(entity_entry.entity_id)
+            continue
+        new_unique_id = old_to_new.get(entity_entry.unique_id)
+        if new_unique_id is None:
+            continue
+        existing = registry.async_get_entity_id(entity_entry.domain, DOMAIN, new_unique_id)
+        if existing is None:
+            registry.async_update_entity(entity_entry.entity_id, new_unique_id=new_unique_id)

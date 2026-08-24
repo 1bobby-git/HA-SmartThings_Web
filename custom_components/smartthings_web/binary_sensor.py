@@ -32,7 +32,6 @@ BINARY_STATES = {
     "carbonMonoxide": BinaryDescription(
         "Carbon monoxide", "detected", BinarySensorDeviceClass.CO
     ),
-    "switch": BinaryDescription("Switch", "on", None),
 }
 
 
@@ -43,13 +42,26 @@ async def async_setup_entry(
 ) -> None:
     """Create supported binary sensors."""
     runtime = entry.runtime_data
-    async_add_entities(
-        SmartThingsWebBinarySensor(runtime, device, state, description)
-        for device in runtime.inventory.devices.values()
-        if device.location_id == runtime.location_id
-        for state in device.states.values()
-        if (description := BINARY_STATES.get(state.attribute)) is not None
-    )
+    known: set[str] = set()
+
+    def discover() -> None:
+        entities = []
+        for device in runtime.inventory.devices.values():
+            if device.location_id != runtime.location_id:
+                continue
+            for state in device.states.values():
+                description = BINARY_STATES.get(state.attribute)
+                unique_id = "_".join((device.device_id, *state.key))
+                if description is not None and unique_id not in known:
+                    known.add(unique_id)
+                    entities.append(
+                        SmartThingsWebBinarySensor(runtime, device, state, description)
+                    )
+        if entities:
+            async_add_entities(entities)
+
+    discover()
+    entry.async_on_unload(runtime.subscribe(discover))
 
 
 class SmartThingsWebBinarySensor(SmartThingsWebEntity, BinarySensorEntity):

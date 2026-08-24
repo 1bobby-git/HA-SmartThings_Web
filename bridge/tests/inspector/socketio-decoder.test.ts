@@ -13,6 +13,15 @@ const fixture = JSON.parse(
 ) as DuplicateFixture;
 
 describe("decodeSocketIoTextFrame", () => {
+  test("decodes Socket.IO binary acknowledgements without treating their placeholder as a protocol error", () => {
+    expect(decodeSocketIoTextFrame('461-17[null,{"_placeholder":true,"num":0}]')).toEqual({
+      kind: "binary_ack",
+      ackId: 17,
+      attachments: 1,
+      args: [null, { _placeholder: true, num: 0 }]
+    });
+  });
+
   test("decodes the sanitized real DEVICE_EVENT envelope", () => {
     const raw = `42${JSON.stringify([fixture.event_name, fixture.fixture_deliveries[0]])}`;
 

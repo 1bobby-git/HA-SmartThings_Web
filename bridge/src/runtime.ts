@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import type { BrowserContextLike, BrowserPageLike } from "./browser/keeper-page.js";
 import { KeeperPageManager } from "./browser/keeper-page.js";
 import { BrowserSupervisor } from "./browser/browser-supervisor.js";
+import { SmartThingsWebUiCommandExecutor } from "./browser/command-page.js";
+import { SafeCommandService } from "./command/command-service.js";
 import {
   launchSmartThingsPersistentContext,
   type ChromiumLauncher
@@ -57,7 +59,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.28";
+const bridgeVersion = "0.1.29";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -111,6 +113,18 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   const physicalActionProbe = new PhysicalActionCorrelationProbe();
   let currentContext: ObservableContext | undefined;
   let currentKeeperManager: KeeperPageManager | undefined;
+  const commandExecutor = new SmartThingsWebUiCommandExecutor(() => currentKeeperManager);
+  const commands = new SafeCommandService({
+    devices,
+    status,
+    executor: commandExecutor,
+    timeoutMs: 15_000,
+    resync: async () => {
+      const keeperManager = currentKeeperManager;
+      if (!keeperManager) throw new Error("command_browser_unavailable");
+      await keeperManager.recoverKeeper();
+    }
+  });
   const getProbeEvidence = () =>
     probeEvidenceFrom(
       createHealthReport(status.getSnapshot()),
@@ -123,6 +137,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     port: deps.config.port,
     auth,
     devices,
+    commands,
     physicalActionProbe,
     getProbeEvidence
   });

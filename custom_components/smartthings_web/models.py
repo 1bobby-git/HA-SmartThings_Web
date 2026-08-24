@@ -6,7 +6,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass
@@ -50,6 +50,15 @@ class BridgeInventory:
     locations: dict[str, str]
     rooms: dict[str, tuple[str, str]]
     devices: dict[str, BridgeDevice]
+
+
+@dataclass(frozen=True)
+class BridgeCommandResult:
+    """Verified result returned by the local Bridge command endpoint."""
+
+    status: Literal["confirmed", "already_confirmed"]
+    sequence: int
+    confirmation: Literal["device_event", "current_state"]
 
 
 @dataclass
@@ -150,6 +159,55 @@ class SmartThingsWebRuntime:
     def _notify_listeners(self) -> None:
         for listener in tuple(self.listeners):
             listener()
+
+
+ControlKind = Literal["switch", "light"]
+
+
+def control_kind(device: BridgeDevice, switch_state: BridgeState) -> ControlKind | None:
+    """Classify only verified, safe switch-shaped controls."""
+    if switch_state.attribute != "switch":
+        return None
+    attributes = {
+        state.attribute
+        for state in device.states.values()
+        if state.component == switch_state.component
+    }
+    light_specific = (
+        "colorTemperatureRange" in attributes
+        or {"hue", "saturation"}.issubset(attributes)
+    )
+    return "light" if light_specific else "switch"
+
+
+def entity_unique_id(device_id: str, state: BridgeState) -> str:
+    """Return the stable entity identity without duplicating the attribute."""
+    return "_".join((device_id, *state.key))
+
+
+def parse_command_result(
+    raw: dict[str, Any], client_request_id: str
+) -> BridgeCommandResult | None:
+    """Accept only a result bound to this request and an authoritative state source."""
+    status = raw.get("status")
+    confirmation = raw.get("confirmation")
+    sequence = raw.get("sequence")
+    if (
+        raw.get("schemaVersion") != 1
+        or raw.get("clientRequestId") != client_request_id
+        or raw.get("transport") != "smartthings_web_ui"
+        or status not in {"confirmed", "already_confirmed"}
+        or confirmation not in {"device_event", "current_state"}
+        or not isinstance(sequence, int)
+        or isinstance(sequence, bool)
+        or sequence < 0
+    ):
+        return None
+    if status == "confirmed" and confirmation != "device_event":
+        return None
+    if status == "already_confirmed" and confirmation != "current_state":
+        return None
+    return BridgeCommandResult(status, sequence, confirmation)
 
 
 def parse_state(raw: dict[str, Any]) -> BridgeState | None:

@@ -181,4 +181,18 @@ describe("KeeperPageManager", () => {
         .filter((page) => !page.isClosed() && page.url() === "https://my.smartthings.com/advanced")
     ).toHaveLength(1);
   });
+
+  test("keeps a tracked command location page separate from the observation keeper", async () => {
+    const context = new FakeContext([new FakePage(KEEPER_URL)]);
+    const manager = new KeeperPageManager(context);
+
+    const keeper = await manager.ensureKeeper();
+    const command = await manager.openCommandPage();
+    const reconciled = await manager.ensureKeeper();
+
+    expect(command).not.toBe(keeper);
+    expect(command.goto).toHaveBeenCalledWith(KEEPER_URL, { waitUntil: "domcontentloaded" });
+    expect(command.close).not.toHaveBeenCalled();
+    expect(reconciled).toBe(keeper);
+  });
 });

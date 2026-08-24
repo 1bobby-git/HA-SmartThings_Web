@@ -14,6 +14,9 @@ from models import (  # noqa: E402
     BridgeInventory,
     BridgeState,
     SmartThingsWebRuntime,
+    control_kind,
+    entity_unique_id,
+    parse_command_result,
 )
 
 
@@ -113,6 +116,84 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(runtime.inventory.sequence, 10)
         self.assertEqual(sensor_value(runtime), 20)
+
+    def test_control_kind_keeps_plain_switches_out_of_binary_sensor_and_light(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        switch = BridgeState(
+            component="identifier_component_main",
+            capability="identifier_capability_switch",
+            attribute="switch",
+            value="off",
+            unit=None,
+            updated_at="2026-08-24T21:10:00Z",
+        )
+        device.states = {switch.key: switch}
+
+        self.assertEqual(control_kind(device, switch), "switch")
+
+    def test_control_kind_requires_light_specific_state_evidence(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        switch = BridgeState(
+            component="identifier_component_main",
+            capability="identifier_capability_switch",
+            attribute="switch",
+            value="off",
+            unit=None,
+            updated_at="2026-08-24T21:10:00Z",
+        )
+        color_range = BridgeState(
+            component=switch.component,
+            capability="identifier_capability_color_temperature",
+            attribute="colorTemperatureRange",
+            value={"minimum": 2200, "maximum": 6500},
+            unit="K",
+            updated_at="2026-08-24T21:10:00Z",
+        )
+        device.states = {switch.key: switch, color_range.key: color_range}
+
+        self.assertEqual(control_kind(device, switch), "light")
+
+    def test_unique_id_contains_attribute_once(self) -> None:
+        state = next(iter(inventory(10, 20, "2026-08-24T21:10:00Z").devices["dev_001"].states.values()))
+
+        unique_id = entity_unique_id("dev_001", state)
+
+        self.assertEqual(
+            unique_id,
+            "dev_001_identifier_component_main_identifier_capability_temperature_temperature",
+        )
+
+    def test_command_result_accepts_only_push_confirmed_response(self) -> None:
+        result = parse_command_result(
+            {
+                "schemaVersion": 1,
+                "clientRequestId": "request_12345678",
+                "status": "confirmed",
+                "sequence": 42,
+                "transport": "smartthings_web_ui",
+                "confirmation": "device_event",
+            },
+            "request_12345678",
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.sequence, 42)
+        self.assertEqual(result.confirmation, "device_event")
+
+    def test_command_result_rejects_wrong_request_or_unverified_confirmation(self) -> None:
+        base = {
+            "schemaVersion": 1,
+            "clientRequestId": "request_12345678",
+            "status": "confirmed",
+            "sequence": 42,
+            "transport": "smartthings_web_ui",
+            "confirmation": "device_event",
+        }
+
+        self.assertIsNone(parse_command_result({**base, "clientRequestId": "other_12345678"}, "request_12345678"))
+        self.assertIsNone(parse_command_result({**base, "confirmation": "button_click"}, "request_12345678"))
 
 
 def inventory(sequence: int, value: int, updated_at: str) -> BridgeInventory:

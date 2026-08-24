@@ -340,13 +340,13 @@ function stateFromEvent(
   const capability = normalizeToken(readString(event.capability), normalizeStateToken);
   const attribute = readString(event.attribute);
   const reportedComponent = readString(event.component);
-  const normalizedComponent = normalizeToken(
-    reportedComponent ?? "main",
-    normalizeStateToken
-  );
-  const component = hasState(device, normalizedComponent, capability, attribute)
-    ? normalizedComponent
-    : inferComponent(device, capability, attribute);
+  const normalizedComponent = normalizeToken(reportedComponent ?? "main", normalizeStateToken);
+  const component =
+    reportedComponent !== null
+      ? normalizedComponent
+      : hasState(device, normalizedComponent, capability, attribute)
+        ? normalizedComponent
+        : inferComponent(device, capability, attribute);
   const state = stateFromParts({
     component,
     capability,
@@ -378,7 +378,10 @@ function hasState(
   attribute: string | null
 ): boolean {
   return Boolean(
-    component && capability && attribute && device.states.has(`${component}\u0000${capability}\u0000${attribute}`)
+    component &&
+      capability &&
+      attribute &&
+      device.states.has(`${component}\u0000${capability}\u0000${attribute}`)
   );
 }
 

@@ -21,6 +21,7 @@ export type DecodedSocketIoFrame =
   | { kind: "socket_disconnect" }
   | { kind: "event"; eventName: string; args: unknown[]; ackId?: number }
   | { kind: "ack"; ackId?: number; args: unknown[] }
+  | { kind: "binary_ack"; attachments: number; ackId?: number; args: unknown[] }
   | { kind: "invalid"; reason: SocketIoInvalidReason; byteLength: number };
 
 export function decodeSocketIoTextFrame(
@@ -64,6 +65,9 @@ function decodeSocketPacket(payload: string, byteLength: number): DecodedSocketI
   if (socketType === "1") {
     return { kind: "socket_disconnect" };
   }
+  if (socketType === "6") {
+    return decodeBinaryAck(payload, byteLength);
+  }
   if (socketType !== "2" && socketType !== "3") {
     return invalid("unknown_socket_packet", byteLength);
   }
@@ -90,6 +94,31 @@ function decodeSocketPacket(payload: string, byteLength: number): DecodedSocketI
   return ackId === undefined
     ? { kind: "event", eventName, args }
     : { kind: "event", eventName, ackId, args };
+}
+
+function decodeBinaryAck(payload: string, byteLength: number): DecodedSocketIoFrame {
+  const separator = payload.indexOf("-", 1);
+  if (separator < 2) {
+    return invalid("invalid_json", byteLength);
+  }
+  const attachmentsText = payload.slice(1, separator);
+  const attachments = /^\d+$/u.test(attachmentsText) ? Number(attachmentsText) : Number.NaN;
+  if (!Number.isSafeInteger(attachments) || attachments < 0) {
+    return invalid("invalid_json", byteLength);
+  }
+  const dataStart = findJsonStart(payload, separator + 1);
+  if (dataStart < 0) {
+    return invalid("invalid_json", byteLength);
+  }
+  const ackText = payload.slice(separator + 1, dataStart);
+  const ackId = /^\d+$/u.test(ackText) ? Number(ackText) : undefined;
+  const decoded = parseJson(payload.slice(dataStart));
+  if (!Array.isArray(decoded)) {
+    return invalid("invalid_json", byteLength);
+  }
+  return ackId === undefined
+    ? { kind: "binary_ack", attachments, args: decoded }
+    : { kind: "binary_ack", attachments, ackId, args: decoded };
 }
 
 function decodeJsonPayload(

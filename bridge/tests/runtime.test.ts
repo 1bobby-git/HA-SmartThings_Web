@@ -26,6 +26,30 @@ class FakeEmitter {
   }
 }
 
+class FakeRoleLocator {
+  readonly click = vi.fn(async () => {
+    if (this.role === "button") {
+      this.page.currentUrl = "https://my.smartthings.com/location/loc-synthetic-001/device";
+      return;
+    }
+    await this.page.onCommandToggle?.();
+  });
+  readonly waitFor = vi.fn(async () => undefined);
+
+  constructor(
+    private readonly page: FakePage,
+    private readonly role: string
+  ) {}
+
+  async count(): Promise<number> {
+    return this.role === "button" || this.role === "switch" ? 1 : 0;
+  }
+
+  first(): FakeRoleLocator {
+    return this;
+  }
+}
+
 class FakePage extends FakeEmitter {
   readonly goto = vi.fn(async (url: string) => {
     this.onGoto?.();
@@ -38,7 +62,8 @@ class FakePage extends FakeEmitter {
   constructor(
     public currentUrl: string,
     public closed = false,
-    private readonly onGoto?: () => void
+    private readonly onGoto?: () => void,
+    readonly onCommandToggle?: () => void | Promise<void>
   ) {
     super();
   }
@@ -49,6 +74,10 @@ class FakePage extends FakeEmitter {
 
   isClosed(): boolean {
     return this.closed;
+  }
+
+  getByRole(role: string): FakeRoleLocator {
+    return new FakeRoleLocator(this, role);
   }
 }
 
@@ -61,6 +90,7 @@ class FakeContext extends FakeEmitter {
   readonly closed = vi.fn(async () => undefined);
   readonly fakeBrowser = { version: vi.fn(() => "Chromium 141.0.7390.122") };
   cdpFailure: Error | undefined;
+  onCommandToggle: (() => void | Promise<void>) | undefined;
 
   constructor(public existingPages: FakePage[] = [new FakePage("about:blank")]) {
     super();
@@ -71,7 +101,7 @@ class FakeContext extends FakeEmitter {
   }
 
   async newPage(): Promise<FakePage> {
-    const page = new FakePage("about:blank");
+    const page = new FakePage("about:blank", false, undefined, this.onCommandToggle);
     this.existingPages.push(page);
     await this.emit("page", page);
     return page;
@@ -138,6 +168,97 @@ function createDeps(
 }
 
 describe("createBridgeRuntime", () => {
+  test("wires the authenticated command API through an isolated UI page and push confirmation", async () => {
+    const root = createTempRoot();
+    const context = new FakeContext([
+      new FakePage("https://my.smartthings.com/location/loc-synthetic-001")
+    ]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, { chromium: { launchPersistentContext: vi.fn(async () => context) } })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    const socket = await attachRuntimeSocket(context);
+    await emitCompleteSnapshot(socket);
+    await emitFirstDeviceEvent(socket);
+    await socket.emit("framereceived", {
+      payload: buildDeviceEventFrame({
+        eventId: "command-event-000",
+        deviceId: "raw-command-device-001",
+        capability: "switch",
+        attribute: "switch",
+        value: "off",
+        stateChange: true,
+        eventTime: "2026-08-25T00:00:00Z"
+      })
+    });
+
+    const baseUrl = `http://127.0.0.1:${runtime.port}`;
+    const pairingCode = await fetch(`${baseUrl}/api/v1/pairing-code`, { method: "POST" }).then(
+      (response) => response.json() as Promise<{ code: string }>
+    );
+    const token = await fetch(`${baseUrl}/api/v1/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: pairingCode.code })
+    }).then((response) => response.json() as Promise<{ token: string }>);
+    const headers = { authorization: `Bearer ${token.token}` };
+    const inventory = await fetch(`${baseUrl}/api/v1/inventory`, { headers }).then(
+      (response) => response.json() as Promise<{
+        devices: Array<{
+          id: string;
+          states: Array<{ component: string; capability: string; attribute: string }>;
+        }>;
+      }>
+    );
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      state: "CONNECTED",
+      pushConnected: true,
+      parserHealthy: true,
+      initialSnapshotComplete: true,
+      decodedDeviceEventCount: 2
+    });
+    const target = inventory.devices.find((device) =>
+      device.states.some((state) => state.attribute === "switch")
+    );
+    expect(target).toBeDefined();
+    const state = target?.states.find((candidate) => candidate.attribute === "switch");
+    expect(state).toBeDefined();
+    context.onCommandToggle = async () => {
+      await socket.emit("framereceived", {
+        payload: buildDeviceEventFrame({
+          eventId: "command-event-001",
+          deviceId: "raw-command-device-001",
+          capability: "switch",
+          attribute: "switch",
+          value: "on",
+          stateChange: true,
+          eventTime: "2026-08-25T00:00:01Z"
+        })
+      });
+    };
+
+    const response = await fetch(`${baseUrl}/api/v1/commands`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({
+        deviceId: target?.id,
+        component: state?.component,
+        capability: state?.capability,
+        command: "on",
+        arguments: [],
+        clientRequestId: "request_haos_001"
+      })
+    });
+
+    const responseBody = await response.json();
+    expect({ status: response.status, body: responseBody }).toMatchObject({
+      status: 200,
+      body: { status: "confirmed", confirmation: "device_event" }
+    });
+    expect(context.existingPages.filter((page) => !page.closed)).toHaveLength(1);
+  });
+
   test("emits path-free startup stage markers in order", async () => {
     const root = createTempRoot();
     const log = {

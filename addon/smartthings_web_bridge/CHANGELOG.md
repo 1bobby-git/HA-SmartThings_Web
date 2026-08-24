@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.29
+
+- Add a safe authenticated switch command endpoint that serializes per device and succeeds only after a newer push event confirms the requested state.
+- Keep command activity in a separate browser page while the keeper page remains observation-only.
+- Add Home Assistant switch and fail-closed light entities without optimistic state updates.
+
 ## 0.1.28
 
 - Keep physical-action correlation armed for valid component-less physical-action events by recording an explicit safe `unspecified` component.

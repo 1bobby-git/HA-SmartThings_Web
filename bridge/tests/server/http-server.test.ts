@@ -1,11 +1,14 @@
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { createConnection } from "node:net";
 
 import {
   PhysicalActionCorrelationProbe,
   type ProbeRuntimeEvidence
 } from "../../src/inspector/physical-action-correlation-probe.js";
+import { SafeCommandError } from "../../src/command/command-service.js";
+import { BridgeAuth } from "../../src/server/bridge-auth.js";
 import { createBridgeHttpServer } from "../../src/server/http-server.js";
+import { DeviceStore } from "../../src/state/device-store.js";
 import { RuntimeStatusStore } from "../../src/state/runtime-state.js";
 
 const servers: { close: () => Promise<void> }[] = [];
@@ -313,6 +316,88 @@ describe("createBridgeHttpServer", () => {
     expect(response).toContain("HTTP/1.1 200 OK");
     expect(response).toContain("content-type: application/json; charset=utf-8");
     expect(response).toContain("\"state\":\"idle\"");
+  });
+
+  test("serves authenticated command requests and returns only the safe confirmation envelope", async () => {
+    const token = "a".repeat(32);
+    const execute = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      clientRequestId: "request_007",
+      status: "confirmed" as const,
+      sequence: 7,
+      transport: "smartthings_web_ui" as const,
+      confirmation: "device_event" as const
+    }));
+    const server = await createBridgeHttpServer({
+      store: createStore(),
+      host: "127.0.0.1",
+      port: 0,
+      auth: new BridgeAuth(token),
+      devices: new DeviceStore(),
+      commands: { execute }
+    });
+    servers.push(server);
+    const response = await fetch(`http://127.0.0.1:${server.port}/api/v1/commands`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        deviceId: "dev_001",
+        component: "main",
+        capability: "identifier_switch",
+        command: "on",
+        arguments: [],
+        clientRequestId: "request_007"
+      })
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      schemaVersion: 1,
+      clientRequestId: "request_007",
+      status: "confirmed",
+      sequence: 7,
+      transport: "smartthings_web_ui",
+      confirmation: "device_event"
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  test("requires Bridge authentication and maps command failures to fixed safe HTTP errors", async () => {
+    const token = "b".repeat(32);
+    const execute = vi.fn(async () => {
+      throw new SafeCommandError("command_confirmation_timeout");
+    });
+    const server = await createBridgeHttpServer({
+      store: createStore(),
+      host: "127.0.0.1",
+      port: 0,
+      auth: new BridgeAuth(token),
+      devices: new DeviceStore(),
+      commands: { execute }
+    });
+    servers.push(server);
+    const baseUrl = `http://127.0.0.1:${server.port}/api/v1/commands`;
+
+    const unauthorized = await fetch(baseUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}"
+    });
+    const timedOut = await fetch(baseUrl, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: "{}"
+    });
+
+    expect(unauthorized.status).toBe(401);
+    await expectFixedError(unauthorized, "unauthorized");
+    expect(timedOut.status).toBe(504);
+    const timedOutBody = await timedOut.text();
+    expect(timedOutBody).toBe(JSON.stringify({ error: "command_confirmation_timeout" }));
+    expect(timedOutBody).not.toMatch(/token|deviceId|component|capability/i);
   });
 });
 

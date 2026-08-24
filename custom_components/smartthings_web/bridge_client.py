@@ -5,11 +5,18 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 import json
 from typing import Any
+from uuid import uuid4
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
 from yarl import URL
 
-from .models import BridgeDevice, BridgeInventory, parse_state
+from .models import (
+    BridgeCommandResult,
+    BridgeDevice,
+    BridgeInventory,
+    parse_command_result,
+    parse_state,
+)
 
 
 class BridgeClientError(Exception):
@@ -43,6 +50,33 @@ class SmartThingsWebBridgeClient:
     async def async_get_inventory(self) -> BridgeInventory:
         """Fetch the current full inventory."""
         return parse_inventory(await self._request_json("GET", "/api/v1/inventory", auth=True))
+
+    async def async_execute_switch(
+        self,
+        device_id: str,
+        component: str,
+        capability: str,
+        command: str,
+    ) -> BridgeCommandResult:
+        """Execute one safe switch command and require authoritative confirmation."""
+        client_request_id = f"ha_{uuid4().hex}"
+        raw = await self._request_json(
+            "POST",
+            "/api/v1/commands",
+            auth=True,
+            json_body={
+                "deviceId": device_id,
+                "component": component,
+                "capability": capability,
+                "command": command,
+                "arguments": [],
+                "clientRequestId": client_request_id,
+            },
+        )
+        result = parse_command_result(raw, client_request_id)
+        if result is None:
+            raise BridgeClientError("bridge_command_unconfirmed")
+        return result
 
     async def async_events(self) -> AsyncIterator[dict[str, Any]]:
         """Yield local push events without polling SmartThings."""

@@ -1,6 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import {
+  SafeCommandError,
+  type SafeCommandService
+} from "../command/command-service.js";
+
+import {
   PHYSICAL_ACTION_PRESETS,
   type PhysicalActionCorrelationProbe,
   type ProbeArmRequest,
@@ -18,6 +23,7 @@ export interface BridgeHttpServerOptions {
   port: number;
   auth?: BridgeAuth;
   devices?: DeviceStore;
+  commands?: Pick<SafeCommandService, "execute">;
   physicalActionProbe?: PhysicalActionCorrelationProbe;
   getProbeEvidence?: () => ProbeRuntimeEvidence;
 }
@@ -105,6 +111,16 @@ async function handleBridgeApiRequest(
     if (!options.auth.authenticate(request.headers.authorization)) {
       return writeError(response, 401, "unauthorized");
     }
+    if (path === "/api/v1/commands") {
+      if (method !== "POST") return writeError(response, 405, "method_not_allowed");
+      if (!options.commands) return writeError(response, 503, "command_api_unavailable");
+      if (!isJsonContentType(request.headers["content-type"])) {
+        return writeError(response, 415, "content_type_unsupported");
+      }
+      const body = await readJsonBody(request, 4_096);
+      if (!body.ok) return writeError(response, body.status, body.error);
+      return writeJson(response, 200, await options.commands.execute(body.value));
+    }
     if (path === "/api/v1/inventory") {
       if (method !== "GET") return writeError(response, 405, "method_not_allowed");
       const report = createHealthReport(options.store.getSnapshot());
@@ -120,10 +136,35 @@ async function handleBridgeApiRequest(
       return openEventStream(request, response, options.devices);
     }
     writeError(response, 404, "not_found");
-  } catch {
-    if (!response.headersSent) writeError(response, 500, "internal_error");
+  } catch (error) {
+    if (!response.headersSent && error instanceof SafeCommandError) {
+      writeError(response, commandErrorStatus(error.code), error.code);
+    } else if (!response.headersSent) writeError(response, 500, "internal_error");
     else response.destroy();
   }
+}
+
+function commandErrorStatus(code: SafeCommandError["code"]): number {
+  if (code === "command_confirmation_timeout") return 504;
+  if (
+    code === "bridge_not_connected" ||
+    code === "command_browser_unavailable" ||
+    code === "command_login_required"
+  ) {
+    return 503;
+  }
+  if (code === "device_not_found") return 404;
+  if (code === "client_request_conflict" || code === "device_offline") return 409;
+  if (
+    code === "command_target_not_found" ||
+    code === "command_target_ambiguous" ||
+    code === "command_control_not_found" ||
+    code === "command_control_ambiguous" ||
+    code === "command_execution_failed"
+  ) {
+    return 502;
+  }
+  return 400;
 }
 
 function openEventStream(
