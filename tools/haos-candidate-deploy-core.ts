@@ -257,6 +257,7 @@ export function buildHaosActivateRemoteScript(layout: HaosDeploymentRemoteLayout
     `test -f ${shellQuote(`${layout.candidateSource}/addon-package-manifest.json`)}`,
     `rm -rf ${shellQuote(layout.addonSource)}`,
     `mv ${shellQuote(layout.candidateSource)} ${shellQuote(layout.addonSource)}`,
+    `touch ${shellQuote(`${layout.addonSource}/config.yaml`)}`,
     "printf 'source_activated\\n'"
   ].join("; ");
 }
@@ -281,6 +282,7 @@ export function buildHaosRollbackSourceRemoteScript(
     `grep -Eq ${shellQuote("^version:[[:space:]]*\"?0\\.1\\.25\"?[[:space:]]*$")} ${shellQuote(`${layout.rollbackSource}/config.yaml`)}`,
     `rm -rf ${shellQuote(layout.addonSource)}`,
     `mv ${shellQuote(layout.rollbackSource)} ${shellQuote(layout.addonSource)}`,
+    `touch ${shellQuote(`${layout.addonSource}/config.yaml`)}`,
     "printf 'rollback_source_restored\\n'"
   ].join("; ");
 }
