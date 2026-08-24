@@ -67,6 +67,7 @@ RUN set -eux; \
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.json ./
 COPY tsconfig.build.json ./
+COPY addon-package-manifest.json ./
 RUN npm ci
 COPY bridge ./bridge
 RUN npm run build

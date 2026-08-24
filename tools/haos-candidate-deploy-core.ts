@@ -9,6 +9,7 @@ export const HAOS_ROLLBACK_RUNTIME_PATH =
   "/app/dist/bridge/src/inspector/protocol-analyzer.js";
 export const HAOS_ROLLBACK_RUNTIME_SHA256 =
   "e64b9edcf9be251beabd97607a5dccd5af13a6e2bc00adebeb22be421af66067";
+export const HAOS_CANDIDATE_MANIFEST_RUNTIME_PATH = "/app/addon-package-manifest.json";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
@@ -147,18 +148,29 @@ export function buildHaosRuntimeHashRemoteCommand(vmId: number, addonSlug: strin
 }
 
 export function parseHaosRuntimeHashGuestResponse(raw: string): string {
-  const output = parseGuestExecText(
+  return parseHaosContainerFileHashGuestResponse(
     raw,
+    HAOS_ROLLBACK_RUNTIME_PATH,
     "haos_candidate_deploy_runtime_hash_failed",
     "haos_candidate_deploy_runtime_hash_invalid"
-  ).trim();
-  const match = /^([a-f0-9]{64})\s+\/app\/dist\/bridge\/src\/inspector\/protocol-analyzer\.js$/u.exec(
-    output
   );
-  if (!match?.[1]) {
-    throw new Error("haos_candidate_deploy_runtime_hash_invalid");
-  }
-  return match[1];
+}
+
+export function buildHaosCandidateManifestHashRemoteCommand(
+  vmId: number,
+  addonSlug: string
+): string {
+  requireVmAndSlug(vmId, addonSlug);
+  return `qm guest exec ${String(vmId)} -- docker exec app_${addonSlug} sha256sum ${HAOS_CANDIDATE_MANIFEST_RUNTIME_PATH}`;
+}
+
+export function parseHaosCandidateManifestHashGuestResponse(raw: string): string {
+  return parseHaosContainerFileHashGuestResponse(
+    raw,
+    HAOS_CANDIDATE_MANIFEST_RUNTIME_PATH,
+    "haos_candidate_deploy_manifest_hash_failed",
+    "haos_candidate_deploy_manifest_hash_invalid"
+  );
 }
 
 export function buildHaosGuestShellRemoteCommand(
@@ -388,6 +400,20 @@ function requireVmAndSlug(vmId: number, addonSlug: string): void {
   if (!Number.isSafeInteger(vmId) || vmId <= 0 || !SAFE_SLUG_PATTERN.test(addonSlug)) {
     throw new Error("haos_candidate_deploy_command_invalid");
   }
+}
+
+function parseHaosContainerFileHashGuestResponse(
+  raw: string,
+  expectedPath: string,
+  commandFailure: string,
+  responseFailure: string
+): string {
+  const output = parseGuestExecText(raw, commandFailure, responseFailure).trim();
+  const match = /^([a-f0-9]{64})\s+(\/[^\s]+)$/u.exec(output);
+  if (!match?.[1] || match[2] !== expectedPath) {
+    throw new Error(responseFailure);
+  }
+  return match[1];
 }
 
 function requireSha256(value: string): void {

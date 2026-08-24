@@ -19,6 +19,7 @@ import {
   buildHaosAddonRebuildRemoteScript,
   buildHaosActivateRemoteScript,
   buildHaosArchiveUploadRemoteCommand,
+  buildHaosCandidateManifestHashRemoteCommand,
   buildHaosCleanupRemoteScript,
   buildHaosGuestShellRemoteCommand,
   buildHaosHealthRemoteScript,
@@ -34,6 +35,7 @@ import {
   HAOS_ROLLBACK_MANIFEST_SHA256,
   HAOS_ROLLBACK_RUNTIME_SHA256,
   HAOS_ROLLBACK_VERSION,
+  parseHaosCandidateManifestHashGuestResponse,
   parseHaosRuntimeHashGuestResponse,
   type HaosCandidateDeploymentReadiness,
   type HaosDeploymentArchiveIdentity,
@@ -89,6 +91,7 @@ interface DeploymentBundle {
 
 interface DeploymentResult {
   version: string;
+  packageManifestSha256?: string;
   app: {
     slug: string;
     state: string;
@@ -321,7 +324,11 @@ async function executeDeployment(
       120
     );
     await reloadAndRebuild(options);
-    const deployed = await verifyInstalledVersion(options, options.expectedCandidateVersion);
+    const deployed = await verifyInstalledVersion(
+      options,
+      options.expectedCandidateVersion,
+      bundle.candidate.manifestSha256
+    );
     await bestEffortCleanup(options, layout);
     return deployed;
   } catch {
@@ -371,12 +378,20 @@ async function reloadAndRebuild(options: CliOptions): Promise<void> {
 
 async function verifyInstalledVersion(
   options: CliOptions,
-  expectedVersion: string
+  expectedVersion: string,
+  expectedManifestSha256?: string
 ): Promise<DeploymentResult> {
   await waitForHealth(options);
   const installed = await readInstalledAppInfo(options);
   if (!deployedAppMatches(installed, expectedVersion, options.addonSlug)) {
     throw new SafeDeploymentError("haos_candidate_deployment_postflight_invalid");
+  }
+  if (expectedManifestSha256 !== undefined) {
+    const installedManifestSha256 = await readInstalledCandidateManifestSha256(options);
+    if (installedManifestSha256 !== expectedManifestSha256) {
+      throw new SafeDeploymentError("haos_candidate_deployment_runtime_identity_invalid");
+    }
+    return safeDeploymentResult(installed, installedManifestSha256);
   }
   return safeDeploymentResult(installed);
 }
@@ -482,6 +497,16 @@ async function readInstalledRuntimeSha256(options: CliOptions): Promise<string> 
     COMMAND_TIMEOUT_MS
   );
   return parseHaosRuntimeHashGuestResponse(raw);
+}
+
+async function readInstalledCandidateManifestSha256(options: CliOptions): Promise<string> {
+  const raw = await runSsh(
+    options,
+    buildHaosCandidateManifestHashRemoteCommand(options.vmId, options.addonSlug),
+    undefined,
+    COMMAND_TIMEOUT_MS
+  );
+  return parseHaosCandidateManifestHashGuestResponse(raw);
 }
 
 async function runSsh(
@@ -688,9 +713,13 @@ function publicReadiness(
   };
 }
 
-function safeDeploymentResult(installed: HaosAppInfo): DeploymentResult {
+function safeDeploymentResult(
+  installed: HaosAppInfo,
+  packageManifestSha256?: string
+): DeploymentResult {
   return {
     version: installed.version,
+    ...(packageManifestSha256 === undefined ? {} : { packageManifestSha256 }),
     app: {
       slug: installed.slug,
       state: installed.state,

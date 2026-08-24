@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, expect, test } from "vitest";
 
 import type {
@@ -8,6 +11,7 @@ import {
   buildHaosAddonRebuildRemoteScript,
   buildHaosActivateRemoteScript,
   buildHaosArchiveUploadRemoteCommand,
+  buildHaosCandidateManifestHashRemoteCommand,
   buildHaosCleanupRemoteScript,
   buildHaosGuestShellRemoteCommand,
   buildHaosHealthRemoteScript,
@@ -18,10 +22,12 @@ import {
   createHaosDeploymentRemoteLayout,
   deployedAppMatches,
   evaluateHaosCandidateDeploymentReadiness,
+  HAOS_CANDIDATE_MANIFEST_RUNTIME_PATH,
   HAOS_ROLLBACK_COMMIT_SHA,
   HAOS_ROLLBACK_MANIFEST_SHA256,
   HAOS_ROLLBACK_RUNTIME_PATH,
   HAOS_ROLLBACK_RUNTIME_SHA256,
+  parseHaosCandidateManifestHashGuestResponse,
   parseHaosRuntimeHashGuestResponse
 } from "../tools/haos-candidate-deploy-core.js";
 
@@ -111,6 +117,33 @@ describe("HAOS deployment command construction", () => {
         guestResponse(`${HAOS_ROLLBACK_RUNTIME_SHA256}  /data/secret\n`)
       )
     ).toThrowError("haos_candidate_deploy_runtime_hash_invalid");
+  });
+
+  test("verifies the exact candidate package manifest inside the running container", () => {
+    expect(
+      buildHaosCandidateManifestHashRemoteCommand(100, "local_smartthings_web_bridge")
+    ).toBe(
+      `qm guest exec 100 -- docker exec app_local_smartthings_web_bridge sha256sum ${HAOS_CANDIDATE_MANIFEST_RUNTIME_PATH}`
+    );
+    expect(
+      parseHaosCandidateManifestHashGuestResponse(
+        guestResponse(`${CANDIDATE_MANIFEST}  ${HAOS_CANDIDATE_MANIFEST_RUNTIME_PATH}\n`)
+      )
+    ).toBe(CANDIDATE_MANIFEST);
+    expect(() =>
+      parseHaosCandidateManifestHashGuestResponse(
+        guestResponse(`${CANDIDATE_MANIFEST}  /app/package.json\n`)
+      )
+    ).toThrowError("haos_candidate_deploy_manifest_hash_invalid");
+  });
+
+  test("copies the generated package manifest into the candidate image", () => {
+    const dockerfile = readFileSync(
+      resolve("addon/smartthings_web_bridge/Dockerfile"),
+      "utf8"
+    );
+
+    expect(dockerfile).toContain("COPY addon-package-manifest.json ./");
   });
 
   test("creates bounded candidate, backup, and exact add-on source paths", () => {
