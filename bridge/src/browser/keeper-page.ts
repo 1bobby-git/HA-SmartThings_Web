@@ -18,6 +18,10 @@ export class KeeperPageManager {
 
   constructor(private readonly context: BrowserContextLike) {}
 
+  currentKeeper(): BrowserPageLike | undefined {
+    return this.#keeper && !this.#keeper.isClosed() ? this.#keeper : undefined;
+  }
+
   async ensureKeeper(): Promise<BrowserPageLike> {
     const candidates = this.context
       .pages()

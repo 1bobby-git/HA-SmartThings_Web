@@ -64,10 +64,13 @@ describe("KeeperPageManager", () => {
     const context = new FakeContext([]);
     const manager = new KeeperPageManager(context);
 
+    expect(manager.currentKeeper()).toBeUndefined();
+
     const keeper = await manager.ensureKeeper();
 
     expect(context.created).toHaveLength(1);
     expect(keeper.goto).toHaveBeenCalledWith(KEEPER_URL, { waitUntil: "domcontentloaded" });
+    expect(manager.currentKeeper()).toBe(keeper);
   });
 
   test("reuses a safe about:blank page for the keeper instead of opening a stray tab", async () => {
@@ -113,11 +116,14 @@ describe("KeeperPageManager", () => {
     const first = (await manager.ensureKeeper()) as FakePage;
 
     first.closed = true;
+    expect(manager.currentKeeper()).toBeUndefined();
+
     const recovered = await manager.recoverKeeper();
 
     expect(recovered).not.toBe(first);
     expect(context.created).toHaveLength(2);
     expect(recovered.goto).toHaveBeenCalledWith(KEEPER_URL, { waitUntil: "domcontentloaded" });
+    expect(manager.currentKeeper()).toBe(recovered);
   });
 
   test("does not interrupt a tracked Samsung login redirect", async () => {
