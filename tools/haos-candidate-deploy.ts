@@ -451,12 +451,25 @@ async function uploadArchive(
     bytes,
     180_000
   );
-  const output = parseGuestExecText(
-    raw,
-    "haos_candidate_deployment_upload_failed",
-    "haos_candidate_deployment_upload_response_invalid"
-  );
-  if (output.trim() !== "") {
+  parseGuestExecNoOutput(raw);
+}
+
+function parseGuestExecNoOutput(raw: string): void {
+  try {
+    if (Buffer.byteLength(raw, "utf8") > MAX_COMMAND_OUTPUT_BYTES) throw new Error();
+    const wrapper = JSON.parse(raw) as Record<string, unknown>;
+    if (
+      typeof wrapper !== "object" ||
+      wrapper === null ||
+      wrapper.exitcode !== 0 ||
+      wrapper.exited !== 1 ||
+      (wrapper["out-truncated"] !== undefined && wrapper["out-truncated"] !== 0) ||
+      (wrapper["out-data"] !== undefined &&
+        (typeof wrapper["out-data"] !== "string" || wrapper["out-data"].trim() !== ""))
+    ) {
+      throw new Error();
+    }
+  } catch {
     throw new SafeDeploymentError("haos_candidate_deployment_upload_response_invalid");
   }
 }
