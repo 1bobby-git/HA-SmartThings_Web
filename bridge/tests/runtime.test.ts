@@ -8,6 +8,7 @@ import {
   createBridgeRuntime,
   type BridgeRuntimeDependencies
 } from "../src/runtime.js";
+import type { PhysicalActionProbeSnapshot } from "../src/inspector/physical-action-correlation-probe.js";
 import { PROTOCOL_CONTRACT_FINGERPRINT } from "../src/inspector/protocol-contract.js";
 import { ProtocolIntegrityStore } from "../src/state/protocol-integrity-store.js";
 import type { RuntimeStatusPatch } from "../src/state/runtime-state.js";
@@ -516,6 +517,190 @@ describe("createBridgeRuntime", () => {
     expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(true);
   });
 
+  test("serves the physical action probe from normal and protocol-load-failed runtimes", async () => {
+    const normal = await startReadyRuntime();
+
+    const initial = await fetch(`${normal.baseUrl}/probe/physical-action`);
+    const armed = await postProbeArm(normal.baseUrl, { actionType: "contact_open" });
+
+    expect(initial.status).toBe(200);
+    expect(armed.status).toBe(201);
+    await expect(armed.json()).resolves.toMatchObject({ state: "armed", actionType: "contact_open" });
+
+    const isolatedRoot = createTempRoot();
+    const isolatedContext = new FakeContext([
+      new FakePage("https://my.smartthings.com/location/loc-synthetic-001"),
+      new FakePage("https://my.smartthings.com/advanced")
+    ]);
+    const isolatedRuntime = await createBridgeRuntime(
+      createDeps(isolatedRoot, {
+        chromium: { launchPersistentContext: vi.fn(async () => isolatedContext) }
+      })
+    );
+    runtimes.push(isolatedRuntime);
+    await isolatedRuntime.browserStartup;
+    const isolatedSocket = await attachRuntimeSocket(isolatedContext);
+    await emitCompleteSnapshot(isolatedSocket);
+    await emitFirstDeviceEvent(isolatedSocket);
+
+    const notIsolated = await postProbeArm(`http://127.0.0.1:${isolatedRuntime.port}`, {
+      actionType: "contact_open"
+    });
+
+    expect(notIsolated.status).toBe(409);
+    await expectFixedProbeError(notIsolated, "browser_not_isolated");
+
+    const corruptRoot = createTempRoot();
+    writeFileSync(join(corruptRoot, "protocol-fingerprint.json"), "{not json", "utf8");
+    const corruptRuntime = await createBridgeRuntime(createDeps(corruptRoot));
+    runtimes.push(corruptRuntime);
+    await corruptRuntime.browserStartup;
+    const corruptBaseUrl = `http://127.0.0.1:${corruptRuntime.port}`;
+    const corruptProbe = await fetch(`${corruptBaseUrl}/probe/physical-action`);
+    const corruptArm = await postProbeArm(corruptBaseUrl, { actionType: "contact_open" });
+
+    expect(corruptProbe.status).toBe(200);
+    expect(corruptArm.status).not.toBe(503);
+    await expectFixedProbeError(corruptArm, "browser_not_isolated");
+  });
+
+  test("correlates duplicate contact events from Playwright and CDP without exposing raw values", async () => {
+    const { baseUrl, context, socket } = await startReadyRuntime();
+    const arm = await postProbeArm(baseUrl, { actionType: "contact_open" });
+    expect(arm.status).toBe(201);
+
+    const frame = buildDeviceEventFrame({
+      eventId: "evt_contact_probe_001",
+      deviceId: "raw-contact-device-001",
+      capability: "contactSensor",
+      attribute: "contact",
+      value: "open",
+      stateChange: true
+    });
+    await socket.emit("framereceived", { payload: frame });
+    await context.cdpSessions[0]?.emit("Network.webSocketFrameReceived", {
+      response: { opcode: 1, payloadData: frame }
+    });
+
+    const snapshot = await getProbeSnapshot(baseUrl);
+
+    expect(snapshot).toMatchObject({
+      state: "armed",
+      actionType: "contact_open",
+      candidateCount: 1,
+      candidates: [
+        {
+          component: "main",
+          capability: "contactSensor",
+          attribute: "contact",
+          valueType: "string",
+          unitPresent: false,
+          stateChange: true,
+          expectedValueMatched: true,
+          identitySource: "event_id",
+          uniqueLogicalEventCount: 1,
+          deliveryCount: 2
+        }
+      ]
+    });
+    expect(snapshot.candidates[0]?.deviceAlias).toMatch(/^dev_\d{3,32}$/);
+    expect(snapshot.candidates[0]?.logicalEventHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(snapshot)).not.toMatch(
+      /raw-contact-device-001|evt_contact_probe_001|raw-location-001|"value"\s*:|"open"/i
+    );
+  });
+
+  test("fails an armed probe on unsafe device events without logging raw event content", async () => {
+    const log = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
+    const { baseUrl, socket } = await startReadyRuntime({ log });
+    const arm = await postProbeArm(baseUrl, { actionType: "contact_open" });
+    expect(arm.status).toBe(201);
+
+    await socket.emit("framereceived", {
+      payload: buildDeviceEventFrame({
+        eventId: "evt_unsafe_probe_secret_001",
+        deviceId: "raw-unsafe-device-001",
+        capability: "bad semantic token",
+        attribute: "contact",
+        value: "raw unsafe value token",
+        stateChange: true
+      })
+    });
+
+    const snapshot = await getProbeSnapshot(baseUrl);
+
+    expect(snapshot).toMatchObject({
+      state: "fail",
+      reasons: ["unsafe_event"],
+      candidateCount: 0
+    });
+    expect(JSON.stringify(log)).not.toMatch(
+      /evt_unsafe_probe_secret_001|raw-unsafe-device-001|raw unsafe value token|bad semantic token|raw-location-001|secret|token|url|alias|body|header/i
+    );
+  });
+
+  test("fails an armed probe before protocol mismatch status handling", async () => {
+    const { baseUrl, socket } = await startReadyRuntime();
+    const arm = await postProbeArm(baseUrl, { actionType: "contact_open" });
+    expect(arm.status).toBe(201);
+
+    await emitSceneShapeMismatch(socket, 70);
+
+    await expect(getProbeSnapshot(baseUrl)).resolves.toMatchObject({
+      state: "fail",
+      reasons: ["protocol_changed"]
+    });
+  });
+
+  test("fails an armed probe on context restart and keeps evidence until manual reset", async () => {
+    const root = createTempRoot();
+    const first = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const second = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        chromium: { launchPersistentContext: vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second) }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    const socket = await attachRuntimeSocket(first);
+    await emitCompleteSnapshot(socket);
+    await emitFirstDeviceEvent(socket);
+    const baseUrl = `http://127.0.0.1:${runtime.port}`;
+    const arm = await postProbeArm(baseUrl, { actionType: "contact_open" });
+    expect(arm.status).toBe(201);
+
+    await first.emit("close");
+
+    const snapshot = await getProbeSnapshot(baseUrl);
+    expect(snapshot).toMatchObject({
+      state: "fail",
+      reasons: ["runtime_restarted"]
+    });
+
+    const reset = await fetch(`${baseUrl}/probe/physical-action/reset`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}"
+    });
+    expect(reset.status).toBe(200);
+    await expect(reset.json()).resolves.toMatchObject({ state: "voided", reasons: ["manual_reset"] });
+  });
+
+  test("fails an armed probe immediately when a new page breaks browser isolation", async () => {
+    const { baseUrl, context } = await startReadyRuntime();
+    const arm = await postProbeArm(baseUrl, { actionType: "contact_open" });
+    expect(arm.status).toBe(201);
+
+    const page = await context.newPage();
+    await page.close();
+
+    await expect(getProbeSnapshot(baseUrl)).resolves.toMatchObject({
+      state: "fail",
+      reasons: ["browser_not_isolated"]
+    });
+  });
+
   test("latches protocol changes for the process lifetime across valid frames and reconnects", async () => {
     const root = createTempRoot();
     const first = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
@@ -981,6 +1166,84 @@ async function attachRuntimeSocket(context: FakeContext): Promise<FakeEmitter & 
   socket.url = () => "wss://my.smartthings.com/socket.io/";
   await context.emit("websocket", socket);
   return socket;
+}
+
+async function startReadyRuntime(options: {
+  context?: FakeContext;
+  log?: BridgeRuntimeDependencies["log"];
+} = {}): Promise<{
+  baseUrl: string;
+  context: FakeContext;
+  runtime: Awaited<ReturnType<typeof createBridgeRuntime>>;
+  socket: FakeEmitter & { url: () => string };
+}> {
+  const root = createTempRoot();
+  const context =
+    options.context ?? new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+  const runtime = await createBridgeRuntime(
+    createDeps(root, {
+      chromium: { launchPersistentContext: vi.fn(async () => context) },
+      ...(options.log ? { log: options.log } : {})
+    })
+  );
+  runtimes.push(runtime);
+  await runtime.browserStartup;
+  const socket = await attachRuntimeSocket(context);
+  await emitCompleteSnapshot(socket);
+  await emitFirstDeviceEvent(socket);
+  expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(true);
+  return { baseUrl: `http://127.0.0.1:${runtime.port}`, context, runtime, socket };
+}
+
+async function postProbeArm(baseUrl: string, body: unknown): Promise<Response> {
+  return fetch(`${baseUrl}/probe/physical-action/arm`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+}
+
+async function getProbeSnapshot(baseUrl: string): Promise<PhysicalActionProbeSnapshot> {
+  const response = await fetch(`${baseUrl}/probe/physical-action`);
+  expect(response.status).toBe(200);
+  return (await response.json()) as PhysicalActionProbeSnapshot;
+}
+
+async function expectFixedProbeError(response: Response, code: string): Promise<void> {
+  expect(await response.text()).toBe(JSON.stringify({ error: code }));
+}
+
+function buildDeviceEventFrame(options: {
+  eventId: string;
+  deviceId: string;
+  capability: string;
+  attribute: string;
+  value: string;
+  stateChange: boolean;
+}): string {
+  return `42${JSON.stringify([
+    "api/subscription DEVICE_EVENT",
+    {
+      subscription_id: "sub_001",
+      data: {
+        event_type: "DEVICE_EVENT",
+        event_time: "2026-08-24T00:00:00Z",
+        device_event: {
+          event_id: options.eventId,
+          device_id: options.deviceId,
+          location_id: "raw-location-001",
+          component: "main",
+          capability: options.capability,
+          attribute: options.attribute,
+          value: options.value,
+          unit: null,
+          state_change: options.stateChange,
+          owner_id: "owner_001",
+          owner_type: "LOCATION"
+        }
+      }
+    }
+  ])}`;
 }
 
 async function emitCompleteSnapshot(socket: FakeEmitter): Promise<void> {

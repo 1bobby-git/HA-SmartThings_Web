@@ -7,7 +7,12 @@ import {
   launchSmartThingsPersistentContext,
   type ChromiumLauncher
 } from "./browser/persistent-context.js";
+import { isProbeBrowserIsolated } from "./browser/probe-browser-isolation.js";
 import type { BridgeConfig } from "./config.js";
+import {
+  PhysicalActionCorrelationProbe,
+  type ProbeRuntimeEvidence
+} from "./inspector/physical-action-correlation-probe.js";
 import { SqliteAliasStore } from "./security/alias-store.js";
 import { bootstrapDataPaths } from "./security/data-paths.js";
 import { createRedactor } from "./security/redactor.js";
@@ -16,6 +21,7 @@ import { installCdpNetworkObserver, type CdpSessionLike } from "./inspector/cdp-
 import { PROTOCOL_CONTRACT_VERSION, type ProtocolMismatchSurface } from "./inspector/protocol-contract.js";
 import { ProtocolAnalyzer } from "./inspector/protocol-analyzer.js";
 import { createBridgeHttpServer, type BridgeHttpServer } from "./server/http-server.js";
+import { createHealthReport, type HealthReport } from "./server/health.js";
 import { CaptureStore } from "./state/capture-store.js";
 import {
   ProtocolIntegrityStore,
@@ -95,15 +101,23 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   const redactor = createRedactor(aliases);
   log.info("bridge_init:capture_store");
   const captures = new CaptureStore(paths.sqlitePath);
+  const physicalActionProbe = new PhysicalActionCorrelationProbe();
+  let currentContext: ObservableContext | undefined;
+  let currentKeeperManager: KeeperPageManager | undefined;
+  const getProbeEvidence = () =>
+    probeEvidenceFrom(
+      createHealthReport(status.getSnapshot()),
+      isProbeBrowserIsolated(currentContext, currentKeeperManager)
+    );
   log.info("bridge_init:http_server");
   const server = await createBridgeHttpServer({
     store: status,
     host: deps.config.host,
-    port: deps.config.port
+    port: deps.config.port,
+    physicalActionProbe,
+    getProbeEvidence
   });
 
-  let currentContext: ObservableContext | undefined;
-  let currentKeeperManager: KeeperPageManager | undefined;
   let activeContextGeneration = 0;
   let stopped = false;
   let restarting = false;
@@ -112,7 +126,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     status,
     protocolIntegrity,
     log,
-    protocolIntegritySnapshot?.compatible === false
+    protocolIntegritySnapshot?.compatible === false,
+    physicalActionProbe
   );
   const sink = capturePipeline.sink;
   const heartbeat = () => {
@@ -175,7 +190,11 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       }
       try {
         const keeperManager = new KeeperPageManager(context);
-        await attachContext(context, keeperManager, sink, redactor, status, log);
+        await attachContext(context, keeperManager, sink, redactor, status, log, () => {
+          if (context === currentContext && keeperManager === currentKeeperManager) {
+            physicalActionProbe.recordBrowserIsolation(isProbeBrowserIsolated(context, keeperManager));
+          }
+        });
         currentContext = context;
         currentKeeperManager = keeperManager;
         assigned = true;
@@ -319,7 +338,8 @@ async function attachContext(
   sink: CaptureSink,
   redact: (value: unknown) => unknown,
   status: RuntimeStatusStore,
-  log: BridgeRuntimeLog
+  log: BridgeRuntimeLog,
+  onNewPage: () => void
 ): Promise<void> {
   const observedCdpPages = new WeakSet<object>();
   const restoredSettledKeeperPresent = context
@@ -329,6 +349,7 @@ async function attachContext(
   installBrowserObserver(context, sink, redact);
   context.on?.("page", (page) => {
     void installCdpForPage(context, page as BrowserPageLike, sink, redact, observedCdpPages, log);
+    onNewPage();
   });
   await installCdpForPages(context, sink, redact, observedCdpPages, log);
 
@@ -389,13 +410,15 @@ function createStatusCapturePipeline(
   status: RuntimeStatusStore,
   protocolIntegrity: ProtocolIntegrityStore | undefined,
   log: BridgeRuntimeLog,
-  initiallyProtocolBlocked: boolean
+  initiallyProtocolBlocked: boolean,
+  physicalActionProbe: PhysicalActionCorrelationProbe
 ): { sink: CaptureSink; reset: () => void } {
   let analyzer = new ProtocolAnalyzer({ ttlMs: 300_000, maxEntries: 100_000 });
   let protocolFingerprintObserved = false;
   let protocolBlocked = initiallyProtocolBlocked;
   return {
     reset: () => {
+      physicalActionProbe.fail("runtime_restarted");
       analyzer.reset();
       analyzer = new ProtocolAnalyzer({ ttlMs: 300_000, maxEntries: 100_000 });
       protocolFingerprintObserved = false;
@@ -419,12 +442,20 @@ function createStatusCapturePipeline(
           };
 
           if (analysis?.kind === "protocol_changed") {
+            physicalActionProbe.fail("protocol_changed");
             status.update({
               ...basePatch,
               ...recordProtocolMismatch(protocolIntegrity, analysis.surface, log)
             });
             protocolBlocked = true;
             return;
+          }
+          if (analysis?.kind === "new" || analysis?.kind === "duplicate") {
+            if (analysis.event) {
+              physicalActionProbe.observe(analysis);
+            } else {
+              physicalActionProbe.observeUnsafeEvent();
+            }
           }
 
           if (!protocolBlocked && !protocolFingerprintObserved && protocol.protocolFingerprint) {
@@ -486,6 +517,22 @@ function createStatusCapturePipeline(
         }
       }
     }
+  };
+}
+
+function probeEvidenceFrom(report: HealthReport, browserIsolated: boolean): ProbeRuntimeEvidence {
+  return {
+    live: report.live,
+    ready: report.ready,
+    state: report.details.state,
+    browserIsolated,
+    observedDeviceCount: report.details.observedDeviceCount,
+    decodedDeviceEventCount: report.details.decodedDeviceEventCount,
+    uniqueLogicalEventCount: report.details.uniqueLogicalEventCount,
+    duplicateEventCount: report.details.duplicateEventCount,
+    protocolInvalidFrameCount: report.details.protocolInvalidFrameCount,
+    protocolChangeCount: report.details.protocolChangeCount,
+    restartCount: report.details.restartCount
   };
 }
 
