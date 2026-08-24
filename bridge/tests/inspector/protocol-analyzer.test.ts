@@ -88,13 +88,92 @@ describe("ProtocolAnalyzer", () => {
     });
   });
 
+  test("returns dedupe correlation metadata and safe summaries for switch event deliveries", () => {
+    const analyzer = new ProtocolAnalyzer({ ttlMs: 60_000, maxEntries: 100 });
+    const delivery = sanitizedSwitchDelivery();
+
+    const first = analyzer.observe(deviceEventRecord(delivery));
+    const duplicate = analyzer.observe(cdpDeviceEventRecord(delivery));
+
+    expect(first).toMatchObject({
+      kind: "new",
+      identitySource: "event_id",
+      occurrence: 1,
+      event: {
+        safe: {
+          deviceAlias: "dev_001",
+          component: "main",
+          capability: "switch",
+          attribute: "switch",
+          valueType: "string",
+          unitPresent: false,
+          stateChange: true
+        }
+      }
+    });
+    expect(first).toHaveProperty("key", expect.stringMatching(/^event_id:/));
+    expect(duplicate).toMatchObject({
+      kind: "duplicate",
+      identitySource: "event_id",
+      occurrence: 2,
+      event: {
+        safe: {
+          deviceAlias: "dev_001",
+          component: "main",
+          capability: "switch",
+          attribute: "switch",
+          valueType: "string",
+          unitPresent: false,
+          stateChange: true
+        }
+      }
+    });
+    expect(duplicate).toHaveProperty("key", first?.kind === "new" ? first.key : expect.stringMatching(/^event_id:/));
+
+    const serializedEvent = JSON.stringify(first?.kind === "new" ? first.event : null);
+    expect(serializedEvent).not.toContain("value_raw");
+    expect(serializedEvent).not.toContain("event_id");
+    expect(serializedEvent).not.toContain("identifier_deadbeef0000");
+  });
+
+  test("keeps identity-valid unsafe aliases deduplicated while omitting event summary", () => {
+    const analyzer = new ProtocolAnalyzer({ ttlMs: 60_000, maxEntries: 100 });
+    const delivery = sanitizedSwitchDelivery({ device_id: "unsafe alias" });
+
+    expect(analyzer.observe(deviceEventRecord(delivery))).toMatchObject({
+      kind: "new",
+      identitySource: "event_id",
+      occurrence: 1,
+      event: null
+    });
+    expect(analyzer.observe(cdpDeviceEventRecord(delivery))).toMatchObject({
+      kind: "duplicate",
+      identitySource: "event_id",
+      occurrence: 2,
+      event: null
+    });
+    expect(analyzer.snapshot()).toMatchObject({
+      decodedDeviceEvents: 2,
+      uniqueLogicalEvents: 1,
+      duplicateDeliveries: 1,
+      invalidFrames: 0,
+      protocolMismatchCount: 0
+    });
+  });
+
   test("keeps distinct missing-ID events while deduplicating the same sanitized payload across observers", () => {
     const analyzer = new ProtocolAnalyzer({ ttlMs: 60_000, maxEntries: 100 });
     const firstDelivery = deviceEventWithoutId({ value: "off", event_time: "2026-08-24T00:00:00Z" });
     const changedDelivery = deviceEventWithoutId({ value: "on", event_time: "2026-08-24T00:00:01Z" });
 
-    expect(analyzer.observe(deviceEventRecord(firstDelivery))).toMatchObject({ kind: "new" });
-    expect(analyzer.observe(cdpDeviceEventRecord(firstDelivery))).toMatchObject({ kind: "duplicate" });
+    expect(analyzer.observe(deviceEventRecord(firstDelivery))).toMatchObject({
+      kind: "new",
+      identitySource: "fingerprint"
+    });
+    expect(analyzer.observe(cdpDeviceEventRecord(firstDelivery))).toMatchObject({
+      kind: "duplicate",
+      identitySource: "fingerprint"
+    });
     expect(analyzer.observe(deviceEventRecord(changedDelivery))).toMatchObject({ kind: "new" });
     expect(analyzer.snapshot()).toMatchObject({
       decodedDeviceEvents: 3,
@@ -394,6 +473,24 @@ function deviceEventWithoutId(overrides: Record<string, unknown>) {
   delete delivery.data.device_event["event_id"];
   Object.assign(delivery.data.device_event, overrides);
   return delivery;
+}
+
+function sanitizedSwitchDelivery(overrides: Record<string, unknown> = {}) {
+  return {
+    data: {
+      event_type: "DEVICE_EVENT",
+      device_event: {
+        event_id: "identifier_deadbeef0000",
+        device_id: "dev_001",
+        component: "main",
+        capability: "switch",
+        attribute: "switch",
+        value: "value_raw",
+        state_change: true,
+        ...overrides
+      }
+    }
+  };
 }
 
 function sanitizedFrame(direction: "sent" | "received", payload: string) {

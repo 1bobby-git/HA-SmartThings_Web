@@ -1,5 +1,9 @@
 import type { SanitizedCaptureRecord } from "../state/capture-store.js";
 import {
+  extractDeviceEventSummary,
+  type DeviceEventSummary
+} from "./device-event-summary.js";
+import {
   createEventPayloadHash,
   EventDeduplicator,
   extractDeviceEventIdentity,
@@ -34,7 +38,13 @@ export interface ProtocolAnalyzerSnapshot {
 }
 
 export type ProtocolAnalysisResult =
-  | { kind: "new" | "duplicate"; key: string; occurrence: number }
+  | {
+      kind: "new" | "duplicate";
+      key: string;
+      identitySource: "event_id" | "fingerprint";
+      occurrence: number;
+      event: DeviceEventSummary | null;
+    }
   | { kind: "snapshot"; requestEvent: string; category: SnapshotCategory; count: number }
   | { kind: "protocol_changed"; surface: ProtocolMismatchSurface };
 
@@ -100,7 +110,9 @@ export class ProtocolAnalyzer {
     return {
       kind: result.duplicate ? "duplicate" : "new",
       key: result.key,
-      occurrence: result.occurrence
+      identitySource: result.source,
+      occurrence: result.occurrence,
+      event: extractDeviceEventSummary(decoded.args[0])
     };
   }
 
