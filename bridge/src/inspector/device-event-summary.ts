@@ -14,8 +14,10 @@ export interface DeviceEventSummary {
   matchesExpectedValue(expected: string): boolean;
 }
 
-const DEVICE_ALIAS_PATTERN = /^dev_[0-9]{3,}$/u;
+const DEVICE_ALIAS_PATTERN = /^dev_[0-9]{3,32}$/u;
 const SAFE_TOKEN_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/u;
+const RFC3339_TIMESTAMP_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u;
 
 export function extractDeviceEventSummary(input: unknown): DeviceEventSummary | null {
   const envelope = asRecord(input);
@@ -44,6 +46,10 @@ export function extractDeviceEventSummary(input: unknown): DeviceEventSummary | 
   }
 
   const rawValue = event["value"];
+  if (!Object.hasOwn(event, "value") || !isJsonCompatibleTopLevelValue(rawValue)) {
+    return null;
+  }
+
   const safe: SafeDeviceEventSummary = {
     deviceAlias,
     component,
@@ -81,6 +87,19 @@ function valueTypeOf(value: unknown): SafeDeviceEventSummary["valueType"] {
   return "object";
 }
 
+function isJsonCompatibleTopLevelValue(value: unknown): boolean {
+  if (value === null || typeof value === "boolean" || typeof value === "string") {
+    return true;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+  if (Array.isArray(value)) {
+    return true;
+  }
+  return isPlainObject(value);
+}
+
 function readEventTimeMs(
   event: Record<string, unknown>,
   data: Record<string, unknown>
@@ -89,8 +108,19 @@ function readEventTimeMs(
   if (!value) {
     return undefined;
   }
+  if (!RFC3339_TIMESTAMP_PATTERN.test(value)) {
+    return undefined;
+  }
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function isSafeToken(value: string | null): value is string {

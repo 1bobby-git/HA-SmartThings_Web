@@ -42,6 +42,13 @@ describe("extractDeviceEventSummary", () => {
     }
   });
 
+  test("bounds safe device aliases to 3 through 32 digits", () => {
+    expect(extractDeviceEventSummary(deviceEvent({ device_id: `dev_${"1".repeat(32)}` }))?.safe.deviceAlias).toBe(
+      `dev_${"1".repeat(32)}`
+    );
+    expect(extractDeviceEventSummary(deviceEvent({ device_id: `dev_${"1".repeat(33)}` }))).toBeNull();
+  });
+
   test("rejects overlong and newline component, capability, or attribute tokens", () => {
     const overlong = "a".repeat(129);
 
@@ -60,6 +67,22 @@ describe("extractDeviceEventSummary", () => {
     expect(summary?.safe).not.toHaveProperty("sourceEventAtMs");
   });
 
+  test("accepts only RFC3339 timestamps with explicit timezones", () => {
+    expect(extractDeviceEventSummary(deviceEvent({ event_time: "2026-08-24T06:00:00Z" }))?.safe.sourceEventAtMs).toBe(
+      Date.parse("2026-08-24T06:00:00Z")
+    );
+    expect(
+      extractDeviceEventSummary(deviceEvent({ event_time: "2026-08-24T06:00:00.123Z" }))?.safe.sourceEventAtMs
+    ).toBe(Date.parse("2026-08-24T06:00:00.123Z"));
+    expect(
+      extractDeviceEventSummary(deviceEvent({ event_time: "2026-08-24T06:00:00+09:00" }))?.safe.sourceEventAtMs
+    ).toBe(Date.parse("2026-08-24T06:00:00+09:00"));
+
+    for (const event_time of ["1", "08/24/2026", "2026-08-24T06:00:00"]) {
+      expect(extractDeviceEventSummary(deviceEvent({ event_time }))?.safe).not.toHaveProperty("sourceEventAtMs");
+    }
+  });
+
   test("distinguishes every value type", () => {
     expect(extractDeviceEventSummary(deviceEvent({ value: null }))?.safe.valueType).toBe("null");
     expect(extractDeviceEventSummary(deviceEvent({ value: true }))?.safe.valueType).toBe("boolean");
@@ -67,6 +90,19 @@ describe("extractDeviceEventSummary", () => {
     expect(extractDeviceEventSummary(deviceEvent({ value: "7" }))?.safe.valueType).toBe("string");
     expect(extractDeviceEventSummary(deviceEvent({ value: ["on"] }))?.safe.valueType).toBe("array");
     expect(extractDeviceEventSummary(deviceEvent({ value: { current: "on" } }))?.safe.valueType).toBe("object");
+  });
+
+  test("fails closed when top-level value is missing or not JSON-compatible", () => {
+    expect(extractDeviceEventSummary(deviceEvent({ value: undefined }))).toBeNull();
+    expect(extractDeviceEventSummary(deviceEvent({ value: BigInt(7) }))).toBeNull();
+    expect(extractDeviceEventSummary(deviceEvent({ value: () => "on" }))).toBeNull();
+    expect(extractDeviceEventSummary(deviceEvent({ value: Symbol("on") }))).toBeNull();
+    expect(extractDeviceEventSummary(deviceEvent({ value: Number.NaN }))).toBeNull();
+    expect(extractDeviceEventSummary(deviceEvent({ value: Number.POSITIVE_INFINITY }))).toBeNull();
+
+    const withoutValue = deviceEvent() as { data: { device_event: Record<string, unknown> } };
+    delete withoutValue.data.device_event["value"];
+    expect(extractDeviceEventSummary(withoutValue)).toBeNull();
   });
 
   test("keeps raw values and event IDs out of enumerable serialization", () => {
