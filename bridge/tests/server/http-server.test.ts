@@ -118,9 +118,12 @@ describe("createBridgeHttpServer", () => {
     ["missing action", "{\"windowSeconds\":15}", "invalid_body"],
     ["wrong action type", "{\"actionType\":42}", "invalid_body"],
     ["unsupported action", "{\"actionType\":\"scene_run\"}", "unsupported_action"],
+    ["target alias number", "{\"actionType\":\"contact_open\",\"targetDeviceAlias\":7}", "invalid_body"],
+    ["target alias object", "{\"actionType\":\"contact_open\",\"targetDeviceAlias\":{}}", "invalid_body"],
     ["unsafe alias", "{\"actionType\":\"contact_open\",\"targetDeviceAlias\":\"dev_007_secret_token\"}", "unsafe_target_alias"],
     ["window below range", "{\"actionType\":\"contact_open\",\"windowSeconds\":14}", "window_out_of_range"],
     ["window above range", "{\"actionType\":\"contact_open\",\"windowSeconds\":121}", "window_out_of_range"],
+    ["window string", "{\"actionType\":\"contact_open\",\"windowSeconds\":\"15\"}", "window_out_of_range"],
     ["window noninteger", "{\"actionType\":\"contact_open\",\"windowSeconds\":15.5}", "window_out_of_range"]
   ] as const)("rejects invalid arm request: %s", async (_name, body, error) => {
     const { baseUrl } = await startProbeServer();
@@ -237,6 +240,8 @@ describe("createBridgeHttpServer", () => {
     ["reset properties", "{\"event_id\":\"abc\"}", "unknown_key"],
     ["reset empty body", "", "invalid_body"],
     ["reset array", "[]", "invalid_body"],
+    ["reset string", "\"reset\"", "invalid_body"],
+    ["reset number", "42", "invalid_body"],
     ["reset wrong content type", "{}", "content_type_unsupported", "text/plain"]
   ])("rejects invalid reset request: %s", async (_name, body, error, contentType = "application/json") => {
     const { baseUrl } = await startProbeServer();
