@@ -2,7 +2,7 @@
 
 Phase 1 add-on skeleton for a headed Chromium SmartThings Web inspector.
 
-The add-on uses Home Assistant Ingress on port `8099`, keeps VNC/noVNC bound inside the container, and exposes `/health/live` for the Supervisor watchdog.
+The add-on uses Home Assistant Ingress on port `8099`, keeps VNC/noVNC bound inside the container, exposes `/health/live` for the Supervisor watchdog, and provides a Core-only Bridge proxy on port `8100` restricted to the Home Assistant container.
 
 For a private repository install, run `npm ci`, then `npm run package:addon` from the repository root. Copy the contents of `dist-addon/smartthings_web_bridge` to `/addons/smartthings_web_bridge` on the Home Assistant host.
 
@@ -12,6 +12,8 @@ Generated text is canonical UTF-8/LF. Equivalent Windows and Linux checkouts the
 
 Keep backup copies outside `/addons`. Supervisor scans child folders there as local apps, so a backup containing the same slug can make an older version appear current.
 
-Use the Ingress noVNC page to sign in manually. Do not store Samsung credentials, cookies, or tokens in add-on options. This release does not create Home Assistant entities and does not control SmartThings devices.
+Use the Ingress noVNC page to sign in manually. Do not store Samsung credentials, cookies, or tokens in add-on options. After the Bridge reaches `CONNECTED`, generate a ten-minute pairing code and add the `SmartThings Web` integration. The limited alpha registers observed devices and creates supported read-only sensor and binary-sensor entities; it does not control devices.
+
+Live Home Assistant 2026.8.3 registration produced 213 devices and 352 read-only entities from the observed inventory. Cached inventory remains loadable during a temporary browser re-login window, while live push updates resume only after the Bridge returns to `CONNECTED`.
 
 Live HAOS validation after manual VNC login reached `CONNECTED`, observed 213 devices, decoded safe live DEVICE_EVENT counters, and restored the session plus complete snapshot after one add-on restart. The evidence gate remains `DECISION: LIMITED` until host reboot recovery, physical-action correlation, long-idle durability, command behavior, and complete API independence are proven with sanitized evidence.

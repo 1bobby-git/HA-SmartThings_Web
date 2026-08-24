@@ -2,6 +2,9 @@
 
 ## 0.1.26
 
+- Route the authenticated Bridge API to Home Assistant Core on internal port 8100 while allowing only the Core container address.
+- Register 213 observed devices and 352 read-only entities on Home Assistant 2026.8.3, using state attributes that remain stable after capability identifiers are privacy-aliased.
+- Permit cached inventory startup during a browser re-login window and use Home Assistant's supported illuminance unit constant.
 - Add an authenticated local inventory API, one-time Ingress pairing codes, and an SSE state stream for the `smartthings_web` Home Assistant integration.
 - Reconstruct all observed devices from the real SmartThings Web snapshot and update supported read-only sensor states from push events without SmartThings polling.
 - Canonicalize generated package text as UTF-8/LF so equivalent cross-platform checkouts retain one manifest identity.
