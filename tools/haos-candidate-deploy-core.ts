@@ -286,7 +286,7 @@ export function buildHaosRollbackSourceRemoteScript(
 }
 
 export function buildHaosSupervisorReloadRemoteScript(): string {
-  return "set -eu; ha supervisor reload >/dev/null; printf 'supervisor_reloaded\\n'";
+  return "set -eu; ha store reload >/dev/null; printf 'supervisor_reloaded\\n'";
 }
 
 export function buildHaosAddonRebuildRemoteScript(addonSlug: string): string {
