@@ -35,17 +35,15 @@ Run `npm run protocol:replay` after updating sanitized fixtures. The command mus
 
 Run `npm run snapshot:replay` after updating snapshot correlation fixtures. All six required categories must match and `complete` must be true before testing live reconnect recovery.
 
-## Physical-Action Probe (0.1.26 Candidate)
+## Physical-Action Probe (0.1.27 Runtime)
 
-Version 0.1.26 is implemented and packaged locally but has not been deployed to HAOS. Physical-action correlation remains unverified until the updated add-on is deployed after the soak and one real safe user action produces one unique passing result.
+Version 0.1.27 is deployed to HAOS. Physical-action correlation remains unverified: a targeted contact attempt failed closed with `unsafe_event` when an unrelated component-less live event arrived before the requested contact action.
 
-Do not install or start 0.1.26 until the active 0.1.25 72-hour soak is sealed.
-
-After that deployment hold is released:
+Before retrying after the component-less probe limitation is covered by reviewed tests:
 
 1. Keep exactly one settled SmartThings `/location` keeper page open. Do not open `/advanced`, a device detail, a login page, or another tab during the probe window.
 2. Confirm the Bridge is live, ready, `CONNECTED`, has observed devices, and reports zero protocol changes and restarts.
-3. Run `npm run probe:physical-action:haos -- status`. The currently deployed 0.1.25 correctly returns the fixed `not_found` result because the probe is not deployed there; after the candidate update it must return a sanitized snapshot.
+3. Run `npm run probe:physical-action:haos -- status` and require a sanitized idle or voided snapshot.
 4. Start one bounded attempt with `npm run probe:physical-action:haos -- arm --action contact_open --window-seconds 60 --wait`. Replace only the fixed action name when testing another supported preset. An optional target may be supplied as `--target-device-alias dev_001`.
 5. While the command waits, perform exactly one safe physical action. Do not use a browser command, scene, automation, lock, valve, garage actuator, appliance, or safety system.
 6. The operator polls `GET /probe/physical-action` and returns only the sanitized snapshot. Only one matching logical candidate with `state=pass` is countable; `ambiguous`, `fail`, `voided`, or `armed` is not proof.

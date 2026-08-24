@@ -54,6 +54,7 @@ export type BridgeDeviceStoreEvent =
     };
 
 type Listener = (event: BridgeDeviceStoreEvent) => void;
+type StateTokenNormalizer = (value: string) => string;
 type SnapshotQuery =
   | "api/location"
   | "api/room"
@@ -91,7 +92,12 @@ export class DeviceStore {
   readonly #devices = new Map<string, MutableDevice>();
   readonly #pending = new Map<number, PendingSnapshot>();
   readonly #listeners = new Set<Listener>();
+  readonly #normalizeStateToken: StateTokenNormalizer;
   #sequence = 0;
+
+  constructor(options: { normalizeStateToken?: StateTokenNormalizer } = {}) {
+    this.#normalizeStateToken = options.normalizeStateToken ?? ((value) => value);
+  }
 
   observe(record: SanitizedCaptureRecord): void {
     const frame = extractTextFrame(record);
@@ -237,11 +243,11 @@ export class DeviceStore {
     if (!data || !event || !deviceId || !locationId) {
       return;
     }
-    const state = stateFromEvent(event, data);
+    const device = this.#ensureDevice(deviceId, locationId);
+    const state = stateFromEvent(event, data, device, this.#normalizeStateToken);
     if (!state) {
       return;
     }
-    const device = this.#ensureDevice(deviceId, locationId);
     if (!this.#setState(device, state)) {
       return;
     }
@@ -276,6 +282,9 @@ export class DeviceStore {
   #setState(device: MutableDevice, state: BridgeDeviceState): boolean {
     const key = stateKey(state);
     const current = device.states.get(key);
+    if (current && isOlderOrUndated(state.updatedAt, current.updatedAt)) {
+      return false;
+    }
     if (current && JSON.stringify(current) === JSON.stringify(state)) {
       return false;
     }
@@ -324,16 +333,65 @@ function stateFromSnapshot(row: Record<string, unknown>): BridgeDeviceState | nu
 
 function stateFromEvent(
   event: Record<string, unknown>,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
+  device: MutableDevice,
+  normalizeStateToken: StateTokenNormalizer
 ): BridgeDeviceState | null {
-  return stateFromParts({
-    component: event.component,
-    capability: event.capability,
-    attribute: event.attribute,
+  const capability = normalizeToken(readString(event.capability), normalizeStateToken);
+  const attribute = readString(event.attribute);
+  const reportedComponent = readString(event.component);
+  const normalizedComponent = normalizeToken(
+    reportedComponent ?? "main",
+    normalizeStateToken
+  );
+  const component = hasState(device, normalizedComponent, capability, attribute)
+    ? normalizedComponent
+    : inferComponent(device, capability, attribute);
+  const state = stateFromParts({
+    component,
+    capability,
+    attribute,
     value: event.value,
     unit: event.unit,
     updatedAt: event.event_time ?? event.eventTime ?? data.event_time ?? data.eventTime
   });
+  return state?.updatedAt ? state : null;
+}
+
+function normalizeToken(
+  value: string | null,
+  normalizeStateToken: StateTokenNormalizer
+): string | null {
+  if (!value || !safeToken(value)) return null;
+  try {
+    const normalized = normalizeStateToken(value);
+    return safeToken(normalized) ? normalized : null;
+  } catch {
+    return null;
+  }
+}
+
+function hasState(
+  device: MutableDevice,
+  component: string | null,
+  capability: string | null,
+  attribute: string | null
+): boolean {
+  return Boolean(
+    component && capability && attribute && device.states.has(`${component}\u0000${capability}\u0000${attribute}`)
+  );
+}
+
+function inferComponent(
+  device: MutableDevice,
+  capability: string | null,
+  attribute: string | null
+): string | null {
+  if (!capability || !attribute) return null;
+  const matches = [...device.states.values()].filter(
+    (state) => state.capability === capability && state.attribute === attribute
+  );
+  return matches.length === 1 ? matches[0]?.component ?? null : null;
 }
 
 function stateFromParts(input: Record<string, unknown>): BridgeDeviceState | null {
@@ -391,8 +449,18 @@ function safeToken(value: string | null): value is string {
 }
 
 function validTimestamp(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const parsed = new Date(value);
+    return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
+  }
   const text = readString(value);
   return text && Number.isFinite(Date.parse(text)) ? text : null;
+}
+
+function isOlderOrUndated(candidate: string | null, current: string | null): boolean {
+  if (current === null) return false;
+  if (candidate === null) return true;
+  return Date.parse(candidate) <= Date.parse(current);
 }
 
 function jsonValue(value: unknown): BridgeJsonValue | undefined {

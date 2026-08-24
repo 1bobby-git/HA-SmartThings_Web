@@ -68,8 +68,7 @@ async def _event_loop(entry: SmartThingsWebConfigEntry) -> None:
     while True:
         try:
             async for event in runtime.client.async_events():
-                if event.get("type") == "state":
-                    runtime.apply_state(event)
+                await runtime.handle_event(event)
         except BridgeAuthError:
             return
         except BridgeClientError:

@@ -52,7 +52,7 @@ The runtime capture sink now feeds already-sanitized incoming Playwright/CDP tex
 
 This proves decoder/dedupe integration against one real sanitized event shape and automated missing-ID fallback behavior. It does not yet prove a real SmartThings event without an event ID, restart persistence of an event journal, or physical-action correlation.
 
-Version 0.1.26 is implemented and packaged locally but has not been deployed to HAOS. Its in-memory physical-action probe consumes only the existing sanitized analyzer result, hashes and drops the internal dedupe key, limits one window to 32 matching logical candidates, and requires exactly one settled `/location` keeper page. The numeric `protocol_version` remains 1 because this release does not accept or redefine a SmartThings protocol surface. Physical-action correlation remains unverified until a real safe action is observed on the deployed candidate after the active 0.1.25 soak is sealed.
+The in-memory physical-action probe introduced in 0.1.26 is deployed with 0.1.27, but physical-action correlation remains unverified. A targeted contact attempt failed closed on `unsafe_event` because an unrelated live DEVICE_EVENT omitted its component. The numeric `protocol_version` remains 1 because 0.1.27 normalizes the already observed event time and component omission without accepting a new external protocol surface.
 
 ## Snapshot ACK replay
 

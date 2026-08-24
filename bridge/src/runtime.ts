@@ -57,7 +57,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.26";
+const bridgeVersion = "0.1.27";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -104,7 +104,10 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   const redactor = createRedactor(aliases);
   log.info("bridge_init:capture_store");
   const captures = new CaptureStore(paths.sqlitePath);
-  const devices = new DeviceStore();
+  const devices = new DeviceStore({
+    normalizeStateToken: (value) =>
+      aliases.alias("identifier", aliases.alias("identifier", value))
+  });
   const physicalActionProbe = new PhysicalActionCorrelationProbe();
   let currentContext: ObservableContext | undefined;
   let currentKeeperManager: KeeperPageManager | undefined;

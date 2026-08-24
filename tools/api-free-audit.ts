@@ -96,6 +96,12 @@ function sanitizeAuditExcerpt(value: string): string {
 }
 
 function isApiFinding(rule: ApiFreeRule, line: string, lines: string[], index: number): boolean {
+  if (
+    rule === "direct-http-client" &&
+    /\bfetch\s*\(\s*["'`]\/?api\/v1\/[A-Za-z0-9._/-]+["'`]/u.test(line)
+  ) {
+    return false;
+  }
   if (rule === "direct-smartthings-socket") {
     return /(?:my\.smartthings\.com|smartthings\.com|samsungiotcloud|socket\.io)/i.test(
       nearby(lines, index)

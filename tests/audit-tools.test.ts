@@ -85,6 +85,17 @@ describe("api-free production audit", () => {
 
     expect(auditSmartThingsApiFree({ cwd: root })).toEqual([]);
   });
+
+  test("allows same-origin Bridge UI requests without allowing direct external clients", () => {
+    const root = seededTempDir();
+    write(
+      root,
+      "bridge/src/status-page.ts",
+      'export const pair = () => fetch("api/v1/pairing-code", { method: "POST", credentials: "same-origin" });\n'
+    );
+
+    expect(auditSmartThingsApiFree({ cwd: root })).toEqual([]);
+  });
 });
 
 describe("secret production scan", () => {

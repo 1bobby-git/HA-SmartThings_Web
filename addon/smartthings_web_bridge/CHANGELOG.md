@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.27
+
+- Restore live sensor and binary-sensor updates by reconciling component-less push events with the normalized snapshot state identity.
+- Normalize epoch-millisecond event timestamps and reject older state events before they can overwrite newer snapshot values.
+- Re-fetch and atomically merge Bridge inventory on SSE connection markers, sequence gaps, and Bridge sequence resets without adding SmartThings polling.
+
 ## 0.1.26
 
 - Route the authenticated Bridge API to Home Assistant Core on internal port 8100 while allowing only the Core container address.

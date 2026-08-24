@@ -84,24 +84,16 @@ describe("Phase 1 documentation gate", () => {
     expect(feasibility).toContain("not a GO decision");
     expect(feasibility).toContain("not causally tied to a user-triggered physical action");
     expect(feasibility).toContain("Phase 2 remains closed");
-    expect(readme).toContain(
-      "Version 0.1.26 contains the in-memory physical-action correlation probe, but it has not been deployed to HAOS."
-    );
-    expect(readme).toContain(
-      "Physical-action correlation remains unverified until a real safe user action produces one unique passing result."
-    );
-    expect(readme).toContain(
-      "Do not install or start 0.1.26 until the active 0.1.25 72-hour soak is sealed."
-    );
+    expect(readme).toContain("Version 0.1.27 is deployed on Home Assistant 2026.8.3");
+    expect(readme).toContain("Live temperature, humidity, contact, motion, and power observations");
+    expect(readme).toContain("Manual physical-action attribution remains unverified");
+    expect(readme).toContain("The 72-hour passive HAOS soak remains explicitly deferred");
     expect(readme).toContain(
       "The probe adds no browser command, DOM state scraping, direct SmartThings API call, Home Assistant entity, or persistent event journal."
     );
-    for (const document of [feasibility, protocol, session]) {
-      expect(document).toContain(
-        "Version 0.1.26 is implemented and packaged locally but has not been deployed to HAOS."
-      );
-      expect(document).toContain("Physical-action correlation remains unverified");
-    }
+    expect(feasibility).toContain("Version 0.1.27 is deployed to HAOS");
+    expect(protocol).toContain("physical-action correlation remains unverified");
+    expect(session).toContain("Version 0.1.27 is deployed");
     expect(manual).toContain("POST /probe/physical-action/arm");
     expect(manual).toContain("GET /probe/physical-action");
     expect(manual).toContain("POST /probe/physical-action/reset");
@@ -110,12 +102,10 @@ describe("Phase 1 documentation gate", () => {
       "npm run probe:physical-action:haos -- arm --action contact_open --window-seconds 60 --wait"
     );
     expect(manual).toContain("npm run probe:physical-action:haos -- reset");
-    expect(manual).toContain("0.1.25 correctly returns the fixed `not_found` result");
     expect(readme).toContain("npm run probe:physical-action:haos");
     expect(packageMetadata.scripts?.["probe:physical-action:haos"]).toBe(
       "tsx tools/haos-physical-action-probe.ts"
     );
-    expect(readme).toContain("npm run soak:deployment-gate");
     expect(manual).toContain("npm run soak:deployment-gate");
     expect(manual).toContain("npx tsx tools/haos-core-restart-continuity.ts");
     expect(manual).toContain("remoteMutationPerformed=false");
@@ -129,7 +119,6 @@ describe("Phase 1 documentation gate", () => {
     expect(packageMetadata.scripts?.["soak:deployment-gate"]).toBe(
       "tsx tools/haos-soak-deployment-gate.ts"
     );
-    expect(readme).toContain("npm run deploy:haos:preflight");
     expect(manual).toContain("npm run deploy:haos:preflight");
     expect(packageMetadata.scripts?.["deploy:haos:preflight"]).toBe(
       "tsx tools/haos-candidate-preflight.ts"
@@ -147,13 +136,13 @@ describe("Phase 1 documentation gate", () => {
     expect(`${readme}\n${manual}\n${soakDocs}`).toContain(
       "final-summary.json.sha256"
     );
-    expect(manual).toContain(
-      "Do not install or start 0.1.26 until the active 0.1.25 72-hour soak is sealed."
-    );
+    expect(manual).toContain("Version 0.1.27 is deployed to HAOS");
+    expect(manual).toContain("failed closed with `unsafe_event`");
+    expect(addonChangelog).toContain("## 0.1.27");
     expect(addonChangelog).toContain("## 0.1.26");
     expect(addonChangelog).toContain("in-memory physical-action correlation probe");
-    expect(`${readme}\n${feasibility}\n${protocol}\n${session}`).not.toContain(
-      "0.1.26 was deployed"
+    expect(`${readme}\n${feasibility}\n${protocol}\n${session}`).toContain(
+      "0.1.27 is deployed"
     );
     expect(feasibility).toContain("live Home Assistant OS 18.2 add-on");
     expect(protocol).toContain("111 requests");

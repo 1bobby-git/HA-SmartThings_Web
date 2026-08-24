@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 
@@ -64,6 +66,64 @@ class SmartThingsWebRuntime:
         self.listeners.add(listener)
         return lambda: self.listeners.discard(listener)
 
+    async def handle_event(self, event: dict[str, Any]) -> bool:
+        """Apply one SSE event, resynchronizing on reconnects and gaps."""
+        if event.get("type") == "inventory":
+            return self.apply_inventory(await self.client.async_get_inventory())
+        if event.get("type") != "state":
+            return False
+        sequence = _event_sequence(event)
+        if sequence is None:
+            return self.apply_inventory(await self.client.async_get_inventory())
+        if sequence <= self.inventory.sequence:
+            return False
+        changed = False
+        if sequence > self.inventory.sequence + 1:
+            changed = self.apply_inventory(await self.client.async_get_inventory())
+            if sequence <= self.inventory.sequence:
+                return changed
+            if sequence > self.inventory.sequence + 1:
+                return changed
+        return self.apply_state(event) or changed
+
+    def apply_inventory(self, latest: BridgeInventory) -> bool:
+        """Atomically merge the newest full or partial Bridge inventory."""
+        current = self.inventory
+        devices = deepcopy(current.devices)
+        for device_id, latest_device in latest.devices.items():
+            existing = devices.get(device_id)
+            if existing is None:
+                devices[device_id] = deepcopy(latest_device)
+                continue
+            states = deepcopy(existing.states)
+            for key, candidate in latest_device.states.items():
+                present = states.get(key)
+                if present is None or _state_is_newer(candidate, present):
+                    states[key] = deepcopy(candidate)
+            devices[device_id] = BridgeDevice(
+                device_id=latest_device.device_id,
+                location_id=latest_device.location_id,
+                room_id=latest_device.room_id,
+                name=latest_device.name,
+                device_type=latest_device.device_type,
+                online=latest_device.online,
+                states=states,
+            )
+        merged = BridgeInventory(
+            sequence=latest.sequence,
+            ready=latest.ready,
+            bridge_version=latest.bridge_version,
+            protocol_version=latest.protocol_version,
+            locations={**current.locations, **latest.locations},
+            rooms={**current.rooms, **latest.rooms},
+            devices=devices,
+        )
+        if merged == current:
+            return False
+        self.inventory = merged
+        self._notify_listeners()
+        return True
+
     def apply_state(self, event: dict[str, Any]) -> bool:
         """Apply one push state event."""
         device_id = event.get("deviceId")
@@ -76,11 +136,20 @@ class SmartThingsWebRuntime:
         state = parse_state(raw)
         if state is None:
             return False
+        sequence = _event_sequence(event)
+        if sequence is None or sequence <= self.inventory.sequence:
+            return False
+        current = device.states.get(state.key)
+        self.inventory.sequence = sequence
+        if current is not None and not _state_is_newer(state, current):
+            return False
         device.states[state.key] = state
-        self.inventory.sequence = max(self.inventory.sequence, int(event.get("sequence", 0)))
+        self._notify_listeners()
+        return True
+
+    def _notify_listeners(self) -> None:
         for listener in tuple(self.listeners):
             listener()
-        return True
 
 
 def parse_state(raw: dict[str, Any]) -> BridgeState | None:
@@ -92,12 +161,40 @@ def parse_state(raw: dict[str, Any]) -> BridgeState | None:
         return None
     unit = raw.get("unit")
     updated_at = raw.get("updatedAt")
+    if updated_at is not None and (
+        not isinstance(updated_at, str) or _timestamp(updated_at) is None
+    ):
+        return None
     return BridgeState(
         component=component,
         capability=capability,
         attribute=attribute,
         value=raw.get("value"),
         unit=unit if isinstance(unit, str) else None,
-        updated_at=updated_at if isinstance(updated_at, str) else None,
+        updated_at=updated_at,
     )
 
+
+def _event_sequence(event: dict[str, Any]) -> int | None:
+    sequence = event.get("sequence")
+    return sequence if isinstance(sequence, int) and not isinstance(sequence, bool) and sequence >= 0 else None
+
+
+def _state_is_newer(candidate: BridgeState, current: BridgeState) -> bool:
+    candidate_time = _timestamp(candidate.updated_at)
+    current_time = _timestamp(current.updated_at)
+    if current_time is None:
+        return True
+    if candidate_time is None:
+        return False
+    return candidate_time > current_time
+
+
+def _timestamp(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo is not None and parsed.utcoffset() is not None else None
+    except ValueError:
+        return None
