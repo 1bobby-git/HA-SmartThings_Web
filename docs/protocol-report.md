@@ -94,6 +94,8 @@ A 72-hour read-only external soak is now running at 300-second intervals. The co
 
 A read-only retained-capture origin audit then classified 1,999 URL-source records from the live 0.1.25 Bridge database entirely inside the container. Of 1,985 valid network URL records, 12 were consumer SmartThings Web records and zero were public SmartThings API records. Only fixed category counts and the capture time range were exported. The hashed reviewed fixture is `protocol/fixtures/2026-08-24-haos-capture-origin-audit-summary.json`; retained rows are supporting sampled evidence, not complete network history.
 
+A separate HA Core restart continuity operator now has a live non-mutating preview. It reconstructed only Core version/boot/watchdog/container-running posture and allowlisted Bridge health, found every prerequisite healthy except the pending soak, and reported `remoteMutationPerformed=false`. No Core restart occurred; execute mode remains held until the soak is sealed.
+
 The 0.1.26 package candidate is deliberately held outside HAOS until that 0.1.25 soak completes. It adds no browser input, DOM state scraping, direct SmartThings API request, Home Assistant entity, command path, or persistent event journal, and it is not live physical-action evidence.
 
 This proves HAOS packaging, enforced-profile startup, headed Chromium, Ingress, noVNC delivery, manual logged-in capture, repeated add-on/browser restart restore, initial snapshot recognition/reacquisition, and live push/parser observation through the add-on path. It does not prove a real missing-ID event, host reboot recovery, physical-action correlation, command confirmation, or long-idle durability.

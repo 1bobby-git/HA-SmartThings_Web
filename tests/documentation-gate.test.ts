@@ -117,6 +117,15 @@ describe("Phase 1 documentation gate", () => {
     );
     expect(readme).toContain("npm run soak:deployment-gate");
     expect(manual).toContain("npm run soak:deployment-gate");
+    expect(manual).toContain("npx tsx tools/haos-core-restart-continuity.ts");
+    expect(manual).toContain("remoteMutationPerformed=false");
+    expect(manual).toContain("Core start time stayed unchanged");
+    expect(manual).toContain("--expected-bridge-version 0.1.26");
+    expect(manual).toContain("--execute");
+    expect(manual).toContain("Actual execute mode remains untested");
+    expect(readme).toContain("npx tsx tools/haos-core-restart-continuity.ts");
+    expect(session).toContain("returning only `soak_gate_blocked`");
+    expect(feasibility).toContain("did not send a restart");
     expect(packageMetadata.scripts?.["soak:deployment-gate"]).toBe(
       "tsx tools/haos-soak-deployment-gate.ts"
     );

@@ -85,6 +85,24 @@ Run `npm run audit:api-free:runtime` from the repository root while the logged-i
 
 Run `npx tsx tools/haos-capture-origin-audit.ts --output-dir <external-directory>` to classify the retained sanitized capture database. The command opens the database read-only inside the add-on container and exports only fixed aggregate categories, never URLs, hostnames, payloads, identifiers, headers, or rows. Require `result=no_public_api_observed`; treat it only as retained-history supporting evidence because existing sockets or unretained traffic can remain outside the database.
 
+## Home Assistant Core Restart Continuity
+
+Do not combine this scenario with the passive soak. While the soak is active, run only the non-mutating preview:
+
+```powershell
+npx tsx tools/haos-core-restart-continuity.ts --run-dir <external-soak-directory> --expected-core-version 2026.8.3 --expected-bridge-version 0.1.25
+```
+
+The preview reads the sealed-soak gate, allowlisted Core posture, Core container start state, and direct Bridge health. It must report `remoteMutationPerformed=false`. The current active run correctly returns only `soak_gate_blocked`; a live execute-request proof was also blocked before creating its output directory, and the Core start time stayed unchanged. No Core restart was sent.
+
+After the soak is sealed, the candidate is deployed, and a fresh preview is eligible, use the exact installed versions and an empty external evidence directory:
+
+```powershell
+npx tsx tools/haos-core-restart-continuity.ts --run-dir <external-soak-directory> --expected-core-version 2026.8.3 --expected-bridge-version 0.1.26 --output-dir <empty-external-directory> --execute
+```
+
+Execution sends only `ha core restart`; it does not restart the add-on, Chromium, HAOS host, or network. During the Core restart it samples the direct Bridge health endpoint and requires every sample to remain live, ready, `CONNECTED`, on the location keeper, with no collection error. A pass also requires the Core container start time to advance, three consecutive healthy post-restart samples, unchanged Core/Bridge/browser/protocol versions, increasing browser uptime, unchanged device inventory, unchanged invalid-frame/protocol-change/restart counts, and non-regressing event counters. The result and SHA-256 sidecar are written once outside the repository. Actual execute mode remains untested until the passive soak finishes.
+
 ## Protocol Integrity Warning
 
 When a protocol mismatch is suspected, use the add-on Web UI and status page to observe the red protocol warning. Record only sanitized evidence: `PROTOCOL_CHANGED`, parser/readiness state, protocol version, affected semantic category names, and fixture or test references. Liveness and Ingress should remain available while readiness stays false.
