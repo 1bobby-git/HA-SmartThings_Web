@@ -62,6 +62,7 @@ const HEALTH_RETRY_MS = 10_000;
 interface CliOptions {
   execute: boolean;
   deferSoak: boolean;
+  acceptHotpatchedRuntime: boolean;
   runDirectory: string;
   repositoryRoot: string;
   expectedInstalledVersion: string;
@@ -129,6 +130,7 @@ async function main(): Promise<void> {
         mode: options.execute ? "execute_blocked" : "preview",
         remoteMutationPerformed: false,
         userAuthorizedSoakDeferral: options.deferSoak,
+        userAuthorizedHotpatchedRuntimePromotion: options.acceptHotpatchedRuntime,
         ...publicReadiness(readiness, bundle, layout)
       });
       if (!deploymentAuthorized) {
@@ -143,6 +145,7 @@ async function main(): Promise<void> {
       mode: "execute",
       remoteMutationPerformed: true,
       userAuthorizedSoakDeferral: options.deferSoak,
+      userAuthorizedHotpatchedRuntimePromotion: options.acceptHotpatchedRuntime,
       rolledBack: false,
       ...publicReadiness(readiness, bundle, layout),
       deployed
@@ -751,6 +754,7 @@ function parseCliOptions(args: readonly string[]): CliOptions {
   const values = new Map<string, string>();
   let execute = false;
   let deferSoak = false;
+  let acceptHotpatchedRuntime = false;
   for (let index = 0; index < args.length; index += 1) {
     const key = args[index];
     if (key === "--execute") {
@@ -765,6 +769,13 @@ function parseCliOptions(args: readonly string[]): CliOptions {
         throw new SafeDeploymentError("haos_candidate_deployment_arguments_invalid");
       }
       deferSoak = true;
+      continue;
+    }
+    if (key === "--accept-hotpatched-runtime") {
+      if (acceptHotpatchedRuntime) {
+        throw new SafeDeploymentError("haos_candidate_deployment_arguments_invalid");
+      }
+      acceptHotpatchedRuntime = true;
       continue;
     }
     const value = args[index + 1];
@@ -818,6 +829,7 @@ function parseCliOptions(args: readonly string[]): CliOptions {
   return {
     execute,
     deferSoak,
+    acceptHotpatchedRuntime,
     runDirectory: resolve(runDirectory),
     repositoryRoot: resolve(values.get("--repository-root") ?? process.cwd()),
     expectedInstalledVersion: installedVersion,
@@ -836,9 +848,14 @@ function isDeploymentAuthorized(
 ): boolean {
   if (readiness.deploymentEligible) return true;
   if (!options.deferSoak) return false;
+  const allowedReadinessReasons = new Set([
+    "preflight_blocked",
+    ...(options.acceptHotpatchedRuntime ? ["rollback_runtime_mismatch"] : [])
+  ]);
   return (
-    readiness.reasons.length === 1 &&
-    readiness.reasons[0] === "preflight_blocked" &&
+    readiness.reasons.includes("preflight_blocked") &&
+    readiness.reasons.length === allowedReadinessReasons.size &&
+    readiness.reasons.every((reason) => allowedReadinessReasons.has(reason)) &&
     readiness.preflight.reasons.length === 1 &&
     readiness.preflight.reasons[0] === "soak_gate_blocked" &&
     readiness.preflight.checks.sourceClean &&
@@ -856,7 +873,7 @@ function isDeploymentAuthorized(
     readiness.checks.candidateCommitMatches &&
     readiness.checks.candidateManifestMatches &&
     readiness.checks.rollbackManifestMatches &&
-    readiness.checks.installedRuntimeMatchesRollback
+    (readiness.checks.installedRuntimeMatchesRollback || options.acceptHotpatchedRuntime)
   );
 }
 
