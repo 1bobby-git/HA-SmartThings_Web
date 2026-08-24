@@ -137,7 +137,7 @@ export function createHaosDeploymentRemoteLayout(
     backupRoot,
     durableRollbackArchive:
       `${backupRoot}/rollback-${HAOS_ROLLBACK_COMMIT_SHA}.tgz`,
-    previousSourceArchive: `${backupRoot}/source-before-deploy.tgz`,
+    previousSourceArchive: `${backupRoot}/source-before-deploy.tar`,
     identityFile: `${backupRoot}/deployment-identity.txt`
   };
 }
@@ -240,7 +240,7 @@ export function buildHaosPrepareRemoteScript(
       identity.candidateManifestSha256
     ),
     `grep -Eq ${shellQuote(`^version:[[:space:]]*\"?${candidateVersionPattern}\"?[[:space:]]*$`)} ${shellQuote(`${layout.candidateSource}/config.yaml`)}`,
-    `if [ -d ${shellQuote(layout.addonSource)} ]; then tar -czf ${shellQuote(`${layout.previousSourceArchive}.tmp`)} -C ${shellQuote(layout.addonSource)} .; mv ${shellQuote(`${layout.previousSourceArchive}.tmp`)} ${shellQuote(layout.previousSourceArchive)}; fi`,
+    `if [ -d ${shellQuote(layout.addonSource)} ]; then tar -cf ${shellQuote(`${layout.previousSourceArchive}.tmp`)} -C ${shellQuote(layout.addonSource)} .; mv ${shellQuote(`${layout.previousSourceArchive}.tmp`)} ${shellQuote(layout.previousSourceArchive)}; fi`,
     `cp ${shellQuote(layout.rollbackUploadArchive)} ${shellQuote(`${layout.durableRollbackArchive}.tmp`)}`,
     hashCheck(`${layout.durableRollbackArchive}.tmp`, identity.rollbackArchiveSha256),
     `mv ${shellQuote(`${layout.durableRollbackArchive}.tmp`)} ${shellQuote(layout.durableRollbackArchive)}`,
