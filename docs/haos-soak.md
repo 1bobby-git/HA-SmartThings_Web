@@ -62,4 +62,12 @@ Deployment is eligible only when all of these independent checks pass:
 
 Exit code `0` and `deploymentEligible=true` are both required. Every other result is fail-closed. In particular, a healthy `pending` result still returns a nonzero exit code and does not release the candidate.
 
+After the gate passes, run the non-mutating candidate preflight:
+
+```powershell
+npm run deploy:haos:preflight -- --run-dir $soakOutput --expected-installed-version 0.1.25 --expected-candidate-version 0.1.26
+```
+
+This packages the ignored local candidate and verifies that the source is clean, on `main`, published to `origin/main`, and newer than the expected installed version. Its remote check runs only `ha apps info ... --raw-json` through the existing HAOS guest path, then reconstructs the slug, versions, running/boot state, local-build status, AppArmor mode, and Ingress boolean. It drops the Ingress URL, IP address, options, and every unrecognized field. The preflight has no execute mode and cannot upload, reload, rebuild, stop, start, or restart the app.
+
 This test proves passive long-idle durability only. Host reboot, network interruption, physical-action correlation, browser command feasibility, and complete API independence remain separate Phase 1 gates.

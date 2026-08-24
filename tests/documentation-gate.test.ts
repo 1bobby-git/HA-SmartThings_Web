@@ -115,10 +115,18 @@ describe("Phase 1 documentation gate", () => {
     expect(packageMetadata.scripts?.["soak:deployment-gate"]).toBe(
       "tsx tools/haos-soak-deployment-gate.ts"
     );
+    expect(readme).toContain("npm run deploy:haos:preflight");
+    expect(manual).toContain("npm run deploy:haos:preflight");
+    expect(packageMetadata.scripts?.["deploy:haos:preflight"]).toBe(
+      "tsx tools/haos-candidate-preflight.ts"
+    );
     const soakDocs = readFileSync("docs/haos-soak.md", "utf8");
     expect(soakDocs).toContain("It never reads `samples.jsonl`");
     expect(soakDocs).toContain("Exit code `0` and `deploymentEligible=true`");
     expect(soakDocs).toContain("at least 865 successful samples");
+    expect(soakDocs).toContain("The preflight has no execute mode");
+    expect(soakDocs).toContain("It drops the Ingress URL, IP address, options");
+    expect(manual).toContain("It does not copy files, reload Supervisor, rebuild");
     expect(`${readme}\n${manual}\n${soakDocs}`).toContain(
       "final-summary.json.sha256"
     );
