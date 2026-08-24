@@ -1,6 +1,6 @@
 # HA SmartThings Web
 
-Phase 1 repository for a Home Assistant SmartThings Web Bridge inspector. It runs a headed Chromium session for `my.smartthings.com`, lets the user log in manually through noVNC/Ingress, and records sanitized read-only network evidence before any Home Assistant entity implementation starts.
+Limited-alpha Home Assistant SmartThings Web Bridge and `smartthings_web` custom integration. It runs a headed Chromium session for `my.smartthings.com`, lets the user log in manually through noVNC/Ingress, and registers observed devices through a local authenticated Bridge connection.
 
 ## Scope
 
@@ -12,9 +12,10 @@ Phase 1 repository for a Home Assistant SmartThings Web Bridge inspector. It run
 - Snapshot ACK correlation across locations, rooms, device cards, device states, device health, and scenes before readiness, including valid empty categories and fail-closed shape checks.
 - Static gates for direct SmartThings API usage and production secret material.
 - Privacy-safe external HAOS soak sampling with automatic readiness, counter, protocol, restart, gap, and memory verdicts.
+- Authenticated local inventory and SSE push endpoints plus a read-only Home Assistant device, sensor, and binary-sensor integration.
 - Phase 1 documentation and manual evidence checklist.
 
-Not included in Phase 1: Home Assistant entity platforms, control commands, DOM-derived device state, persistent event journals, entity migration, stable release tagging, or any direct SmartThings API/PAT/OAuth/SmartApp/webhook path.
+Not included in the limited alpha: control commands, DOM-derived device state, persistent event journals, entity migration, stable release tagging, or any direct SmartThings API/PAT/OAuth/SmartApp/webhook path.
 
 ## Install
 
@@ -63,7 +64,7 @@ Phase 2 remains closed until sanitized real traffic proves full inventory, initi
 
 Current gate: `DECISION: LIMITED` in `docs/feasibility-report.md`. A bounded controlled Chrome sample confirmed a session-based Socket.IO transport and initial snapshot-shaped data without an observed `api.smartthings.com` request. A later read-only `npx tsx tools/haos-capture-origin-audit.ts` audit classified 1,999 retained URL-source records inside the live add-on container and again found consumer SmartThings Web traffic with zero public SmartThings API records; retained captures are supporting evidence, not complete network history. A live HAOS add-on run after manual VNC login reached `CONNECTED`, observed 213 devices, decoded live DEVICE_EVENT counters, and restored that session plus a complete snapshot after one 0.1.24 add-on restart. Deliberately triggered physical device events, host-reboot recovery, long-idle durability, commands, and complete API independence remain unverified.
 
-Version 0.1.26 contains the in-memory physical-action correlation probe, but it has not been deployed to HAOS. Physical-action correlation remains unverified until a real safe user action produces one unique passing result. Do not install or start 0.1.26 until the active 0.1.25 72-hour soak is sealed. The probe adds no browser command, DOM state scraping, direct SmartThings API call, Home Assistant entity, or persistent event journal.
+Version 0.1.26 now contains the first limited read-only `smartthings_web` registration path. The user explicitly deferred the incomplete 0.1.25 soak so actual device registration can be completed first. Physical-action correlation and commands remain unverified.
 
 After that deployment hold is released, the recommended operator path is `npm run probe:physical-action:haos -- arm --action contact_open --window-seconds 60 --wait`; status and reset use the same command with `status` and `reset`. The operator validates every argument, reconstructs only allowlisted response fields, and does not expose a new port or retain raw HTTP output.
 

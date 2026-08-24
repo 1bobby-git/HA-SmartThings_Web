@@ -2,13 +2,15 @@
 
 ## 0.1.26
 
+- Add an authenticated local inventory API, one-time Ingress pairing codes, and an SSE state stream for the `smartthings_web` Home Assistant integration.
+- Reconstruct all observed devices from the real SmartThings Web snapshot and update supported read-only sensor states from push events without SmartThings polling.
 - Canonicalize generated package text as UTF-8/LF so equivalent cross-platform checkouts retain one manifest identity.
 - Add a bounded in-memory physical-action correlation probe with fixed safe contact, motion, switch, and button presets.
 - Require exactly one settled `/location` keeper page before arming and fail active evidence on browser isolation loss, protocol change, or runtime restart.
 - Collapse Playwright/CDP duplicate deliveries into one logical candidate while exposing only safe metadata and an output-only SHA-256 logical-event hash.
 - Add fixed no-store Ingress control responses with strict JSON validation, a 4 KiB request limit, and no request-body or raw-event logging.
-- Keep commands, DOM state scraping, direct SmartThings APIs, Home Assistant entities, and a persistent event journal outside Phase 1.
-- Hold HAOS deployment and real physical-action testing until the active 0.1.25 72-hour soak is sealed.
+- Keep commands, DOM state scraping, direct SmartThings APIs, and a persistent event journal outside the current limited alpha.
+- Defer the interrupted 72-hour soak until after the first real Home Assistant device-registration result.
 
 ## 0.1.25
 

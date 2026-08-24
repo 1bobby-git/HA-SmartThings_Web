@@ -19,7 +19,7 @@ Keep backup copies outside `/addons`. Supervisor scans child folders there as lo
 
 Open the add-on Ingress panel, use the noVNC browser view, and sign in to Samsung manually. The bridge keeps `https://my.smartthings.com/location` open and records only sanitized network metadata for feasibility review.
 
-This Phase 1 build does not create Home Assistant entities and does not control devices.
+After the Bridge reaches `CONNECTED`, generate a ten-minute pairing code on its status page and add the `SmartThings Web` integration. The current limited alpha registers every observed device and creates supported read-only sensor and binary-sensor entities. It does not control devices.
 
 Live Home Assistant OS 18.2 validation on 2026-08-24 confirmed that the Supervisor-loaded AppArmor profile is enforced, the add-on remains non-privileged with bridge networking, and sandboxed Chromium 151 starts as the non-root browser user. The status page and noVNC Ingress rendered the Samsung Account login page.
 

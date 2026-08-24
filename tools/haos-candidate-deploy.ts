@@ -61,6 +61,7 @@ const HEALTH_RETRY_MS = 10_000;
 
 interface CliOptions {
   execute: boolean;
+  deferSoak: boolean;
   runDirectory: string;
   repositoryRoot: string;
   expectedInstalledVersion: string;
@@ -116,19 +117,21 @@ async function main(): Promise<void> {
   try {
     const bundle = await createDeploymentBundle(options.repositoryRoot, workspaceRoot);
     const readiness = await inspectDeploymentReadiness(options, bundle);
+    const deploymentAuthorized = isDeploymentAuthorized(options, readiness);
     const layout = createHaosDeploymentRemoteLayout(
       options.expectedCandidateCommitSha,
       options.expectedCandidateManifestSha256
     );
 
-    if (!options.execute || !readiness.deploymentEligible) {
+    if (!options.execute || !deploymentAuthorized) {
       emitResult({
         event: "haos_candidate_deployment_preview",
         mode: options.execute ? "execute_blocked" : "preview",
         remoteMutationPerformed: false,
+        userAuthorizedSoakDeferral: options.deferSoak,
         ...publicReadiness(readiness, bundle, layout)
       });
-      if (!readiness.deploymentEligible) {
+      if (!deploymentAuthorized) {
         process.exitCode = 1;
       }
       return;
@@ -139,6 +142,7 @@ async function main(): Promise<void> {
       event: "haos_candidate_deployment_succeeded",
       mode: "execute",
       remoteMutationPerformed: true,
+      userAuthorizedSoakDeferral: options.deferSoak,
       rolledBack: false,
       ...publicReadiness(readiness, bundle, layout),
       deployed
@@ -311,7 +315,7 @@ async function executeDeployment(
   );
 
   const finalReadiness = await inspectDeploymentReadiness(options, bundle);
-  if (!finalReadiness.deploymentEligible) {
+  if (!isDeploymentAuthorized(options, finalReadiness)) {
     await bestEffortCleanup(options, layout);
     throw new SafeDeploymentError("haos_candidate_deployment_preflight_changed");
   }
@@ -733,6 +737,7 @@ function safeDeploymentResult(
 function parseCliOptions(args: readonly string[]): CliOptions {
   const values = new Map<string, string>();
   let execute = false;
+  let deferSoak = false;
   for (let index = 0; index < args.length; index += 1) {
     const key = args[index];
     if (key === "--execute") {
@@ -740,6 +745,13 @@ function parseCliOptions(args: readonly string[]): CliOptions {
         throw new SafeDeploymentError("haos_candidate_deployment_arguments_invalid");
       }
       execute = true;
+      continue;
+    }
+    if (key === "--defer-soak") {
+      if (deferSoak) {
+        throw new SafeDeploymentError("haos_candidate_deployment_arguments_invalid");
+      }
+      deferSoak = true;
       continue;
     }
     const value = args[index + 1];
@@ -792,6 +804,7 @@ function parseCliOptions(args: readonly string[]): CliOptions {
   }
   return {
     execute,
+    deferSoak,
     runDirectory: resolve(runDirectory),
     repositoryRoot: resolve(values.get("--repository-root") ?? process.cwd()),
     expectedInstalledVersion: installedVersion,
@@ -802,6 +815,36 @@ function parseCliOptions(args: readonly string[]): CliOptions {
     vmId: positiveInteger(values.get("--vm-id") ?? "100"),
     addonSlug
   };
+}
+
+function isDeploymentAuthorized(
+  options: CliOptions,
+  readiness: HaosCandidateDeploymentReadiness
+): boolean {
+  if (readiness.deploymentEligible) return true;
+  if (!options.deferSoak) return false;
+  return (
+    readiness.reasons.length === 1 &&
+    readiness.reasons[0] === "preflight_blocked" &&
+    readiness.preflight.reasons.length === 1 &&
+    readiness.preflight.reasons[0] === "soak_gate_blocked" &&
+    readiness.preflight.checks.sourceClean &&
+    readiness.preflight.checks.sourceOnMain &&
+    readiness.preflight.checks.sourcePublished &&
+    readiness.preflight.checks.candidateVersionExpected &&
+    readiness.preflight.checks.candidateVersionNewer &&
+    readiness.preflight.checks.installedSlugExpected &&
+    readiness.preflight.checks.installedVersionExpected &&
+    readiness.preflight.checks.installedStarted &&
+    readiness.preflight.checks.installedBootAuto &&
+    readiness.preflight.checks.installedLocalBuild &&
+    readiness.preflight.checks.installedApparmorEnforced &&
+    readiness.preflight.checks.installedIngressEnabled &&
+    readiness.checks.candidateCommitMatches &&
+    readiness.checks.candidateManifestMatches &&
+    readiness.checks.rollbackManifestMatches &&
+    readiness.checks.installedRuntimeMatchesRollback
+  );
 }
 
 function safeVersion(value: string): string {

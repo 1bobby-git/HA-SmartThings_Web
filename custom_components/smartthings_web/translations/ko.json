@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "SmartThings Web Bridge 연결",
+        "description": "Bridge 애드온에서 페어링 코드를 생성한 뒤 입력하세요.",
+        "data": {
+          "bridge_url": "Bridge 주소",
+          "pairing_code": "페어링 코드"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Bridge에 연결할 수 없습니다",
+      "invalid_pairing_code": "페어링 코드가 잘못되었거나 만료되었습니다",
+      "no_devices": "Bridge에서 발견한 기기가 없습니다"
+    },
+    "abort": {
+      "already_configured": "이 SmartThings 위치는 이미 구성되어 있습니다"
+    }
+  }
+}

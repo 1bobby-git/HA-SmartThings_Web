@@ -25,6 +25,8 @@ export function renderStatusPage(report: HealthReport): string {
     th, td { border-bottom: 1px solid #2b3640; padding: 8px 10px; text-align: left; }
     th { width: 260px; color: #98a7b3; font-weight: 600; }
     a { color: #80c7ff; }
+    button { padding: 9px 13px; border: 0; border-radius: 6px; background: #3182ce; color: white; cursor: pointer; }
+    #pairing-result { display: inline-block; margin-left: 10px; font: 700 18px ui-monospace, monospace; letter-spacing: .12em; }
   </style>
 </head>
 <body>
@@ -33,8 +35,27 @@ export function renderStatusPage(report: HealthReport): string {
     <p>live=${String(report.live)} ready=${String(report.ready)}</p>
     ${protocolPanel}
     <p><a href="novnc-ui/vnc.html?autoconnect=1&amp;resize=scale&amp;path=websockify">Open browser login view</a></p>
+    <section class="protocol">
+      <h2>Home Assistant integration</h2>
+      <p>Generate a ten-minute pairing code, then add the <code>smartthings_web</code> integration.</p>
+      <button id="pairing-button" type="button">Generate pairing code</button>
+      <span id="pairing-result" aria-live="polite"></span>
+    </section>
     <table>${rows}</table>
   </main>
+  <script>
+    document.getElementById("pairing-button").addEventListener("click", async () => {
+      const target = document.getElementById("pairing-result");
+      target.textContent = "...";
+      try {
+        const response = await fetch("api/v1/pairing-code", { method: "POST", credentials: "same-origin" });
+        const body = await response.json();
+        target.textContent = response.ok && /^\\d{8}$/.test(body.code) ? body.code : "failed";
+      } catch {
+        target.textContent = "failed";
+      }
+    });
+  </script>
 </body>
 </html>`;
 }

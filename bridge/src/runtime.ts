@@ -22,7 +22,9 @@ import { PROTOCOL_CONTRACT_VERSION, type ProtocolMismatchSurface } from "./inspe
 import { ProtocolAnalyzer } from "./inspector/protocol-analyzer.js";
 import { createBridgeHttpServer, type BridgeHttpServer } from "./server/http-server.js";
 import { createHealthReport, type HealthReport } from "./server/health.js";
+import { BridgeAuth } from "./server/bridge-auth.js";
 import { CaptureStore } from "./state/capture-store.js";
+import { DeviceStore } from "./state/device-store.js";
 import {
   ProtocolIntegrityStore,
   type ProtocolIntegritySnapshot
@@ -65,6 +67,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   });
   log.info("bridge_init:secret");
   const secret = readFileSync(paths.bridgeSecretPath, "utf8").trim();
+  const auth = new BridgeAuth(secret);
   let protocolIntegrity: ProtocolIntegrityStore | undefined;
   let protocolIntegritySnapshot: ProtocolIntegritySnapshot | undefined;
   let protocolIntegrityLoadFailed = false;
@@ -101,6 +104,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   const redactor = createRedactor(aliases);
   log.info("bridge_init:capture_store");
   const captures = new CaptureStore(paths.sqlitePath);
+  const devices = new DeviceStore();
   const physicalActionProbe = new PhysicalActionCorrelationProbe();
   let currentContext: ObservableContext | undefined;
   let currentKeeperManager: KeeperPageManager | undefined;
@@ -114,6 +118,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     store: status,
     host: deps.config.host,
     port: deps.config.port,
+    auth,
+    devices,
     physicalActionProbe,
     getProbeEvidence
   });
@@ -127,7 +133,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     protocolIntegrity,
     log,
     protocolIntegritySnapshot?.compatible === false,
-    physicalActionProbe
+    physicalActionProbe,
+    devices
   );
   const sink = capturePipeline.sink;
   const heartbeat = () => {
@@ -411,7 +418,8 @@ function createStatusCapturePipeline(
   protocolIntegrity: ProtocolIntegrityStore | undefined,
   log: BridgeRuntimeLog,
   initiallyProtocolBlocked: boolean,
-  physicalActionProbe: PhysicalActionCorrelationProbe
+  physicalActionProbe: PhysicalActionCorrelationProbe,
+  devices: DeviceStore
 ): { sink: CaptureSink; reset: () => void } {
   let analyzer = new ProtocolAnalyzer({ ttlMs: 300_000, maxEntries: 100_000 });
   let protocolFingerprintObserved = false;
@@ -419,6 +427,7 @@ function createStatusCapturePipeline(
   return {
     reset: () => {
       physicalActionProbe.fail("runtime_restarted");
+      devices.reset();
       analyzer.reset();
       analyzer = new ProtocolAnalyzer({ ttlMs: 300_000, maxEntries: 100_000 });
       protocolFingerprintObserved = false;
@@ -426,6 +435,7 @@ function createStatusCapturePipeline(
     sink: {
       write(record) {
         captures.write(record);
+        devices.observe(record);
         const now = Date.now();
         if (record.source === "playwright-websocket-frame" || record.source === "cdp-websocket-frame") {
           const analysis = analyzer.observe(record);

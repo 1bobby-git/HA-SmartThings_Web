@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect SmartThings Web Bridge",
+        "description": "Open the Bridge add-on and generate a pairing code.",
+        "data": {
+          "bridge_url": "Bridge URL",
+          "pairing_code": "Pairing code"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to the Bridge",
+      "invalid_pairing_code": "The pairing code is invalid or expired",
+      "no_devices": "The Bridge has not discovered any devices"
+    },
+    "abort": {
+      "already_configured": "This SmartThings location is already configured"
+    }
+  }
+}

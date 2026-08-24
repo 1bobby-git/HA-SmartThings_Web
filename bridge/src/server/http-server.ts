@@ -6,7 +6,9 @@ import {
   type ProbeArmRequest,
   type ProbeRuntimeEvidence
 } from "../inspector/physical-action-correlation-probe.js";
+import type { DeviceStore } from "../state/device-store.js";
 import { createHealthReport } from "./health.js";
+import type { BridgeAuth } from "./bridge-auth.js";
 import { renderStatusPage } from "./status-page.js";
 import type { RuntimeStatusStore } from "../state/runtime-state.js";
 
@@ -14,6 +16,8 @@ export interface BridgeHttpServerOptions {
   store: RuntimeStatusStore;
   host: string;
   port: number;
+  auth?: BridgeAuth;
+  devices?: DeviceStore;
   physicalActionProbe?: PhysicalActionCorrelationProbe;
   getProbeEvidence?: () => ProbeRuntimeEvidence;
 }
@@ -45,6 +49,10 @@ export async function createBridgeHttpServer(options: BridgeHttpServerOptions): 
       response.end(renderStatusPage(report));
       return;
     }
+    if (path.startsWith("/api/v1/")) {
+      void handleBridgeApiRequest(request, response, options, path);
+      return;
+    }
     if (isProbePath(path)) {
       void handleProbeRequest(request, response, options, path);
       return;
@@ -60,6 +68,93 @@ export async function createBridgeHttpServer(options: BridgeHttpServerOptions): 
     port,
     close: () => close(server)
   };
+}
+
+async function handleBridgeApiRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: BridgeHttpServerOptions,
+  path: string
+): Promise<void> {
+  try {
+    const method = request.method ?? "GET";
+    if (!options.auth || !options.devices) {
+      return writeError(response, 503, "bridge_api_unavailable");
+    }
+    if (path === "/api/v1/pairing-code") {
+      if (method !== "POST") return writeError(response, 405, "method_not_allowed");
+      if (!isLoopback(request.socket.remoteAddress)) {
+        return writeError(response, 403, "ingress_required");
+      }
+      return writeJson(response, 201, options.auth.createPairingCode());
+    }
+    if (path === "/api/v1/pair") {
+      if (method !== "POST") return writeError(response, 405, "method_not_allowed");
+      if (!isJsonContentType(request.headers["content-type"])) {
+        return writeError(response, 415, "content_type_unsupported");
+      }
+      const body = await readJsonBody(request, 1_024);
+      if (!body.ok || !isRecord(body.value) || typeof body.value.code !== "string") {
+        return writeError(response, 400, "invalid_pairing_code");
+      }
+      const token = options.auth.exchangePairingCode(body.value.code);
+      return token
+        ? writeJson(response, 200, { token })
+        : writeError(response, 401, "invalid_pairing_code");
+    }
+    if (!options.auth.authenticate(request.headers.authorization)) {
+      return writeError(response, 401, "unauthorized");
+    }
+    if (path === "/api/v1/inventory") {
+      if (method !== "GET") return writeError(response, 405, "method_not_allowed");
+      const report = createHealthReport(options.store.getSnapshot());
+      return writeJson(response, 200, {
+        ...options.devices.snapshot(),
+        ready: report.ready,
+        bridgeVersion: report.details.bridgeVersion,
+        protocolVersion: report.details.protocolVersion
+      });
+    }
+    if (path === "/api/v1/events") {
+      if (method !== "GET") return writeError(response, 405, "method_not_allowed");
+      return openEventStream(request, response, options.devices);
+    }
+    writeError(response, 404, "not_found");
+  } catch {
+    if (!response.headersSent) writeError(response, 500, "internal_error");
+    else response.destroy();
+  }
+}
+
+function openEventStream(
+  request: IncomingMessage,
+  response: ServerResponse,
+  devices: DeviceStore
+): void {
+  response.writeHead(200, {
+    "cache-control": "no-store",
+    connection: "keep-alive",
+    "content-type": "text/event-stream; charset=utf-8",
+    "x-accel-buffering": "no",
+    "x-content-type-options": "nosniff"
+  });
+  const writeEvent = (value: unknown) => {
+    if (!response.destroyed) response.write(`data: ${JSON.stringify(value)}\n\n`);
+  };
+  writeEvent({ schemaVersion: 1, sequence: devices.snapshot().sequence, type: "inventory" });
+  const unsubscribe = devices.subscribe(writeEvent);
+  const keepalive = setInterval(() => {
+    if (!response.destroyed) response.write(": keepalive\n\n");
+  }, 15_000);
+  request.once("close", () => {
+    clearInterval(keepalive);
+    unsubscribe();
+    response.end();
+  });
+}
+
+function isLoopback(value: string | undefined): boolean {
+  return value === "127.0.0.1" || value === "::1" || value === "::ffff:127.0.0.1";
 }
 
 function writeJson(response: ServerResponse, status: number, value: unknown): void {
