@@ -44,6 +44,39 @@ const MONOTONIC_HEALTH_COUNTERS = [
 ] as const;
 
 const BROWSER_UPTIME_ROLLBACK_TOLERANCE_MS = 5_000;
+const SAMPLE_OBSERVATION_KEYS = new Set(["schemaVersion", "kind", "sampledAt", "health", "resources"]);
+const ERROR_OBSERVATION_KEYS = new Set(["schemaVersion", "kind", "sampledAt", "code"]);
+const HEALTH_OBSERVATION_KEYS = new Set([
+  "live",
+  "ready",
+  "state",
+  "urlCategory",
+  "activeConnections",
+  "observedDeviceCount",
+  "decodedDeviceEventCount",
+  "uniqueLogicalEventCount",
+  "duplicateEventCount",
+  "dedupeJournalSize",
+  "protocolInvalidFrameCount",
+  "protocolChangeCount",
+  "restartCount",
+  "bridgeVersion",
+  "browserVersion",
+  "protocolVersion",
+  "heartbeatAgeMs",
+  "snapshotAgeMs",
+  ...OPTIONAL_HEALTH_AGE_FIELDS
+]);
+const RESOURCE_OBSERVATION_KEYS = new Set([
+  "cpuPercent",
+  "memoryUsageBytes",
+  "memoryLimitBytes",
+  "memoryPercent",
+  "networkRxBytes",
+  "networkTxBytes",
+  "blockReadBytes",
+  "blockWriteBytes"
+]);
 
 export type SoakErrorCode =
   | "health_command_failed"
@@ -255,7 +288,7 @@ export async function writeSanitizedObservation(
   outputFile: string,
   observation: SoakObservation
 ): Promise<void> {
-  const sanitized = sanitizeObservation(observation);
+  const sanitized = parseSoakObservation(observation);
   await mkdir(dirname(resolve(outputFile)), { recursive: true, mode: 0o700 });
   await appendFile(resolve(outputFile), `${JSON.stringify(sanitized)}\n`, {
     encoding: "utf8",
@@ -470,19 +503,25 @@ function sanitizeResources(record: Record<string, unknown>): SoakResourceObserva
   };
 }
 
-function sanitizeObservation(observation: SoakObservation): SoakObservation {
+export function parseSoakObservation(observation: unknown): SoakObservation {
   const record = requireRecord(observation);
   if (record.schemaVersion !== 1) {
     throw new Error("soak_observation_invalid");
   }
   if (record.kind === "sample") {
+    assertAllowedKeys(record, SAMPLE_OBSERVATION_KEYS);
+    const health = requireRecord(record.health);
+    const resources = requireRecord(record.resources);
+    assertAllowedKeys(health, HEALTH_OBSERVATION_KEYS);
+    assertAllowedKeys(resources, RESOURCE_OBSERVATION_KEYS);
     return createSoakSample({
       sampledAt: sanitizeTimestamp(record.sampledAt),
-      health: sanitizeHealth(requireRecord(record.health)),
-      resources: sanitizeResources(requireRecord(record.resources))
+      health: sanitizeHealth(health),
+      resources: sanitizeResources(resources)
     });
   }
   if (record.kind === "error" && isSoakErrorCode(record.code)) {
+    assertAllowedKeys(record, ERROR_OBSERVATION_KEYS);
     return {
       schemaVersion: 1,
       kind: "error",
@@ -491,6 +530,12 @@ function sanitizeObservation(observation: SoakObservation): SoakObservation {
     };
   }
   throw new Error("soak_observation_invalid");
+}
+
+function assertAllowedKeys(record: Record<string, unknown>, allowed: ReadonlySet<string>): void {
+  if (Object.keys(record).some((key) => !allowed.has(key))) {
+    throw new Error("soak_observation_invalid");
+  }
 }
 
 function countersRegressed(previous: SoakSample, current: SoakSample): boolean {

@@ -127,6 +127,9 @@ describe("Phase 1 documentation gate", () => {
     expect(soakDocs).toContain("at least 865 successful samples");
     expect(soakDocs).toContain("The preflight has no execute mode");
     expect(soakDocs).toContain("It drops the Ingress URL, IP address, options");
+    expect(soakDocs).toContain("npm run soak:haos -- --resume");
+    expect(soakDocs).toContain("allows exactly one collector");
+    expect(soakDocs).toContain("does not hide downtime");
     expect(manual).toContain("It does not copy files, reload Supervisor, rebuild");
     expect(`${readme}\n${manual}\n${soakDocs}`).toContain(
       "final-summary.json.sha256"

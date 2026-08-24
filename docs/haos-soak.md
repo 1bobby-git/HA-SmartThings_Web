@@ -15,6 +15,18 @@ The defaults target the current HAOS validation environment through the existing
 
 The output directory must resolve outside this Git repository. The collector refuses an in-repository path, uses SSH batch mode with a bounded timeout, and never persists SSH stdout, stderr, the complete Supervisor app record, an Ingress path, or a browser/network capture.
 
+## Resume an interrupted run
+
+Each new run writes `collector-config.json` and holds `.collector.lock` for its lifetime. The lock allows exactly one collector to append to a run directory. A second collector fails closed; after an abnormal exit, the dead process lock is removed automatically by the next resume attempt.
+
+Resume the same external directory with the original duration and interval:
+
+```powershell
+npm run soak:haos -- --resume --duration-hours 72 --interval-seconds 300 --output-dir $soakOutput
+```
+
+`--resume` requires an explicit `--output-dir`. The SSH target, VM ID, app slug, and maximum memory-growth setting must also match the immutable collector configuration from the original run. The collector strictly replays only complete, allowlisted JSONL lines, preserves the original start/end times, and continues after the last persisted sample. It does not hide downtime: an interruption longer than twice the configured interval still produces the existing `sample_gap` failure.
+
 ## Stored evidence
 
 `samples.jsonl` contains only an explicit allowlist:
@@ -26,7 +38,7 @@ The output directory must resolve outside this Git repository. The collector ref
 - heartbeat/snapshot/frame/event/parser/push ages and browser uptime;
 - CPU, memory, network-byte, and block-I/O aggregates from Supervisor stats.
 
-`status.json` is the latest automatic evaluation. `run.json` contains timing and the `allowlisted_aggregates_only` output policy. On completion, `final-summary.json` and its SHA-256 sidecar are written. A future repository fixture may contain only the reviewed final aggregate and hash, never the external JSONL stream.
+`status.json` is the latest automatic evaluation. `run.json` contains timing and the `allowlisted_aggregates_only` output policy. `collector-config.json` contains only the fixed non-secret collector settings needed for safe resume, while `.collector.lock` contains only the collector process ID and creation time. On completion, `final-summary.json` and its SHA-256 sidecar are written. A future repository fixture may contain only the reviewed final aggregate and hash, never the external JSONL stream.
 
 ## Verdict rules
 
