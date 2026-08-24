@@ -47,6 +47,9 @@ describe("Phase 1 documentation gate", () => {
     const snapshotHashPath = `${snapshotPath}.sha256`;
     const runtimeAuditPath = "protocol/fixtures/2026-08-24-runtime-api-audit-summary.json";
     const runtimeAuditHashPath = `${runtimeAuditPath}.sha256`;
+    const captureOriginAuditPath =
+      "protocol/fixtures/2026-08-24-haos-capture-origin-audit-summary.json";
+    const captureOriginAuditHashPath = `${captureOriginAuditPath}.sha256`;
     const gitattributes = readFileSync(".gitattributes", "utf8");
     const packageMetadata = JSON.parse(readFileSync("package.json", "utf8")) as {
       scripts?: Record<string, string>;
@@ -75,6 +78,7 @@ describe("Phase 1 documentation gate", () => {
     expect(readme).toContain("/data/protocol-fingerprint.json");
     expect(readme).toContain("same contract cannot self-heal");
     expect(readme).toContain("numeric `protocol_version` bump");
+    expect(readme).toContain("npx tsx tools/haos-capture-origin-audit.ts");
     expect(readme).not.toContain("Current gate: `DECISION: STOP`");
     expect(feasibility).toContain("bounded controlled Chrome sample");
     expect(feasibility).toContain("not a GO decision");
@@ -574,6 +578,44 @@ describe("Phase 1 documentation gate", () => {
     expect(apiFree).toContain(runtimeAuditPath);
     expect(feasibility).toContain("Bridge-owned external TCP connections remained zero");
     expect(fixtures).toContain(runtimeAuditPath);
+    expect(existsSync(captureOriginAuditPath)).toBe(true);
+    expect(existsSync(captureOriginAuditHashPath)).toBe(true);
+    const captureOriginAuditText = readFileSync(captureOriginAuditPath, "utf8");
+    expect(scanSanitizedFixtureText(captureOriginAuditPath, captureOriginAuditText)).toEqual([]);
+    const captureOriginAudit = JSON.parse(captureOriginAuditText) as {
+      result?: string;
+      classification?: string;
+      analyzedCaptureRowCount?: number;
+      urlBearingCaptureRowCount?: number;
+      originCounts?: {
+        publicSmartThingsApi?: number;
+        consumerSmartThingsWeb?: number;
+      };
+      limitations?: string[];
+    };
+    expect(captureOriginAudit).toMatchObject({
+      result: "no_public_api_observed",
+      classification: "consumer_web_only_observed",
+      analyzedCaptureRowCount: 1999,
+      urlBearingCaptureRowCount: 1985,
+      originCounts: {
+        publicSmartThingsApi: 0,
+        consumerSmartThingsWeb: 12
+      }
+    });
+    expect(captureOriginAudit.limitations).toContain(
+      "retained_capture_history_not_complete_network_history"
+    );
+    const expectedCaptureOriginAuditHash = readFileSync(captureOriginAuditHashPath, "utf8")
+      .trim()
+      .split(/\s+/)[0];
+    expect(createHash("sha256").update(captureOriginAuditText).digest("hex")).toBe(
+      expectedCaptureOriginAuditHash
+    );
+    expect(apiFree).toContain("npx tsx tools/haos-capture-origin-audit.ts");
+    expect(apiFree).toContain(captureOriginAuditPath);
+    expect(feasibility).toContain("zero public SmartThings API records");
+    expect(fixtures).toContain("2026-08-24-haos-capture-origin-audit-summary.json");
     expect(`${feasibility}\n${protocol}`).not.toMatch(/DECISION: GO/);
 
     const baselines = YAML.parse(readFileSync("upstream-baselines.yaml", "utf8")) as {

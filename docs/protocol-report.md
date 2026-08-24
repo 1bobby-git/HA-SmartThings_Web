@@ -92,6 +92,8 @@ Version 0.1.25 was then deployed after moving duplicate-slug source backups outs
 
 A 72-hour read-only external soak is now running at 300-second intervals. The corrected run began with 213 devices, ready `CONNECTED` state, protocol changes and restart count at zero, invalid-frame baseline 2, and successful 200/200/101 Ingress, noVNC asset, and WebSocket start checks. Detailed JSONL stays outside the repository; only a reviewed aggregate and SHA may be retained after completion. Its current status is `pending`, so no long-idle claim is made yet.
 
+A read-only retained-capture origin audit then classified 1,999 URL-source records from the live 0.1.25 Bridge database entirely inside the container. Of 1,985 valid network URL records, 12 were consumer SmartThings Web records and zero were public SmartThings API records. Only fixed category counts and the capture time range were exported. The hashed reviewed fixture is `protocol/fixtures/2026-08-24-haos-capture-origin-audit-summary.json`; retained rows are supporting sampled evidence, not complete network history.
+
 The 0.1.26 package candidate is deliberately held outside HAOS until that 0.1.25 soak completes. It adds no browser input, DOM state scraping, direct SmartThings API request, Home Assistant entity, command path, or persistent event journal, and it is not live physical-action evidence.
 
 This proves HAOS packaging, enforced-profile startup, headed Chromium, Ingress, noVNC delivery, manual logged-in capture, repeated add-on/browser restart restore, initial snapshot recognition/reacquisition, and live push/parser observation through the add-on path. It does not prove a real missing-ID event, host reboot recovery, physical-action correlation, command confirmation, or long-idle durability.

@@ -83,6 +83,8 @@ Require exit code `0`. The preflight verifies a clean published `main`, the cand
 
 Run `npm run audit:api-free:runtime` from the repository root while the logged-in HAOS add-on is healthy. The collector reads only HAOS process/socket ownership and writes a hashed aggregate outside the repository. A passing bounded sample requires the Bridge listener in every sample, zero Bridge-owned external TCP connections, at least one Chromium-owned external TCP connection, and at least two samples. It never stores destination addresses, ports, process IDs, socket identifiers, or packet contents. Treat a pass as bounded process-separation evidence only, not complete network-history or public-API independence proof.
 
+Run `npx tsx tools/haos-capture-origin-audit.ts --output-dir <external-directory>` to classify the retained sanitized capture database. The command opens the database read-only inside the add-on container and exports only fixed aggregate categories, never URLs, hostnames, payloads, identifiers, headers, or rows. Require `result=no_public_api_observed`; treat it only as retained-history supporting evidence because existing sockets or unretained traffic can remain outside the database.
+
 ## Protocol Integrity Warning
 
 When a protocol mismatch is suspected, use the add-on Web UI and status page to observe the red protocol warning. Record only sanitized evidence: `PROTOCOL_CHANGED`, parser/readiness state, protocol version, affected semantic category names, and fixture or test references. Liveness and Ingress should remain available while readiness stays false.

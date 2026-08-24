@@ -16,6 +16,8 @@ Raw events remained transient in browser/CDP buffers during the current bounded 
 
 `protocol/fixtures/2026-08-24-runtime-api-audit-summary.json` records a bounded live HAOS process-socket sample. It retains only role-level counts and pass/fail booleans proving that the Bridge owned no external TCP connection during the sample while Chromium did. Raw destinations, ports, process IDs, socket identifiers, command output, and packet contents were discarded before persistence. This bounded sample is not complete network-history proof.
 
+`2026-08-24-haos-capture-origin-audit-summary.json` records a read-only classification of the URL-bearing rows retained in the live 0.1.25 Bridge capture database. URL parsing and hostname classification occurred inside the add-on container; only fixed category counts and the capture time range left the container. The reviewed result found consumer SmartThings Web records and zero public SmartThings API records. URL records can double-count one exchange, and retained capture history is not complete network-history proof.
+
 `2026-08-20-device-event-duplicate.sanitized.json` contains three sanitized deliveries from one real event ID. It is used only to verify Socket.IO DEVICE_EVENT decoding and deduplication; the raw value and identifiers are not retained.
 
 `2026-08-20-snapshot-ack-correlations.sanitized.json` records six real Socket.IO request/ACK correlations using only stable query names, aliased ACK IDs, response categories, counts, and field names. It contains no inventory values or raw identifiers. The query names allow an empty but successful category response to be recognized without inspecting account data.
