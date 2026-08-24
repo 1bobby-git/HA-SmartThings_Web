@@ -199,6 +199,16 @@ describe("createBridgeHttpServer", () => {
     expect(preRejected).toContain("{\"error\":\"body_too_large\"}");
   });
 
+  test("rejects invalid UTF-8 JSON bytes without leaking raw content", async () => {
+    const { server } = await startProbeServer();
+
+    const response = await rawInvalidUtf8JsonPost(server.port);
+
+    expect(response).toContain("HTTP/1.1 400 Bad Request");
+    expect(response).toContain("{\"error\":\"invalid_json\"}");
+    expect(response).not.toMatch(/secret|token|dev_007|event_id:|fingerprint:|https?:\/\//i);
+  });
+
   test("preserves method and route boundaries for probe paths", async () => {
     const { baseUrl } = await startProbeServer();
 
@@ -434,6 +444,57 @@ async function rawOversizedPostWithoutBody(port: number): Promise<string> {
           ""
         ].join("\r\n")
       );
+    });
+    socket.on("data", (chunk) => {
+      response += chunk.toString("utf8");
+      clearTimeout(timeout);
+      socket.end();
+    });
+    socket.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    socket.on("close", () => {
+      clearTimeout(timeout);
+      resolve(response);
+    });
+  });
+}
+
+async function rawInvalidUtf8JsonPost(port: number): Promise<string> {
+  const body = Buffer.from([
+    ...Buffer.from("{\"actionType\":\"contact_open\",\"targetDeviceAlias\":\"dev_007\",\"secret\":\""),
+    0xc3,
+    0x28,
+    ...Buffer.from("token-event_id:fingerprint:https://internal\"}")
+  ]);
+  return rawHttpRequest(
+    port,
+    [
+      "POST /probe/physical-action/arm HTTP/1.1",
+      "Host: 127.0.0.1",
+      "Content-Type: application/json",
+      `Content-Length: ${body.length}`,
+      "Connection: close",
+      "",
+      ""
+    ].join("\r\n"),
+    body
+  );
+}
+
+async function rawHttpRequest(port: number, headers: string, body: Buffer): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection({ host: "127.0.0.1", port });
+    let response = "";
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      reject(new Error("raw request did not receive a response"));
+    }, 1_000);
+
+    socket.on("connect", () => {
+      socket.write(headers);
+      socket.write(body);
     });
     socket.on("data", (chunk) => {
       response += chunk.toString("utf8");

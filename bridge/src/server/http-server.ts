@@ -185,12 +185,11 @@ async function readJsonBody(request: IncomingMessage, limitBytes: number): Promi
     chunks.push(buffer);
   }
 
-  const text = Buffer.concat(chunks).toString("utf8");
-  if (text.trim().length === 0) {
-    return { ok: false, status: 400, error: "invalid_body" };
-  }
-
   try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
+    if (text.trim().length === 0) {
+      return { ok: false, status: 400, error: "invalid_body" };
+    }
     return { ok: true, value: JSON.parse(text) };
   } catch {
     return { ok: false, status: 400, error: "invalid_json" };
