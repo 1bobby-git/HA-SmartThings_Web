@@ -10,20 +10,22 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("publishes the live-state synchronization fix as version 0.1.27", () => {
+  test("publishes the physical-action evidence fix as version 0.1.28", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.27");
-    expect(packageMetadata.version).toBe("0.1.27");
-    expect(protocolMetadata.bridge_version).toBe("0.1.27");
+    expect(config.version).toBe("0.1.28");
+    expect(packageMetadata.version).toBe("0.1.28");
+    expect(protocolMetadata.bridge_version).toBe("0.1.28");
     expect(protocolMetadata.protocol_version).toBe(1);
-    expect(runtime).toContain('const bridgeVersion = "0.1.27";');
+    expect(runtime).toContain('const bridgeVersion = "0.1.28";');
+    expect(changelog).toContain("## 0.1.28");
+    expect(changelog).toContain("component-less physical-action events");
+    expect(changelog).toContain("epoch-millisecond source timestamps");
     expect(changelog).toContain("## 0.1.27");
-    expect(changelog).toContain("component-less push events");
     expect(changelog).toContain("sequence gaps");
     expect(changelog).toContain("without adding SmartThings polling");
     expect(changelog).toContain("## 0.1.26");

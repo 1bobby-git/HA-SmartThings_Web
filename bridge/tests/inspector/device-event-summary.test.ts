@@ -36,6 +36,32 @@ describe("extractDeviceEventSummary", () => {
     expect(summary?.matchesExpectedValue("ON")).toBe(false);
   });
 
+  test("accepts an unspecified component and epoch-millisecond source time", () => {
+    const eventTime = Date.parse("2026-08-24T21:34:27.656Z");
+    const summary = extractDeviceEventSummary(
+      deviceEvent({
+        component: null,
+        capability: "contactSensor",
+        attribute: "contact",
+        value: "open",
+        unit: null,
+        event_time: eventTime
+      })
+    );
+
+    expect(summary?.safe).toEqual({
+      deviceAlias: "dev_001",
+      component: "unspecified",
+      capability: "contactSensor",
+      attribute: "contact",
+      valueType: "string",
+      unitPresent: false,
+      stateChange: true,
+      sourceEventAtMs: eventTime
+    });
+    expect(summary?.matchesExpectedValue("open")).toBe(true);
+  });
+
   test("rejects unsafe device aliases", () => {
     for (const device_id of ["raw-device-id", "dev_1", "dev_001?token=x"]) {
       expect(extractDeviceEventSummary(deviceEvent({ device_id }))).toBeNull();

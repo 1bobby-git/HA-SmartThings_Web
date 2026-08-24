@@ -16,6 +16,7 @@ export interface DeviceEventSummary {
 
 const DEVICE_ALIAS_PATTERN = /^dev_[0-9]{3,32}$/u;
 const SAFE_TOKEN_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/u;
+const UNSPECIFIED_COMPONENT = "unspecified";
 const RFC3339_TIMESTAMP_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u;
 
@@ -35,7 +36,11 @@ export function extractDeviceEventSummary(input: unknown): DeviceEventSummary | 
   }
 
   const deviceAlias = readString(event, "device_id", "deviceId");
-  const component = readString(event, "component");
+  const componentValue = event["component"];
+  const component =
+    componentValue === null || componentValue === undefined
+      ? UNSPECIFIED_COMPONENT
+      : readString(event, "component");
   const capability = readString(event, "capability");
   const attribute = readString(event, "attribute");
   if (!deviceAlias || !DEVICE_ALIAS_PATTERN.test(deviceAlias)) {
@@ -104,8 +109,15 @@ function readEventTimeMs(
   event: Record<string, unknown>,
   data: Record<string, unknown>
 ): number | undefined {
-  const value = readString(event, "event_time", "eventTime") ?? readString(data, "event_time", "eventTime");
-  if (!value) {
+  const value =
+    readValue(event, "event_time", "eventTime") ?? readValue(data, "event_time", "eventTime");
+  if (typeof value === "number") {
+    if (!Number.isInteger(value) || value < 0) {
+      return undefined;
+    }
+    return Number.isFinite(new Date(value).getTime()) ? value : undefined;
+  }
+  if (typeof value !== "string") {
     return undefined;
   }
   if (!RFC3339_TIMESTAMP_PATTERN.test(value)) {
@@ -141,6 +153,15 @@ function readString(value: Record<string, unknown> | undefined, ...keys: string[
     }
   }
   return null;
+}
+
+function readValue(value: Record<string, unknown>, ...keys: string[]): unknown {
+  for (const key of keys) {
+    if (Object.hasOwn(value, key)) {
+      return value[key];
+    }
+  }
+  return undefined;
 }
 
 function readBoolean(value: Record<string, unknown>, ...keys: string[]): boolean | null {

@@ -610,6 +610,40 @@ describe("createBridgeRuntime", () => {
     );
   });
 
+  test("keeps an armed probe active for a component-less contact event", async () => {
+    const { baseUrl, socket } = await startReadyRuntime();
+    const arm = await postProbeArm(baseUrl, { actionType: "contact_open" });
+    expect(arm.status).toBe(201);
+
+    await socket.emit("framereceived", {
+      payload: buildDeviceEventFrame({
+        eventId: "evt_componentless_contact_001",
+        deviceId: "raw-contact-device-001",
+        component: null,
+        capability: "contactSensor",
+        attribute: "contact",
+        value: "open",
+        stateChange: true,
+        eventTime: Date.now()
+      })
+    });
+
+    await expect(getProbeSnapshot(baseUrl)).resolves.toMatchObject({
+      state: "armed",
+      candidateCount: 1,
+      reasons: [],
+      candidates: [
+        {
+          component: "unspecified",
+          capability: "contactSensor",
+          attribute: "contact",
+          expectedValueMatched: true
+        }
+      ]
+    });
+    expect((await getProbeSnapshot(baseUrl)).candidates[0]?.deviceAlias).toMatch(/^dev_\d{3,32}$/);
+  });
+
   test("fails an armed probe on unsafe device events without logging raw event content", async () => {
     const log = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
     const { baseUrl, socket } = await startReadyRuntime({ log });
@@ -1216,10 +1250,12 @@ async function expectFixedProbeError(response: Response, code: string): Promise<
 function buildDeviceEventFrame(options: {
   eventId: string;
   deviceId: string;
+  component?: string | null;
   capability: string;
   attribute: string;
   value: string;
   stateChange: boolean;
+  eventTime?: string | number;
 }): string {
   return `42${JSON.stringify([
     "api/subscription DEVICE_EVENT",
@@ -1227,12 +1263,12 @@ function buildDeviceEventFrame(options: {
       subscription_id: "sub_001",
       data: {
         event_type: "DEVICE_EVENT",
-        event_time: "2026-08-24T00:00:00Z",
+        event_time: options.eventTime ?? "2026-08-24T00:00:00Z",
         device_event: {
           event_id: options.eventId,
           device_id: options.deviceId,
           location_id: "raw-location-001",
-          component: "main",
+          component: options.component === undefined ? "main" : options.component,
           capability: options.capability,
           attribute: options.attribute,
           value: options.value,

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.28
+
+- Keep physical-action correlation armed for valid component-less physical-action events by recording an explicit safe `unspecified` component.
+- Accept the observed epoch-millisecond source timestamps in privacy-safe physical-action evidence.
+
 ## 0.1.27
 
 - Restore live sensor and binary-sensor updates by reconciling component-less push events with the normalized snapshot state identity.
