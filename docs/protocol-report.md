@@ -52,6 +52,8 @@ The runtime capture sink now feeds already-sanitized incoming Playwright/CDP tex
 
 This proves decoder/dedupe integration against one real sanitized event shape and automated missing-ID fallback behavior. It does not yet prove a real SmartThings event without an event ID, restart persistence of an event journal, or physical-action correlation.
 
+Version 0.1.26 is implemented and packaged locally but has not been deployed to HAOS. Its in-memory physical-action probe consumes only the existing sanitized analyzer result, hashes and drops the internal dedupe key, limits one window to 32 matching logical candidates, and requires exactly one settled `/location` keeper page. The numeric `protocol_version` remains 1 because this release does not accept or redefine a SmartThings protocol surface. Physical-action correlation remains unverified until a real safe action is observed on the deployed candidate after the active 0.1.25 soak is sealed.
+
 ## Snapshot ACK replay
 
 Sanitized correlation fixture: `protocol/fixtures/2026-08-20-snapshot-ack-correlations.sanitized.json` with its adjacent SHA-256 file.
@@ -87,5 +89,7 @@ After the readiness correction, 0.1.24 was deployed through Supervisor. Its pers
 Version 0.1.25 was then deployed after moving duplicate-slug source backups outside Supervisor's local app discovery root. Supervisor reported installed/latest `0.1.25` with no update pending, the persisted session and complete snapshot restored, and readiness stayed true at `initialSnapshotAgeMs=145892`. The bridge reported 213 devices, 170 decoded deliveries, 85 unique logical events, 85 duplicate deliveries, `protocolChangeCount=0`, and `restartCount=0`. AppArmor remained enforced, the container remained non-privileged on bridge networking with no added capabilities, and no matching AppArmor denial appeared in the post-update window.
 
 A 72-hour read-only external soak is now running at 300-second intervals. The corrected run began with 213 devices, ready `CONNECTED` state, protocol changes and restart count at zero, invalid-frame baseline 2, and successful 200/200/101 Ingress, noVNC asset, and WebSocket start checks. Detailed JSONL stays outside the repository; only a reviewed aggregate and SHA may be retained after completion. Its current status is `pending`, so no long-idle claim is made yet.
+
+The 0.1.26 package candidate is deliberately held outside HAOS until that 0.1.25 soak completes. It adds no browser input, DOM state scraping, direct SmartThings API request, Home Assistant entity, command path, or persistent event journal, and it is not live physical-action evidence.
 
 This proves HAOS packaging, enforced-profile startup, headed Chromium, Ingress, noVNC delivery, manual logged-in capture, repeated add-on/browser restart restore, initial snapshot recognition/reacquisition, and live push/parser observation through the add-on path. It does not prove a real missing-ID event, host reboot recovery, physical-action correlation, command confirmation, or long-idle durability.

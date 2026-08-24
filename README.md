@@ -8,12 +8,13 @@ Phase 1 repository for a Home Assistant SmartThings Web Bridge inspector. It run
 - TypeScript bridge runtime with Playwright persistent context, keeper tab, browser/session health, read-only CDP/WebSocket/SSE/XHR observation, and redaction boundaries.
 - Sanitized Engine.IO/Socket.IO text decoding and bounded event-ID/fingerprint deduplication replay.
 - Runtime diagnostics for decoded DEVICE_EVENT, unique logical event, duplicate delivery, dedupe journal, and invalid-frame counts.
+- Bounded in-memory physical-action correlation controls that use only sanitized, deduplicated events and require one isolated `/location` keeper page.
 - Snapshot ACK correlation across locations, rooms, device cards, device states, device health, and scenes before readiness, including valid empty categories and fail-closed shape checks.
 - Static gates for direct SmartThings API usage and production secret material.
 - Privacy-safe external HAOS soak sampling with automatic readiness, counter, protocol, restart, gap, and memory verdicts.
 - Phase 1 documentation and manual evidence checklist.
 
-Not included in Phase 1: Home Assistant entity platforms, control commands, entity migration, stable release tagging, or any direct SmartThings API/PAT/OAuth/SmartApp/webhook path.
+Not included in Phase 1: Home Assistant entity platforms, control commands, DOM-derived device state, persistent event journals, entity migration, stable release tagging, or any direct SmartThings API/PAT/OAuth/SmartApp/webhook path.
 
 ## Install
 
@@ -59,5 +60,7 @@ The same contract cannot self-heal. Recovery requires reviewed sanitized evidenc
 Phase 2 remains closed until sanitized real traffic proves full inventory, initial snapshot, location-wide push events, reconnect behavior, and no direct dependency on paid/public SmartThings API calls.
 
 Current gate: `DECISION: LIMITED` in `docs/feasibility-report.md`. A bounded controlled Chrome sample confirmed a session-based Socket.IO transport and initial snapshot-shaped data without an observed `api.smartthings.com` request. A live HAOS add-on run after manual VNC login reached `CONNECTED`, observed 213 devices, decoded live DEVICE_EVENT counters, and restored that session plus a complete snapshot after one 0.1.24 add-on restart. Deliberately triggered physical device events, host-reboot recovery, long-idle durability, commands, and complete API independence remain unverified.
+
+Version 0.1.26 contains the in-memory physical-action correlation probe, but it has not been deployed to HAOS. Physical-action correlation remains unverified until a real safe user action produces one unique passing result. Do not install or start 0.1.26 until the active 0.1.25 72-hour soak is sealed. The probe adds no browser command, DOM state scraping, direct SmartThings API call, Home Assistant entity, or persistent event journal.
 
 The recommended non-disruptive next gate is the 72-hour passive HAOS soak documented in `docs/haos-soak.md`. Run it with `npm run soak:haos`; its detailed samples stay outside the repository and only a reviewed sanitized completion summary may later be committed.

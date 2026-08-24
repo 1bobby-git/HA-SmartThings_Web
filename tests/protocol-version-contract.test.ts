@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import YAML from "yaml";
 
 import protocolVersion from "../protocol/version.json" with { type: "json" };
 import {
@@ -11,6 +12,27 @@ import {
 import { bootstrapDataPaths } from "../bridge/src/security/data-paths.js";
 
 describe("protocol version contract", () => {
+  test("keeps every Bridge release surface on the packaged 0.1.26 candidate", () => {
+    const expectedBridgeVersion = "0.1.26";
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as { version?: string };
+    const packageLock = JSON.parse(readFileSync("package-lock.json", "utf8")) as {
+      version?: string;
+      packages?: Record<string, { version?: string }>;
+    };
+    const addonConfig = YAML.parse(
+      readFileSync("addon/smartthings_web_bridge/config.yaml", "utf8")
+    ) as { version?: string };
+    const runtimeSource = readFileSync("bridge/src/runtime.ts", "utf8");
+
+    expect(packageJson.version).toBe(expectedBridgeVersion);
+    expect(packageLock.version).toBe(expectedBridgeVersion);
+    expect(packageLock.packages?.[""]?.version).toBe(expectedBridgeVersion);
+    expect(protocolVersion.bridge_version).toBe(expectedBridgeVersion);
+    expect(addonConfig.version).toBe(expectedBridgeVersion);
+    expect(runtimeSource).toContain(`const bridgeVersion = "${expectedBridgeVersion}";`);
+    expect(protocolVersion.protocol_version).toBe(1);
+  });
+
   test("keeps the protocol contract version synchronized from source to bootstrap JSON", () => {
     expect(PROTOCOL_CONTRACT_VERSION).toBe(protocolVersion.protocol_version);
 

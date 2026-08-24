@@ -35,6 +35,23 @@ Run `npm run protocol:replay` after updating sanitized fixtures. The command mus
 
 Run `npm run snapshot:replay` after updating snapshot correlation fixtures. All six required categories must match and `complete` must be true before testing live reconnect recovery.
 
+## Physical-Action Probe (0.1.26 Candidate)
+
+Version 0.1.26 is implemented and packaged locally but has not been deployed to HAOS. Physical-action correlation remains unverified until the updated add-on is deployed after the soak and one real safe user action produces one unique passing result.
+
+Do not install or start 0.1.26 until the active 0.1.25 72-hour soak is sealed.
+
+After that deployment hold is released:
+
+1. Keep exactly one settled SmartThings `/location` keeper page open. Do not open `/advanced`, a device detail, a login page, or another tab during the probe window.
+2. Confirm the Bridge is live, ready, `CONNECTED`, has observed devices, and reports zero protocol changes and restarts.
+3. Call `POST /probe/physical-action/arm` through the existing Ingress boundary with one fixed preset, preferably `contact_open`, `contact_close`, or `motion_active`. Use a 15–120 second window and only an optional stable alias such as `dev_001`.
+4. Perform exactly one safe physical action. Do not use a browser command, scene, automation, lock, valve, garage actuator, appliance, or safety system.
+5. After the full window, call `GET /probe/physical-action`. Only one matching logical candidate with `state=pass` is countable; `ambiguous`, `fail`, `voided`, or `armed` is not proof.
+6. Call `POST /probe/physical-action/reset` with `{}` before another attempt. Never retain request bodies, raw values, raw IDs, URLs, headers, cookies, or internal dedupe keys.
+
+The probe adds no DOM state source, direct SmartThings API call, Home Assistant entity, command path, or persistent event journal. Keep `DECISION: LIMITED` after a pass until every other Phase 1 gate is independently proven.
+
 ## Passive 72-Hour Soak
 
 Run the privacy-safe collector described in `docs/haos-soak.md` with a 300-second interval. Keep its JSONL samples outside the repository. The automatic verdict must reach `pass`; a `pending` result is not completion, and any live/ready/state failure, collection error, counter regression, protocol change, restart count or browser-uptime rollback, invalid-frame increase, excessive sample gap, or sustained memory-growth failure keeps the durability gate closed.

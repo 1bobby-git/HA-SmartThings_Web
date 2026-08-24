@@ -73,6 +73,35 @@ describe("Phase 1 documentation gate", () => {
     expect(feasibility).toContain("not a GO decision");
     expect(feasibility).toContain("not causally tied to a user-triggered physical action");
     expect(feasibility).toContain("Phase 2 remains closed");
+    expect(readme).toContain(
+      "Version 0.1.26 contains the in-memory physical-action correlation probe, but it has not been deployed to HAOS."
+    );
+    expect(readme).toContain(
+      "Physical-action correlation remains unverified until a real safe user action produces one unique passing result."
+    );
+    expect(readme).toContain(
+      "Do not install or start 0.1.26 until the active 0.1.25 72-hour soak is sealed."
+    );
+    expect(readme).toContain(
+      "The probe adds no browser command, DOM state scraping, direct SmartThings API call, Home Assistant entity, or persistent event journal."
+    );
+    for (const document of [feasibility, protocol, session]) {
+      expect(document).toContain(
+        "Version 0.1.26 is implemented and packaged locally but has not been deployed to HAOS."
+      );
+      expect(document).toContain("Physical-action correlation remains unverified");
+    }
+    expect(manual).toContain("POST /probe/physical-action/arm");
+    expect(manual).toContain("GET /probe/physical-action");
+    expect(manual).toContain("POST /probe/physical-action/reset");
+    expect(manual).toContain(
+      "Do not install or start 0.1.26 until the active 0.1.25 72-hour soak is sealed."
+    );
+    expect(addonChangelog).toContain("## 0.1.26");
+    expect(addonChangelog).toContain("in-memory physical-action correlation probe");
+    expect(`${readme}\n${feasibility}\n${protocol}\n${session}`).not.toContain(
+      "0.1.26 was deployed"
+    );
     expect(feasibility).toContain("live Home Assistant OS 18.2 add-on");
     expect(protocol).toContain("111 requests");
     expect(protocol).toContain("Socket.IO");

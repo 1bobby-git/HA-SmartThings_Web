@@ -18,4 +18,6 @@ Short-window background delivery and two add-on/browser restart restores are ver
 
 A privacy-safe 72-hour passive soak is in progress with five-minute samples and automatic browser-uptime rollback detection. Until its final summary reaches `pass`, the long-idle items above remain unverified.
 
+Version 0.1.26 is implemented and packaged locally but has not been deployed to HAOS. Its probe requires the existing current keeper to be the only open page and fails active evidence on page isolation loss or browser-context restart. Physical-action correlation remains unverified, and no 0.1.26 session-restore or keeper-durability claim is made before the active 0.1.25 soak is sealed and the candidate is deployed later.
+
 The Home Assistant OS 18.2 Supervisor install is now verified for enforced AppArmor, sandboxed headed Chromium startup, Ingress status rendering, noVNC delivery of the Samsung Account login page, logged-in add-on observation, and repeated automatic session/snapshot restore after add-on updates. Host reboot recovery, physical-action correlation, and long-idle behavior are still manual Phase 1 evidence gaps.

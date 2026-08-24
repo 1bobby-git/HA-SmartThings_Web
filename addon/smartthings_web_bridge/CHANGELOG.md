@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.26
+
+- Add a bounded in-memory physical-action correlation probe with fixed safe contact, motion, switch, and button presets.
+- Require exactly one settled `/location` keeper page before arming and fail active evidence on browser isolation loss, protocol change, or runtime restart.
+- Collapse Playwright/CDP duplicate deliveries into one logical candidate while exposing only safe metadata and an output-only SHA-256 logical-event hash.
+- Add fixed no-store Ingress control responses with strict JSON validation, a 4 KiB request limit, and no request-body or raw-event logging.
+- Keep commands, DOM state scraping, direct SmartThings APIs, Home Assistant entities, and a persistent event journal outside Phase 1.
+- Hold HAOS deployment and real physical-action testing until the active 0.1.25 72-hour soak is sealed.
+
 ## 0.1.25
 
 - Keep missing-event-ID deduplication source-independent by hashing the canonical sanitized Socket.IO delivery instead of an observer-specific capture envelope.
