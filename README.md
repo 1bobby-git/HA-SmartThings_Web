@@ -63,4 +63,6 @@ Current gate: `DECISION: LIMITED` in `docs/feasibility-report.md`. A bounded con
 
 Version 0.1.26 contains the in-memory physical-action correlation probe, but it has not been deployed to HAOS. Physical-action correlation remains unverified until a real safe user action produces one unique passing result. Do not install or start 0.1.26 until the active 0.1.25 72-hour soak is sealed. The probe adds no browser command, DOM state scraping, direct SmartThings API call, Home Assistant entity, or persistent event journal.
 
+After that deployment hold is released, the recommended operator path is `npm run probe:physical-action:haos -- arm --action contact_open --window-seconds 60 --wait`; status and reset use the same command with `status` and `reset`. The operator validates every argument, reconstructs only allowlisted response fields, and does not expose a new port or retain raw HTTP output.
+
 The recommended non-disruptive next gate is the 72-hour passive HAOS soak documented in `docs/haos-soak.md`. Run it with `npm run soak:haos`; its detailed samples stay outside the repository and only a reviewed sanitized completion summary may later be committed.

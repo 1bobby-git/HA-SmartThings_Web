@@ -22,6 +22,7 @@
     "audit:fixtures": "tsx tools/sanitized-fixture-audit.ts",
     "audit:secrets": "tsx tools/secret-scan.ts",
     "protocol:replay": "tsx tools/replay-device-event-fixture.ts",
+    "probe:physical-action:haos": "tsx tools/haos-physical-action-probe.ts",
     "snapshot:replay": "tsx tools/replay-snapshot-fixture.ts",
     "soak:haos": "tsx tools/haos-soak.ts"
   },

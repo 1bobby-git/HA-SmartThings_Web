@@ -45,10 +45,13 @@ After that deployment hold is released:
 
 1. Keep exactly one settled SmartThings `/location` keeper page open. Do not open `/advanced`, a device detail, a login page, or another tab during the probe window.
 2. Confirm the Bridge is live, ready, `CONNECTED`, has observed devices, and reports zero protocol changes and restarts.
-3. Call `POST /probe/physical-action/arm` through the existing Ingress boundary with one fixed preset, preferably `contact_open`, `contact_close`, or `motion_active`. Use a 15–120 second window and only an optional stable alias such as `dev_001`.
-4. Perform exactly one safe physical action. Do not use a browser command, scene, automation, lock, valve, garage actuator, appliance, or safety system.
-5. After the full window, call `GET /probe/physical-action`. Only one matching logical candidate with `state=pass` is countable; `ambiguous`, `fail`, `voided`, or `armed` is not proof.
-6. Call `POST /probe/physical-action/reset` with `{}` before another attempt. Never retain request bodies, raw values, raw IDs, URLs, headers, cookies, or internal dedupe keys.
+3. Run `npm run probe:physical-action:haos -- status`. The currently deployed 0.1.25 correctly returns the fixed `not_found` result because the probe is not deployed there; after the candidate update it must return a sanitized snapshot.
+4. Start one bounded attempt with `npm run probe:physical-action:haos -- arm --action contact_open --window-seconds 60 --wait`. Replace only the fixed action name when testing another supported preset. An optional target may be supplied as `--target-device-alias dev_001`.
+5. While the command waits, perform exactly one safe physical action. Do not use a browser command, scene, automation, lock, valve, garage actuator, appliance, or safety system.
+6. The operator polls `GET /probe/physical-action` and returns only the sanitized snapshot. Only one matching logical candidate with `state=pass` is countable; `ambiguous`, `fail`, `voided`, or `armed` is not proof.
+7. Run `npm run probe:physical-action:haos -- reset` before another attempt. This calls `POST /probe/physical-action/reset` with `{}`. Never retain request bodies, raw values, raw IDs, URLs, headers, cookies, or internal dedupe keys.
+
+The operator uses the existing HAOS administrator SSH path and container-local Bridge port; it exposes no new network port or token. The underlying fixed endpoints remain `POST /probe/physical-action/arm`, `GET /probe/physical-action`, and `POST /probe/physical-action/reset`.
 
 The probe adds no DOM state source, direct SmartThings API call, Home Assistant entity, command path, or persistent event journal. Keep `DECISION: LIMITED` after a pass until every other Phase 1 gate is independently proven.
 

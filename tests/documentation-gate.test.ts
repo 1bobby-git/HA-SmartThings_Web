@@ -48,6 +48,9 @@ describe("Phase 1 documentation gate", () => {
     const runtimeAuditPath = "protocol/fixtures/2026-08-24-runtime-api-audit-summary.json";
     const runtimeAuditHashPath = `${runtimeAuditPath}.sha256`;
     const gitattributes = readFileSync(".gitattributes", "utf8");
+    const packageMetadata = JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts?: Record<string, string>;
+    };
 
     expect(gitattributes).toContain("protocol/fixtures/*.json text eol=lf");
     expect(gitattributes).toContain("protocol/fixtures/*.sha256 text eol=lf");
@@ -97,6 +100,16 @@ describe("Phase 1 documentation gate", () => {
     expect(manual).toContain("POST /probe/physical-action/arm");
     expect(manual).toContain("GET /probe/physical-action");
     expect(manual).toContain("POST /probe/physical-action/reset");
+    expect(manual).toContain("npm run probe:physical-action:haos -- status");
+    expect(manual).toContain(
+      "npm run probe:physical-action:haos -- arm --action contact_open --window-seconds 60 --wait"
+    );
+    expect(manual).toContain("npm run probe:physical-action:haos -- reset");
+    expect(manual).toContain("0.1.25 correctly returns the fixed `not_found` result");
+    expect(readme).toContain("npm run probe:physical-action:haos");
+    expect(packageMetadata.scripts?.["probe:physical-action:haos"]).toBe(
+      "tsx tools/haos-physical-action-probe.ts"
+    );
     expect(manual).toContain(
       "Do not install or start 0.1.26 until the active 0.1.25 72-hour soak is sealed."
     );
