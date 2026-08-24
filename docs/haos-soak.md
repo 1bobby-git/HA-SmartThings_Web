@@ -70,4 +70,22 @@ npm run deploy:haos:preflight -- --run-dir $soakOutput --expected-installed-vers
 
 This packages the ignored local candidate and verifies that the source is clean, on `main`, published to `origin/main`, and newer than the expected installed version. Its remote check runs only `ha apps info ... --raw-json` through the existing HAOS guest path, then reconstructs the slug, versions, running/boot state, local-build status, AppArmor mode, and Ingress boolean. It drops the Ingress URL, IP address, options, and every unrecognized field. The preflight has no execute mode and cannot upload, reload, rebuild, stop, start, or restart the app.
 
+After publishing the candidate commit, create its package once and retain the two exact identities printed by Git and the packager:
+
+```powershell
+$candidateCommit = git rev-parse HEAD
+$candidatePackage = npm run --silent package:addon | ConvertFrom-Json
+$candidateManifest = $candidatePackage.manifestSha256
+```
+
+Preview the complete deployment decision without changing HAOS:
+
+```powershell
+npm run deploy:haos:candidate -- --run-dir $soakOutput --expected-installed-version 0.1.25 --expected-candidate-version 0.1.26 --expected-commit-sha $candidateCommit --expected-candidate-manifest-sha $candidateManifest
+```
+
+The preview must report `deploymentEligible=true`. It also proves that the installed 0.1.25 runtime file matches the pinned rollback commit and that a fresh rollback package has the pinned manifest. A preview never uploads, reloads, rebuilds, starts, stops, or restarts anything.
+
+Run the exact same command with `--execute` only after reviewing that eligible preview. Execution uploads two sub-1 MiB archives through the HAOS guest-agent stdin path: the exact candidate and a rollback package materialized from the pinned 0.1.25 commit. It verifies archive and manifest hashes, stores the rollback archive outside the local app scan directory, repeats the full soak/source/installed/runtime preflight immediately before activation, then reloads Supervisor and force-rebuilds the local app. Success requires the expected version, started/automatic/local-build posture, enforced AppArmor, enabled Ingress, and both live and ready health endpoints. Any activation, rebuild, or postflight failure restores 0.1.25, rebuilds it, verifies health, and verifies the pinned runtime hash before reporting the failed candidate as rolled back.
+
 This test proves passive long-idle durability only. Host reboot, network interruption, physical-action correlation, browser command feasibility, and complete API independence remain separate Phase 1 gates.

@@ -16,6 +16,7 @@
     "test:integration": "vitest run tests",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+    "deploy:haos:candidate": "tsx tools/haos-candidate-deploy.ts",
     "deploy:haos:preflight": "tsx tools/haos-candidate-preflight.ts",
     "package:addon": "tsx tools/package-addon.ts",
     "audit:api-free": "tsx tools/api-free-audit.ts",
