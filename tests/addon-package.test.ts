@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { access, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
@@ -19,6 +19,20 @@ const writeFixture = async (repoRoot: string, relativePath: string, content = re
   const path = join(repoRoot, ...relativePath.split("/"));
   await mkdir(join(path, ".."), { recursive: true });
   await writeFile(path, content);
+};
+
+const rewriteTreeWithCrlf = async (root: string) => {
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) {
+      await rewriteTreeWithCrlf(path);
+      continue;
+    }
+    if (entry.isFile()) {
+      const text = await readFile(path, "utf8");
+      await writeFile(path, text.replace(/\r?\n/gu, "\r\n"));
+    }
+  }
 };
 
 const createMinimalRepo = async () => {
@@ -149,6 +163,42 @@ describe("packageAddon", { timeout: 15_000 }, () => {
     for (const source of copySources) {
       await expectPathExists(join(second.packageDir, ...source.split("/")));
     }
+  });
+
+  test("produces the same LF package manifest from LF and CRLF checkouts", async () => {
+    const lfRepoRoot = await createMinimalRepo();
+    const crlfRepoRoot = await createMinimalRepo();
+    const lfOutputRoot = await makeTempRoot();
+    const crlfOutputRoot = await makeTempRoot();
+    await rewriteTreeWithCrlf(crlfRepoRoot);
+
+    const lfResult = await packageAddon({ repoRoot: lfRepoRoot, outputRoot: lfOutputRoot });
+    const crlfResult = await packageAddon({ repoRoot: crlfRepoRoot, outputRoot: crlfOutputRoot });
+    const lfManifest = await readFile(
+      join(lfResult.packageDir, "addon-package-manifest.json"),
+      "utf8"
+    );
+    const crlfManifest = await readFile(
+      join(crlfResult.packageDir, "addon-package-manifest.json"),
+      "utf8"
+    );
+
+    expect(crlfResult.manifestSha256).toBe(lfResult.manifestSha256);
+    expect(crlfManifest).toBe(lfManifest);
+    for (const entry of (await readManifest(crlfResult.packageDir)).files) {
+      const packaged = await readFile(join(crlfResult.packageDir, ...entry.path.split("/")), "utf8");
+      expect(packaged).not.toContain("\r");
+    }
+  });
+
+  test("rejects invalid UTF-8 in a declared text source", async () => {
+    const repoRoot = await createMinimalRepo();
+    const outputRoot = await makeTempRoot();
+    await writeFile(join(repoRoot, "bridge/src/main.ts"), Buffer.from([0xff, 0xfe]));
+
+    await expect(packageAddon({ repoRoot, outputRoot })).rejects.toThrow(
+      /not valid UTF-8/u
+    );
   });
 
   test("removes stale generated files on rerun", async () => {

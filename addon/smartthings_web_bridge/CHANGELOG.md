@@ -2,6 +2,7 @@
 
 ## 0.1.26
 
+- Canonicalize generated package text as UTF-8/LF so equivalent cross-platform checkouts retain one manifest identity.
 - Add a bounded in-memory physical-action correlation probe with fixed safe contact, motion, switch, and button presets.
 - Require exactly one settled `/location` keeper page before arming and fail active evidence on browser isolation loss, protocol change, or runtime restart.
 - Collapse Playwright/CDP duplicate deliveries into one logical candidate while exposing only safe metadata and an output-only SHA-256 logical-event hash.

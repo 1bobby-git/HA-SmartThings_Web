@@ -71,6 +71,7 @@ describe("Phase 1 documentation gate", () => {
     expect(readme).toContain("local_smartthings_web_bridge");
     expect(readme).toContain("Do not copy the raw `addon/smartthings_web_bridge` source folder");
     expect(readme).toContain("generated monorepo build inputs");
+    expect(readme).toContain("canonicalizes generated text files to UTF-8 with LF line endings");
     expect(readme).toContain("/data/protocol-fingerprint.json");
     expect(readme).toContain("same contract cannot self-heal");
     expect(readme).toContain("numeric `protocol_version` bump");
@@ -194,6 +195,7 @@ describe("Phase 1 documentation gate", () => {
     expect(addonDocs).toContain("/addons/smartthings_web_bridge");
     expect(addonDocs).toContain("Do not copy the raw `addon/smartthings_web_bridge` source folder");
     expect(addonDocs).toContain("generated monorepo build inputs");
+    expect(addonDocs).toContain("Generated text is canonical UTF-8/LF");
     expect(addonDocs).toContain("Keep backup copies outside `/addons`");
     expect(addonDocs).toContain("local_smartthings_web_bridge");
     expect(addonDocs).toContain("Supervisor-loaded AppArmor profile is enforced");
@@ -218,6 +220,7 @@ describe("Phase 1 documentation gate", () => {
     expect(addonReadme).toContain("/addons/smartthings_web_bridge");
     expect(addonReadme).toContain("Do not copy the raw `addon/smartthings_web_bridge` source folder");
     expect(addonReadme).toContain("generated monorepo build inputs");
+    expect(addonReadme).toContain("Generated text is canonical UTF-8/LF");
     expect(addonReadme).toContain("Keep backup copies outside `/addons`");
     expect(addonChangelog).toContain("LIMITED evidence gate");
     expect(addonChangelog).toContain("## 0.1.23");

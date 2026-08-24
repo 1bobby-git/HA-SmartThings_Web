@@ -32,6 +32,8 @@ The folder path and add-on slug are different: `/addons/smartthings_web_bridge` 
 
 Do not copy the raw `addon/smartthings_web_bridge` source folder to Home Assistant. It lacks generated monorepo build inputs that are included by `npm run package:addon`.
 
+The packager canonicalizes generated text files to UTF-8 with LF line endings, so the manifest SHA-256 is identical for equivalent Windows and Linux checkouts. Source files in the monorepo are not rewritten.
+
 Keep backup copies outside `/addons`. Supervisor scans child folders there as local apps, so a backup that still contains `config.yaml` with the same slug can hide the newest package metadata.
 
 If the repository is made public later, it can instead be added from **Settings → Apps → Install app → ⋮ → Repositories** using the repository URL.

@@ -47,6 +47,7 @@ const ADDON_NAME = "smartthings_web_bridge";
 const MANIFEST_NAME = "addon-package-manifest.json";
 const ROOT_FILES = ["package.json", "package-lock.json", "tsconfig.json", "tsconfig.build.json"];
 const ROOT_TREES = ["bridge/src", `addon/${ADDON_NAME}`];
+const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 const EXCLUDED_SEGMENTS = new Set([
   ".git",
   "node_modules",
@@ -278,11 +279,36 @@ const copyStableSource = async (source: SourceFile, destinationPath: string) => 
       throw new Error(`Source changed before copy: ${source.relativePath}`);
     }
 
-    await writeFile(destinationPath, await handle.readFile());
+    const sourceBytes = await handle.readFile();
+    await writeFile(destinationPath, canonicalPackageBytes(source.relativePath, sourceBytes));
   } finally {
     await handle.close();
   }
 };
+
+const canonicalPackageBytes = (relativePath: string, sourceBytes: Buffer): Buffer => {
+  if (!isPackageTextPath(relativePath)) {
+    return sourceBytes;
+  }
+  let text: string;
+  try {
+    text = UTF8_DECODER.decode(sourceBytes);
+  } catch {
+    throw new Error(`Package text source is not valid UTF-8: ${relativePath}`);
+  }
+  return Buffer.from(text.replace(/\r\n?/gu, "\n"), "utf8");
+};
+
+const isPackageTextPath = (relativePath: string) =>
+  ROOT_FILES.includes(relativePath) ||
+  relativePath.startsWith("bridge/src/") ||
+  relativePath.startsWith("rootfs/") ||
+  relativePath === "CHANGELOG.md" ||
+  relativePath === "DOCS.md" ||
+  relativePath === "Dockerfile" ||
+  relativePath === "README.md" ||
+  relativePath === "apparmor.txt" ||
+  relativePath === "config.yaml";
 
 const removePath = async (path: string) => {
   await rm(path, { recursive: true, force: true });
