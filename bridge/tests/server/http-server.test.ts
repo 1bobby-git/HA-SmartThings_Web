@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, test } from "vitest";
+import { createConnection } from "node:net";
 
+import {
+  PhysicalActionCorrelationProbe,
+  type ProbeRuntimeEvidence
+} from "../../src/inspector/physical-action-correlation-probe.js";
 import { createBridgeHttpServer } from "../../src/server/http-server.js";
 import { RuntimeStatusStore } from "../../src/state/runtime-state.js";
 
@@ -47,4 +52,396 @@ describe("createBridgeHttpServer", () => {
     expect(missing.status).toBe(404);
     expect(missing.headers.get("cache-control")).toBe("no-store");
   });
+
+  test("arms, snapshots, and resets the physical action probe with safe JSON responses", async () => {
+    const { baseUrl } = await startProbeServer();
+
+    const arm = await fetch(`${baseUrl}/probe/physical-action/arm`, {
+      method: "POST",
+      headers: { "content-type": "application/json; charset=UTF-8" },
+      body: JSON.stringify({
+        actionType: "contact_open",
+        targetDeviceAlias: "dev_007",
+        windowSeconds: 15
+      })
+    });
+    const armed = await arm.json();
+    const current = await fetch(`${baseUrl}/probe/physical-action`);
+    const reset = await fetch(`${baseUrl}/probe/physical-action/reset`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}"
+    });
+
+    expect(arm.status).toBe(201);
+    expect(armed).toMatchObject({
+      state: "armed",
+      actionType: "contact_open",
+      targetDeviceAlias: "dev_007",
+      windowSeconds: 15
+    });
+    expect(current.status).toBe(200);
+    expect(await current.json()).toMatchObject({ state: "armed", actionType: "contact_open" });
+    expect(reset.status).toBe(200);
+    expect(await reset.json()).toMatchObject({ state: "voided", reasons: ["manual_reset"] });
+  });
+
+  test("returns probe conflict on a second active arm", async () => {
+    const { baseUrl } = await startProbeServer();
+
+    await postJson(`${baseUrl}/probe/physical-action/arm`, { actionType: "contact_open" });
+    const conflict = await postJson(`${baseUrl}/probe/physical-action/arm`, { actionType: "contact_close" });
+
+    expect(conflict.status).toBe(409);
+    await expectFixedError(conflict, "probe_conflict");
+  });
+
+  test("maps domain readiness failures to fixed probe errors", async () => {
+    const isolated = await startProbeServer({ evidence: healthyEvidence({ browserIsolated: false }) });
+    const notReady = await startProbeServer({ evidence: healthyEvidence({ observedDeviceCount: 0 }) });
+
+    const browser = await postJson(`${isolated.baseUrl}/probe/physical-action/arm`, { actionType: "contact_open" });
+    const ready = await postJson(`${notReady.baseUrl}/probe/physical-action/arm`, { actionType: "contact_open" });
+
+    expect(browser.status).toBe(409);
+    await expectFixedError(browser, "browser_not_isolated");
+    expect(ready.status).toBe(503);
+    await expectFixedError(ready, "not_ready");
+  });
+
+  test.each([
+    ["malformed JSON", "{", "invalid_json"],
+    ["empty body", "", "invalid_body"],
+    ["array body", "[]", "invalid_body"],
+    ["primitive body", "\"contact_open\"", "invalid_body"],
+    ["unknown key", "{\"actionType\":\"contact_open\",\"secret\":\"token-123\"}", "unknown_key"],
+    ["missing action", "{\"windowSeconds\":15}", "invalid_body"],
+    ["wrong action type", "{\"actionType\":42}", "invalid_body"],
+    ["unsupported action", "{\"actionType\":\"scene_run\"}", "unsupported_action"],
+    ["unsafe alias", "{\"actionType\":\"contact_open\",\"targetDeviceAlias\":\"dev_007_secret_token\"}", "unsafe_target_alias"],
+    ["window below range", "{\"actionType\":\"contact_open\",\"windowSeconds\":14}", "window_out_of_range"],
+    ["window above range", "{\"actionType\":\"contact_open\",\"windowSeconds\":121}", "window_out_of_range"],
+    ["window noninteger", "{\"actionType\":\"contact_open\",\"windowSeconds\":15.5}", "window_out_of_range"]
+  ] as const)("rejects invalid arm request: %s", async (_name, body, error) => {
+    const { baseUrl } = await startProbeServer();
+
+    const response = await fetch(`${baseUrl}/probe/physical-action/arm`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body
+    });
+
+    expect(response.status).toBe(400);
+    await expectFixedError(response, error);
+  });
+
+  test("requires JSON content type for probe POSTs while accepting UTF-8 charset", async () => {
+    const { baseUrl } = await startProbeServer();
+
+    const absent = await fetch(`${baseUrl}/probe/physical-action/arm`, {
+      method: "POST",
+      body: JSON.stringify({ actionType: "contact_open" })
+    });
+    const wrong = await fetch(`${baseUrl}/probe/physical-action/arm`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: JSON.stringify({ actionType: "contact_open" })
+    });
+    const accepted = await fetch(`${baseUrl}/probe/physical-action/arm`, {
+      method: "POST",
+      headers: { "content-type": "application/json; charset=utf-8" },
+      body: JSON.stringify({ actionType: "contact_open" })
+    });
+
+    expect(absent.status).toBe(415);
+    await expectFixedError(absent, "content_type_unsupported");
+    expect(wrong.status).toBe(415);
+    await expectFixedError(wrong, "content_type_unsupported");
+    expect(accepted.status).toBe(201);
+  });
+
+  test("rejects probe bodies over 4096 bytes from declared and streamed lengths", async () => {
+    const { baseUrl, server } = await startProbeServer();
+    const oversized = JSON.stringify({
+      actionType: "contact_open",
+      padding: "x".repeat(4096)
+    });
+
+    const declared = await fetch(`${baseUrl}/probe/physical-action/arm`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(oversized.length)
+      },
+      body: oversized
+    });
+    const streamed = await fetch(`${baseUrl}/probe/physical-action/arm`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(" ".repeat(4097)));
+          controller.close();
+        }
+      }),
+      duplex: "half"
+    } as RequestInit & { duplex: "half" });
+    const preRejected = await rawOversizedPostWithoutBody(server.port);
+
+    expect(declared.status).toBe(413);
+    await expectFixedError(declared, "body_too_large");
+    expect(streamed.status).toBe(413);
+    await expectFixedError(streamed, "body_too_large");
+    expect(preRejected).toContain("HTTP/1.1 413 Payload Too Large");
+    expect(preRejected).toContain("{\"error\":\"body_too_large\"}");
+  });
+
+  test("preserves method and route boundaries for probe paths", async () => {
+    const { baseUrl } = await startProbeServer();
+
+    const wrongMethod = await fetch(`${baseUrl}/probe/physical-action`, { method: "POST" });
+    const unknown = await fetch(`${baseUrl}/probe/physical-action/unknown`);
+
+    expect(wrongMethod.status).toBe(405);
+    await expectFixedError(wrongMethod, "method_not_allowed");
+    expect(unknown.status).toBe(404);
+    await expectFixedError(unknown, "not_found");
+  });
+
+  test("returns probe unavailable when either probe dependency is absent", async () => {
+    const onlyEvidence = await startProbeServer({ includeProbe: false });
+    const onlyProbe = await startProbeServer({ includeEvidence: false });
+    const neither = await startProbeServer({ includeProbe: false, includeEvidence: false });
+
+    for (const baseUrl of [onlyEvidence.baseUrl, onlyProbe.baseUrl, neither.baseUrl]) {
+      const response = await fetch(`${baseUrl}/probe/physical-action`);
+      expect(response.status).toBe(503);
+      await expectFixedError(response, "probe_unavailable");
+    }
+  });
+
+  test("maps unexpected evidence failure to fixed internal error", async () => {
+    const { baseUrl } = await startProbeServer({
+      getProbeEvidence: () => {
+        throw new Error("secret thrown message event_id:abc fingerprint:xyz https://internal");
+      }
+    });
+
+    const response = await fetch(`${baseUrl}/probe/physical-action`);
+
+    expect(response.status).toBe(500);
+    await expectFixedError(response, "internal_error");
+  });
+
+  test.each<readonly [string, string, string] | readonly [string, string, string, string]>([
+    ["reset properties", "{\"event_id\":\"abc\"}", "unknown_key"],
+    ["reset empty body", "", "invalid_body"],
+    ["reset array", "[]", "invalid_body"],
+    ["reset wrong content type", "{}", "content_type_unsupported", "text/plain"]
+  ])("rejects invalid reset request: %s", async (_name, body, error, contentType = "application/json") => {
+    const { baseUrl } = await startProbeServer();
+
+    const response = await fetch(`${baseUrl}/probe/physical-action/reset`, {
+      method: "POST",
+      headers: { "content-type": contentType },
+      body
+    });
+
+    expect(response.status).toBe(error === "content_type_unsupported" ? 415 : 400);
+    await expectFixedError(response, error);
+  });
+
+  test("probe errors do not echo secrets, raw values, URLs, headers, or identities", async () => {
+    const { baseUrl } = await startProbeServer();
+
+    const response = await fetch(`${baseUrl}/probe/physical-action/arm?token=secret`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-secret-header": "event_id:header-fingerprint"
+      },
+      body: JSON.stringify({
+        actionType: "contact_open",
+        targetDeviceAlias: "dev_007_secret_suffix",
+        event_id: "abc",
+        url: "https://internal.example"
+      })
+    });
+    const body = await response.text();
+
+    expect(response.status).toBe(400);
+    expect(body).toBe("{\"error\":\"unknown_key\"}");
+    expect(body).not.toMatch(/secret|dev_007_secret_suffix|https?:\/\/|headers?|event_id:|fingerprint:/i);
+  });
+
+  test("all probe responses are JSON, no-store, and nosniff", async () => {
+    const { baseUrl } = await startProbeServer();
+    const responses = [
+      await fetch(`${baseUrl}/probe/physical-action`),
+      await postJson(`${baseUrl}/probe/physical-action/arm`, { actionType: "contact_open" }),
+      await postJson(`${baseUrl}/probe/physical-action/reset`, {}),
+      await fetch(`${baseUrl}/probe/physical-action/arm`, { method: "GET" })
+    ];
+
+    for (const response of responses) {
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("content-type")).toBe("application/json; charset=utf-8");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    }
+  });
+
+  test("GET probe snapshot does not wait for or consume a request body", async () => {
+    const { server } = await startProbeServer();
+
+    const response = await rawHttpRequestWithoutBody(server.port);
+
+    expect(response).toContain("HTTP/1.1 200 OK");
+    expect(response).toContain("content-type: application/json; charset=utf-8");
+    expect(response).toContain("\"state\":\"idle\"");
+  });
 });
+
+function createStore(): RuntimeStatusStore {
+  const now = Date.now();
+  return new RuntimeStatusStore({
+    now: () => now,
+    initial: {
+      dbAvailable: true,
+      heartbeatAtMs: now,
+      state: "CONNECTED",
+      urlCategory: "smartthings_advanced",
+      chromiumRunning: true,
+      keeperPresent: true,
+      authenticated: true,
+      pushConnected: true,
+      initialSnapshotComplete: true,
+      parserHealthy: true
+    }
+  });
+}
+
+async function startProbeServer(options: {
+  includeProbe?: boolean;
+  includeEvidence?: boolean;
+  evidence?: ProbeRuntimeEvidence;
+  getProbeEvidence?: () => ProbeRuntimeEvidence;
+} = {}): Promise<{ baseUrl: string; server: { port: number; close: () => Promise<void> } }> {
+  const includeProbe = options.includeProbe ?? true;
+  const includeEvidence = options.includeEvidence ?? true;
+  const server = await createBridgeHttpServer({
+    store: createStore(),
+    host: "127.0.0.1",
+    port: 0,
+    ...(includeProbe ? { physicalActionProbe: new PhysicalActionCorrelationProbe() } : {}),
+    ...(includeEvidence
+      ? { getProbeEvidence: options.getProbeEvidence ?? (() => options.evidence ?? healthyEvidence()) }
+      : {})
+  });
+  servers.push(server);
+  return { baseUrl: `http://127.0.0.1:${server.port}`, server };
+}
+
+function healthyEvidence(overrides: Partial<ProbeRuntimeEvidence> = {}): ProbeRuntimeEvidence {
+  return {
+    live: true,
+    ready: true,
+    state: "CONNECTED",
+    browserIsolated: true,
+    observedDeviceCount: 213,
+    decodedDeviceEventCount: 100,
+    uniqueLogicalEventCount: 50,
+    duplicateEventCount: 50,
+    protocolInvalidFrameCount: 2,
+    protocolChangeCount: 0,
+    restartCount: 0,
+    ...overrides
+  };
+}
+
+async function postJson(url: string, body: unknown): Promise<Response> {
+  return fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+}
+
+async function expectFixedError(response: Response, code: string): Promise<void> {
+  expect(await response.text()).toBe(JSON.stringify({ error: code }));
+}
+
+async function rawHttpRequestWithoutBody(port: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection({ host: "127.0.0.1", port });
+    let response = "";
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      reject(new Error("GET response waited for request body"));
+    }, 1_000);
+
+    socket.on("connect", () => {
+      socket.write(
+        [
+          "GET /probe/physical-action HTTP/1.1",
+          "Host: 127.0.0.1",
+          "Content-Type: application/json",
+          "Content-Length: 32",
+          "Connection: close",
+          "",
+          ""
+        ].join("\r\n")
+      );
+    });
+    socket.on("data", (chunk) => {
+      response += chunk.toString("utf8");
+      clearTimeout(timeout);
+      socket.end();
+    });
+    socket.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    socket.on("close", () => {
+      clearTimeout(timeout);
+      resolve(response);
+    });
+  });
+}
+
+async function rawOversizedPostWithoutBody(port: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection({ host: "127.0.0.1", port });
+    let response = "";
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      reject(new Error("oversized content-length was not pre-rejected"));
+    }, 1_000);
+
+    socket.on("connect", () => {
+      socket.write(
+        [
+          "POST /probe/physical-action/arm HTTP/1.1",
+          "Host: 127.0.0.1",
+          "Content-Type: application/json",
+          "Content-Length: 4097",
+          "Connection: close",
+          "",
+          ""
+        ].join("\r\n")
+      );
+    });
+    socket.on("data", (chunk) => {
+      response += chunk.toString("utf8");
+      clearTimeout(timeout);
+      socket.end();
+    });
+    socket.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    socket.on("close", () => {
+      clearTimeout(timeout);
+      resolve(response);
+    });
+  });
+}
