@@ -29,6 +29,8 @@ Version 0.1.24 then attached Playwright/CDP observers before reloading a restore
 
 Version 0.1.25 adds a source-independent sanitized payload fingerprint for the missing-event-ID fallback so a changed value or event timestamp is not collapsed into an earlier logical event. It was deployed through Supervisor after duplicate-slug source backups were moved outside the local app discovery root. The session and snapshot restored again, and readiness remained true at `initialSnapshotAgeMs=145892` with 213 observed devices, 170 decoded deliveries, 85 unique logical events, 85 duplicate deliveries, `protocolChangeCount=0`, and `restartCount=0`. This live sample validates the release path and normal event-ID dedupe path; no real missing-ID SmartThings event was observed.
 
+A privacy-safe external 72-hour passive soak started on 2026-08-24 with a 300-second interval. Its first corrected-run sample was `live=true`, `ready=true`, `state=CONNECTED`, with 213 observed devices, `protocolChangeCount=0`, `restartCount=0`, and an invalid-frame baseline of 2. Start-boundary checks returned Ingress 200, noVNC asset 200, and noVNC WebSocket 101. The evaluator also detects a successful browser/context restart through browser-uptime rollback even when `restartCount` stays zero. This run is still `pending`; it is not long-idle durability evidence until the full duration completes without a failure.
+
 Phase 2 remains closed until sanitized real captures prove the remaining host-reboot/long-idle durability, physical-action device-event correlation, command, and API-independence requirements.
 
 DECISION: LIMITED

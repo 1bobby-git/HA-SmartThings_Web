@@ -16,4 +16,6 @@ If a known incompatible ACK/event shape or corrupt protocol store is detected, t
 
 Short-window background delivery and two add-on/browser restart restores are verified. Host reboot restore, long idle behavior, and long-idle background delivery remain unverified.
 
+A privacy-safe 72-hour passive soak is in progress with five-minute samples and automatic browser-uptime rollback detection. Until its final summary reaches `pass`, the long-idle items above remain unverified.
+
 The Home Assistant OS 18.2 Supervisor install is now verified for enforced AppArmor, sandboxed headed Chromium startup, Ingress status rendering, noVNC delivery of the Samsung Account login page, logged-in add-on observation, and repeated automatic session/snapshot restore after add-on updates. Host reboot recovery, physical-action correlation, and long-idle behavior are still manual Phase 1 evidence gaps.

@@ -10,6 +10,7 @@ Phase 1 repository for a Home Assistant SmartThings Web Bridge inspector. It run
 - Runtime diagnostics for decoded DEVICE_EVENT, unique logical event, duplicate delivery, dedupe journal, and invalid-frame counts.
 - Snapshot ACK correlation across locations, rooms, device cards, device states, device health, and scenes before readiness, including valid empty categories and fail-closed shape checks.
 - Static gates for direct SmartThings API usage and production secret material.
+- Privacy-safe external HAOS soak sampling with automatic readiness, counter, protocol, restart, gap, and memory verdicts.
 - Phase 1 documentation and manual evidence checklist.
 
 Not included in Phase 1: Home Assistant entity platforms, control commands, entity migration, stable release tagging, or any direct SmartThings API/PAT/OAuth/SmartApp/webhook path.
@@ -58,3 +59,5 @@ The same contract cannot self-heal. Recovery requires reviewed sanitized evidenc
 Phase 2 remains closed until sanitized real traffic proves full inventory, initial snapshot, location-wide push events, reconnect behavior, and no direct dependency on paid/public SmartThings API calls.
 
 Current gate: `DECISION: LIMITED` in `docs/feasibility-report.md`. A bounded controlled Chrome sample confirmed a session-based Socket.IO transport and initial snapshot-shaped data without an observed `api.smartthings.com` request. A live HAOS add-on run after manual VNC login reached `CONNECTED`, observed 213 devices, decoded live DEVICE_EVENT counters, and restored that session plus a complete snapshot after one 0.1.24 add-on restart. Deliberately triggered physical device events, host-reboot recovery, long-idle durability, commands, and complete API independence remain unverified.
+
+The recommended non-disruptive next gate is the 72-hour passive HAOS soak documented in `docs/haos-soak.md`. Run it with `npm run soak:haos`; its detailed samples stay outside the repository and only a reviewed sanitized completion summary may later be committed.

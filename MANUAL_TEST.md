@@ -35,6 +35,14 @@ Run `npm run protocol:replay` after updating sanitized fixtures. The command mus
 
 Run `npm run snapshot:replay` after updating snapshot correlation fixtures. All six required categories must match and `complete` must be true before testing live reconnect recovery.
 
+## Passive 72-Hour Soak
+
+Run the privacy-safe collector described in `docs/haos-soak.md` with a 300-second interval. Keep its JSONL samples outside the repository. The automatic verdict must reach `pass`; a `pending` result is not completion, and any live/ready/state failure, collection error, counter regression, protocol change, restart count or browser-uptime rollback, invalid-frame increase, excessive sample gap, or sustained memory-growth failure keeps the durability gate closed.
+
+At the beginning and end, separately verify Ingress HTTP 200, internal noVNC HTTP 200, and the noVNC WebSocket upgrade. Record only status codes and sanitized aggregate versions/counters. Do not store the Ingress tokenized path or raw command output.
+
+This soak is passive. Do not combine it with a host reboot, network interruption, or physical device action; those remain independent controlled scenarios.
+
 ## Protocol Integrity Warning
 
 When a protocol mismatch is suspected, use the add-on Web UI and status page to observe the red protocol warning. Record only sanitized evidence: `PROTOCOL_CHANGED`, parser/readiness state, protocol version, affected semantic category names, and fixture or test references. Liveness and Ingress should remain available while readiness stays false.
