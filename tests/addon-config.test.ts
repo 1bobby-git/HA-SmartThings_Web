@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import YAML from "yaml";
 
@@ -10,6 +10,20 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
+  test("publishes missing-ID dedupe protection as version 0.1.25", () => {
+    const config = addonConfig();
+    const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
+    const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
+    const runtime = readText("bridge/src/runtime.ts");
+    const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
+
+    expect(config.version).toBe("0.1.25");
+    expect(packageMetadata.version).toBe("0.1.25");
+    expect(protocolMetadata.bridge_version).toBe("0.1.25");
+    expect(runtime).toContain('const bridgeVersion = "0.1.25";');
+    expect(changelog).toContain("## 0.1.25");
+  });
+
   test("uses ingress watchdog and avoids broad privileges or public VNC ports", () => {
     const config = addonConfig();
     const dockerfile = addonDockerfile();
@@ -53,20 +67,56 @@ describe("Home Assistant add-on metadata", () => {
     expect(archCheckIndex).toBeLessThan(dockerfile.indexOf("tar -C / -Jxpf /tmp/s6-overlay-arch.tar.xz"));
   });
 
+  test("configures the pinned Chromium setuid helper without enabling broad container privileges", () => {
+    const dockerfile = addonDockerfile();
+
+    expect(dockerfile).toContain("CHROME_DEVEL_SANDBOX=/usr/local/sbin/chrome-devel-sandbox");
+    expect(dockerfile).toContain("chrome-linux64/chrome_sandbox");
+    expect(dockerfile).toContain("chrome-linux/chrome_sandbox");
+    expect(dockerfile).toContain('chown root:root "${sandbox}"');
+    expect(dockerfile).toContain('chmod 4755 "${sandbox}"');
+    expect(dockerfile).toContain('ln -s "${sandbox}" /usr/local/sbin/chrome-devel-sandbox');
+    expect(dockerfile).toContain('test "$(stat -c \'%u:%g:%a\' "${sandbox}")" = "0:0:4755"');
+    expect(dockerfile).toContain("id -u pwuser");
+    expect(dockerfile).not.toContain("--no-sandbox");
+  });
+
   test("keeps noVNC and websockify internal-only while exposing only ingress", () => {
     const nginx = readText("addon/smartthings_web_bridge/rootfs/etc/nginx/nginx.conf");
     const novncRun = readText("addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/novnc/run");
     const x11vncRun = readText("addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/x11vnc/run");
     const dockerfile = addonDockerfile();
 
+    expect(nginx).toMatch(/^user root;/);
     expect(nginx).toContain("listen 8099;");
+    expect(nginx).toContain("include /etc/nginx/mime.types;");
     expect(nginx).toContain("access_log off;");
     expect(nginx).toContain("error_log /dev/stderr");
     expect(nginx).toContain("allow 172.30.32.2;");
     expect(nginx).toContain("deny all;");
     expect(nginx.indexOf("allow 172.30.32.2;")).toBeLessThan(nginx.indexOf("deny all;"));
-    expect(nginx).toContain("proxy_pass http://127.0.0.1:6080/");
-    expect(novncRun).toContain("exec websockify --web=/usr/share/novnc 127.0.0.1:6080 127.0.0.1:5900");
+    expect(nginx).toContain("location = /novnc/websockify {");
+    expect(nginx).toContain("location = /novnc-ui/websockify {");
+    expect(nginx).toContain("proxy_pass http://127.0.0.1:6080;");
+    expect(nginx).toContain("location /novnc/ {");
+    expect(nginx).toContain("location /novnc-ui/ {");
+    expect(nginx).toContain("alias /usr/share/novnc/;");
+    expect(nginx).toContain('add_header Cache-Control "no-store, no-cache, must-revalidate" always;');
+    for (const directive of [
+      "client_body_temp_path",
+      "proxy_temp_path",
+      "fastcgi_temp_path",
+      "uwsgi_temp_path",
+      "scgi_temp_path"
+    ]) {
+      expect(nginx).toContain(`${directive} /tmp;`);
+    }
+    expect(nginx).not.toContain("/var/lib/nginx");
+    expect(novncRun).toContain(
+      "exec websockify 127.0.0.1:6080 127.0.0.1:5900"
+    );
+    expect(novncRun).not.toContain("--web=");
+    expect(novncRun).not.toContain("--libserver");
     expect(x11vncRun).toContain("exec x11vnc -display :99 -localhost");
     expect(dockerfile).toContain("EXPOSE 8099");
     expect(dockerfile).not.toMatch(/EXPOSE\s+(5900|6080)\b/);
@@ -74,17 +124,53 @@ describe("Home Assistant add-on metadata", () => {
 
   test("declares expected services, dependencies, and add-on entrypoint", () => {
     const serviceRoot = "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d";
+    const bundleRoot = "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/user-bundles.d/user";
     const dockerfile = addonDockerfile();
+    const bridgeRun = readText(`${serviceRoot}/bridge/run`);
+    const prepareData = readText("addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data");
 
-    expect(readText(`${serviceRoot}/bridge/run`)).toContain("exec node --experimental-sqlite /app/dist/bridge/src/main.js");
-    expect(readText(`${serviceRoot}/bridge/run`)).not.toContain("--experimental-strip-types");
-    expect(readText(`${serviceRoot}/bridge/run`)).not.toContain("/app/bridge/src/main.ts");
+    expect(bridgeRun).toMatch(/^#!\/command\/with-contenv sh/);
+    expect(bridgeRun).toContain("export HOME=/data");
+    expect(bridgeRun).toContain("export XDG_CACHE_HOME=/data/chromium-profile/.cache");
+    expect(bridgeRun).toContain("export XDG_CONFIG_HOME=/data/chromium-profile/.config");
+    expect(bridgeRun).toContain("exec s6-setuidgid pwuser node --experimental-sqlite /app/dist/bridge/src/main.js");
+    expect(bridgeRun).not.toMatch(/^mkdir\b/m);
+    expect(bridgeRun).not.toMatch(/^chmod\b/m);
+    expect(bridgeRun).not.toContain("--experimental-strip-types");
+    expect(bridgeRun).not.toContain("/app/bridge/src/main.ts");
     expect(readText(`${serviceRoot}/nginx/run`)).toContain('exec nginx -c /etc/nginx/nginx.conf -g "daemon off;"');
+    expect(readText(`${serviceRoot}/openbox/run`)).toContain("export HOME=/tmp/openbox-home");
+    expect(readText(`${serviceRoot}/openbox/run`)).toContain("export XDG_CACHE_HOME=/tmp/openbox-cache");
     expect(readText(`${serviceRoot}/xvfb/run`)).toContain("exec Xvfb :99 -screen 0 1440x1000x24 -nolisten tcp");
-    expect(readText(`${serviceRoot}/x11vnc/dependencies.d/xvfb`).trim()).toBe("");
+    expect(readText(`${serviceRoot}/xvfb-ready/type`).trim()).toBe("oneshot");
+    expect(readText(`${serviceRoot}/xvfb-ready/dependencies.d/xvfb`).trim()).toBe("");
+    expect(readText(`${serviceRoot}/xvfb-ready/up`).trim()).toBe(
+      "/etc/s6-overlay/scripts/wait-xvfb"
+    );
+    expect(readText(`${serviceRoot}/xvfb/run`)).toContain("-nolock");
+    const waitXvfb = readText("addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/wait-xvfb");
+    expect(waitXvfb).toContain("xdpyinfo -display :99");
+    expect(waitXvfb).toContain("s6-sleep -m 100");
+    expect(waitXvfb).not.toContain("sleep 0.1");
+    expect(readText(`${serviceRoot}/x11vnc/dependencies.d/xvfb-ready`).trim()).toBe("");
     expect(readText(`${serviceRoot}/novnc/dependencies.d/x11vnc`).trim()).toBe("");
-    expect(readText(`${serviceRoot}/openbox/dependencies.d/xvfb`).trim()).toBe("");
-    expect(readText(`${serviceRoot}/bridge/dependencies.d/xvfb`).trim()).toBe("");
+    expect(readText(`${serviceRoot}/openbox/dependencies.d/xvfb-ready`).trim()).toBe("");
+    expect(readText(`${serviceRoot}/bridge/dependencies.d/xvfb-ready`).trim()).toBe("");
+    expect(readText(`${serviceRoot}/bridge/dependencies.d/data-prep`).trim()).toBe("");
+    expect(readText(`${serviceRoot}/data-prep/type`).trim()).toBe("oneshot");
+    expect(readText(`${serviceRoot}/data-prep/up`).trim()).toBe(
+      "/etc/s6-overlay/scripts/prepare-data"
+    );
+    expect(prepareData).toContain("test -d /data");
+    expect(prepareData).toContain("exec chown -R pwuser:pwuser /data");
+    expect(readText(`${bundleRoot}/type`).trim()).toBe("bundle");
+    for (const service of ["bridge", "data-prep", "nginx", "novnc", "openbox", "x11vnc", "xvfb", "xvfb-ready"]) {
+      expect(readText(`${bundleRoot}/contents.d/${service}`).trim()).toBe("");
+    }
+    expect(existsSync(`${serviceRoot}/user`)).toBe(false);
+    expect(dockerfile).toContain("x11-utils");
+    expect(dockerfile).toContain("-name up");
+    expect(dockerfile).toContain("chmod +x /etc/s6-overlay/scripts/*");
     expect(dockerfile).toContain('ENTRYPOINT ["/init"]');
     expect(dockerfile).not.toMatch(/--privileged|CAP_SYS_ADMIN|host\.docker\.internal/);
   });
@@ -101,18 +187,73 @@ describe("Home Assistant add-on metadata", () => {
     expect(dockerfile).not.toContain("COPY addon/smartthings_web_bridge/apparmor.txt /etc/apparmor.d/smartthings_web_bridge");
   });
 
+  test("uses paths that are valid from the generated add-on package root", () => {
+    const dockerfile = addonDockerfile();
+
+    expect(dockerfile).toContain("COPY package.json package-lock.json tsconfig.json ./");
+    expect(dockerfile).not.toContain("vitest.config.ts");
+    expect(dockerfile).toContain("COPY tsconfig.build.json ./");
+    expect(dockerfile).toContain("COPY bridge ./bridge");
+    expect(dockerfile).toContain("COPY rootfs /");
+    expect(dockerfile).not.toContain("COPY addon/smartthings_web_bridge/rootfs /");
+  });
+
   test("documents minimal AppArmor access and runtime validation gap", () => {
     const apparmor = readText("addon/smartthings_web_bridge/apparmor.txt");
     const docs = readText("addon/smartthings_web_bridge/DOCS.md");
 
-    expect(apparmor).toContain("file,");
+    expect(apparmor).not.toMatch(/^\s*file,\s*$/m);
     expect(apparmor).toContain("signal (send) peer=unconfined,");
     expect(apparmor).toContain("signal (send) peer=smartthings_web_bridge,");
-    expect(apparmor).toContain("/init ix,");
+    expect(apparmor).toContain("/init rix,");
+    expect(apparmor).not.toContain("/init ix,");
     expect(apparmor).toContain("/bin/** ix,");
     expect(apparmor).toContain("/usr/bin/** ix,");
+    expect(apparmor).toContain("/usr/lib/cargo/bin/coreutils/** ix,");
+    expect(apparmor).toContain("/bin/sleep ix,");
+    expect(apparmor).toContain("/usr/bin/sleep ix,");
+    expect(apparmor).toContain("/usr/sbin/nginx ix,");
+    expect(apparmor).toContain("/ms-playwright/chromium-1234/{,**} rm,");
+    expect(apparmor).toContain(
+      "/ms-playwright/chromium-1234/chrome-linux64/chrome rix,"
+    );
+    expect(apparmor).toContain(
+      "/ms-playwright/chromium-1234/chrome-linux64/chrome_crashpad_handler rix,"
+    );
+    expect(apparmor).toContain(
+      "/ms-playwright/chromium-1234/chrome-linux64/chrome_sandbox rix,"
+    );
+    expect(apparmor).toContain("/ms-playwright/chromium-1234/chrome-linux/chrome rix,");
+    expect(apparmor).toContain(
+      "/ms-playwright/chromium-1234/chrome-linux/chrome_crashpad_handler rix,"
+    );
+    expect(apparmor).toContain("/ms-playwright/chromium-1234/chrome-linux/chrome_sandbox rix,");
+    expect(apparmor).toContain("/usr/local/sbin/chrome-devel-sandbox rix,");
+    expect(apparmor).not.toContain("/ms-playwright/** rix,");
+    expect(apparmor).not.toContain("/usr/sbin/** ix,");
+    expect(apparmor).toContain("/etc/nginx/nginx.conf r,");
+    expect(apparmor).toContain("/etc/nginx/mime.types r,");
+    expect(apparmor).not.toContain("/etc/nginx/** r,");
+    expect(apparmor).toContain("/etc/fonts/{,**} r,");
+    expect(apparmor).toContain("/etc/xdg/openbox/{,**} r,");
+    expect(apparmor).not.toContain("/etc/** r,");
+    expect(apparmor).toContain("/usr/share/novnc/ r,");
+    expect(apparmor).toContain("/usr/share/novnc/** r,");
+    expect(apparmor).toContain("/etc/ssl/{,**} r,");
+    expect(apparmor).toContain("/var/lib/xkb/{,**} rw,");
+    expect(apparmor).not.toContain("/var/lib/** rw,");
+    expect(apparmor).toContain("/var/cache/fontconfig/{,**} rwk,");
     expect(apparmor).toContain("/run/{s6,s6-rc*,service}/** ix,");
+    expect(apparmor).toContain("/package/admin/s6-overlay-3.2.3.2/libexec/{,**} rix,");
+    expect(apparmor).toContain("/package/admin/s6-overlay-3.2.3.2/command/{,**} rix,");
+    expect(apparmor).toContain("/package/admin/s6-overlay-3.2.3.2/etc/s6-rc/scripts/{,**} rix,");
+    expect(apparmor).toContain("/package/admin/s6-overlay-3.2.3.2/etc/s6-linux-init/skel/{,**} r,");
+    expect(apparmor).toContain("/package/admin/s6-overlay-3.2.3.2/etc/s6-rc/sources/{,**} r,");
+    expect(apparmor).not.toContain("/package/admin/s6-overlay-3.2.3.2/etc/s6-rc/sources/** r,");
+    expect(apparmor).not.toContain("/package/admin/s6-overlay-3.2.3.2/etc/** r,");
     expect(apparmor).toContain("/package/** ix,");
+    expect(apparmor).not.toContain("/package/** rix,");
+    expect(apparmor).not.toContain("/package/** r,");
     expect(apparmor).toContain("/command/** ix,");
     expect(apparmor).toContain("/etc/s6-overlay/** rix,");
     expect(apparmor).toContain("/run/{,**} rwk,");
@@ -122,13 +263,32 @@ describe("Home Assistant add-on metadata", () => {
     expect(apparmor).toContain("/dev/random r,");
     expect(apparmor).toContain("/dev/urandom r,");
     expect(apparmor).toContain("/dev/pts/** rw,");
+    expect(apparmor).toContain("/proc/ r,");
     expect(apparmor).toContain("/proc/** r,");
+    expect(apparmor).toContain(
+      "owner /proc/[0-9]*/{setgroups,uid_map,gid_map,oom_score_adj} w,"
+    );
+    expect(apparmor).not.toMatch(
+      /^\s*\/proc\/\[0-9\]\*\/{setgroups,uid_map,gid_map,oom_score_adj}\s+w,/m
+    );
+    expect(apparmor).not.toMatch(/^\s*\/proc\/\*\*\s+rw/mi);
+    expect(apparmor).toContain("/etc/gnutls/config r,");
     expect(apparmor).toContain("/sys/devices/system/cpu/** r,");
     expect(apparmor).toContain("/tmp/.X11-unix/** rw,");
+    expect(apparmor).toContain("/data/ rwk,");
+    expect(apparmor).not.toContain("/data rwk,");
     expect(apparmor).toContain("/data/** rwk,");
-    expect(apparmor).not.toMatch(/\bcapability\b/);
+    expect(apparmor).toContain("capability setgid,");
+    expect(apparmor).toContain("capability setuid,");
+    expect(apparmor).toContain("capability chown,");
+    expect(apparmor).toContain("capability dac_override,");
+    expect(apparmor).toContain("capability setpcap,");
+    expect(apparmor).toContain("capability sys_chroot,");
+    expect(apparmor).toContain("capability sys_admin,");
+    expect(apparmor).not.toMatch(/^\s*capability,\s*$/m);
+    expect(apparmor).not.toMatch(/^\s*userns(?:\s+create)?,\s*$/m);
     expect(apparmor).not.toContain("complain");
-    expect(docs).toContain("AppArmor runtime enforcement has not been validated on a live Home Assistant Supervisor install");
+    expect(docs).toContain("Supervisor-loaded AppArmor profile is enforced");
   });
 });
 

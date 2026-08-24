@@ -6,6 +6,8 @@ export interface NormalizedText {
   readonly truncated: boolean;
 }
 
+export const DEFAULT_CAPTURE_TEXT_LIMIT_BYTES = 1_048_576;
+
 export function normalizeTextForCapture(value: string, limitBytes: number, redact: Redact): NormalizedText {
   const byteLength = Buffer.byteLength(value, "utf8");
   const redacted = redact(value);

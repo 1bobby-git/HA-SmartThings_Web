@@ -20,8 +20,8 @@ const productionRoots = ["bridge/src", "addon", "docker", "package.json"];
 const skipEntries = new Set([".git", "node_modules", "dist", "package-lock.json"]);
 const excludedPathPattern = /^(?:docs|tests|protocol\/fixtures|tools)\//;
 const sensitiveAssignment =
-  /\b(password|mfa|captcha|cookie|authorization|csrf|session(?:Token|_token|[-_]?id)?|access(?:Token|_token)?|refresh(?:Token|_token)?|client(?:Secret|_secret)?|bridge(?:Token|_token)|token|secret)\b\s*(?:[:=]|=>)\s*["'`][^"'`\n]{3,}["'`]/i;
-const bearerMaterial = /Bearer\s+[A-Za-z0-9._~+/=-]{20,}/;
+  /(?<![A-Za-z0-9_$])["']?(password|mfa(?:Code|_code)?|captcha(?:Code|_code)?|cookie|authorization|csrf(?:Token|_token)?|session(?:Token|_token|[-_]?id)?|access(?:Token|_token)?|refresh(?:Token|_token)?|client(?:Secret|_secret)?|bridge(?:Token|_token)|token|secret)["']?(?![A-Za-z0-9_$])\s*(?:[:=]|=>)\s*["'`][^"'`\n]{3,}["'`]/gi;
+const bearerMaterial = /Bearer\s+[A-Za-z0-9._~+/=-]{20,}/i;
 
 export function scanProductionSecrets(options: SecretScanOptions = {}): SecretFinding[] {
   const cwd = options.cwd ?? process.cwd();
@@ -36,8 +36,7 @@ export function scanProductionSecrets(options: SecretScanOptions = {}): SecretFi
       }
       const lines = readFileSync(path, "utf8").split(/\r?\n/);
       for (const [index, line] of lines.entries()) {
-        const assignment = sensitiveAssignment.exec(line);
-        if (assignment) {
+        for (const assignment of line.matchAll(sensitiveAssignment)) {
           findings.push({ path: rel, rule: "secret-assignment", line: index + 1, key: assignment[1] ?? "unknown" });
         }
         if (bearerMaterial.test(line)) {

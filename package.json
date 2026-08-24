@@ -1,6 +1,6 @@
 {
   "name": "ha-smartthings-web",
-  "version": "0.1.0",
+  "version": "0.1.25",
   "private": true,
   "type": "module",
   "packageManager": "npm@11.12.1",
@@ -16,8 +16,12 @@
     "test:integration": "vitest run tests",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+    "package:addon": "tsx tools/package-addon.ts",
     "audit:api-free": "tsx tools/api-free-audit.ts",
-    "audit:secrets": "tsx tools/secret-scan.ts"
+    "audit:fixtures": "tsx tools/sanitized-fixture-audit.ts",
+    "audit:secrets": "tsx tools/secret-scan.ts",
+    "protocol:replay": "tsx tools/replay-device-event-fixture.ts",
+    "snapshot:replay": "tsx tools/replay-snapshot-fixture.ts"
   },
   "dependencies": {
     "playwright-core": "1.62.1"

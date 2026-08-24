@@ -39,7 +39,7 @@ describe("createBridgeHttpServer", () => {
     expect((await ready.json()).ready).toBe(false);
     expect(details.details.state).toBe("LOGIN_REQUIRED");
     expect(page).toContain("SmartThings Web Bridge");
-    expect(page).toContain('href="novnc/vnc.html?autoconnect=1&amp;resize=scale&amp;path=novnc/websockify"');
+    expect(page).toContain('href="novnc-ui/vnc.html?autoconnect=1&amp;resize=scale&amp;path=websockify"');
     expect(page).not.toContain('href="/novnc/"');
     expect(JSON.stringify([details, page])).not.toMatch(/https?:\/\/my\.smartthings\.com|deviceId|locationId|token|secret/i);
 

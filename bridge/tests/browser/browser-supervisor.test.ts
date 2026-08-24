@@ -1,6 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
 
-import { BrowserSupervisor } from "../../src/browser/browser-supervisor.js";
+import {
+  BrowserSupervisor,
+  browserLaunchFailureToken
+} from "../../src/browser/browser-supervisor.js";
 import type { RuntimeStatusPatch, RuntimeStatusStore } from "../../src/state/runtime-state.js";
 
 class FakeStatusStore {
@@ -13,6 +16,68 @@ class FakeStatusStore {
 }
 
 describe("BrowserSupervisor", () => {
+  test("reduces launch failures to an allowlisted code token", () => {
+    expect(browserLaunchFailureToken({ code: "EACCES" })).toBe("EACCES");
+    expect(browserLaunchFailureToken({ code: "EACCES:/data/private" })).toBe("UNKNOWN");
+    expect(browserLaunchFailureToken(new Error("spawn permission denied /raw/path"))).toBe(
+      "PERMISSION_DENIED"
+    );
+    expect(
+      browserLaunchFailureToken(
+        new Error(
+          "<launching> /ms-playwright/chromium-1234/chrome --user-data-dir=/data/chromium-profile\n[err] /root/.config/chromium: Permission denied"
+        )
+      )
+    ).toBe("HOME_PERMISSION");
+    expect(
+      browserLaunchFailureToken(
+        new Error("[err] /ms-playwright/chromium-1234/chrome-linux64/helper: Permission denied")
+      )
+    ).toBe("PLAYWRIGHT_BUNDLE_PERMISSION");
+    expect(
+      browserLaunchFailureToken(new Error("[err] zygote host failed: Permission denied"))
+    ).toBe("ZYGOTE_PERMISSION");
+    expect(
+      browserLaunchFailureToken(
+        new Error("[FATAL:sandbox/linux/services/credentials.cc:135] Permission denied")
+      )
+    ).toBe("CREDENTIALS_PERMISSION");
+    expect(
+      browserLaunchFailureToken(new Error("[FATAL:namespace sandbox] Operation not permitted"))
+    ).toBe("USERNS_PERMISSION");
+    expect(
+      browserLaunchFailureToken(new Error("[FATAL:seccomp sandbox] Operation not permitted"))
+    ).toBe("SECCOMP_PERMISSION");
+    expect(
+      browserLaunchFailureToken(
+        new Error("[FATAL:sandbox/linux/sandbox_linux.cc:379] Permission denied")
+      )
+    ).toBe("CHROMIUM_SANDBOX_LINUX_PERMISSION");
+    expect(browserLaunchFailureToken(new Error("Running as root without --no-sandbox"))).toBe(
+      "SANDBOX_REQUIRED"
+    );
+    expect(
+      browserLaunchFailureToken(
+        new Error("The SUID sandbox helper binary was found, but is not configured correctly")
+      )
+    ).toBe("SUID_SANDBOX_CONFIG");
+    expect(
+      browserLaunchFailureToken(new Error("chrome_sandbox: Permission denied"))
+    ).toBe("SUID_SANDBOX_PERMISSION");
+    expect(
+      browserLaunchFailureToken(
+        new Error("browserType.launchPersistentContext: Timeout 30000ms exceeded.")
+      )
+    ).toBe("LAUNCH_TIMEOUT");
+    expect(browserLaunchFailureToken(new Error("Executable doesn't exist at /raw/path"))).toBe(
+      "EXECUTABLE_MISSING"
+    );
+    expect(browserLaunchFailureToken(new Error("Target page, context or browser has been closed"))).toBe(
+      "BROWSER_CLOSED"
+    );
+    expect(browserLaunchFailureToken(new Error("raw token=secret"))).toBe("UNKNOWN");
+  });
+
   test("attempts the initial launch plus maxRestarts retries before failing", async () => {
     const launch = vi.fn(async () => {
       throw new Error("browser failed");
@@ -85,5 +150,27 @@ describe("BrowserSupervisor", () => {
       expect.objectContaining({ restartCount: 1 }),
       expect.objectContaining({ restartCount: 2 })
     ]);
+  });
+
+  test("waits between failed launch attempts but not after the final failure", async () => {
+    const launch = vi.fn(async () => {
+      throw new Error("transient launch failure");
+    });
+    const wait = vi.fn(async () => undefined);
+    const status = new FakeStatusStore();
+    const supervisor = new BrowserSupervisor({
+      launch,
+      maxRestarts: 2,
+      retryDelayMs: 1_000,
+      wait,
+      status: status as unknown as RuntimeStatusStore
+    });
+
+    await supervisor.start();
+
+    expect(launch).toHaveBeenCalledTimes(3);
+    expect(wait).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenNthCalledWith(1, 1_000);
+    expect(wait).toHaveBeenNthCalledWith(2, 1_000);
   });
 });

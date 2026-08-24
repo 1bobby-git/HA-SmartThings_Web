@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "evidence_id": "controlled-chrome-summary-2026-08-20",
+  "observed_date": "2026-08-20",
+  "source": "Read-only Chrome CDP Network events from a manually authenticated SmartThings location tab",
+  "raw_capture_persisted": false,
+  "sanitization": "Only aggregate counts, protocol event family names, and capability names were retained. Raw identifiers, values, headers, URLs with identifiers, cookies, and tokens were discarded.",
+  "decision": "LIMITED",
+  "initial_reload": {
+    "requests": 111,
+    "websocket_host_path": "my.smartthings.com/socket.io/",
+    "received_frames": 25,
+    "sent_frames": 18,
+    "api_smartthings_com_observed": false,
+    "locations": 2,
+    "rooms": 9,
+    "scenes": 4,
+    "device_card_records": 205,
+    "unique_state_devices": 206,
+    "state_rows": 1557,
+    "health_records": 212,
+    "health_online": 196,
+    "health_offline": 16
+  },
+  "live_device_events": {
+    "deliveries": 72,
+    "unique_event_ids": 27,
+    "unique_devices": 9,
+    "state_change_true": 66,
+    "state_change_false": 6,
+    "event_families": [
+      "api/subscription DEVICE_EVENT",
+      "api/subscription CONTROL_EVENT",
+      "api/subscription SPIGOT_EVENT"
+    ]
+  },
+  "background_window": {
+    "duration_seconds": 20,
+    "frames": 954,
+    "device_event_deliveries": 747,
+    "control_event_deliveries": 139,
+    "spigot_event_deliveries": 16,
+    "websocket_closed_events": 0
+  },
+  "later_capability_window": {
+    "device_event_deliveries": 141,
+    "unique_event_ids": 47,
+    "unique_devices": 13,
+    "capability_families": [
+      "motionSensor",
+      "presenceSensor",
+      "battery",
+      "temperatureMeasurement",
+      "illuminanceMeasurement",
+      "signalStrength",
+      "airQualitySensor"
+    ]
+  },
+  "limitations": [
+    "No event was causally tied to a deliberate physical device action.",
+    "Duplicate delivery was observed but the dedupe formula was not validated.",
+    "Long-idle delivery, browser and host restarts, Home Assistant restart behavior, commands, and complete API independence remain unverified."
+  ]
+}

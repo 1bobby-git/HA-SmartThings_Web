@@ -36,7 +36,7 @@ export class KeeperPageManager {
       await duplicate.close();
     }
 
-    if (keeper.url() !== KEEPER_URL && !isSamsungLoginUrl(keeper.url())) {
+    if (!isKeeperSettledUrl(keeper.url()) && !isSamsungLoginUrl(keeper.url())) {
       await keeper.goto(KEEPER_URL, { waitUntil: "domcontentloaded" });
     }
 
@@ -69,10 +69,28 @@ export class KeeperPageManager {
 function isKeeperCandidateUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    return url.origin === "https://my.smartthings.com" && url.pathname === "/location";
+    return url.origin === "https://my.smartthings.com" && isLocationPath(url.pathname);
   } catch {
     return false;
   }
+}
+
+function isKeeperSettledUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.origin === "https://my.smartthings.com" &&
+      isLocationPath(url.pathname) &&
+      url.search === "" &&
+      url.hash === ""
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isLocationPath(pathname: string): boolean {
+  return /^\/location(?:\/[^/]+)?\/?$/.test(pathname);
 }
 
 function isSamsungLoginUrl(value: string): boolean {

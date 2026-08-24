@@ -10,7 +10,9 @@ export interface PersistentContextLaunch {
   userDataDir: string;
   options: {
     headless: false;
+    chromiumSandbox: true;
     downloadsPath: string;
+    timeout: number;
     viewport: { width: number; height: number };
     args: string[];
   };
@@ -63,7 +65,9 @@ export function createPersistentContextLaunch(paths: PersistentContextPaths): Pe
     userDataDir: normalizeBridgePath(paths.profileDir),
     options: {
       headless: false,
+      chromiumSandbox: true,
       downloadsPath: normalizeBridgePath(paths.downloadDir),
+      timeout: 30_000,
       viewport: { width: 1440, height: 1000 },
       args: [
         "--no-first-run",

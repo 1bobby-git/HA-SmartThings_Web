@@ -1,0 +1,4 @@
+#!/command/with-contenv sh
+set -eu
+test -d /data
+exec chown -R pwuser:pwuser /data

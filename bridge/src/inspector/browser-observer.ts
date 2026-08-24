@@ -1,6 +1,9 @@
 import { sanitizeCaptureRecord, type CaptureStore, type CaptureSource } from "../state/capture-store.js";
 import { createHash } from "node:crypto";
-import { normalizeTextForCapture } from "./text-normalizer.js";
+import {
+  DEFAULT_CAPTURE_TEXT_LIMIT_BYTES,
+  normalizeTextForCapture
+} from "./text-normalizer.js";
 
 export interface EventTargetLike {
   on(event: string, handler: (payload: unknown) => void): void;
@@ -23,7 +26,7 @@ export function installBrowserObserver(
   redact: Redact,
   options: BrowserObserverOptions = {}
 ): void {
-  const textLimitBytes = options.textLimitBytes ?? 64_000;
+  const textLimitBytes = options.textLimitBytes ?? DEFAULT_CAPTURE_TEXT_LIMIT_BYTES;
   const observedPages = new WeakSet<object>();
   const observedServiceWorkers = new WeakSet<object>();
 

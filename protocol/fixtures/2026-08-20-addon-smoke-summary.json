@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "evidence_id": "addon-smoke-summary-2026-08-20",
+  "observed_at": "2026-08-20T20:16:40+09:00",
+  "image": "ha-smartthings-web-addon:phase1-release-candidate",
+  "manifest_sha256": "1c72223a3876404c5865449f60c7c16e1c0f503ab86e1c963ba9ac5ffe1bf59a",
+  "local_image_id": "sha256:9fc550052b29d3745fc3ef385fb4bc225ca570f2b8d4aea78f4a532b9b816001",
+  "build_context": "dist-addon/smartthings_web_bridge only",
+  "architecture": "amd64",
+  "os": "linux",
+  "container_node_version": "24.18.1",
+  "playwright_version": "1.62.1",
+  "chromium_version": "151.0.7922.34",
+  "state": "LOGIN_REQUIRED",
+  "live": true,
+  "liveness_observed_after_seconds": 14,
+  "ready": false,
+  "protocol_version": 1,
+  "protocol_state": "discovering",
+  "chromium_running": true,
+  "browser_restart_count": 0,
+  "container_restart_smoke": {
+    "live": true,
+    "liveness_status": 200,
+    "eventually_state": "LOGIN_REQUIRED",
+    "data_file_hashes_preserved": true,
+    "chromium_running": true
+  },
+  "corrupt_protocol_fingerprint_smoke": {
+    "wrote_invalid_temp_volume_file": true,
+    "liveness_status": 200,
+    "ready_status": 503,
+    "state": "PROTOCOL_CHANGED",
+    "parser_healthy": false,
+    "chromium_running": false,
+    "protocol_version": 1,
+    "protocol_state": "discovering",
+    "status_page_indicates_changed": true,
+    "status_page_indicates_phase_2_closed": true,
+    "status_page_indicates_readiness_blocked": true,
+    "log_event": "protocol_integrity_store_failed",
+    "raw_content_logged": false
+  },
+  "ingress_allowed_status": 200,
+  "ingress_ready_status": 503,
+  "ingress_status_page_status": 200,
+  "ingress_novnc_status": 200,
+  "ingress_denied_status": 403,
+  "published_host_ports": 0,
+  "permissions": {
+    "/data": "0700",
+    "/data/chromium-profile": "0700",
+    "/data/downloads": "0700",
+    "/data/bridge-secret": "0600",
+    "/data/bridge.sqlite": "0600",
+    "/data/settings.json": "0600",
+    "/data/protocol-fingerprint.json": "0600"
+  },
+  "supervised_processes_observed": [
+    "Xvfb",
+    "Openbox",
+    "x11vnc",
+    "websockify/noVNC",
+    "nginx",
+    "bridge daemon",
+    "headed Chromium"
+  ],
+  "limitations": [
+    "The smoke test used Docker Desktop, not Home Assistant Supervisor.",
+    "The custom AppArmor profile was not enforced in this test.",
+    "No Samsung credentials or live SmartThings session were entered into the add-on test container."
+  ],
+  "cleanup": {
+    "temp_container_removed": true,
+    "temp_volume_removed": true,
+    "temp_network_removed": true,
+    "docker_stopped": true
+  }
+}

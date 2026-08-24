@@ -49,7 +49,13 @@ describe("RuntimeStatusStore", () => {
       dbAvailable: false,
       activeConnections: 0,
       observedDeviceCount: 0,
+      decodedDeviceEventCount: 0,
+      uniqueLogicalEventCount: 0,
+      duplicateEventCount: 0,
+      dedupeJournalSize: 0,
+      protocolInvalidFrameCount: 0,
       protocolChangeCount: 0,
+      protocolMismatchSurface: undefined,
       restartCount: 0,
       bridgeVersion: "0.0.0-dev",
       browserVersion: "unknown",
@@ -89,7 +95,8 @@ describe("RuntimeStatusStore", () => {
       observedDeviceCount: 7,
       bridgeVersion: "0.1.0",
       browserVersion: "Chromium 141.0.7390.122",
-      protocolVersion: "2026-08"
+      protocolVersion: "2026-08",
+      protocolMismatchSurface: "snapshot:scenes:response_shape"
     });
 
     expect(before.state).toBe("STARTING");
@@ -112,7 +119,8 @@ describe("RuntimeStatusStore", () => {
       observedDeviceCount: 7,
       bridgeVersion: "0.1.0",
       browserVersion: "Chromium 141.0.7390.122",
-      protocolVersion: "2026-08"
+      protocolVersion: "2026-08",
+      protocolMismatchSurface: "snapshot:scenes:response_shape"
     });
 
     unsubscribe();
@@ -137,7 +145,11 @@ describe("RuntimeStatusStore", () => {
       ({ lastFrameAtMs: Number.NaN } as unknown) as RuntimeStatusPatch,
       ({ bridgeVersion: "0.1.0?token=secret" } as unknown) as RuntimeStatusPatch,
       ({ protocolVersion: "proto\nraw" } as unknown) as RuntimeStatusPatch,
-      ({ browserVersion: "https://browser.example/version" } as unknown) as RuntimeStatusPatch
+      ({ browserVersion: "https://browser.example/version" } as unknown) as RuntimeStatusPatch,
+      ({
+        protocolMismatchSurface: "snapshot:raw-device-id:response_shape"
+      } as unknown) as RuntimeStatusPatch,
+      ({ protocolMismatchSurface: "https://example.invalid/?token=secret" } as unknown) as RuntimeStatusPatch
     ];
 
     for (const patch of invalidPatches) {
@@ -154,7 +166,12 @@ describe("RuntimeStatusStore", () => {
       { initial: ({ urlCategory: "signin" } as unknown) as RuntimeStatusPatch },
       { initial: ({ authenticated: "true" } as unknown) as RuntimeStatusPatch },
       { initial: ({ lastEventAtMs: -1 } as unknown) as RuntimeStatusPatch },
-      { initial: ({ browserVersion: "Chromium 141 token=secret" } as unknown) as RuntimeStatusPatch }
+      { initial: ({ browserVersion: "Chromium 141 token=secret" } as unknown) as RuntimeStatusPatch },
+      {
+        initial: ({
+          protocolMismatchSurface: "event:raw-token:identity"
+        } as unknown) as RuntimeStatusPatch
+      }
     ];
 
     for (const options of invalidOptions) {
@@ -180,6 +197,19 @@ describe("RuntimeStatusStore", () => {
     expect(store.update({ heartbeatAtMs: withinSkew }).heartbeatAtMs).toBe(withinSkew);
     expect(() => store.update({ lastSnapshotAtMs: beyondSkew })).toThrow(/clock skew/i);
     expect(store.getSnapshot().lastSnapshotAtMs).toBeUndefined();
+  });
+
+  test("clears the snapshot completion timestamp when reconnect invalidates the snapshot", () => {
+    let now = 1_000;
+    const store = new RuntimeStatusStore({ now: () => now });
+    now = 2_000;
+    store.update({ initialSnapshotComplete: true });
+    expect(store.getSnapshot().initialSnapshotCompletedAtMs).toBe(2_000);
+
+    now = 3_000;
+    store.update({ initialSnapshotComplete: false });
+
+    expect(store.getSnapshot().initialSnapshotCompletedAtMs).toBeUndefined();
   });
 
   test("commits updates and notifies later subscribers when one subscriber throws", () => {

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -8,7 +8,10 @@ import {
   createBridgeRuntime,
   type BridgeRuntimeDependencies
 } from "../src/runtime.js";
+import { PROTOCOL_CONTRACT_FINGERPRINT } from "../src/inspector/protocol-contract.js";
+import { ProtocolIntegrityStore } from "../src/state/protocol-integrity-store.js";
 import type { RuntimeStatusPatch } from "../src/state/runtime-state.js";
+import { createHealthReport } from "../src/server/health.js";
 
 class FakeEmitter {
   readonly handlers = new Map<string, ((payload: unknown) => void | Promise<void>)[]>();
@@ -24,13 +27,18 @@ class FakeEmitter {
 
 class FakePage extends FakeEmitter {
   readonly goto = vi.fn(async (url: string) => {
+    this.onGoto?.();
     this.currentUrl = url;
   });
   readonly close = vi.fn(async () => {
     this.closed = true;
   });
 
-  constructor(public currentUrl: string, public closed = false) {
+  constructor(
+    public currentUrl: string,
+    public closed = false,
+    private readonly onGoto?: () => void
+  ) {
     super();
   }
 
@@ -113,7 +121,8 @@ function createDeps(
       host: "127.0.0.1",
       port: 0,
       heartbeatIntervalMs: 10_000,
-      browserMaxRestarts: 2
+      browserMaxRestarts: 2,
+      browserRetryDelayMs: 0
     },
     chromium: {
       launchPersistentContext: vi.fn(async () => new FakeContext())
@@ -128,6 +137,36 @@ function createDeps(
 }
 
 describe("createBridgeRuntime", () => {
+  test("emits path-free startup stage markers in order", async () => {
+    const root = createTempRoot();
+    const log = {
+      error: vi.fn(),
+      warn: vi.fn(),
+      info: vi.fn()
+    };
+
+    const runtime = await createBridgeRuntime(createDeps(root, { log }));
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+
+    expect(log.info.mock.calls.slice(0, 13)).toEqual([
+      ["bridge_init:data_paths"],
+      ["bridge_init:data_paths:data_dir"],
+      ["bridge_init:data_paths:profile_dir"],
+      ["bridge_init:data_paths:download_dir"],
+      ["bridge_init:data_paths:bridge_secret"],
+      ["bridge_init:data_paths:sqlite_file"],
+      ["bridge_init:data_paths:settings_file"],
+      ["bridge_init:data_paths:protocol_fingerprint_file"],
+      ["bridge_init:secret"],
+      ["bridge_init:protocol_integrity"],
+      ["bridge_init:alias_store"],
+      ["bridge_init:capture_store"],
+      ["bridge_init:http_server"]
+    ]);
+    expect(JSON.stringify(log.info.mock.calls)).not.toMatch(/\\|\/data|secret path|token/i);
+  });
+
   test("returns after HTTP is ready while browser startup is still pending", async () => {
     const root = createTempRoot();
     let resolveLaunch: ((context: FakeContext) => void) | undefined;
@@ -203,7 +242,8 @@ describe("createBridgeRuntime", () => {
           host: "127.0.0.1",
           port: 0,
           heartbeatIntervalMs: 10_000,
-          browserMaxRestarts: 0
+          browserMaxRestarts: 0,
+          browserRetryDelayMs: 0
         },
         chromium: { launchPersistentContext: vi.fn(async () => context) },
         log
@@ -253,7 +293,8 @@ describe("createBridgeRuntime", () => {
             host: "127.0.0.1",
             port: 0,
             heartbeatIntervalMs: 1_000,
-            browserMaxRestarts: 0
+            browserMaxRestarts: 0,
+            browserRetryDelayMs: 0
           }
         })
       );
@@ -296,6 +337,365 @@ describe("createBridgeRuntime", () => {
       expect(context.handlers.get("page")).toHaveLength(2);
   });
 
+  test("reloads a restored authenticated keeper only after network observers are attached", async () => {
+    const root = createTempRoot();
+    let context!: FakeContext;
+    const keeper = new FakePage(
+      "https://my.smartthings.com/location/loc-synthetic-001",
+      false,
+      () => {
+        expect(context.handlers.get("websocket")).toHaveLength(1);
+        expect(context.cdpSessions).toHaveLength(1);
+      }
+    );
+    context = new FakeContext([keeper]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        chromium: { launchPersistentContext: vi.fn(async () => context) }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+
+    expect(keeper.goto).toHaveBeenCalledTimes(1);
+    expect(keeper.goto).toHaveBeenCalledWith("https://my.smartthings.com/location", {
+      waitUntil: "domcontentloaded"
+    });
+  });
+
+  test("updates safe protocol counters when duplicate sanitized DEVICE_EVENT frames arrive", async () => {
+    const root = createTempRoot();
+    const context = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        chromium: { launchPersistentContext: vi.fn(async () => context) }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    const fixture = JSON.parse(
+      readFileSync("protocol/fixtures/2026-08-20-device-event-duplicate.sanitized.json", "utf8")
+    ) as { event_name: string; fixture_deliveries: unknown[] };
+    const socket = new FakeEmitter() as FakeEmitter & { url: () => string };
+    socket.url = () => "wss://my.smartthings.com/socket.io/";
+
+    await context.emit("websocket", socket);
+    for (const delivery of fixture.fixture_deliveries) {
+      await socket.emit("framereceived", {
+        payload: `42${JSON.stringify([fixture.event_name, delivery])}`
+      });
+    }
+
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      pushConnected: true,
+      parserHealthy: true,
+      decodedDeviceEventCount: 3,
+      uniqueLogicalEventCount: 1,
+      duplicateEventCount: 2,
+      dedupeJournalSize: 1,
+      protocolInvalidFrameCount: 0,
+      lastParserSuccessAtMs: expect.any(Number)
+    });
+  });
+
+  test("marks snapshot complete only after all real ACK categories and becomes ready after push", async () => {
+    vi.useFakeTimers();
+    const root = createTempRoot();
+    const context = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        config: {
+          dataDir: root,
+          host: "127.0.0.1",
+          port: 0,
+          heartbeatIntervalMs: 1_000,
+          browserMaxRestarts: 2,
+          browserRetryDelayMs: 0
+        },
+        chromium: { launchPersistentContext: vi.fn(async () => context) }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    const socket = new FakeEmitter() as FakeEmitter & { url: () => string };
+    socket.url = () => "wss://my.smartthings.com/socket.io/";
+    await context.emit("websocket", socket);
+    const snapshotFixture = JSON.parse(
+      readFileSync("protocol/fixtures/2026-08-20-snapshot-ack-correlations.sanitized.json", "utf8")
+    ) as {
+      correlations: Array<{
+        ack_id: string;
+        request_event: string;
+        request_query: string;
+        request_keys: string[];
+        response_category: string;
+        response_count: number;
+        response_item_keys: string[];
+        response_keys?: string[];
+      }>;
+    };
+
+    for (const correlation of snapshotFixture.correlations) {
+      const ackId = Number(correlation.ack_id.split("_")[1]);
+      await socket.emit("framesent", {
+        payload: `42${ackId}${JSON.stringify([
+          correlation.request_event,
+          correlation.request_query,
+          Object.fromEntries(correlation.request_keys.map((key) => [key, null]))
+        ])}`
+      });
+      await socket.emit("framereceived", {
+        payload: `43${ackId}${JSON.stringify([null, buildRuntimeSnapshotResponse(correlation)])}`
+      });
+    }
+
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      initialSnapshotComplete: true,
+      observedDeviceCount: 212,
+      pushConnected: false,
+      state: "SYNCING",
+      lastSnapshotAtMs: expect.any(Number)
+    });
+    expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(false);
+
+    const eventFixture = JSON.parse(
+      readFileSync("protocol/fixtures/2026-08-20-device-event-duplicate.sanitized.json", "utf8")
+    ) as { event_name: string; fixture_deliveries: unknown[] };
+    await socket.emit("framereceived", {
+      payload: `42${JSON.stringify([eventFixture.event_name, eventFixture.fixture_deliveries[0]])}`
+    });
+
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      initialSnapshotComplete: true,
+      pushConnected: true,
+      parserHealthy: true,
+      state: "CONNECTED"
+    });
+    expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(runtime.status.getSnapshot().state).toBe("CONNECTED");
+  });
+
+  test("persists the first complete protocol baseline and exposes the safe protocol version", async () => {
+    const root = createTempRoot();
+    const context = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        chromium: { launchPersistentContext: vi.fn(async () => context) }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+
+    const socket = await attachRuntimeSocket(context);
+    await emitCompleteSnapshot(socket);
+    await emitFirstDeviceEvent(socket);
+
+    const persisted = JSON.parse(readFileSync(join(root, "protocol-fingerprint.json"), "utf8")) as {
+      protocol_contract_version: number;
+      baseline: string | null;
+      current: string | null;
+      change_count: number;
+    };
+    const expectedVersion = `1:${PROTOCOL_CONTRACT_FINGERPRINT.slice(0, 16)}`;
+
+    expect(persisted).toMatchObject({
+      protocol_contract_version: 1,
+      baseline: PROTOCOL_CONTRACT_FINGERPRINT,
+      current: PROTOCOL_CONTRACT_FINGERPRINT,
+      change_count: 0
+    });
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      initialSnapshotComplete: true,
+      pushConnected: true,
+      parserHealthy: true,
+      state: "CONNECTED",
+      protocolChangeCount: 0,
+      protocolVersion: expectedVersion
+    });
+    expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(true);
+  });
+
+  test("latches protocol changes for the process lifetime across valid frames and reconnects", async () => {
+    const root = createTempRoot();
+    const first = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const second = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const launchPersistentContext = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        config: {
+          dataDir: root,
+          host: "127.0.0.1",
+          port: 0,
+          heartbeatIntervalMs: 10_000,
+          browserMaxRestarts: 1,
+          browserRetryDelayMs: 0
+        },
+        chromium: { launchPersistentContext }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+
+    const firstSocket = await attachRuntimeSocket(first);
+    await emitCompleteSnapshot(firstSocket);
+    await emitFirstDeviceEvent(firstSocket);
+    expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(true);
+
+    await emitSceneShapeMismatch(firstSocket, 50);
+
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      state: "PROTOCOL_CHANGED",
+      parserHealthy: false,
+      protocolChangeCount: 1,
+      protocolVersion: `1:${PROTOCOL_CONTRACT_FINGERPRINT.slice(0, 16)}`
+    });
+    expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(false);
+
+    await emitFirstDeviceEvent(firstSocket);
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      state: "PROTOCOL_CHANGED",
+      parserHealthy: false,
+      protocolChangeCount: 1
+    });
+
+    await first.emit("close");
+    const secondSocket = await attachRuntimeSocket(second);
+    await emitCompleteSnapshot(secondSocket);
+    await emitFirstDeviceEvent(secondSocket);
+
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      state: "PROTOCOL_CHANGED",
+      parserHealthy: false,
+      protocolChangeCount: 1,
+      initialSnapshotComplete: false,
+      pushConnected: false
+    });
+    expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(false);
+  });
+
+  test("restarts with matching protocol data without incrementing the persistent change count", async () => {
+    const root = createTempRoot();
+    const first = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const firstRuntime = await createBridgeRuntime(
+      createDeps(root, {
+        chromium: { launchPersistentContext: vi.fn(async () => first) }
+      })
+    );
+    runtimes.push(firstRuntime);
+    await firstRuntime.browserStartup;
+    const firstSocket = await attachRuntimeSocket(first);
+    await emitCompleteSnapshot(firstSocket);
+    await emitFirstDeviceEvent(firstSocket);
+    await firstRuntime.stop();
+    runtimes.splice(runtimes.indexOf(firstRuntime), 1);
+
+    const second = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const secondRuntime = await createBridgeRuntime(
+      createDeps(root, {
+        chromium: { launchPersistentContext: vi.fn(async () => second) }
+      })
+    );
+    runtimes.push(secondRuntime);
+    await secondRuntime.browserStartup;
+    const secondSocket = await attachRuntimeSocket(second);
+    await emitCompleteSnapshot(secondSocket);
+    await emitFirstDeviceEvent(secondSocket);
+
+    const persisted = JSON.parse(readFileSync(join(root, "protocol-fingerprint.json"), "utf8")) as {
+      change_count: number;
+    };
+    expect(persisted.change_count).toBe(0);
+    expect(secondRuntime.status.getSnapshot()).toMatchObject({
+      state: "CONNECTED",
+      protocolChangeCount: 0,
+      protocolVersion: `1:${PROTOCOL_CONTRACT_FINGERPRINT.slice(0, 16)}`
+    });
+    expect(createHealthReport(secondRuntime.status.getSnapshot()).ready).toBe(true);
+  });
+
+  test("keeps HTTP live and skips chromium when the protocol store is corrupt", async () => {
+    const root = createTempRoot();
+    writeFileSync(join(root, "protocol-fingerprint.json"), "{not json", "utf8");
+    const launchPersistentContext = vi.fn(async () => new FakeContext());
+    const log = {
+      error: vi.fn(),
+      warn: vi.fn(),
+      info: vi.fn()
+    };
+
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        chromium: { launchPersistentContext },
+        log
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+
+    const live = await fetch(`http://127.0.0.1:${runtime.port}/health/live`);
+    const ready = await fetch(`http://127.0.0.1:${runtime.port}/health/ready`);
+
+    expect(launchPersistentContext).not.toHaveBeenCalled();
+    expect(live.status).toBe(200);
+    expect(ready.status).toBe(503);
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      state: "PROTOCOL_CHANGED",
+      parserHealthy: false,
+      chromiumRunning: false,
+      keeperPresent: false,
+      protocolVersion: "1:discovering"
+    });
+    expect(JSON.stringify(log.error.mock.calls)).not.toMatch(/not json|protocol-fingerprint|token|secret/i);
+    expect(log.error).toHaveBeenCalledWith("protocol_integrity_store_failed");
+  });
+
+  test("preserves a persisted same-contract surface mismatch across healthy replay after restart", async () => {
+    const root = createTempRoot();
+    const seeded = new ProtocolIntegrityStore(join(root, "protocol-fingerprint.json"), {
+      contractVersion: 1
+    });
+    seeded.recordMismatch("snapshot:scenes:response_shape");
+    expect(seeded.snapshot().changeCount).toBe(1);
+
+    const context = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        chromium: { launchPersistentContext: vi.fn(async () => context) }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+
+    const socket = await attachRuntimeSocket(context);
+    await emitCompleteSnapshot(socket);
+    await emitFirstDeviceEvent(socket);
+
+    const status = runtime.status.getSnapshot();
+    expect(status).toMatchObject({
+      state: "PROTOCOL_CHANGED",
+      chromiumRunning: true,
+      parserHealthy: false,
+      pushConnected: false,
+      initialSnapshotComplete: false,
+      protocolChangeCount: 1,
+      protocolMismatchSurface: "snapshot:scenes:response_shape"
+    });
+    expect(createHealthReport(status)).toMatchObject({
+      ready: false,
+      details: {
+        state: "PROTOCOL_CHANGED",
+        protocolChangeCount: 1,
+        protocolMismatchSurface: "snapshot:scenes:response_shape"
+      }
+    });
+    expect(
+      new ProtocolIntegrityStore(join(root, "protocol-fingerprint.json"), {
+        contractVersion: 1
+      }).snapshot().changeCount
+    ).toBe(1);
+  });
+
   test("recovers after context close without concurrent restart loops and stops at max failures", async () => {
     const root = createTempRoot();
       const first = new FakeContext();
@@ -318,7 +718,8 @@ describe("createBridgeRuntime", () => {
             host: "127.0.0.1",
             port: 0,
             heartbeatIntervalMs: 10_000,
-            browserMaxRestarts: 0
+            browserMaxRestarts: 0,
+            browserRetryDelayMs: 0
           },
           chromium: { launchPersistentContext }
         })
@@ -326,7 +727,28 @@ describe("createBridgeRuntime", () => {
       runtimes.push(runtime);
       await runtime.browserStartup;
 
+      runtime.status.update({
+        initialSnapshotComplete: true,
+        pushConnected: true,
+        parserHealthy: true,
+        decodedDeviceEventCount: 3,
+        uniqueLogicalEventCount: 1,
+        duplicateEventCount: 2,
+        dedupeJournalSize: 1,
+        observedDeviceCount: 212
+      });
+
       await Promise.all([first.emit("close"), first.emit("close")]);
+      expect(runtime.status.getSnapshot()).toMatchObject({
+        initialSnapshotComplete: false,
+        pushConnected: false,
+        parserHealthy: false,
+        decodedDeviceEventCount: 0,
+        uniqueLogicalEventCount: 0,
+        duplicateEventCount: 0,
+        dedupeJournalSize: 0,
+        observedDeviceCount: 0
+      });
       await Promise.all([second.emit("close"), second.emit("close")]);
 
       expect(launchPersistentContext).toHaveBeenCalledTimes(3);
@@ -355,7 +777,8 @@ describe("createBridgeRuntime", () => {
           host: "127.0.0.1",
           port: 0,
           heartbeatIntervalMs: 10_000,
-          browserMaxRestarts: 1
+          browserMaxRestarts: 1,
+          browserRetryDelayMs: 0
         },
         chromium: { launchPersistentContext }
       })
@@ -389,7 +812,8 @@ describe("createBridgeRuntime", () => {
           host: "127.0.0.1",
           port: 0,
           heartbeatIntervalMs: 1_000,
-          browserMaxRestarts: 0
+          browserMaxRestarts: 0,
+          browserRetryDelayMs: 0
         },
         chromium: { launchPersistentContext: vi.fn(async () => context) }
       })
@@ -507,7 +931,7 @@ describe("createBridgeRuntime", () => {
         createDeps(root, {
           chromium: {
             launchPersistentContext: vi.fn(async () => {
-              throw new Error("raw-device token=secret stack");
+              throw Object.assign(new Error("raw-device token=secret stack"), { code: "EACCES" });
             })
           },
           log
@@ -517,13 +941,14 @@ describe("createBridgeRuntime", () => {
       await runtime.browserStartup;
 
       expect(JSON.stringify(log.error.mock.calls)).not.toMatch(/raw-device|secret|stack/);
-      expect(log.error).toHaveBeenCalledWith("browser_launch_failed");
+      expect(log.error).toHaveBeenCalledWith("browser_launch_failed:EACCES");
   });
 });
 
 describe("classifySmartThingsUrl", () => {
   test.each([
     ["https://my.smartthings.com/location?deviceId=raw", "smartthings_location"],
+    ["https://my.smartthings.com/location/loc-synthetic-001", "smartthings_location"],
     ["https://my.smartthings.com/advanced", "smartthings_advanced"],
     ["https://account.samsung.com/accounts/v1/ST/signInGate", "samsung_login"],
     ["https://example.test/path", "other"],
@@ -533,3 +958,76 @@ describe("classifySmartThingsUrl", () => {
     expect(classifySmartThingsUrl(url)).toBe(category);
   });
 });
+
+function buildRuntimeSnapshotResponse(correlation: {
+  response_category: string;
+  response_count: number;
+  response_item_keys: string[];
+  response_keys?: string[];
+}): unknown {
+  const items = Array.from({ length: correlation.response_count }, () =>
+    Object.fromEntries(correlation.response_item_keys.map((key) => [key, null]))
+  );
+  if (correlation.response_category === "device_cards") {
+    return Object.fromEntries(
+      (correlation.response_keys ?? ["data"]).map((key) => [key, key === "data" ? items : null])
+    );
+  }
+  return items;
+}
+
+async function attachRuntimeSocket(context: FakeContext): Promise<FakeEmitter & { url: () => string }> {
+  const socket = new FakeEmitter() as FakeEmitter & { url: () => string };
+  socket.url = () => "wss://my.smartthings.com/socket.io/";
+  await context.emit("websocket", socket);
+  return socket;
+}
+
+async function emitCompleteSnapshot(socket: FakeEmitter): Promise<void> {
+  const snapshotFixture = JSON.parse(
+    readFileSync("protocol/fixtures/2026-08-20-snapshot-ack-correlations.sanitized.json", "utf8")
+  ) as {
+    correlations: Array<{
+      ack_id: string;
+      request_event: string;
+      request_query: string;
+      request_keys: string[];
+      response_category: string;
+      response_count: number;
+      response_item_keys: string[];
+      response_keys?: string[];
+    }>;
+  };
+
+  for (const correlation of snapshotFixture.correlations) {
+    const ackId = Number(correlation.ack_id.split("_")[1]);
+    await socket.emit("framesent", {
+      payload: `42${ackId}${JSON.stringify([
+        correlation.request_event,
+        correlation.request_query,
+        Object.fromEntries(correlation.request_keys.map((key) => [key, null]))
+      ])}`
+    });
+    await socket.emit("framereceived", {
+      payload: `43${ackId}${JSON.stringify([null, buildRuntimeSnapshotResponse(correlation)])}`
+    });
+  }
+}
+
+async function emitFirstDeviceEvent(socket: FakeEmitter): Promise<void> {
+  const eventFixture = JSON.parse(
+    readFileSync("protocol/fixtures/2026-08-20-device-event-duplicate.sanitized.json", "utf8")
+  ) as { event_name: string; fixture_deliveries: unknown[] };
+  await socket.emit("framereceived", {
+    payload: `42${JSON.stringify([eventFixture.event_name, eventFixture.fixture_deliveries[0]])}`
+  });
+}
+
+async function emitSceneShapeMismatch(socket: FakeEmitter, ackId: number): Promise<void> {
+  await socket.emit("framesent", {
+    payload: `42${ackId}${JSON.stringify(["find", "api/scene", {}])}`
+  });
+  await socket.emit("framereceived", {
+    payload: `43${ackId}${JSON.stringify([null, [{ roomId: null, locationId: null }]])}`
+  });
+}

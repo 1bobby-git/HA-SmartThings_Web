@@ -13,8 +13,14 @@ import { bootstrapDataPaths } from "./security/data-paths.js";
 import { createRedactor } from "./security/redactor.js";
 import { installBrowserObserver, type CaptureSink } from "./inspector/browser-observer.js";
 import { installCdpNetworkObserver, type CdpSessionLike } from "./inspector/cdp-network.js";
+import { PROTOCOL_CONTRACT_VERSION, type ProtocolMismatchSurface } from "./inspector/protocol-contract.js";
+import { ProtocolAnalyzer } from "./inspector/protocol-analyzer.js";
 import { createBridgeHttpServer, type BridgeHttpServer } from "./server/http-server.js";
 import { CaptureStore } from "./state/capture-store.js";
+import {
+  ProtocolIntegrityStore,
+  type ProtocolIntegritySnapshot
+} from "./state/protocol-integrity-store.js";
 import { RuntimeStatusStore, type RuntimeStatusPatch, type UrlCategory } from "./state/runtime-state.js";
 
 export interface BridgeRuntimeLog {
@@ -43,22 +49,53 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.0";
+const bridgeVersion = "0.1.25";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
-  const paths = bootstrapDataPaths(deps.config.dataDir);
+  log.info("bridge_init:data_paths");
+  const paths = bootstrapDataPaths(deps.config.dataDir, (stage) => {
+    log.info(`bridge_init:data_paths:${stage}`);
+  });
+  log.info("bridge_init:secret");
   const secret = readFileSync(paths.bridgeSecretPath, "utf8").trim();
+  let protocolIntegrity: ProtocolIntegrityStore | undefined;
+  let protocolIntegritySnapshot: ProtocolIntegritySnapshot | undefined;
+  let protocolIntegrityLoadFailed = false;
+  log.info("bridge_init:protocol_integrity");
+  try {
+    protocolIntegrity = new ProtocolIntegrityStore(paths.protocolFingerprintPath, {
+      contractVersion: PROTOCOL_CONTRACT_VERSION
+    });
+    protocolIntegritySnapshot = protocolIntegrity.snapshot();
+  } catch {
+    protocolIntegrityLoadFailed = true;
+    log.error("protocol_integrity_store_failed");
+  }
   const status = new RuntimeStatusStore({
     initial: {
       bridgeVersion,
-      dbAvailable: true
+      dbAvailable: true,
+      protocolVersion: protocolVersionFor(protocolIntegritySnapshot),
+      protocolChangeCount: protocolIntegritySnapshot?.changeCount ?? 0,
+      protocolMismatchSurface: protocolMismatchSurfaceFor(protocolIntegritySnapshot),
+      ...(protocolIntegritySnapshot?.compatible === false
+        ? {
+            state: "PROTOCOL_CHANGED" as const,
+            parserHealthy: false,
+            initialSnapshotComplete: false,
+            pushConnected: false
+          }
+        : {})
     },
     onListenerError: () => log.warn("runtime_status_listener_failed")
   });
+  log.info("bridge_init:alias_store");
   const aliases = new SqliteAliasStore(paths.sqlitePath, secret);
   const redactor = createRedactor(aliases);
+  log.info("bridge_init:capture_store");
   const captures = new CaptureStore(paths.sqlitePath);
+  log.info("bridge_init:http_server");
   const server = await createBridgeHttpServer({
     store: status,
     host: deps.config.host,
@@ -70,7 +107,14 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   let activeContextGeneration = 0;
   let stopped = false;
   let restarting = false;
-  const sink = createStatusCaptureSink(captures, status);
+  const capturePipeline = createStatusCapturePipeline(
+    captures,
+    status,
+    protocolIntegrity,
+    log,
+    protocolIntegritySnapshot?.compatible === false
+  );
+  const sink = capturePipeline.sink;
   const heartbeat = () => {
     let dbAvailable = false;
     try {
@@ -87,8 +131,40 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   }, deps.config.heartbeatIntervalMs);
   heartbeat();
 
+  if (protocolIntegrityLoadFailed) {
+    status.update({
+      state: "PROTOCOL_CHANGED",
+      parserHealthy: false,
+      initialSnapshotComplete: false,
+      pushConnected: false,
+      protocolVersion: `${PROTOCOL_CONTRACT_VERSION}:discovering`
+    });
+    const browserStartup = Promise.resolve();
+    let stopPromise: Promise<void> | undefined;
+    return {
+      port: server.port,
+      status,
+      browserStartup,
+      stop: () => {
+        stopPromise ??= stopRuntime({
+          getContext: () => undefined,
+          heartbeatInterval,
+          keeperInterval,
+          server,
+          aliases,
+          captures,
+          setStopped: () => {
+            stopped = true;
+          }
+        });
+        return stopPromise;
+      }
+    };
+  }
+
   const supervisor = new BrowserSupervisor({
     maxRestarts: deps.config.browserMaxRestarts,
+    retryDelayMs: deps.config.browserRetryDelayMs ?? 1_000,
     launch: async () => {
       let context: ObservableContext | undefined;
       let assigned = false;
@@ -111,7 +187,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       }
     },
     status,
-    onLaunchError: () => log.error("browser_launch_failed")
+    onLaunchError: (token) => log.error(`browser_launch_failed:${token}`)
   });
 
   const restartBrowser = async () => {
@@ -122,15 +198,33 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     try {
       const context = (await supervisor.start()) as ObservableContext | undefined;
       if (context && !stopped) {
+        const protocolSnapshot = safeProtocolSnapshot(protocolIntegrity);
+        if (protocolSnapshot?.compatible === false) {
+          status.update(protocolBlockedPatch(protocolSnapshot));
+        }
         activeContextGeneration += 1;
         const generation = activeContextGeneration;
         context.on?.("close", async () => {
           if (stopped || generation !== activeContextGeneration || context !== currentContext) {
             return;
           }
+          capturePipeline.reset();
           status.update({
             chromiumRunning: false,
             keeperPresent: false,
+            authenticated: false,
+            pushConnected: false,
+            parserHealthy: false,
+            initialSnapshotComplete: false,
+            observedDeviceCount: 0,
+            decodedDeviceEventCount: 0,
+            uniqueLogicalEventCount: 0,
+            duplicateEventCount: 0,
+            dedupeJournalSize: 0,
+            protocolInvalidFrameCount: 0,
+            lastSnapshotAtMs: undefined,
+            lastEventAtMs: undefined,
+            lastParserSuccessAtMs: undefined,
             state: "RECONNECTING"
           });
           await restartBrowser();
@@ -152,7 +246,17 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     try {
       const keeper = await keeperManager.ensureKeeper();
       if (generation === activeContextGeneration && context === currentContext && !stopped) {
-        status.update(statusForKeeperUrl(keeper.url()));
+        const keeperStatus = statusForKeeperUrl(keeper.url());
+        const currentState = status.getSnapshot().state;
+        if (
+          keeperStatus.authenticated === true &&
+          ["SYNCING", "CONNECTED", "STALE", "PROTOCOL_CHANGED"].includes(currentState)
+        ) {
+          const { state: _state, ...withoutState } = keeperStatus;
+          status.update(withoutState);
+        } else {
+          status.update(keeperStatus);
+        }
       }
     } catch {
       log.warn("keeper_reconcile_failed");
@@ -191,7 +295,10 @@ export function classifySmartThingsUrl(value: string): UrlCategory {
   }
   try {
     const url = new URL(value);
-    if (url.origin === "https://my.smartthings.com" && url.pathname === "/location") {
+    if (
+      url.origin === "https://my.smartthings.com" &&
+      /^\/location(?:\/[^/]+)?\/?$/.test(url.pathname)
+    ) {
       return "smartthings_location";
     }
     if (url.origin === "https://my.smartthings.com" && url.pathname === "/advanced") {
@@ -215,18 +322,34 @@ async function attachContext(
   log: BridgeRuntimeLog
 ): Promise<void> {
   const observedCdpPages = new WeakSet<object>();
-  const keeper = await keeperManager.ensureKeeper();
+  const restoredSettledKeeperPresent = context
+    .pages()
+    .some((page) => !page.isClosed() && isSettledSmartThingsLocation(page.url()));
+
+  installBrowserObserver(context, sink, redact);
+  context.on?.("page", (page) => {
+    void installCdpForPage(context, page as BrowserPageLike, sink, redact, observedCdpPages, log);
+  });
+  await installCdpForPages(context, sink, redact, observedCdpPages, log);
+
+  let keeper = await keeperManager.ensureKeeper();
+  if (restoredSettledKeeperPresent && classifySmartThingsUrl(keeper.url()) === "smartthings_location") {
+    keeper = await keeperManager.recoverKeeper();
+  }
   status.update({
     browserVersion: safeBrowserVersion(context.browser?.()?.version?.()),
     keeperPresent: true,
     ...statusForKeeperUrl(keeper.url())
   });
+}
 
-  installBrowserObserver(context, sink, redact);
-  await installCdpForPages(context, sink, redact, observedCdpPages, log);
-  context.on?.("page", (page) => {
-    void installCdpForPage(context, page as BrowserPageLike, sink, redact, observedCdpPages, log);
-  });
+function isSettledSmartThingsLocation(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return classifySmartThingsUrl(value) === "smartthings_location" && url.search === "" && url.hash === "";
+  } catch {
+    return false;
+  }
 }
 
 async function installCdpForPages(
@@ -261,20 +384,182 @@ async function installCdpForPage(
   }
 }
 
-function createStatusCaptureSink(captures: CaptureStore, status: RuntimeStatusStore): CaptureSink {
+function createStatusCapturePipeline(
+  captures: CaptureStore,
+  status: RuntimeStatusStore,
+  protocolIntegrity: ProtocolIntegrityStore | undefined,
+  log: BridgeRuntimeLog,
+  initiallyProtocolBlocked: boolean
+): { sink: CaptureSink; reset: () => void } {
+  let analyzer = new ProtocolAnalyzer({ ttlMs: 300_000, maxEntries: 100_000 });
+  let protocolFingerprintObserved = false;
+  let protocolBlocked = initiallyProtocolBlocked;
   return {
-    write(record) {
-      captures.write(record);
-      const now = Date.now();
-      if (record.source === "playwright-websocket-frame" || record.source === "cdp-websocket-frame") {
-        status.update({ lastFrameAtMs: now, lastPushAtMs: now });
-        return;
-      }
-      if (record.source === "cdp-eventsource") {
-        status.update({ lastEventAtMs: now });
+    reset: () => {
+      analyzer.reset();
+      analyzer = new ProtocolAnalyzer({ ttlMs: 300_000, maxEntries: 100_000 });
+      protocolFingerprintObserved = false;
+    },
+    sink: {
+      write(record) {
+        captures.write(record);
+        const now = Date.now();
+        if (record.source === "playwright-websocket-frame" || record.source === "cdp-websocket-frame") {
+          const analysis = analyzer.observe(record);
+          const protocol = analyzer.snapshot();
+          const current = status.getSnapshot();
+          const basePatch: RuntimeStatusPatch = {
+            lastFrameAtMs: now,
+            lastPushAtMs: now,
+            decodedDeviceEventCount: protocol.decodedDeviceEvents,
+            uniqueLogicalEventCount: protocol.uniqueLogicalEvents,
+            duplicateEventCount: protocol.duplicateDeliveries,
+            dedupeJournalSize: protocol.journalSize,
+            protocolInvalidFrameCount: protocol.invalidFrames
+          };
+
+          if (analysis?.kind === "protocol_changed") {
+            status.update({
+              ...basePatch,
+              ...recordProtocolMismatch(protocolIntegrity, analysis.surface, log)
+            });
+            protocolBlocked = true;
+            return;
+          }
+
+          if (!protocolBlocked && !protocolFingerprintObserved && protocol.protocolFingerprint) {
+            protocolFingerprintObserved = true;
+            const protocolPatch = observeProtocolFingerprint(
+              protocolIntegrity,
+              protocol.protocolFingerprint,
+              log
+            );
+            if (protocolPatch.state === "PROTOCOL_CHANGED") {
+              status.update({ ...basePatch, ...protocolPatch });
+              protocolBlocked = true;
+              return;
+            }
+            status.update(protocolPatch);
+          }
+
+          if (protocolBlocked) {
+            status.update({
+              ...basePatch,
+              ...protocolBlockedPatch(protocolIntegrity?.snapshot())
+            });
+            return;
+          }
+
+          if (analysis?.kind === "snapshot") {
+            status.update({
+              ...basePatch,
+              initialSnapshotComplete: protocol.snapshotComplete || current.initialSnapshotComplete,
+              lastSnapshotAtMs: now,
+              observedDeviceCount: Math.max(
+                current.observedDeviceCount,
+                protocol.snapshotCategories.device_cards ?? 0,
+                protocol.snapshotCategories.device_health ?? 0
+              ),
+              state:
+                protocol.snapshotComplete && current.pushConnected && current.parserHealthy
+                  ? "CONNECTED"
+                  : "SYNCING"
+            });
+            return;
+          }
+          if (analysis) {
+            status.update({
+              ...basePatch,
+              lastEventAtMs: now,
+              lastParserSuccessAtMs: now,
+              parserHealthy: true,
+              pushConnected: true,
+              state: current.initialSnapshotComplete ? "CONNECTED" : "SYNCING"
+            });
+            return;
+          }
+          status.update(basePatch);
+          return;
+        }
+        if (record.source === "cdp-eventsource") {
+          status.update({ lastEventAtMs: now });
+        }
       }
     }
   };
+}
+
+function observeProtocolFingerprint(
+  protocolIntegrity: ProtocolIntegrityStore | undefined,
+  fingerprint: string,
+  log: BridgeRuntimeLog
+): RuntimeStatusPatch {
+  if (!protocolIntegrity) {
+    return protocolBlockedPatch();
+  }
+  try {
+    const snapshot = protocolIntegrity.observeCompleteFingerprint(fingerprint);
+    if (snapshot.compatible === false) {
+      return protocolBlockedPatch(snapshot);
+    }
+    return {
+      protocolVersion: protocolVersionFor(snapshot),
+      protocolChangeCount: snapshot.changeCount,
+      protocolMismatchSurface: undefined
+    };
+  } catch {
+    log.error("protocol_integrity_write_failed");
+    return protocolBlockedPatch(safeProtocolSnapshot(protocolIntegrity));
+  }
+}
+
+function recordProtocolMismatch(
+  protocolIntegrity: ProtocolIntegrityStore | undefined,
+  surface: ProtocolMismatchSurface,
+  log: BridgeRuntimeLog
+): RuntimeStatusPatch {
+  if (!protocolIntegrity) {
+    return protocolBlockedPatch();
+  }
+  try {
+    return protocolBlockedPatch(protocolIntegrity.recordMismatch(surface));
+  } catch {
+    log.error("protocol_integrity_write_failed");
+    return protocolBlockedPatch(safeProtocolSnapshot(protocolIntegrity));
+  }
+}
+
+function protocolBlockedPatch(snapshot?: ProtocolIntegritySnapshot): RuntimeStatusPatch {
+  return {
+    state: "PROTOCOL_CHANGED",
+    parserHealthy: false,
+    pushConnected: false,
+    initialSnapshotComplete: false,
+    protocolVersion: protocolVersionFor(snapshot),
+    protocolChangeCount: snapshot?.changeCount ?? 0,
+    protocolMismatchSurface: protocolMismatchSurfaceFor(snapshot)
+  };
+}
+
+function protocolVersionFor(snapshot?: ProtocolIntegritySnapshot): string {
+  const fingerprint = snapshot?.baseline ?? snapshot?.current;
+  return `${PROTOCOL_CONTRACT_VERSION}:${fingerprint ? fingerprint.slice(0, 16) : "discovering"}`;
+}
+
+function safeProtocolSnapshot(
+  protocolIntegrity: ProtocolIntegrityStore | undefined
+): ProtocolIntegritySnapshot | undefined {
+  try {
+    return protocolIntegrity?.snapshot();
+  } catch {
+    return undefined;
+  }
+}
+
+function protocolMismatchSurfaceFor(
+  snapshot: ProtocolIntegritySnapshot | undefined
+): ProtocolMismatchSurface | undefined {
+  return snapshot?.lastMismatch?.kind === "surface" ? snapshot.lastMismatch.surface : undefined;
 }
 
 function statusForKeeperUrl(value: string): RuntimeStatusPatch {

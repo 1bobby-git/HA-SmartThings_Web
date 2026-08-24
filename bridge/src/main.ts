@@ -34,6 +34,16 @@ export function installShutdownHandlers(
   processLike.once("SIGINT", shutdown);
 }
 
+export function startupFailureToken(error: unknown): string {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return "UNKNOWN";
+  }
+  const code = error.code;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,31}$/.test(code)
+    ? code
+    : "UNKNOWN";
+}
+
 const entry = process.argv[1] ? fileURLToPath(import.meta.url) === process.argv[1] : false;
 if (entry) {
   main()
@@ -42,8 +52,8 @@ if (entry) {
         console.error("browser_startup_failed");
       });
     })
-    .catch(() => {
-      console.error("bridge_start_failed");
+    .catch((error: unknown) => {
+      console.error(`bridge_start_failed:${startupFailureToken(error)}`);
       process.exitCode = 1;
     });
 }

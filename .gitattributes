@@ -1,0 +1,10 @@
+protocol/fixtures/*.json text eol=lf
+protocol/fixtures/*.sha256 text eol=lf
+protocol/fixtures/**/*.json text eol=lf
+protocol/fixtures/**/*.sha256 text eol=lf
+addon/smartthings_web_bridge/Dockerfile text eol=lf
+addon/smartthings_web_bridge/apparmor.txt text eol=lf
+addon/smartthings_web_bridge/config.yaml text eol=lf
+addon/smartthings_web_bridge/rootfs/** text eol=lf
+docker/** text eol=lf
+*.sh text eol=lf

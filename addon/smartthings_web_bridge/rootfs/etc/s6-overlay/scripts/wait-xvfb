@@ -1,0 +1,12 @@
+#!/usr/bin/env sh
+set -eu
+
+attempt=0
+until xdpyinfo -display :99 >/dev/null 2>&1; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 100 ]; then
+    echo "Xvfb display :99 did not become ready" >&2
+    exit 1
+  fi
+  s6-sleep -m 100
+done

@@ -4,6 +4,7 @@ export interface BridgeConfig {
   port: number;
   heartbeatIntervalMs: number;
   browserMaxRestarts: number;
+  browserRetryDelayMs?: number;
 }
 
 export function readBridgeConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
@@ -12,8 +13,17 @@ export function readBridgeConfig(env: NodeJS.ProcessEnv = process.env): BridgeCo
     host: env.STW_HOST ?? "0.0.0.0",
     port: parsePort(env.STW_PORT ?? "8098"),
     heartbeatIntervalMs: parseHeartbeatInterval(env.STW_HEARTBEAT_INTERVAL_MS ?? "10000"),
-    browserMaxRestarts: parseRestartCount(env.STW_BROWSER_MAX_RESTARTS ?? "3")
+    browserMaxRestarts: parseRestartCount(env.STW_BROWSER_MAX_RESTARTS ?? "3"),
+    browserRetryDelayMs: parseRetryDelay(env.STW_BROWSER_RETRY_DELAY_MS ?? "1000")
   };
+}
+
+function parseRetryDelay(value: string): number {
+  const delay = Number(value);
+  if (!Number.isInteger(delay) || delay < 100 || delay > 10_000) {
+    throw new Error("invalid bridge config: STW_BROWSER_RETRY_DELAY_MS must be an integer from 100 to 10000");
+  }
+  return delay;
 }
 
 function parsePort(value: string): number {

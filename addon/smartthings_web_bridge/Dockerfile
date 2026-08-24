@@ -15,6 +15,7 @@ ENV DISPLAY=:99
 ENV STW_DATA_DIR=/data
 ENV STW_HOST=127.0.0.1
 ENV STW_PORT=8098
+ENV CHROME_DEVEL_SANDBOX=/usr/local/sbin/chrome-devel-sandbox
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
@@ -24,10 +25,25 @@ RUN apt-get update \
     openbox \
     xz-utils \
     x11vnc \
+    x11-utils \
     xvfb \
     websockify \
     novnc \
   && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+  id -u pwuser >/dev/null; \
+  arch="$(uname -m)"; \
+  case "${arch}" in \
+    x86_64) sandbox="/ms-playwright/chromium-1234/chrome-linux64/chrome_sandbox" ;; \
+    aarch64) sandbox="/ms-playwright/chromium-1234/chrome-linux/chrome_sandbox" ;; \
+    *) echo "Unsupported Chromium sandbox architecture: ${arch}" >&2; exit 1 ;; \
+  esac; \
+  test -f "${sandbox}"; \
+  chown root:root "${sandbox}"; \
+  chmod 4755 "${sandbox}"; \
+  ln -s "${sandbox}" /usr/local/sbin/chrome-devel-sandbox; \
+  test "$(stat -c '%u:%g:%a' "${sandbox}")" = "0:0:4755"
 
 ARG S6_OVERLAY_VERSION=3.2.3.2
 ARG S6_OVERLAY_NOARCH_SHA256=5379750ed30a84bbd2e2dd74847ba6b5bd29cd0b2e3ea2ec58049b57eb2eda12
@@ -49,15 +65,16 @@ RUN set -eux; \
   rm -f /tmp/s6-overlay-noarch.tar.xz /tmp/s6-overlay-arch.tar.xz
 
 WORKDIR /app
-COPY package.json package-lock.json tsconfig.json vitest.config.ts ./
+COPY package.json package-lock.json tsconfig.json ./
 COPY tsconfig.build.json ./
 RUN npm ci
 COPY bridge ./bridge
 RUN npm run build
 RUN npm prune --omit=dev
 
-COPY addon/smartthings_web_bridge/rootfs /
-RUN chmod +x /etc/s6-overlay/s6-rc.d/*/run
+COPY rootfs /
+RUN find /etc/s6-overlay/s6-rc.d -type f \( -name run -o -name up \) -exec chmod +x {} +
+RUN chmod +x /etc/s6-overlay/scripts/*
 
 EXPOSE 8099
 ENTRYPOINT ["/init"]

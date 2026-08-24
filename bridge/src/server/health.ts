@@ -3,7 +3,7 @@ import { MAX_CLOCK_SKEW_MS, type RuntimeStatusSnapshot } from "../state/runtime-
 export interface HealthReportOptions {
   nowMs?: number;
   heartbeatFreshMs?: number;
-  snapshotFreshMs?: number;
+  pushFreshMs?: number;
 }
 
 export interface HealthDetails {
@@ -11,7 +11,13 @@ export interface HealthDetails {
   urlCategory: RuntimeStatusSnapshot["urlCategory"];
   activeConnections: number;
   observedDeviceCount: number;
+  decodedDeviceEventCount: number;
+  uniqueLogicalEventCount: number;
+  duplicateEventCount: number;
+  dedupeJournalSize: number;
+  protocolInvalidFrameCount: number;
   protocolChangeCount: number;
+  protocolMismatchSurface?: RuntimeStatusSnapshot["protocolMismatchSurface"];
   restartCount: number;
   bridgeVersion: string;
   browserVersion: string;
@@ -38,7 +44,7 @@ export interface HealthReport {
 }
 
 const DEFAULT_HEARTBEAT_FRESH_MS = 31_000;
-const DEFAULT_SNAPSHOT_FRESH_MS = 120_000;
+const DEFAULT_PUSH_FRESH_MS = 120_000;
 
 export function createHealthReport(
   snapshot: RuntimeStatusSnapshot,
@@ -46,7 +52,7 @@ export function createHealthReport(
 ): HealthReport {
   const nowMs = options.nowMs ?? Date.now();
   const heartbeatFreshMs = options.heartbeatFreshMs ?? DEFAULT_HEARTBEAT_FRESH_MS;
-  const snapshotFreshMs = options.snapshotFreshMs ?? DEFAULT_SNAPSHOT_FRESH_MS;
+  const pushFreshMs = options.pushFreshMs ?? DEFAULT_PUSH_FRESH_MS;
   const heartbeatAgeMs = ageMs(nowMs, snapshot.heartbeatAtMs);
   const snapshotAgeMs = ageMs(nowMs, snapshot.updatedAtMs);
   const initialSnapshotAgeMs = optionalAgeMs(nowMs, snapshot.initialSnapshotCompletedAtMs);
@@ -61,21 +67,32 @@ export function createHealthReport(
     snapshot.dbAvailable &&
     !isFutureBeyondSkew(nowMs, snapshot.heartbeatAtMs) &&
     heartbeatAgeMs <= heartbeatFreshMs;
-  const initialSnapshotFresh =
+  const initialSnapshotCurrent =
     snapshot.initialSnapshotComplete &&
-    lastSnapshotAgeMs !== undefined &&
+    snapshot.initialSnapshotCompletedAtMs !== undefined &&
     snapshot.lastSnapshotAtMs !== undefined &&
+    !isFutureBeyondSkew(nowMs, snapshot.initialSnapshotCompletedAtMs) &&
     !isFutureBeyondSkew(nowMs, snapshot.lastSnapshotAtMs) &&
-    lastSnapshotAgeMs <= snapshotFreshMs;
+    snapshot.lastSnapshotAtMs <= snapshot.updatedAtMs + MAX_CLOCK_SKEW_MS;
+  const pushCurrent =
+    snapshot.pushConnected &&
+    pushAgeMs !== undefined &&
+    snapshot.lastPushAtMs !== undefined &&
+    !isFutureBeyondSkew(nowMs, snapshot.lastPushAtMs) &&
+    pushAgeMs <= pushFreshMs;
+  const parserCurrent =
+    snapshot.parserHealthy &&
+    snapshot.lastParserSuccessAtMs !== undefined &&
+    !isFutureBeyondSkew(nowMs, snapshot.lastParserSuccessAtMs);
 
   const ready =
     live &&
     snapshot.chromiumRunning &&
     snapshot.keeperPresent &&
     snapshot.authenticated &&
-    snapshot.pushConnected &&
-    initialSnapshotFresh &&
-    snapshot.parserHealthy;
+    pushCurrent &&
+    initialSnapshotCurrent &&
+    parserCurrent;
 
   return {
     live,
@@ -85,7 +102,13 @@ export function createHealthReport(
       urlCategory: snapshot.urlCategory,
       activeConnections: snapshot.activeConnections,
       observedDeviceCount: snapshot.observedDeviceCount,
+      decodedDeviceEventCount: snapshot.decodedDeviceEventCount,
+      uniqueLogicalEventCount: snapshot.uniqueLogicalEventCount,
+      duplicateEventCount: snapshot.duplicateEventCount,
+      dedupeJournalSize: snapshot.dedupeJournalSize,
+      protocolInvalidFrameCount: snapshot.protocolInvalidFrameCount,
       protocolChangeCount: snapshot.protocolChangeCount,
+      protocolMismatchSurface: snapshot.protocolMismatchSurface,
       restartCount: snapshot.restartCount,
       bridgeVersion: snapshot.bridgeVersion,
       browserVersion: snapshot.browserVersion,

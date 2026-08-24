@@ -1,3 +1,5 @@
+import type { ProtocolMismatchSurface } from "../inspector/protocol-contract.js";
+
 export const RUNTIME_STATES = [
   "STARTING",
   "BROWSER_STARTING",
@@ -43,7 +45,13 @@ export interface RuntimeStatusSnapshot {
   dbAvailable: boolean;
   activeConnections: number;
   observedDeviceCount: number;
+  decodedDeviceEventCount: number;
+  uniqueLogicalEventCount: number;
+  duplicateEventCount: number;
+  dedupeJournalSize: number;
+  protocolInvalidFrameCount: number;
   protocolChangeCount: number;
+  protocolMismatchSurface: ProtocolMismatchSurface | undefined;
   restartCount: number;
   bridgeVersion: string;
   browserVersion: string;
@@ -85,7 +93,13 @@ const snapshotKeys = new Set<keyof RuntimeStatusSnapshot>([
   "dbAvailable",
   "activeConnections",
   "observedDeviceCount",
+  "decodedDeviceEventCount",
+  "uniqueLogicalEventCount",
+  "duplicateEventCount",
+  "dedupeJournalSize",
+  "protocolInvalidFrameCount",
   "protocolChangeCount",
+  "protocolMismatchSurface",
   "restartCount",
   "bridgeVersion",
   "browserVersion",
@@ -105,6 +119,11 @@ const snapshotKeys = new Set<keyof RuntimeStatusSnapshot>([
 const counterKeys = new Set<keyof RuntimeStatusSnapshot>([
   "activeConnections",
   "observedDeviceCount",
+  "decodedDeviceEventCount",
+  "uniqueLogicalEventCount",
+  "duplicateEventCount",
+  "dedupeJournalSize",
+  "protocolInvalidFrameCount",
   "protocolChangeCount",
   "restartCount"
 ]);
@@ -138,6 +157,16 @@ const versionKeys = new Set<keyof RuntimeStatusSnapshot>([
   "protocolVersion"
 ]);
 
+const protocolMismatchSurfaces = new Set<ProtocolMismatchSurface>([
+  "snapshot:locations:response_shape",
+  "snapshot:rooms:response_shape",
+  "snapshot:device_cards:response_shape",
+  "snapshot:device_states:response_shape",
+  "snapshot:device_health:response_shape",
+  "snapshot:scenes:response_shape",
+  "event:device_event:identity"
+]);
+
 export class RuntimeStatusStore {
   #snapshot: RuntimeStatusSnapshot;
   #listeners = new Set<RuntimeStatusListener>();
@@ -162,7 +191,13 @@ export class RuntimeStatusStore {
       dbAvailable: false,
       activeConnections: 0,
       observedDeviceCount: 0,
+      decodedDeviceEventCount: 0,
+      uniqueLogicalEventCount: 0,
+      duplicateEventCount: 0,
+      dedupeJournalSize: 0,
+      protocolInvalidFrameCount: 0,
       protocolChangeCount: 0,
+      protocolMismatchSurface: undefined,
       restartCount: 0,
       bridgeVersion: "0.0.0-dev",
       browserVersion: "unknown",
@@ -203,10 +238,12 @@ export class RuntimeStatusStore {
       updatedAtMs: now,
       lastStateChangeAtMs: patch.state && patch.state !== previous.state ? now : previous.lastStateChangeAtMs,
       initialSnapshotCompletedAtMs:
-        patch.initialSnapshotCompletedAtMs ??
-        (patch.initialSnapshotComplete === true && previous.initialSnapshotComplete === false
-          ? now
-          : previous.initialSnapshotCompletedAtMs)
+        patch.initialSnapshotComplete === false
+          ? undefined
+          : (patch.initialSnapshotCompletedAtMs ??
+            (patch.initialSnapshotComplete === true && previous.initialSnapshotComplete === false
+              ? now
+              : previous.initialSnapshotCompletedAtMs))
     });
 
     this.#snapshot = next;
@@ -243,6 +280,9 @@ function validatePatch(patch: RuntimeStatusPatch, now: number): void {
     if (key === "urlCategory" && value !== undefined && !isUrlCategory(value)) {
       throw new Error(`invalid URL category: ${String(value)}`);
     }
+    if (key === "protocolMismatchSurface" && value !== undefined && !isProtocolMismatchSurface(value)) {
+      throw new Error(`invalid protocol mismatch surface: ${String(value)}`);
+    }
     if (value !== undefined && timestampKeys.has(key)) {
       if (!isSafeTimestamp(value)) {
         throw new Error(`runtime status timestamp must be a non-negative integer: ${String(key)}`);
@@ -271,6 +311,10 @@ function isRuntimeState(value: unknown): value is RuntimeState {
 
 function isUrlCategory(value: unknown): value is UrlCategory {
   return typeof value === "string" && URL_CATEGORIES.includes(value as UrlCategory);
+}
+
+function isProtocolMismatchSurface(value: unknown): value is ProtocolMismatchSurface {
+  return typeof value === "string" && protocolMismatchSurfaces.has(value as ProtocolMismatchSurface);
 }
 
 function isSafeVersion(value: unknown): boolean {

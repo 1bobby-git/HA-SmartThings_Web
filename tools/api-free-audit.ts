@@ -8,6 +8,7 @@ export type ApiFreeRule =
   | "official-smartthings-auth"
   | "official-smartthings-sdk"
   | "direct-http-client"
+  | "direct-smartthings-socket"
   | "polling-smartthings-call"
   | "playwright-network-mutation";
 
@@ -34,13 +35,18 @@ const rules: Array<{ rule: ApiFreeRule; pattern: RegExp }> = [
   },
   {
     rule: "official-smartthings-auth",
-    pattern: /\b(?:PAT|Personal Access Token|OAuth|API Access App|SmartApp|installedApp(?:Id)?|subscription|webhook)\b/i
+    pattern:
+      /\b(?:PAT|Personal Access Token|OAuth|API Access App|SmartApp|installedApp(?:Id)?|webhook)\b|\bcreate[_-]?subscription\s*\(/i
   },
   {
     rule: "official-smartthings-sdk",
     pattern: /(?:@smartthings\/(?:core-)?sdk|pysmartthings|SmartThingsClient|new\s+SmartThings)/i
   },
   { rule: "direct-http-client", pattern: /\b(?:fetch\s*\(|axios\b|node-fetch\b|got\b|undici\b)/i },
+  {
+    rule: "direct-smartthings-socket",
+    pattern: /new\s+(?:WebSocket|EventSource)\s*\(|\b(?:io|socketIoClient)\s*\(/i
+  },
   {
     rule: "playwright-network-mutation",
     pattern: /\.(?:route|fulfill|abort|setExtraHTTPHeaders|addCookies)\s*\(|\b(?:Network\.setRequestInterception|Fetch\.enable)\b/i
@@ -64,7 +70,7 @@ export function auditSmartThingsApiFree(options: AuditOptions = {}): AuditFindin
               path: relative(cwd, path).replace(/\\/g, "/"),
               rule,
               line: index + 1,
-              excerpt: line.trim()
+              excerpt: sanitizeAuditExcerpt(line.trim())
             });
           }
         }
@@ -75,7 +81,26 @@ export function auditSmartThingsApiFree(options: AuditOptions = {}): AuditFindin
   return findings;
 }
 
+function sanitizeAuditExcerpt(value: string): string {
+  return value
+    .replace(/Bearer\s+[^\s"'`,)]+/gi, "Bearer [REDACTED]")
+    .replace(
+      /(?<![A-Za-z0-9_$])(["']?)((?:x[-_])?(?:csrf(?:Token|[-_]?token)?|api[-_]?secret)|password|mfa(?:Code|_code)?|captcha(?:Code|_code)?|cookie|set[-_]?cookie|authorization|session(?:Token|_token|[-_]?id)?|access(?:Token|_token)?|refresh(?:Token|_token)?|client(?:Secret|[-_]secret)?|bridge(?:Token|_token)|token|secret)\1(?![A-Za-z0-9_$])\s*[:=]\s*(["'`])[^"'`]*\3/gi,
+      (_match, quote: string, key: string, valueQuote: string) =>
+        `${quote}${key}${quote}: ${valueQuote}[REDACTED]${valueQuote}`
+    )
+    .replace(
+      /([?&](?:access_token|refresh_token|token|session|csrf|authorization)=)[^&#\s"']+/gi,
+      "$1[REDACTED]"
+    );
+}
+
 function isApiFinding(rule: ApiFreeRule, line: string, lines: string[], index: number): boolean {
+  if (rule === "direct-smartthings-socket") {
+    return /(?:my\.smartthings\.com|smartthings\.com|samsungiotcloud|socket\.io)/i.test(
+      nearby(lines, index)
+    );
+  }
   if (rule !== "polling-smartthings-call") {
     return true;
   }

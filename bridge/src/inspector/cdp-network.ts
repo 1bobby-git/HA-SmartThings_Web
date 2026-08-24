@@ -1,7 +1,10 @@
 import { sanitizeCaptureRecord, type CaptureSource } from "../state/capture-store.js";
 import type { CaptureSink, Redact } from "./browser-observer.js";
 import { createHash } from "node:crypto";
-import { normalizeTextForCapture } from "./text-normalizer.js";
+import {
+  DEFAULT_CAPTURE_TEXT_LIMIT_BYTES,
+  normalizeTextForCapture
+} from "./text-normalizer.js";
 
 export interface CdpSessionLike {
   send(method: string, params?: Record<string, unknown>): Promise<unknown>;
@@ -24,7 +27,7 @@ export async function installCdpNetworkObserver(
   redact: Redact,
   options: CdpNetworkOptions = {}
 ): Promise<void> {
-  const limit = options.responseBodyLimitBytes ?? 64_000;
+  const limit = options.responseBodyLimitBytes ?? DEFAULT_CAPTURE_TEXT_LIMIT_BYTES;
   const tracked = new Map<string, TrackedResponse>();
   await session.send("Network.enable");
 

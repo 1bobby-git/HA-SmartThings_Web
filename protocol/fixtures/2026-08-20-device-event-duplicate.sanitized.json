@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "provenance": "Sanitized from read-only Chrome CDP Network.webSocketFrameReceived events; raw frames were not persisted.",
+  "observed_date": "2026-08-20",
+  "event_name": "api/subscription DEVICE_EVENT",
+  "raw_delivery_count": 4,
+  "fixture_deliveries": [
+    {
+      "subscription_id": "sub_001",
+      "data": {
+        "event_type": "DEVICE_EVENT",
+        "event_time_present": true,
+        "device_event": {
+          "event_id": "evt_001",
+          "device_id": "dev_001",
+          "location_id": "loc_001",
+          "component": "main",
+          "capability": "fineDustSensor",
+          "attribute": "fineDustLevel",
+          "value_redacted": true,
+          "value_type": "number",
+          "declared_value_type": "number",
+          "unit_present": true,
+          "state_change": true,
+          "sensitive": false,
+          "command_id": null,
+          "owner_id": "owner_001",
+          "owner_type": "LOCATION",
+          "subscription_name_redacted": true
+        }
+      }
+    },
+    {
+      "subscription_id": "sub_001",
+      "data": {
+        "event_type": "DEVICE_EVENT",
+        "event_time_present": true,
+        "device_event": {
+          "event_id": "evt_001",
+          "device_id": "dev_001",
+          "location_id": "loc_001",
+          "component": "main",
+          "capability": "fineDustSensor",
+          "attribute": "fineDustLevel",
+          "value_redacted": true,
+          "value_type": "number",
+          "declared_value_type": "number",
+          "unit_present": true,
+          "state_change": true,
+          "sensitive": false,
+          "command_id": null,
+          "owner_id": "owner_001",
+          "owner_type": "LOCATION",
+          "subscription_name_redacted": true
+        }
+      }
+    },
+    {
+      "subscription_id": "sub_001",
+      "data": {
+        "event_type": "DEVICE_EVENT",
+        "event_time_present": true,
+        "device_event": {
+          "event_id": "evt_001",
+          "device_id": "dev_001",
+          "location_id": "loc_001",
+          "component": "main",
+          "capability": "fineDustSensor",
+          "attribute": "fineDustLevel",
+          "value_redacted": true,
+          "value_type": "number",
+          "declared_value_type": "number",
+          "unit_present": true,
+          "state_change": true,
+          "sensitive": false,
+          "command_id": null,
+          "owner_id": "owner_001",
+          "owner_type": "LOCATION",
+          "subscription_name_redacted": true
+        }
+      }
+    }
+  ],
+  "expected_unique_events": 1,
+  "decision_scope": "Decoder and dedupe verification only; not physical-action correlation."
+}

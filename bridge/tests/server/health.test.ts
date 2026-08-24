@@ -24,6 +24,11 @@ describe("createHealthReport", () => {
       urlCategory: "none",
       activeConnections: 0,
       observedDeviceCount: 0,
+      decodedDeviceEventCount: 0,
+      uniqueLogicalEventCount: 0,
+      duplicateEventCount: 0,
+      dedupeJournalSize: 0,
+      protocolInvalidFrameCount: 0,
       protocolChangeCount: 0,
       restartCount: 0,
       bridgeVersion: "0.0.0-dev",
@@ -54,9 +59,8 @@ describe("createHealthReport", () => {
     expect(createHealthReport(snapshot, { nowMs: 32_000 }).live).toBe(true);
     expect(createHealthReport(snapshot, { nowMs: 32_001 }).live).toBe(false);
     expect(createHealthReport({ ...snapshot, dbAvailable: false }, { nowMs: 2_500 }).live).toBe(false);
-    const liveSnapshotAtBoundary = { ...snapshot, heartbeatAtMs: 121_100 };
-    expect(createHealthReport(liveSnapshotAtBoundary, { nowMs: 121_200 }).ready).toBe(true);
-    expect(createHealthReport(liveSnapshotAtBoundary, { nowMs: 121_201 }).ready).toBe(false);
+    const liveSnapshotAfterOldBoundary = { ...snapshot, heartbeatAtMs: 121_100 };
+    expect(createHealthReport(liveSnapshotAfterOldBoundary, { nowMs: 121_201 }).ready).toBe(true);
   });
 
   test("requires all operational gates for readiness and exposes only safe details", () => {
@@ -74,8 +78,14 @@ describe("createHealthReport", () => {
       parserHealthy: true,
       activeConnections: 3,
       observedDeviceCount: 8,
+      decodedDeviceEventCount: 3,
+      uniqueLogicalEventCount: 1,
+      duplicateEventCount: 2,
+      dedupeJournalSize: 1,
+      protocolInvalidFrameCount: 0,
       restartCount: 1,
       protocolChangeCount: 2,
+      protocolMismatchSurface: "snapshot:scenes:response_shape",
       bridgeVersion: "0.1.0",
       browserVersion: "Chromium 141.0.7390.122",
       protocolVersion: "proto-4",
@@ -90,22 +100,28 @@ describe("createHealthReport", () => {
 
     const ready = createHealthReport(snapshot, { nowMs: 10_000 });
     const missingKeeper = createHealthReport({ ...snapshot, keeperPresent: false }, { nowMs: 10_000 });
-    const staleSnapshot = createHealthReport(
-      { ...snapshot, lastSnapshotAtMs: 1, updatedAtMs: 10_000 },
-      { nowMs: 10_000, snapshotFreshMs: 5_000 }
+    const missingSnapshotProof = createHealthReport(
+      { ...snapshot, initialSnapshotCompletedAtMs: undefined, updatedAtMs: 10_000 },
+      { nowMs: 10_000 }
     );
 
     expect(ready.live).toBe(true);
     expect(ready.ready).toBe(true);
     expect(missingKeeper.ready).toBe(false);
-    expect(staleSnapshot.ready).toBe(false);
+    expect(missingSnapshotProof.ready).toBe(false);
     expect(JSON.stringify(ready.details)).not.toMatch(/https?:|deviceId|locationId|token|secret|raw-/i);
     expect(ready.details).toEqual({
       state: "CONNECTED",
       urlCategory: "smartthings_advanced",
       activeConnections: 3,
       observedDeviceCount: 8,
+      decodedDeviceEventCount: 3,
+      uniqueLogicalEventCount: 1,
+      duplicateEventCount: 2,
+      dedupeJournalSize: 1,
+      protocolInvalidFrameCount: 0,
       protocolChangeCount: 2,
+      protocolMismatchSurface: "snapshot:scenes:response_shape",
       restartCount: 1,
       bridgeVersion: "0.1.0",
       browserVersion: "Chromium 141.0.7390.122",
@@ -135,7 +151,9 @@ describe("createHealthReport", () => {
       initialSnapshotComplete: true,
       parserHealthy: true,
       initialSnapshotCompletedAtMs: 9_500,
-      lastSnapshotAtMs: 9_400
+      lastSnapshotAtMs: 9_400,
+      lastPushAtMs: 9_800,
+      lastParserSuccessAtMs: 9_700
     });
 
     const futureHeartbeat = createHealthReport(
@@ -146,10 +164,54 @@ describe("createHealthReport", () => {
       { ...snapshot, lastSnapshotAtMs: 15_001 },
       { nowMs: 10_000 }
     );
+    const futureInitialSnapshot = createHealthReport(
+      { ...snapshot, initialSnapshotCompletedAtMs: 15_001 },
+      { nowMs: 10_000 }
+    );
 
     expect(futureHeartbeat.live).toBe(false);
     expect(futureHeartbeat.ready).toBe(false);
     expect(futureSnapshot.live).toBe(true);
     expect(futureSnapshot.ready).toBe(false);
+    expect(futureInitialSnapshot.ready).toBe(false);
+  });
+
+  test("keeps current-context snapshot proof while requiring recent push evidence", () => {
+    const store = new RuntimeStatusStore({ now: () => 500_000 });
+    const snapshot = store.update({
+      state: "CONNECTED",
+      dbAvailable: true,
+      heartbeatAtMs: 499_900,
+      chromiumRunning: true,
+      keeperPresent: true,
+      authenticated: true,
+      pushConnected: true,
+      initialSnapshotComplete: true,
+      parserHealthy: true,
+      initialSnapshotCompletedAtMs: 1_000,
+      lastSnapshotAtMs: 1_000,
+      lastPushAtMs: 499_900,
+      lastParserSuccessAtMs: 1_100
+    });
+
+    expect(createHealthReport(snapshot, { nowMs: 500_000, pushFreshMs: 5_000 }).ready).toBe(true);
+    expect(
+      createHealthReport(
+        { ...snapshot, lastPushAtMs: 494_999 },
+        { nowMs: 500_000, pushFreshMs: 5_000 }
+      ).ready
+    ).toBe(false);
+    expect(createHealthReport({ ...snapshot, lastPushAtMs: undefined }, { nowMs: 500_000 }).ready).toBe(
+      false
+    );
+    expect(
+      createHealthReport({ ...snapshot, lastPushAtMs: 505_001 }, { nowMs: 500_000 }).ready
+    ).toBe(false);
+    expect(
+      createHealthReport({ ...snapshot, lastParserSuccessAtMs: undefined }, { nowMs: 500_000 }).ready
+    ).toBe(false);
+    expect(
+      createHealthReport({ ...snapshot, lastParserSuccessAtMs: 505_001 }, { nowMs: 500_000 }).ready
+    ).toBe(false);
   });
 });

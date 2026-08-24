@@ -15,6 +15,7 @@ RUN apt-get update \
     openbox \
     xz-utils \
     x11vnc \
+    x11-utils \
     xvfb \
     websockify \
     novnc \
@@ -49,7 +50,8 @@ RUN npm prune --omit=dev
 
 COPY addon/smartthings_web_bridge/rootfs /
 COPY docker/nginx.conf /etc/nginx/nginx.conf
-RUN chmod +x /etc/s6-overlay/s6-rc.d/*/run
+RUN find /etc/s6-overlay/s6-rc.d -type f \( -name run -o -name up \) -exec chmod +x {} +
+RUN chmod +x /etc/s6-overlay/scripts/*
 
 EXPOSE 8099
 ENTRYPOINT ["/init"]

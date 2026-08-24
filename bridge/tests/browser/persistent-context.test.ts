@@ -16,8 +16,11 @@ describe("persistent Chromium context", () => {
 
     expect(launch.userDataDir).toBe("/data/chromium-profile");
     expect(launch.options.headless).toBe(false);
+    expect(launch.options.chromiumSandbox).toBe(true);
     expect(launch.options.downloadsPath).toBe("/data/downloads");
+    expect(launch.options.timeout).toBe(30_000);
     expect(launch.options.args).toContain("--no-first-run");
+    expect(launch.options.args).not.toContain("--no-sandbox");
     expect(launch.options.args).not.toContain("--disable-background-timer-throttling");
     expect(launch.options.args).not.toContain("--disable-backgrounding-occluded-windows");
     expect(launch.options.args).not.toContain("--disable-renderer-backgrounding");

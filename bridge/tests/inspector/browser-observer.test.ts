@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 
 import { installBrowserObserver } from "../../src/inspector/browser-observer.js";
+import { DEFAULT_CAPTURE_TEXT_LIMIT_BYTES } from "../../src/inspector/text-normalizer.js";
 import { SqliteAliasStore } from "../../src/security/alias-store.js";
 import { createRedactor } from "../../src/security/redactor.js";
 import { CaptureStore } from "../../src/state/capture-store.js";
@@ -41,6 +42,10 @@ async function withPersistedCaptures<T>(
 }
 
 describe("installBrowserObserver", () => {
+  test("default text limit retains the largest bounded live snapshot observed in Phase 1", () => {
+    expect(DEFAULT_CAPTURE_TEXT_LIMIT_BYTES).toBe(1_048_576);
+    expect(DEFAULT_CAPTURE_TEXT_LIMIT_BYTES).toBeGreaterThan(482_235);
+  });
   test("records sanitized request, response, websocket, and service-worker metadata without routing", () => {
     const context = new Emitter() as Emitter & { route?: unknown };
     const write = vi.fn();

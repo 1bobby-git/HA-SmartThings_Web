@@ -1,0 +1,108 @@
+{
+  "schema_version": 2,
+  "provenance": "Sanitized from read-only Chrome CDP Socket.IO request/ACK pairs; only stable query names, field names, counts, and aliases were retained, while raw frames, values, and identifiers were not persisted.",
+  "observed_date": "2026-08-20",
+  "required_categories": [
+    "locations",
+    "rooms",
+    "device_cards",
+    "device_states",
+    "device_health",
+    "scenes"
+  ],
+  "correlations": [
+    {
+      "ack_id": "ack_001",
+      "request_event": "find",
+      "request_query": "api/device",
+      "request_keys": ["locale", "locationId", "since"],
+      "response_category": "device_cards",
+      "response_count": 205,
+      "response_item_keys": ["basic", "camera", "cloud", "type"],
+      "response_keys": ["data", "etag", "version"]
+    },
+    {
+      "ack_id": "ack_002",
+      "request_event": "find",
+      "request_query": "api/device/health",
+      "request_keys": ["locationId"],
+      "response_category": "device_health",
+      "response_count": 212,
+      "response_unique_device_count": 212,
+      "response_item_keys": ["deviceId", "lastUpdatedDate", "locationId", "state"]
+    },
+    {
+      "ack_id": "ack_003",
+      "request_event": "find",
+      "request_query": "api/device/status",
+      "request_keys": ["deviceIds", "locationId"],
+      "response_category": "device_states",
+      "response_count": 1557,
+      "response_unique_device_count": 206,
+      "response_item_keys": [
+        "attributeName",
+        "capabilityId",
+        "componentId",
+        "data",
+        "deviceId",
+        "locationId",
+        "timestamp",
+        "unit",
+        "value",
+        "valueType"
+      ]
+    },
+    {
+      "ack_id": "ack_004",
+      "request_event": "find",
+      "request_query": "api/location",
+      "request_keys": [],
+      "response_category": "locations",
+      "response_count": 2,
+      "response_item_keys": ["allowed", "locationId", "name", "parent"]
+    },
+    {
+      "ack_id": "ack_005",
+      "request_event": "find",
+      "request_query": "api/room",
+      "request_keys": ["locationId"],
+      "response_category": "rooms",
+      "response_count": 9,
+      "response_item_keys": [
+        "allowed",
+        "backgroundImage",
+        "created",
+        "indoorMap",
+        "lastModified",
+        "locationId",
+        "name",
+        "roomId"
+      ]
+    },
+    {
+      "ack_id": "ack_006",
+      "request_event": "find",
+      "request_query": "api/scene",
+      "request_keys": ["locationId"],
+      "response_category": "scenes",
+      "response_count": 4,
+      "response_item_keys": [
+        "actions",
+        "creator",
+        "dateCreated",
+        "dateExecuted",
+        "dateUpdated",
+        "executionLocation",
+        "iconUrl",
+        "id",
+        "meta",
+        "name",
+        "ownerId",
+        "ownerType",
+        "sequence"
+      ]
+    }
+  ],
+  "raw_capture_persisted": false,
+  "decision_scope": "Snapshot ACK classification and completeness verification only."
+}

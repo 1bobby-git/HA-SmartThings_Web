@@ -25,7 +25,18 @@ describe("api-free production audit", () => {
       export async function bad(page) {
         setInterval(() => fetch("https://api.smartthings.com/v1/devices"), 15000);
         await page.route("**/*", route => route.fulfill({ status: 200 }));
-        await page.context().setExtraHTTPHeaders({ Authorization: "Bearer x" });
+        await page.context().setExtraHTTPHeaders({ Authorization: "Bearer x", "access_token": "json-token-value", "client_secret": "json-secret-value", "x-csrf-token": "csrf-secret-value", "client-secret": "client-dash-secret", "x-api-secret": "api-secret-value", Cookie: "sid=secretcookievalue" });
+        const directSocket = new WebSocket("wss://my.smartthings.com/socket.io/");
+        const multilineSocket = new WebSocket(
+          "wss://my.smartthings.com/socket.io/"
+        );
+        const multilineEvents = new EventSource(
+          "https://my.smartthings.com/events"
+        );
+        const multilineIo = io(
+          "https://my.smartthings.com"
+        );
+        await createSubscription();
       }
     `);
 
@@ -35,12 +46,22 @@ describe("api-free production audit", () => {
       expect.arrayContaining([
         "direct-smartthings-api-host",
         "smartthings-v1-endpoint",
+        "official-smartthings-auth",
         "official-smartthings-sdk",
         "direct-http-client",
+        "direct-smartthings-socket",
         "polling-smartthings-call",
         "playwright-network-mutation"
       ])
     );
+    expect(JSON.stringify(findings)).not.toContain("Bearer x");
+    expect(JSON.stringify(findings)).not.toContain("json-token-value");
+    expect(JSON.stringify(findings)).not.toContain("json-secret-value");
+    expect(JSON.stringify(findings)).not.toContain("secretcookievalue");
+    expect(JSON.stringify(findings)).not.toContain("csrf-secret-value");
+    expect(JSON.stringify(findings)).not.toContain("client-dash-secret");
+    expect(JSON.stringify(findings)).not.toContain("api-secret-value");
+    expect(findings.filter((finding) => finding.rule === "direct-smartthings-socket").length).toBeGreaterThanOrEqual(4);
   });
 
   test("ignores legitimate local heartbeat timers", () => {
@@ -53,6 +74,17 @@ describe("api-free production audit", () => {
 
     expect(auditSmartThingsApiFree({ cwd: root })).toEqual([]);
   });
+
+  test("allows observed subscription event names without allowing subscription creation", () => {
+    const root = seededTempDir();
+    write(
+      root,
+      "bridge/src/protocol-analyzer.ts",
+      'export const observedEvent = "api/subscription DEVICE_EVENT";\n'
+    );
+
+    expect(auditSmartThingsApiFree({ cwd: root })).toEqual([]);
+  });
 });
 
 describe("secret production scan", () => {
@@ -60,8 +92,10 @@ describe("secret production scan", () => {
     const root = seededTempDir();
     write(root, "bridge/src/secrets.ts", `
       const sessionToken = "session_12345678901234567890";
-      const authorization = "Bearer abcdefghijklmnopqrstuvwxyz123456";
+      const authorization = "bEaReR abcdefghijklmnopqrstuvwxyz123456";
       const captchaCode = "123456";
+      const serialized = { "access_token": "json-token-value", "client_secret": "json-secret-value" };
+      const notoken = "ordinary-production-label";
     `);
 
     const findings = scanProductionSecrets({ cwd: root });
@@ -72,6 +106,13 @@ describe("secret production scan", () => {
         "bearer-material"
       ])
     );
+    expect(
+      findings
+        .filter((finding) => finding.rule === "secret-assignment")
+        .map((finding) => finding.key)
+        .sort()
+    ).toEqual(["access_token", "authorization", "captchaCode", "client_secret", "sessionToken"].sort());
+    expect(findings.some((finding) => finding.key === "token" && finding.line > 0)).toBe(false);
   });
 
   test("excludes docs, tests, synthetic fixtures, and scanner definitions", () => {

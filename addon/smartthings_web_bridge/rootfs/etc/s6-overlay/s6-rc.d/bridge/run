@@ -1,4 +1,5 @@
-#!/usr/bin/env sh
-mkdir -p /data
-chmod 700 /data
-exec node --experimental-sqlite /app/dist/bridge/src/main.js
+#!/command/with-contenv sh
+export HOME=/data
+export XDG_CACHE_HOME=/data/chromium-profile/.cache
+export XDG_CONFIG_HOME=/data/chromium-profile/.config
+exec s6-setuidgid pwuser node --experimental-sqlite /app/dist/bridge/src/main.js

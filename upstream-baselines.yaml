@@ -11,5 +11,6 @@ smartthings_customize:
   usage: "behavioral-reference-only"
 project:
   project_license: "MIT"
-  production_bridge_modules: "not-created"
+  production_bridge_modules: "phase-1-created"
   private_web_contracts: "observe-only"
+  phase_2_gate: "LIMITED"

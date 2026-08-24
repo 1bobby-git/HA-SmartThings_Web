@@ -82,6 +82,18 @@ describe("KeeperPageManager", () => {
     expect(blank.goto).toHaveBeenCalledWith(KEEPER_URL, { waitUntil: "domcontentloaded" });
   });
 
+  test("accepts the canonical location-id redirect as the keeper without reloading", async () => {
+    const canonical = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    const context = new FakeContext([canonical]);
+    const manager = new KeeperPageManager(context);
+
+    const keeper = await manager.ensureKeeper();
+
+    expect(keeper).toBe(canonical);
+    expect(canonical.goto).not.toHaveBeenCalled();
+    expect(context.created).toHaveLength(0);
+  });
+
   test("tracks keeper identity and navigates a drifted keeper back without creating a tab", async () => {
     const context = new FakeContext([]);
     const manager = new KeeperPageManager(context);
