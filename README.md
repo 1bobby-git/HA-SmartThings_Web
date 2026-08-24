@@ -47,7 +47,7 @@ docker run --rm --shm-size=1g -p 127.0.0.1:8099:8099 -v smartthings-web-data:/da
 
 ## Security
 
-Do not place Samsung credentials, MFA codes, CAPTCHA values, cookies, CSRF values, Authorization headers, or bridge tokens in source, config, fixtures, logs, issues, or chat. Production source is scanned with `npm run audit:api-free` and `npm run audit:secrets`.
+Do not place Samsung credentials, MFA codes, CAPTCHA values, cookies, CSRF values, Authorization headers, or bridge tokens in source, config, fixtures, logs, issues, or chat. Production source is scanned with `npm run audit:api-free` and `npm run audit:secrets`; a bounded live HAOS process-separation sample can be collected with `npm run audit:api-free:runtime` without retaining destinations, ports, process IDs, or socket identifiers.
 
 ## Protocol Integrity
 

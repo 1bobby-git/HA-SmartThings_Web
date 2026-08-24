@@ -31,6 +31,7 @@ describe("Phase 1 documentation gate", () => {
     const fixtures = readFileSync("protocol/fixtures/README.md", "utf8");
     const session = readFileSync("docs/session-behavior.md", "utf8");
     const security = readFileSync("docs/security.md", "utf8");
+    const apiFree = readFileSync("docs/api-free-audit.md", "utf8");
     const addonDocs = readFileSync("addon/smartthings_web_bridge/DOCS.md", "utf8");
     const addonReadme = readFileSync("addon/smartthings_web_bridge/README.md", "utf8");
     const addonChangelog = readFileSync("addon/smartthings_web_bridge/CHANGELOG.md", "utf8");
@@ -44,6 +45,8 @@ describe("Phase 1 documentation gate", () => {
     const duplicateHashPath = `${duplicatePath}.sha256`;
     const snapshotPath = "protocol/fixtures/2026-08-20-snapshot-ack-correlations.sanitized.json";
     const snapshotHashPath = `${snapshotPath}.sha256`;
+    const runtimeAuditPath = "protocol/fixtures/2026-08-24-runtime-api-audit-summary.json";
+    const runtimeAuditHashPath = `${runtimeAuditPath}.sha256`;
     const gitattributes = readFileSync(".gitattributes", "utf8");
 
     expect(gitattributes).toContain("protocol/fixtures/*.json text eol=lf");
@@ -495,6 +498,43 @@ describe("Phase 1 documentation gate", () => {
     expect(scanSanitizedFixtureText(snapshotPath, snapshotText)).toEqual([]);
     const expectedSnapshotHash = readFileSync(snapshotHashPath, "utf8").trim().split(/\s+/)[0];
     expect(createHash("sha256").update(snapshotText).digest("hex")).toBe(expectedSnapshotHash);
+    expect(existsSync(runtimeAuditPath)).toBe(true);
+    expect(existsSync(runtimeAuditHashPath)).toBe(true);
+    const runtimeAuditText = readFileSync(runtimeAuditPath, "utf8");
+    expect(scanSanitizedFixtureText(runtimeAuditPath, runtimeAuditText)).toEqual([]);
+    const runtimeAudit = JSON.parse(runtimeAuditText) as {
+      status?: string;
+      sampleCount?: number;
+      bridge?: { establishedExternalCount?: number };
+      chromium?: { establishedExternalCount?: number };
+      checks?: {
+        bridgeExternalConnectionObserved?: boolean;
+        browserExternalConnectionObserved?: boolean;
+      };
+      limitations?: string[];
+    };
+    expect(runtimeAudit).toMatchObject({
+      status: "pass",
+      sampleCount: 4,
+      bridge: { establishedExternalCount: 0 },
+      chromium: { establishedExternalCount: 3 },
+      checks: {
+        bridgeExternalConnectionObserved: false,
+        browserExternalConnectionObserved: true
+      }
+    });
+    expect(runtimeAudit.limitations).toContain("bounded_sample_not_complete_network_history");
+    const expectedRuntimeAuditHash = readFileSync(runtimeAuditHashPath, "utf8")
+      .trim()
+      .split(/\s+/)[0];
+    expect(createHash("sha256").update(runtimeAuditText).digest("hex")).toBe(
+      expectedRuntimeAuditHash
+    );
+    expect(apiFree).toContain("npm run audit:api-free:runtime");
+    expect(apiFree).toContain("4/4 process-socket samples passed");
+    expect(apiFree).toContain(runtimeAuditPath);
+    expect(feasibility).toContain("Bridge-owned external TCP connections remained zero");
+    expect(fixtures).toContain(runtimeAuditPath);
     expect(`${feasibility}\n${protocol}`).not.toMatch(/DECISION: GO/);
 
     const baselines = YAML.parse(readFileSync("upstream-baselines.yaml", "utf8")) as {

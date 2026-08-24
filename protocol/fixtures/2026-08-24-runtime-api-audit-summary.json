@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "status": "pass",
+  "observationScope": "bounded_process_socket_sampling",
+  "startedAt": "2026-08-24T09:22:27.050Z",
+  "endedAt": "2026-08-24T09:22:46.647Z",
+  "durationMs": 19597,
+  "sampleCount": 4,
+  "passingSampleCount": 4,
+  "inconclusiveSampleCount": 0,
+  "bridge": {
+    "processCount": 1,
+    "tcpSocketCount": 1,
+    "listeningSocketCount": 1,
+    "establishedLoopbackCount": 0,
+    "establishedPrivateCount": 0,
+    "establishedExternalCount": 0,
+    "otherTcpSocketCount": 0
+  },
+  "chromium": {
+    "processCount": 9,
+    "tcpSocketCount": 3,
+    "listeningSocketCount": 0,
+    "establishedLoopbackCount": 0,
+    "establishedPrivateCount": 0,
+    "establishedExternalCount": 3,
+    "otherTcpSocketCount": 0
+  },
+  "checks": {
+    "bridgeHttpListenerObservedEverySample": true,
+    "bridgeExternalConnectionObserved": false,
+    "browserExternalConnectionObserved": true
+  },
+  "failures": [],
+  "inconclusiveReasons": [],
+  "limitations": [
+    "bounded_sample_not_complete_network_history",
+    "destinations_and_ports_intentionally_not_retained"
+  ]
+}
