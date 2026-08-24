@@ -906,12 +906,17 @@ async function runCli(): Promise<void> {
       error instanceof SafeDeploymentError
         ? error
         : new SafeDeploymentError("haos_candidate_deployment_failed");
+    const diagnostic =
+      process.env.STW_DEPLOY_DEBUG === "1" && error instanceof Error
+        ? error.message.slice(0, 240)
+        : undefined;
     process.stderr.write(
       `${JSON.stringify({
         event: "haos_candidate_deployment_error",
         success: false,
         rolledBack: safeError.rolledBack,
-        error: safeError.message
+        error: safeError.message,
+        ...(diagnostic ? { diagnostic } : {})
       })}\n`
     );
     process.exitCode = 1;
