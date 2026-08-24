@@ -175,7 +175,7 @@ export class PhysicalActionCorrelationProbe {
       if (!this.#isExpired(now)) {
         return { ok: false, error: "probe_conflict" };
       }
-      this.#finalizeExpired(evidence, now);
+      this.#finalizeExpired();
     }
 
     const readinessError = armReadinessError(evidence);
@@ -257,16 +257,19 @@ export class PhysicalActionCorrelationProbe {
   }
 
   observeUnsafeEvent(): void {
+    this.#finalizeIfExpired();
     this.#failActive("unsafe_event");
   }
 
   recordBrowserIsolation(isolated: boolean): void {
+    this.#finalizeIfExpired();
     if (!isolated) {
       this.#failActive("browser_not_isolated");
     }
   }
 
   fail(reason: ProbeFailureReason): void {
+    this.#finalizeIfExpired();
     this.#failActive(reason);
   }
 
@@ -305,7 +308,7 @@ export class PhysicalActionCorrelationProbe {
       if (failure) {
         this.#failActive(failure);
       } else if (this.#isExpired(now)) {
-        this.#finalizeExpired(evidence, now);
+        this.#finalizeExpired();
       }
     }
     return this.#snapshotFromWindow(evidence, now);
@@ -336,7 +339,13 @@ export class PhysicalActionCorrelationProbe {
     return this.#window.deadlineMonotonicMs !== undefined && now >= this.#window.deadlineMonotonicMs;
   }
 
-  #finalizeExpired(_evidence: ProbeRuntimeEvidence, _now: number): void {
+  #finalizeIfExpired(): void {
+    if (this.#window.state === "armed" && this.#isExpired(this.#monotonicNow())) {
+      this.#finalizeExpired();
+    }
+  }
+
+  #finalizeExpired(): void {
     if (this.#window.state !== "armed") {
       return;
     }

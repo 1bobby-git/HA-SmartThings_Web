@@ -197,6 +197,21 @@ describe("PhysicalActionCorrelationProbe", () => {
     });
   });
 
+  test("unsafe event at the exact deadline cannot replace no-match expiry", () => {
+    const clock = createClock();
+    const probe = createProbe(clock);
+
+    probe.arm({ actionType: "contact_open", windowSeconds: 1 }, healthyEvidence());
+    clock.advance(1_000);
+    probe.observeUnsafeEvent();
+
+    expect(probe.snapshot(healthyEvidence())).toMatchObject({
+      state: "fail",
+      reasons: ["no_match"],
+      candidateCount: 0
+    });
+  });
+
   test("records browser isolation loss during an active window", () => {
     const probe = createProbe(createClock());
 
@@ -209,6 +224,38 @@ describe("PhysicalActionCorrelationProbe", () => {
     expect(probe.snapshot(healthyEvidence())).toMatchObject({
       state: "fail",
       reasons: ["browser_not_isolated"]
+    });
+  });
+
+  test("browser isolation loss at the exact deadline cannot replace a pass", () => {
+    const clock = createClock();
+    const probe = createProbe(clock);
+
+    probe.arm({ actionType: "contact_open", windowSeconds: 1 }, healthyEvidence());
+    probe.observe(newResult("event_id:one", contactEvent("dev_001", "open", true)));
+    clock.advance(1_000);
+    probe.recordBrowserIsolation(false);
+
+    expect(probe.snapshot(healthyEvidence())).toMatchObject({
+      state: "pass",
+      reasons: [],
+      candidateCount: 1
+    });
+  });
+
+  test("explicit failure at the exact deadline cannot replace a pass", () => {
+    const clock = createClock();
+    const probe = createProbe(clock);
+
+    probe.arm({ actionType: "contact_open", windowSeconds: 1 }, healthyEvidence());
+    probe.observe(newResult("event_id:one", contactEvent("dev_001", "open", true)));
+    clock.advance(1_000);
+    probe.fail("runtime_restarted");
+
+    expect(probe.snapshot(healthyEvidence())).toMatchObject({
+      state: "pass",
+      reasons: [],
+      candidateCount: 1
     });
   });
 
