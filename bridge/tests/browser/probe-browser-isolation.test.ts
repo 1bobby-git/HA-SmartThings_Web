@@ -4,7 +4,9 @@ import { isProbeBrowserIsolated } from "../../src/browser/probe-browser-isolatio
 import { KEEPER_URL, KeeperPageManager, type BrowserContextLike, type BrowserPageLike } from "../../src/browser/keeper-page.js";
 
 class FakePage implements BrowserPageLike {
-  readonly close = vi.fn(async () => undefined);
+  readonly close = vi.fn(async () => {
+    this.closed = true;
+  });
   readonly goto = vi.fn(async (url: string) => {
     this.currentUrl = url;
   });
@@ -99,11 +101,11 @@ describe("isProbeBrowserIsolated", () => {
     ["another location", "https://my.smartthings.com/location/loc-2"]
   ])("returns false when an extra open %s page exists", async (_name, extraUrl) => {
     const keeper = new FakePage(KEEPER_URL);
-    const extra = new FakePage(extraUrl);
-    const context = new FakeContext([keeper, extra]);
+    const context = new FakeContext([keeper]);
     const manager = new KeeperPageManager(context);
 
     await manager.ensureKeeper();
+    context.existing.push(new FakePage(extraUrl));
 
     expect(isProbeBrowserIsolated(context, manager)).toBe(false);
   });
