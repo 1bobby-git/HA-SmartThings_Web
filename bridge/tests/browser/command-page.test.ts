@@ -37,6 +37,7 @@ class FakeCommandPage {
     if (role === "button") {
       expect(options?.name).toBeInstanceOf(RegExp);
       expect((options?.name as RegExp).test("Safe plug Off")).toBe(true);
+      expect((options?.name as RegExp).test("Off Safe plug")).toBe(true);
       return this.card;
     }
     expect(role).toBe("switch");

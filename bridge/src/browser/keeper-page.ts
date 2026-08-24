@@ -69,7 +69,9 @@ export class KeeperPageManager {
     const page = await this.context.newPage();
     this.#commandPages.add(page);
     try {
-      await page.goto(KEEPER_URL, { waitUntil: "domcontentloaded" });
+      const keeperUrl = this.currentKeeper()?.url();
+      const target = keeperUrl && isKeeperSettledUrl(keeperUrl) ? keeperUrl : KEEPER_URL;
+      await page.goto(target, { waitUntil: "domcontentloaded" });
       return page;
     } catch (error) {
       this.#commandPages.delete(page);

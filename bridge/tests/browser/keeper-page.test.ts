@@ -195,4 +195,17 @@ describe("KeeperPageManager", () => {
     expect(command.close).not.toHaveBeenCalled();
     expect(reconciled).toBe(keeper);
   });
+
+  test("opens commands on the keeper's selected location route", async () => {
+    const keeper = new FakePage("https://my.smartthings.com/location/selected-location");
+    const context = new FakeContext([keeper]);
+    const manager = new KeeperPageManager(context);
+    await manager.ensureKeeper();
+
+    const command = await manager.openCommandPage();
+
+    expect(command.goto).toHaveBeenCalledWith(keeper.url(), {
+      waitUntil: "domcontentloaded"
+    });
+  });
 });

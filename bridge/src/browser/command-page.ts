@@ -28,7 +28,7 @@ export class SmartThingsWebUiCommandExecutor {
       }
 
       const device = page.getByRole("button", {
-        name: new RegExp(`^${escapeRegExp(input.deviceName)}(?:\\s|$)`, "u")
+        name: new RegExp(escapeRegExp(input.deviceName), "u")
       });
       try {
         await device.first().waitFor({ state: "visible", timeout: 15_000 });
