@@ -154,7 +154,7 @@ describe("HAOS deployment command construction", () => {
       "/tmp/ha-smartthings-web-bridge-aaaaaaaaaaaa-bbbbbbbbbbbb"
     );
     expect(layout.addonSource).toBe(
-      "/mnt/data/supervisor/addons/local/smartthings_web_bridge"
+      "/mnt/data/supervisor/apps/local/smartthings_web_bridge"
     );
     expect(layout.backupRoot).toBe(
       "/mnt/data/supervisor/backup/ha-smartthings-web-bridge/aaaaaaaaaaaa-bbbbbbbbbbbb"
@@ -186,7 +186,7 @@ describe("HAOS deployment command construction", () => {
     expect(prepare).not.toContain(`rm -rf '${layout.addonSource}'`);
     expect(activate).toContain(`rm -rf '${layout.addonSource}'`);
     expect(activate).toContain(`mv '${layout.candidateSource}' '${layout.addonSource}'`);
-    expect(activate).not.toContain("/mnt/data/supervisor/addons/local';");
+    expect(activate).not.toContain("/mnt/data/supervisor/apps/local';");
   });
 
   test("rejects a package identity that does not belong to the remote layout", () => {

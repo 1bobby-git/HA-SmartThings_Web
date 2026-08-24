@@ -133,7 +133,7 @@ export function createHaosDeploymentRemoteLayout(
     rollbackUploadArchive: `${temporaryRoot}/rollback.tgz`,
     candidateSource: `${backupRoot}/candidate-source`,
     rollbackSource: `${backupRoot}/rollback-source`,
-    addonSource: "/mnt/data/supervisor/addons/local/smartthings_web_bridge",
+    addonSource: "/mnt/data/supervisor/apps/local/smartthings_web_bridge",
     backupRoot,
     durableRollbackArchive:
       `${backupRoot}/rollback-${HAOS_ROLLBACK_COMMIT_SHA}.tgz`,
@@ -384,7 +384,7 @@ function validateLayout(layout: HaosDeploymentRemoteLayout): void {
   ]) {
     requireChildPath(layout.backupRoot, path);
   }
-  if (layout.addonSource !== "/mnt/data/supervisor/addons/local/smartthings_web_bridge") {
+  if (layout.addonSource !== "/mnt/data/supervisor/apps/local/smartthings_web_bridge") {
     throw new Error("haos_candidate_deploy_layout_invalid");
   }
 }
