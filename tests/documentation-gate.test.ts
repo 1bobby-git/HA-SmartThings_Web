@@ -84,16 +84,18 @@ describe("Phase 1 documentation gate", () => {
     expect(feasibility).toContain("not a GO decision");
     expect(feasibility).toContain("not causally tied to a user-triggered physical action");
     expect(feasibility).toContain("Phase 2 remains closed");
-    expect(readme).toContain("Version 0.1.27 is deployed on Home Assistant 2026.8.3");
+    expect(readme).toContain("Version 0.1.28 is deployed on Home Assistant 2026.8.3");
     expect(readme).toContain("Live temperature, humidity, contact, motion, and power observations");
-    expect(readme).toContain("Manual physical-action attribution remains unverified");
+    expect(readme).toContain("Manual physical-action attribution is verified");
+    expect(readme).toContain("sequence 642 through 672 with zero gaps");
     expect(readme).toContain("The 72-hour passive HAOS soak remains explicitly deferred");
     expect(readme).toContain(
       "The probe adds no browser command, DOM state scraping, direct SmartThings API call, Home Assistant entity, or persistent event journal."
     );
-    expect(feasibility).toContain("Version 0.1.27 is deployed to HAOS");
-    expect(protocol).toContain("physical-action correlation remains unverified");
-    expect(session).toContain("Version 0.1.27 is deployed");
+    expect(feasibility).toContain("Version 0.1.28 is deployed to HAOS");
+    expect(feasibility).toContain("exactly one passing candidate");
+    expect(protocol).toContain("targeted contact-open action produced exactly one passing candidate");
+    expect(session).toContain("Version 0.1.28 is deployed");
     expect(manual).toContain("POST /probe/physical-action/arm");
     expect(manual).toContain("GET /probe/physical-action");
     expect(manual).toContain("POST /probe/physical-action/reset");
@@ -136,13 +138,14 @@ describe("Phase 1 documentation gate", () => {
     expect(`${readme}\n${manual}\n${soakDocs}`).toContain(
       "final-summary.json.sha256"
     );
-    expect(manual).toContain("Version 0.1.27 is deployed to HAOS");
-    expect(manual).toContain("failed closed with `unsafe_event`");
+    expect(manual).toContain("Version 0.1.28 is deployed to HAOS");
+    expect(manual).toContain("targeted contact-open attempt passed");
+    expect(addonChangelog).toContain("## 0.1.28");
     expect(addonChangelog).toContain("## 0.1.27");
     expect(addonChangelog).toContain("## 0.1.26");
     expect(addonChangelog).toContain("in-memory physical-action correlation probe");
     expect(`${readme}\n${feasibility}\n${protocol}\n${session}`).toContain(
-      "0.1.27 is deployed"
+      "0.1.28 is deployed"
     );
     expect(feasibility).toContain("live Home Assistant OS 18.2 add-on");
     expect(protocol).toContain("111 requests");
@@ -205,7 +208,7 @@ describe("Phase 1 documentation gate", () => {
     expect(addonDocs).toContain("local_smartthings_web_bridge");
     expect(addonDocs).toContain("Supervisor-loaded AppArmor profile is enforced");
     expect(addonDocs).toContain("Version 0.1.23 fixes the old 120-second readiness drop");
-    expect(addonDocs).toContain("Version 0.1.24 was then verified");
+    expect(addonDocs).toContain("Version 0.1.28 was then verified");
     expect(manual).toContain("dist-addon/smartthings_web_bridge");
     expect(manual).toContain("Do not copy the raw `addon/smartthings_web_bridge` source folder");
     expect(manual).toContain("Keep backup copies outside `/addons`");
@@ -227,6 +230,9 @@ describe("Phase 1 documentation gate", () => {
     expect(addonReadme).toContain("generated monorepo build inputs");
     expect(addonReadme).toContain("Generated text is canonical UTF-8/LF");
     expect(addonReadme).toContain("Keep backup copies outside `/addons`");
+    expect(addonReadme).toContain("Live HAOS validation of version 0.1.28");
+    expect(addonReadme).toContain("one passing component-less candidate");
+    expect(addonDocs).toContain("Version 0.1.28 was then verified");
     expect(addonChangelog).toContain("LIMITED evidence gate");
     expect(addonChangelog).toContain("## 0.1.23");
     expect(addonChangelog).toContain("old 120-second snapshot TTL");

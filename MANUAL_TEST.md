@@ -35,11 +35,11 @@ Run `npm run protocol:replay` after updating sanitized fixtures. The command mus
 
 Run `npm run snapshot:replay` after updating snapshot correlation fixtures. All six required categories must match and `complete` must be true before testing live reconnect recovery.
 
-## Physical-Action Probe (0.1.27 Runtime)
+## Physical-Action Probe (0.1.28 Runtime)
 
-Version 0.1.27 is deployed to HAOS. Physical-action correlation remains unverified: a targeted contact attempt failed closed with `unsafe_event` when an unrelated component-less live event arrived before the requested contact action.
+Version 0.1.28 is deployed to HAOS. A targeted contact-open attempt passed with one component-less candidate. Bridge source, Bridge receipt, and Home Assistant `last_updated` were 22:41:28.361Z, 22:41:28.482Z, and 22:41:28.494626Z. A later close attempt received two distinct matching events and remained correctly `ambiguous`; both closes and the intervening opens were present in Home Assistant in order.
 
-Before retrying after the component-less probe limitation is covered by reviewed tests:
+For another controlled action:
 
 1. Keep exactly one settled SmartThings `/location` keeper page open. Do not open `/advanced`, a device detail, a login page, or another tab during the probe window.
 2. Confirm the Bridge is live, ready, `CONNECTED`, has observed devices, and reports zero protocol changes and restarts.

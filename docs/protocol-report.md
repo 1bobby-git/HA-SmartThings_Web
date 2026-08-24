@@ -50,9 +50,9 @@ Sanitized duplicate fixture: `protocol/fixtures/2026-08-20-device-event-duplicat
 
 The runtime capture sink now feeds already-sanitized incoming Playwright/CDP text frames through the same analyzer. A valid DEVICE_EVENT updates safe counters for decoded deliveries, unique events, duplicates, journal size, and invalid frames, and only then marks parser/push state healthy. Integration tests replay the fixture through that runtime path.
 
-This proves decoder/dedupe integration against one real sanitized event shape and automated missing-ID fallback behavior. It does not yet prove a real SmartThings event without an event ID, restart persistence of an event journal, or physical-action correlation.
+This proves decoder/dedupe integration against one real sanitized event shape and automated missing-ID fallback behavior. It does not yet prove a real SmartThings event without an event ID or restart persistence of an event journal.
 
-The in-memory physical-action probe introduced in 0.1.26 is deployed with 0.1.27, but physical-action correlation remains unverified. A targeted contact attempt failed closed on `unsafe_event` because an unrelated live DEVICE_EVENT omitted its component. The numeric `protocol_version` remains 1 because 0.1.27 normalizes the already observed event time and component omission without accepting a new external protocol surface.
+The in-memory physical-action probe introduced in 0.1.26 is deployed with 0.1.28. Valid component-less events now carry the explicit safe component `unspecified`, and observed epoch-millisecond source times are accepted. A targeted contact-open action produced exactly one passing candidate with source-to-Bridge and source-to-Home-Assistant delays of about 121 ms and 134 ms. A separate close window retained two distinct candidates and correctly remained `ambiguous`; the corresponding close/open sequence was also present in Home Assistant. The numeric `protocol_version` remains 1 because this is compatibility with the already observed nullable component and numeric event-time fields, not acceptance of a new external surface.
 
 ## Snapshot ACK replay
 
@@ -96,6 +96,6 @@ A read-only retained-capture origin audit then classified 1,999 URL-source recor
 
 A separate HA Core restart continuity operator now has a live non-mutating preview. It reconstructed only Core version/boot/watchdog/container-running posture and allowlisted Bridge health, found every prerequisite healthy except the pending soak, and reported `remoteMutationPerformed=false`. No Core restart occurred; execute mode remains held until the soak is sealed.
 
-The 0.1.26 package candidate is deliberately held outside HAOS until that 0.1.25 soak completes. It adds no browser input, DOM state scraping, direct SmartThings API request, Home Assistant entity, command path, or persistent event journal, and it is not live physical-action evidence.
+At that stage, the 0.1.26 package candidate was deliberately held outside HAOS and was not live physical-action evidence. The later 0.1.28 deployment supplied that evidence without adding browser input, DOM state scraping, a direct SmartThings API request, a Home Assistant entity, a command path, or a persistent event journal.
 
-This proves HAOS packaging, enforced-profile startup, headed Chromium, Ingress, noVNC delivery, manual logged-in capture, repeated add-on/browser restart restore, initial snapshot recognition/reacquisition, and live push/parser observation through the add-on path. It does not prove a real missing-ID event, host reboot recovery, physical-action correlation, command confirmation, or long-idle durability.
+This proves HAOS packaging, enforced-profile startup, headed Chromium, Ingress, noVNC delivery, manual logged-in capture, repeated add-on/browser restart restore, initial snapshot recognition/reacquisition, live push/parser observation, and one targeted physical contact action through the add-on path. It does not prove a real missing-ID event, host reboot recovery, command confirmation, or long-idle durability.
