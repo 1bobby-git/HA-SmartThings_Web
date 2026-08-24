@@ -296,7 +296,10 @@ export function buildHaosAddonRebuildRemoteScript(addonSlug: string): string {
   return `set -eu; ha apps rebuild ${addonSlug} --force >/dev/null 2>&1; printf 'addon_rebuilt\\n'`;
 }
 
-export function buildHaosHealthRemoteScript(addonSlug: string): string {
+export function buildHaosHealthRemoteScript(
+  addonSlug: string,
+  requireReady = true
+): string {
   if (!SAFE_SLUG_PATTERN.test(addonSlug)) {
     throw new Error("haos_candidate_deploy_command_invalid");
   }
@@ -304,7 +307,9 @@ export function buildHaosHealthRemoteScript(addonSlug: string): string {
   return [
     "set -eu",
     `docker exec ${container} curl -fsS -o /dev/null http://127.0.0.1:8098/health/live`,
-    `docker exec ${container} curl -fsS -o /dev/null http://127.0.0.1:8098/health/ready`,
+    ...(requireReady
+      ? [`docker exec ${container} curl -fsS -o /dev/null http://127.0.0.1:8098/health/ready`]
+      : []),
     "printf 'health_ready\\n'"
   ].join("; ");
 }

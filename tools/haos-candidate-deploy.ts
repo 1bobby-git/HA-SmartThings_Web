@@ -63,6 +63,7 @@ interface CliOptions {
   execute: boolean;
   deferSoak: boolean;
   acceptHotpatchedRuntime: boolean;
+  allowLoginRequired: boolean;
   runDirectory: string;
   repositoryRoot: string;
   expectedInstalledVersion: string;
@@ -131,6 +132,7 @@ async function main(): Promise<void> {
         remoteMutationPerformed: false,
         userAuthorizedSoakDeferral: options.deferSoak,
         userAuthorizedHotpatchedRuntimePromotion: options.acceptHotpatchedRuntime,
+        userAuthorizedLoginRequiredPostflight: options.allowLoginRequired,
         ...publicReadiness(readiness, bundle, layout)
       });
       if (!deploymentAuthorized) {
@@ -146,6 +148,7 @@ async function main(): Promise<void> {
       remoteMutationPerformed: true,
       userAuthorizedSoakDeferral: options.deferSoak,
       userAuthorizedHotpatchedRuntimePromotion: options.acceptHotpatchedRuntime,
+      userAuthorizedLoginRequiredPostflight: options.allowLoginRequired,
       rolledBack: false,
       ...publicReadiness(readiness, bundle, layout),
       deployed
@@ -408,7 +411,7 @@ async function waitForHealth(options: CliOptions): Promise<void> {
     try {
       await runGuestMarker(
         options,
-        buildHaosHealthRemoteScript(options.addonSlug),
+        buildHaosHealthRemoteScript(options.addonSlug, !options.allowLoginRequired),
         "health_ready",
         30
       );
@@ -755,6 +758,7 @@ function parseCliOptions(args: readonly string[]): CliOptions {
   let execute = false;
   let deferSoak = false;
   let acceptHotpatchedRuntime = false;
+  let allowLoginRequired = false;
   for (let index = 0; index < args.length; index += 1) {
     const key = args[index];
     if (key === "--execute") {
@@ -776,6 +780,13 @@ function parseCliOptions(args: readonly string[]): CliOptions {
         throw new SafeDeploymentError("haos_candidate_deployment_arguments_invalid");
       }
       acceptHotpatchedRuntime = true;
+      continue;
+    }
+    if (key === "--allow-login-required") {
+      if (allowLoginRequired) {
+        throw new SafeDeploymentError("haos_candidate_deployment_arguments_invalid");
+      }
+      allowLoginRequired = true;
       continue;
     }
     const value = args[index + 1];
@@ -830,6 +841,7 @@ function parseCliOptions(args: readonly string[]): CliOptions {
     execute,
     deferSoak,
     acceptHotpatchedRuntime,
+    allowLoginRequired,
     runDirectory: resolve(runDirectory),
     repositoryRoot: resolve(values.get("--repository-root") ?? process.cwd()),
     expectedInstalledVersion: installedVersion,
