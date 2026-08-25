@@ -162,6 +162,7 @@ function commandErrorStatus(code: SafeCommandError["code"]): number {
     code === "command_location_picker_not_found" ||
     code === "command_location_target_not_found" ||
     code === "command_location_change_failed" ||
+    code === "command_room_not_found" ||
     code === "command_target_ambiguous" ||
     code === "command_search_not_found" ||
     code === "command_search_ambiguous" ||

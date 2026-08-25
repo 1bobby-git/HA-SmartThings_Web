@@ -31,6 +31,7 @@ export class SmartThingsWebUiCommandExecutor {
     deviceName: string;
     locationId: string;
     locationNames?: Readonly<Record<string, string>>;
+    roomName?: string;
   }): Promise<void> {
     const manager = this.getManager();
     if (!manager) {
@@ -43,7 +44,7 @@ export class SmartThingsWebUiCommandExecutor {
       }
       await this.ensureLocation(page, input.locationId, input.locationNames);
 
-      let device = deviceLocator(page, input.deviceName);
+      let device: CommandLocatorLike | undefined = deviceLocator(page, input.deviceName);
       try {
         await device.first().waitFor({ state: "visible", timeout: 15_000 });
       } catch {
@@ -51,9 +52,11 @@ export class SmartThingsWebUiCommandExecutor {
         try {
           await device.first().waitFor({ state: "visible", timeout: 5_000 });
         } catch {
-          device =
-            (await scrollForDevice(page, input.deviceName)) ??
-            (await searchForDevice(page, input.deviceName));
+          device = await scrollForDevice(page, input.deviceName);
+          if (!device && input.roomName) {
+            device = await findDeviceInRoom(page, input.deviceName, input.roomName);
+          }
+          device ??= await searchForDevice(page, input.deviceName);
         }
       }
       if ((await device.count()) !== 1) {
@@ -114,6 +117,38 @@ export class SmartThingsWebUiCommandExecutor {
       throw new Error("command_location_change_failed");
     }
   }
+}
+
+async function findDeviceInRoom(
+  page: CommandPageLike,
+  deviceName: string,
+  roomName: string
+): Promise<CommandLocatorLike> {
+  const url = new URL(page.url());
+  const route = url.pathname.match(/^(\/location\/[^/]+)(?:\/.*)?$/u)?.[1];
+  if (!route) throw new Error("command_room_not_found");
+  await page.goto(`${url.origin}${route}/rooms`, { waitUntil: "domcontentloaded" });
+  const room = page.getByRole("link", { name: exactName(roomName) });
+  try {
+    await room.first().waitFor({ state: "visible", timeout: 15_000 });
+  } catch {
+    throw new Error("command_room_not_found");
+  }
+  if ((await room.count()) !== 1) throw new Error("command_room_not_found");
+  await room.click({ timeout: 15_000 });
+
+  let device = deviceLocator(page, deviceName);
+  try {
+    await device.first().waitFor({ state: "visible", timeout: 15_000 });
+  } catch {
+    device = exactTextCardLocator(page, deviceName);
+    try {
+      await device.first().waitFor({ state: "visible", timeout: 10_000 });
+    } catch {
+      throw new Error("command_target_not_found");
+    }
+  }
+  return device;
 }
 
 async function scrollForDevice(

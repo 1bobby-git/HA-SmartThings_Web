@@ -30,6 +30,7 @@ export interface SafeCommandExecutor {
     deviceName: string;
     locationId: string;
     locationNames: Readonly<Record<string, string>>;
+    roomName?: string;
   }): Promise<void>;
 }
 
@@ -54,6 +55,7 @@ export type SafeCommandErrorCode =
   | "command_location_picker_not_found"
   | "command_location_target_not_found"
   | "command_location_change_failed"
+  | "command_room_not_found"
   | "command_target_not_found"
   | "command_target_ambiguous"
   | "command_search_not_found"
@@ -173,13 +175,17 @@ export class SafeCommandService {
       afterSequence: snapshot.sequence,
       resync: this.options.resync
     });
+    const roomName = device.roomId
+      ? snapshot.rooms.find((room) => room.id === device.roomId)?.name
+      : undefined;
     try {
       await this.options.executor.executeSwitch({
         deviceName: device.name,
         locationId: device.locationId,
         locationNames: Object.fromEntries(
           snapshot.locations.map((location) => [location.id, location.name])
-        )
+        ),
+        ...(roomName ? { roomName } : {})
       });
     } catch (error) {
       confirmation.cancel();
@@ -312,6 +318,7 @@ function isExecutorErrorCode(value: string): value is SafeCommandErrorCode {
     "command_location_picker_not_found",
     "command_location_target_not_found",
     "command_location_change_failed",
+    "command_room_not_found",
     "command_target_not_found",
     "command_target_ambiguous",
     "command_search_not_found",
