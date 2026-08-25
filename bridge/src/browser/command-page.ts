@@ -6,6 +6,8 @@ interface CommandLocatorLike {
   fill(value: string, options?: { timeout?: number }): Promise<unknown>;
   filter(options: { has: CommandLocatorLike }): CommandLocatorLike;
   first(): CommandLocatorLike;
+  getByRole(role: string, options?: { name?: string | RegExp }): CommandLocatorLike;
+  locator(selector: string): CommandLocatorLike;
   waitFor(options: { state: "visible"; timeout: number }): Promise<unknown>;
 }
 
@@ -54,7 +56,11 @@ export class SmartThingsWebUiCommandExecutor {
         } catch {
           device = await scrollForDevice(page, input.deviceName);
           if (!device) {
-            device = await findDeviceInRooms(page, input.deviceName).catch(
+            device = await findDeviceInRooms(
+              page,
+              input.deviceName,
+              input.roomName
+            ).catch(
               () => undefined
             );
           }
@@ -123,7 +129,8 @@ export class SmartThingsWebUiCommandExecutor {
 
 async function findDeviceInRooms(
   page: CommandPageLike,
-  deviceName: string
+  deviceName: string,
+  roomName: string | undefined
 ): Promise<CommandLocatorLike> {
   const url = new URL(page.url());
   const route = url.pathname.match(/^(\/location\/[^/]+)(?:\/.*)?$/u)?.[1];
@@ -140,6 +147,20 @@ async function findDeviceInRooms(
       const scrolled = await scrollForDevice(page, deviceName);
       if (!scrolled) throw new Error("command_target_not_found");
       device = scrolled;
+    }
+  }
+  if ((await device.count()) !== 1 && roomName) {
+    const heading = page.getByRole("heading", { name: exactName(roomName) });
+    if ((await heading.count()) === 1) {
+      const scoped = heading.locator("..").getByRole("button", {
+        name: new RegExp(escapeRegExp(deviceName), "u")
+      });
+      try {
+        await scoped.first().waitFor({ state: "visible", timeout: 5_000 });
+        device = scoped;
+      } catch {
+        // The caller retains the fail-closed ambiguity check.
+      }
     }
   }
   return device;

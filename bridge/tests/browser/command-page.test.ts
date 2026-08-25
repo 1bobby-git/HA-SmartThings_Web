@@ -24,6 +24,14 @@ class FakeLocator {
   filter(): FakeLocator {
     return this;
   }
+
+  getByRole(): FakeLocator {
+    return this;
+  }
+
+  locator(): FakeLocator {
+    return this;
+  }
 }
 
 class FakeCommandPage {
