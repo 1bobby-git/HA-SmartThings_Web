@@ -774,6 +774,7 @@ function controlLabelFor(attribute: string): string | undefined {
     detectionFrequency: "Detection frequency|감지 주기",
     volume: "Volume|볼륨",
     fanSpeed: "Fan speed|팬 속도",
+    percent: "Fan speed|팬 속도|Percent|퍼센트",
     level: "Level|레벨",
     airPurifierMode: "Air purifier mode|공기청정기 모드",
     fanMode: "Fan mode|팬 모드"

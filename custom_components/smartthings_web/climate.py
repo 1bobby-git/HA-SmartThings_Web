@@ -11,7 +11,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SmartThingsWebConfigEntry
-from .bridge_client import BridgeClientError
+from .bridge_client import BridgeClientError, bridge_error_message
 from .entity import SmartThingsWebDeviceEntity
 from .models import (
     BridgeControl,
@@ -150,7 +150,7 @@ class SmartThingsWebClimate(SmartThingsWebDeviceEntity, ClimateEntity):
                 arguments=arguments,
             )
         except BridgeClientError as err:
-            raise HomeAssistantError("SmartThings Web did not confirm climate state") from err
+            raise HomeAssistantError(bridge_error_message("climate command", err)) from err
 
 
 def _mode_options(device: BridgeDevice | None) -> list[str]:

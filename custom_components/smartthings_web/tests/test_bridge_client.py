@@ -19,6 +19,7 @@ from smartthings_web.bridge_client import (  # noqa: E402
     BridgeReadOnlyError,
     ReadOnlyBridgeClient,
     SmartThingsWebBridgeClient,
+    bridge_error_message,
     parse_inventory,
 )
 
@@ -58,6 +59,16 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
             with self.subTest(base_url=base_url):
                 with self.assertRaisesRegex(BridgeClientError, "invalid_bridge_url"):
                     SmartThingsWebBridgeClient(object(), base_url)  # type: ignore[arg-type]
+
+    def test_command_error_message_preserves_only_safe_actionable_codes(self) -> None:
+        self.assertEqual(
+            bridge_error_message("fan command", BridgeClientError("command_login_required")),
+            "SmartThings Web fan command failed: command_login_required",
+        )
+        self.assertEqual(
+            bridge_error_message("switch command", BridgeClientError("private raw detail")),
+            "SmartThings Web switch command failed: bridge_request_failed",
+        )
 
     async def test_read_only_client_blocks_write_commands(self) -> None:
         client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]

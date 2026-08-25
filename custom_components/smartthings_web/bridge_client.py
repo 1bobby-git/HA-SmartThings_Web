@@ -89,6 +89,17 @@ class BridgeReadOnlyError(BridgeClientError):
     """Write command blocked by the HA integration control mode."""
 
 
+def bridge_error_message(action: str, error: BridgeClientError) -> str:
+    """Return an actionable command error without exposing arbitrary details."""
+    raw_code = str(error)
+    code = (
+        raw_code
+        if raw_code in _SAFE_BRIDGE_ERROR_CODES or raw_code == "smartthings_web_read_only"
+        else "bridge_request_failed"
+    )
+    return f"SmartThings Web {action} failed: {code}"
+
+
 class SmartThingsWebBridgeClient:
     """Client for the local Bridge HTTP/SSE API."""
 

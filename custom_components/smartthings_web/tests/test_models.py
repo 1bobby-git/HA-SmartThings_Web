@@ -39,6 +39,7 @@ from models import (  # noqa: E402
     sensor_extra_attributes,
     sensor_native_value,
     sensor_state_allowed,
+    token_values,
 )
 
 
@@ -388,6 +389,38 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
 
         self.assertTrue(is_fan_device(device))
         self.assertTrue(number_state_allowed(device, fan_speed))
+
+    def test_air_purifier_percent_and_space_delimited_modes_are_actionable(self) -> None:
+        """Match the pushed shape used by the live Air Purifier devices."""
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        fan_mode = BridgeState(
+            "main",
+            "fanMode",
+            "fanMode",
+            "off",
+            None,
+            "2026-08-24T21:10:00Z",
+        )
+        percent = BridgeState(
+            "main",
+            "fanSpeedPercent",
+            "percent",
+            0,
+            "%",
+            "2026-08-24T21:10:00Z",
+        )
+        device.name = "Air Purifier"
+        device.states = {fan_mode.key: fan_mode, percent.key: percent}
+
+        self.assertTrue(is_fan_device(device))
+        self.assertTrue(number_state_allowed(device, percent))
+        self.assertEqual(numeric_range_for(device, percent), (0.0, 100.0, 1.0))
+        self.assertEqual(option_values("Quiet Mode"), ["Quiet Mode"])
+        self.assertEqual(
+            token_values("off low medium high auto"),
+            ["off", "low", "medium", "high", "auto"],
+        )
 
     def test_cover_helpers_require_cover_state_or_controls(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")

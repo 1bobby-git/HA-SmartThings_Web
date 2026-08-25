@@ -6,6 +6,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
+import re
 from typing import Any, Literal
 
 
@@ -341,6 +342,7 @@ NUMBER_ATTRIBUTES = {
     "fanSpeed",
     "heatingSetpoint",
     "level",
+    "percent",
     "setpoint",
     "targetTemperature",
     "volume",
@@ -435,6 +437,8 @@ def number_state_allowed(device: BridgeDevice, state: BridgeState) -> bool:
     if state.attribute in {"volume"} and is_media_device(device):
         return False
     if state.attribute == "fanSpeed" and not is_fan_device(device):
+        return False
+    if state.attribute == "percent" and not is_fan_device(device):
         return False
     return True
 
@@ -541,7 +545,7 @@ def numeric_range_for(device: BridgeDevice, state: BridgeState) -> tuple[float, 
         parsed = _parse_numeric_range(sibling.value)
         if parsed is not None:
             return parsed
-    if state.attribute in {"level", "fanSpeed"}:
+    if state.attribute in {"level", "fanSpeed", "percent"}:
         return (0.0, 100.0, 1.0)
     if state.attribute == "detectionFrequency":
         return (0.0, 3600.0, 1.0)
@@ -552,6 +556,8 @@ def numeric_range_for(device: BridgeDevice, state: BridgeState) -> tuple[float, 
 
 def option_values(value: Any) -> list[str]:
     """Extract option strings from normalized SmartThings option payloads."""
+    if isinstance(value, str):
+        return [value] if value else []
     if isinstance(value, list):
         result = []
         for item in value:
@@ -570,6 +576,13 @@ def option_values(value: Any) -> list[str]:
             if nested is not None:
                 return option_values(nested)
     return []
+
+
+def token_values(value: Any) -> list[str]:
+    """Extract whitespace/comma-delimited capability tokens or structured options."""
+    if isinstance(value, str):
+        return [item for item in re.split(r"[\s,]+", value.strip()) if item]
+    return option_values(value)
 
 
 def sensor_state_allowed(attribute: str) -> bool:

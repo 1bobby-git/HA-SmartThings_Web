@@ -215,7 +215,9 @@ describe("SafeCommandService", () => {
     const executor: SafeCommandExecutor = {
       executeDeviceAction: vi.fn(async (input) => {
         if (input.command === "setNumber") {
-          store.observe(received(deviceEventFrame(42, "2026-08-25T00:00:01Z", "detectionFrequency")));
+          const attribute = input.attribute === "percent" ? "percent" : "detectionFrequency";
+          const value = input.attribute === "percent" ? 55 : 42;
+          store.observe(received(deviceEventFrame(value, "2026-08-25T00:00:01Z", attribute)));
         }
         if (input.command === "setVolume") {
           store.observe(received(deviceEventFrame(12, "2026-08-25T00:00:02Z", "volume")));
@@ -239,6 +241,10 @@ describe("SafeCommandService", () => {
     await expect(service.execute(deviceCommand("setNumber", "request_008", {
       attribute: "detectionFrequency",
       arguments: [42]
+    }))).resolves.toMatchObject({ status: "confirmed" });
+    await expect(service.execute(deviceCommand("setNumber", "request_008b", {
+      attribute: "percent",
+      arguments: [55]
     }))).resolves.toMatchObject({ status: "confirmed" });
     await expect(service.execute(deviceCommand("setVolume", "request_009", {
       attribute: "volume",

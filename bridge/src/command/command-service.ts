@@ -629,6 +629,7 @@ const NUMBER_ATTRIBUTES = new Set([
   "fanSpeed",
   "heatingSetpoint",
   "level",
+  "percent",
   "setpoint",
   "targetTemperature"
 ]);

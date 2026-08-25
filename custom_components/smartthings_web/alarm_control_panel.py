@@ -11,7 +11,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SmartThingsWebConfigEntry
-from .bridge_client import BridgeClientError
+from .bridge_client import BridgeClientError, bridge_error_message
 from .const import DOMAIN
 from .models import (
     SmartThingsWebRuntime,
@@ -109,4 +109,4 @@ class SmartThingsWebHomeMonitor(AlarmControlPanelEntity):
                 arguments=[],
             )
         except BridgeClientError as err:
-            raise HomeAssistantError("SmartThings Web did not confirm Home Monitor state") from err
+            raise HomeAssistantError(bridge_error_message("Home Monitor command", err)) from err

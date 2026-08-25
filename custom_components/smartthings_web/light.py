@@ -8,7 +8,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SmartThingsWebConfigEntry
-from .bridge_client import BridgeClientError
+from .bridge_client import BridgeClientError, bridge_error_message
 from .entity import SmartThingsWebEntity
 from .models import BridgeDevice, BridgeState, SmartThingsWebRuntime, control_kind
 
@@ -72,6 +72,4 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
                 self.device_id, self.state_key[0], self.state_key[1], command
             )
         except BridgeClientError as err:
-            raise HomeAssistantError(
-                "SmartThings Web did not confirm the requested light state"
-            ) from err
+            raise HomeAssistantError(bridge_error_message("light command", err)) from err

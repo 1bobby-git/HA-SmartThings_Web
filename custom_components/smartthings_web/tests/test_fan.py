@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from enum import IntFlag
 from inspect import signature
 from pathlib import Path
 import sys
 from types import ModuleType
 import unittest
+from unittest.mock import AsyncMock
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -100,6 +102,109 @@ class SmartThingsWebFanTests(unittest.TestCase):
         parameters = list(signature(SmartThingsWebFan.async_turn_on).parameters)
 
         self.assertEqual(parameters[:3], ["self", "percentage", "preset_mode"])
+
+    def test_mode_only_air_purifier_uses_fan_mode_for_power_and_percent_for_speed(self) -> None:
+        """Control the live mode-only purifier shape without inventing a switch."""
+        states = [
+            BridgeState(
+                "main",
+                "fanMode",
+                "fanMode",
+                "off",
+                None,
+                "2026-08-25T00:00:00Z",
+            ),
+            BridgeState(
+                "main",
+                "fanMode",
+                "supportedAcFanModes",
+                "off low medium high auto",
+                None,
+                "2026-08-25T00:00:00Z",
+            ),
+            BridgeState(
+                "main",
+                "fanSpeedPercent",
+                "percent",
+                0,
+                "%",
+                "2026-08-25T00:00:00Z",
+            ),
+        ]
+        device = BridgeDevice(
+            "dev_001",
+            "loc_001",
+            None,
+            "Air purifier",
+            None,
+            True,
+            states={state.key: state for state in states},
+            controls={},
+        )
+        fan = SmartThingsWebFan(object(), device)
+
+        self.assertEqual(fan.percentage, 0)
+        self.assertEqual(fan.preset_modes, ["off", "low", "medium", "high", "auto"])
+        self.assertTrue(fan.supported_features & FanEntityFeature.SET_SPEED)
+        self.assertTrue(fan.supported_features & FanEntityFeature.PRESET_MODE)
+        self.assertTrue(fan.supported_features & FanEntityFeature.TURN_ON)
+        self.assertTrue(fan.supported_features & FanEntityFeature.TURN_OFF)
+
+        fan._async_command = AsyncMock()  # type: ignore[method-assign]
+        asyncio.run(fan.async_turn_on())
+        fan._async_command.assert_awaited_once_with(
+            "setFanMode", ["auto"], attribute="fanMode"
+        )
+
+        fan._async_command.reset_mock()
+        asyncio.run(fan.async_turn_off())
+        fan._async_command.assert_awaited_once_with(
+            "setFanMode", ["off"], attribute="fanMode"
+        )
+
+        fan._async_command.reset_mock()
+        asyncio.run(fan.async_turn_on(preset_mode="sleep"))
+        fan._async_command.assert_awaited_once_with(
+            "setFanMode", ["sleep"], attribute="fanMode"
+        )
+
+    def test_air_purifier_mode_only_power_targets_its_observed_attribute(self) -> None:
+        states = [
+            BridgeState(
+                "main",
+                "airPurifierMode",
+                "airPurifierMode",
+                "off",
+                None,
+                "2026-08-25T00:00:00Z",
+            ),
+            BridgeState(
+                "main",
+                "airPurifierMode",
+                "supportedAirPurifierModes",
+                ["off", "auto", "sleep"],
+                None,
+                "2026-08-25T00:00:00Z",
+            ),
+        ]
+        device = BridgeDevice(
+            "dev_002",
+            "loc_001",
+            None,
+            "Purifier",
+            None,
+            True,
+            states={state.key: state for state in states},
+            controls={},
+        )
+        fan = SmartThingsWebFan(object(), device)
+        fan._async_command = AsyncMock()  # type: ignore[method-assign]
+
+        asyncio.run(fan.async_turn_on())
+
+        fan._async_command.assert_awaited_once_with(
+            "setFanMode", ["auto"], attribute="airPurifierMode"
+        )
 
 
 if __name__ == "__main__":

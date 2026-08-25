@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.47
+
+- Map the live Air Purifier `percent` slider and space-delimited `supportedAcFanModes` state into Home Assistant fan speed, number, preset, and mode-backed on/off controls.
+- Parse the live speakers' space-delimited playback and track command lists so play, pause, stop, next, and previous controls remain available after a cached-inventory restore.
+- Expose `playTrackAndResume` only when its exact detail control is observed, retaining exact UI targeting plus authoritative push confirmation.
+- Include only sanitized Bridge error codes in every Home Assistant control failure so login, target, selector, and confirmation failures are distinguishable.
+
 ## 0.1.46
 
 - Wait for the persistent Chromium context to close before the add-on process exits so session state can be flushed during a normal rebuild or restart.

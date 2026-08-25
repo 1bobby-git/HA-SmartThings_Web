@@ -8,7 +8,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SmartThingsWebConfigEntry
-from .bridge_client import BridgeClientError
+from .bridge_client import BridgeClientError, bridge_error_message
 from .models import BridgeScene, SmartThingsWebRuntime, scene_unique_id
 
 
@@ -68,4 +68,4 @@ class SmartThingsWebScene(Scene):
                 arguments=[],
             )
         except BridgeClientError as err:
-            raise HomeAssistantError("SmartThings Web did not confirm scene execution") from err
+            raise HomeAssistantError(bridge_error_message("scene command", err)) from err

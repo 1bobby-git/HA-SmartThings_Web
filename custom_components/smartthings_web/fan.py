@@ -8,9 +8,9 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SmartThingsWebConfigEntry
-from .bridge_client import BridgeClientError
+from .bridge_client import BridgeClientError, bridge_error_message
 from .entity import SmartThingsWebDeviceEntity
-from .models import BridgeControl, BridgeDevice, SmartThingsWebRuntime, is_fan_device, option_values
+from .models import BridgeControl, BridgeDevice, SmartThingsWebRuntime, is_fan_device, token_values
 
 
 async def async_setup_entry(
@@ -50,7 +50,7 @@ class SmartThingsWebFan(SmartThingsWebDeviceEntity, FanEntity):
         device = self.bridge_device
         if device is None:
             return None
-        for attribute in ("fanSpeed", "level"):
+        for attribute in ("fanSpeed", "percent", "level"):
             state = _state(device, attribute)
             if isinstance(state, (int, float)) and not isinstance(state, bool):
                 return max(0, min(100, int(state)))
@@ -61,13 +61,11 @@ class SmartThingsWebFan(SmartThingsWebDeviceEntity, FanEntity):
         """Expose only fan controls backed by pushed state or detail metadata."""
         features = FanEntityFeature(0)
         device = self.bridge_device
-        if device is not None and (
-            _state_obj(device, "switch") is not None
-            or any(
-                control.kind == "toggle" and control.attribute == "switch"
-                for control in device.controls.values()
-            )
-        ):
+        modes = self.preset_modes or []
+        mode_power = any(mode.lower() == "off" for mode in modes) and any(
+            mode.lower() != "off" for mode in modes
+        )
+        if device is not None and (_has_switch_power(device) or mode_power):
             features |= FanEntityFeature.TURN_ON | FanEntityFeature.TURN_OFF
         if self.percentage is not None:
             features |= FanEntityFeature.SET_SPEED
@@ -90,8 +88,12 @@ class SmartThingsWebFan(SmartThingsWebDeviceEntity, FanEntity):
         device = self.bridge_device
         if device is None:
             return None
-        for attribute in ("supportedAirPurifierModes", "supportedFanModes"):
-            modes = option_values(_state(device, attribute))
+        for attribute in (
+            "supportedAirPurifierModes",
+            "supportedAcFanModes",
+            "supportedFanModes",
+        ):
+            modes = token_values(_state(device, attribute))
             if modes:
                 return modes
         device = self.bridge_device
@@ -117,12 +119,19 @@ class SmartThingsWebFan(SmartThingsWebDeviceEntity, FanEntity):
 
     async def async_set_percentage(self, percentage: int) -> None:
         """Set fan speed without optimistic state mutation."""
-        attribute = "fanSpeed" if _state(self.bridge_device, "fanSpeed") is not None else "level"
+        attribute = next(
+            (
+                candidate
+                for candidate in ("fanSpeed", "percent", "level")
+                if _state(self.bridge_device, candidate) is not None
+            ),
+            "fanSpeed",
+        )
         await self._async_command("setNumber", [percentage], attribute=attribute)
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Set purifier/fan mode without optimistic state mutation."""
-        attribute = "airPurifierMode" if _state(self.bridge_device, "airPurifierMode") is not None else "fanMode"
+        attribute = _mode_attribute(self.bridge_device)
         await self._async_command("setFanMode", [preset_mode], attribute=attribute)
 
     async def async_turn_on(
@@ -132,15 +141,31 @@ class SmartThingsWebFan(SmartThingsWebDeviceEntity, FanEntity):
         **kwargs: object,
     ) -> None:
         """Turn on the fan-like device."""
-        await self._async_command("on", [])
+        switch_power = _has_switch_power(self.bridge_device)
+        if switch_power:
+            await self._async_command("on", [])
+        else:
+            mode = preset_mode or _turn_on_mode(self.preset_mode, self.preset_modes)
+            if mode is None:
+                raise HomeAssistantError("SmartThings Web fan has no observed on control")
+            await self._async_command(
+                "setFanMode", [mode], attribute=_mode_attribute(self.bridge_device)
+            )
         if percentage is not None:
             await self.async_set_percentage(percentage)
-        if preset_mode is not None:
+        if preset_mode is not None and switch_power:
             await self.async_set_preset_mode(preset_mode)
 
     async def async_turn_off(self, **kwargs: object) -> None:
         """Turn off the fan-like device."""
-        await self._async_command("off", [])
+        if _has_switch_power(self.bridge_device):
+            await self._async_command("off", [])
+        elif any(mode.lower() == "off" for mode in self.preset_modes or []):
+            await self._async_command(
+                "setFanMode", ["off"], attribute=_mode_attribute(self.bridge_device)
+            )
+        else:
+            raise HomeAssistantError("SmartThings Web fan has no observed off control")
 
     async def _async_command(
         self, command: str, arguments: list[object], attribute: str | None = None
@@ -161,7 +186,7 @@ class SmartThingsWebFan(SmartThingsWebDeviceEntity, FanEntity):
                 arguments=arguments,
             )
         except BridgeClientError as err:
-            raise HomeAssistantError("SmartThings Web did not confirm fan state") from err
+            raise HomeAssistantError(bridge_error_message("fan command", err)) from err
 
 
 def _state(device: BridgeDevice | None, attribute: str) -> object | None:
@@ -197,3 +222,23 @@ def _control_for(device: BridgeDevice | None, command: str) -> BridgeControl | N
 
 def _attribute_for_command(command: str) -> str:
     return "switch" if command in {"on", "off"} else command
+
+
+def _has_switch_power(device: BridgeDevice | None) -> bool:
+    if device is None:
+        return False
+    return _state_obj(device, "switch") is not None or any(
+        control.kind == "toggle" and control.attribute == "switch"
+        for control in device.controls.values()
+    )
+
+
+def _turn_on_mode(current: str | None, supported: list[str] | None) -> str | None:
+    if current and current.lower() != "off":
+        return current
+    modes = [mode for mode in supported or [] if mode.lower() != "off"]
+    return next((mode for mode in modes if mode.lower() == "auto"), modes[0] if modes else None)
+
+
+def _mode_attribute(device: BridgeDevice | None) -> str:
+    return "airPurifierMode" if _state(device, "airPurifierMode") is not None else "fanMode"

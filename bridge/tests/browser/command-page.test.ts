@@ -1022,6 +1022,47 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(rangeInput.fill).toHaveBeenCalledWith("45", { timeout: 15_000 });
   });
 
+  test("maps an Air Purifier percent state to the localized fan-speed slider", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const missingNamedSlider = new FakeLocator(0, true);
+    const label = new FakeLocator(1);
+    const swatch = new FakeLocator(1);
+    const rangeInput = new FakeLocator(1);
+    label.locator = vi.fn(() => swatch);
+    swatch.getByRole = vi.fn((role: string) =>
+      role === "slider" ? rangeInput : new FakeLocator(0, true)
+    );
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Air purifier")) {
+        return card;
+      }
+      if (role === "button") return card;
+      if (role === "slider") return missingNamedSlider;
+      return new FakeLocator(0, true);
+    });
+    page.getByText = vi.fn((text?: string) =>
+      text === "팬 속도" ? label : new FakeLocator(0, true)
+    );
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "Air purifier",
+      locationId: "loc_001",
+      command: "setNumber",
+      action: "setNumber",
+      component: "main",
+      capability: "fanSpeedPercent",
+      attribute: "percent",
+      arguments: [55]
+    });
+
+    expect(label.locator).toHaveBeenCalledWith("..");
+    expect(rangeInput.fill).toHaveBeenCalledWith("55", { timeout: 15_000 });
+  });
+
   test("clicks a generic toggle scoped by its visible swatch label", async () => {
     const page = new FakeCommandPage();
     const card = new FakeLocator(1);

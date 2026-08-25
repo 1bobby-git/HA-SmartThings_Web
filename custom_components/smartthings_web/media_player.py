@@ -9,7 +9,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SmartThingsWebConfigEntry
-from .bridge_client import BridgeClientError
+from .bridge_client import BridgeClientError, bridge_error_message
 from .entity import SmartThingsWebDeviceEntity
 from .models import (
     BridgeControl,
@@ -17,6 +17,7 @@ from .models import (
     SmartThingsWebRuntime,
     control_supports_command,
     is_media_device,
+    token_values,
 )
 
 
@@ -167,7 +168,7 @@ class SmartThingsWebMediaPlayer(SmartThingsWebDeviceEntity, MediaPlayerEntity):
                 arguments=arguments,
             )
         except BridgeClientError as err:
-            raise HomeAssistantError("SmartThings Web did not confirm media state") from err
+            raise HomeAssistantError(bridge_error_message("media command", err)) from err
 
 
 def _raw_state(device: BridgeDevice | None, attribute: str) -> object | None:
@@ -192,7 +193,7 @@ def _numeric_state(device: BridgeDevice | None, attribute: str) -> float | None:
 
 
 def _string_options(value: object | None) -> set[str]:
-    return {item for item in value if isinstance(item, str)} if isinstance(value, list) else set()
+    return set(token_values(value))
 
 
 def _state_for_command(device: BridgeDevice | None, command: str):

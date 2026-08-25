@@ -10,7 +10,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SmartThingsWebConfigEntry
-from .bridge_client import BridgeClientError
+from .bridge_client import BridgeClientError, bridge_error_message
 from .entity import SmartThingsWebDeviceEntity
 from .models import (
     BridgeControl,
@@ -126,9 +126,7 @@ class SmartThingsWebNumber(SmartThingsWebDeviceEntity, NumberEntity):
                 arguments=[value],
             )
         except BridgeClientError as err:
-            raise HomeAssistantError(
-                "SmartThings Web did not confirm the requested number state"
-            ) from err
+            raise HomeAssistantError(bridge_error_message("number command", err)) from err
 
     @property
     def _current_state(self) -> BridgeState | None:
