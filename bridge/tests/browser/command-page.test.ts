@@ -20,6 +20,10 @@ class FakeLocator {
   first(): FakeLocator {
     return this;
   }
+
+  filter(): FakeLocator {
+    return this;
+  }
 }
 
 class FakeCommandPage {
@@ -47,6 +51,10 @@ class FakeCommandPage {
     }
     expect(role).toBe("switch");
     return this.toggle;
+  }
+
+  getByText(): FakeLocator {
+    return new FakeLocator(0);
   }
 }
 
@@ -107,6 +115,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       if (role === "button" && options?.name instanceof RegExp) {
         return searched ? visibleCard : hiddenCard;
       }
+      if (role === "button") return hiddenCard;
       return page.toggle;
     });
     const executor = new SmartThingsWebUiCommandExecutor(() => ({
@@ -136,5 +145,29 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       "command_search_not_found"
     );
     expect(page.toggle.click).not.toHaveBeenCalled();
+  });
+
+  test("finds a device card by exact visible name within an accessible button", async () => {
+    const page = new FakeCommandPage();
+    const hiddenNamedCard = new FakeLocator(1, true);
+    const visibleCard = new FakeLocator(1);
+    const deviceText = new FakeLocator(1);
+    visibleCard.filter = vi.fn(() => visibleCard);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name) return hiddenNamedCard;
+      if (role === "button") return visibleCard;
+      return page.toggle;
+    });
+    page.getByText = vi.fn(() => deviceText);
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeSwitch({ deviceName: "Safe plug" });
+
+    expect(page.getByText).toHaveBeenCalledWith("Safe plug", { exact: true });
+    expect(visibleCard.filter).toHaveBeenCalledWith({ has: deviceText });
+    expect(visibleCard.click).toHaveBeenCalledTimes(1);
+    expect(page.toggle.click).toHaveBeenCalledTimes(1);
   });
 });
