@@ -78,7 +78,7 @@ export class CameraImageStore {
       this.#pendingThumbnails.delete(key);
       if (!alias) return;
       const body = decoded.args[0] === null ? decoded.args[1] : decoded.args[0];
-      const url = readString(asRecord(body)?.url);
+      const url = findImageUrl(body);
       if (url) this.#download(alias, url);
       return;
     }
@@ -216,4 +216,23 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function findImageUrl(value: unknown, depth = 0): string | undefined {
+  if (depth > 5 || value === null || typeof value !== "object") return undefined;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const nested = findImageUrl(item, depth + 1);
+      if (nested) return nested;
+    }
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const direct = readString(record.url);
+  if (direct) return direct;
+  for (const nestedValue of Object.values(record)) {
+    const nested = findImageUrl(nestedValue, depth + 1);
+    if (nested) return nested;
+  }
+  return undefined;
 }

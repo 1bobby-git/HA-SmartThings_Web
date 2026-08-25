@@ -39,6 +39,31 @@ describe("CameraImageStore", () => {
     });
   });
 
+  test("accepts a signed thumbnail URL nested in the acknowledged data envelope", async () => {
+    const fetchImage = vi.fn(async () =>
+      new Response(Uint8Array.from([8, 9]), {
+        status: 200,
+        headers: { "content-type": "image/webp", "content-length": "2" }
+      })
+    );
+    const store = createStore(fetchImage);
+
+    store.observeRawWebSocketFrame(
+      "sent",
+      '421["get","api/camera/thumbnail","raw-camera-uuid",{}]',
+      "cdp-session:socket-1"
+    );
+    store.observeRawWebSocketFrame(
+      "received",
+      '431[null,{"status":200,"data":{"url":"https://media.st-av.net/camera/image.webp?token=secret"}}]',
+      "cdp-session:socket-1"
+    );
+    await store.whenIdle();
+
+    expect(fetchImage).toHaveBeenCalledOnce();
+    expect(store.get("dev_001")?.body).toEqual(Buffer.from([8, 9]));
+  });
+
   test("keeps pending thumbnail ACKs isolated by websocket connection", async () => {
     const fetchImage = vi.fn(async (input: RequestInfo | URL) => {
       const url = input.toString();

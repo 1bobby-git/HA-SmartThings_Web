@@ -139,7 +139,7 @@ describe("installCdpNetworkObserver", () => {
     expect(JSON.stringify(frameRecord.payload)).not.toMatch(/raw-location|secret-tail/);
   });
 
-  test("tags CDP websocket frames with the Chrome request id as connection id", async () => {
+  test("tags CDP websocket frames with a session-scoped Chrome request id", async () => {
     const session = new FakeSession();
     const write = vi.fn();
 
@@ -157,10 +157,43 @@ describe("installCdpNetworkObserver", () => {
       .map(([record]) => record)
       .filter((record) => record.source === "cdp-websocket-frame")
       .map((record) => record.payload);
-    expect(frames).toEqual([
-      expect.objectContaining({ direction: "sent", connectionId: "socket-1" }),
-      expect.objectContaining({ direction: "received", connectionId: "socket-2" })
-    ]);
+    expect(frames).toHaveLength(2);
+    expect(frames[0]).toEqual(
+      expect.objectContaining({ direction: "sent", connectionId: expect.stringMatching(/:socket-1$/u) })
+    );
+    expect(frames[1]).toEqual(
+      expect.objectContaining({ direction: "received", connectionId: expect.stringMatching(/:socket-2$/u) })
+    );
+    expect(String(frames[0]?.connectionId).split(":", 1)[0]).toBe(
+      String(frames[1]?.connectionId).split(":", 1)[0]
+    );
+  });
+
+  test("keeps reused Chrome request ids isolated across CDP sessions", async () => {
+    const first = new FakeSession();
+    const second = new FakeSession();
+    const firstObserver = vi.fn();
+    const secondObserver = vi.fn();
+
+    await installCdpNetworkObserver(first, { write: vi.fn() }, (value) => value, {
+      onRawWebSocketFrame: firstObserver
+    });
+    await installCdpNetworkObserver(second, { write: vi.fn() }, (value) => value, {
+      onRawWebSocketFrame: secondObserver
+    });
+    const payload = {
+      requestId: "socket-1",
+      response: { payloadData: '421["get","api/camera/thumbnail","raw-camera-uuid",{}]', opcode: 1 }
+    };
+
+    await first.emit("Network.webSocketFrameSent", payload);
+    await second.emit("Network.webSocketFrameSent", payload);
+
+    const firstConnection = firstObserver.mock.calls[0]?.[2];
+    const secondConnection = secondObserver.mock.calls[0]?.[2];
+    expect(firstConnection).toMatch(/:socket-1$/u);
+    expect(secondConnection).toMatch(/:socket-1$/u);
+    expect(firstConnection).not.toBe(secondConnection);
   });
 
   test("offers raw CDP text websocket frames only to the explicit in-memory observer before sanitization", async () => {
@@ -188,7 +221,7 @@ describe("installCdpNetworkObserver", () => {
     expect(onRawWebSocketFrame).toHaveBeenCalledWith(
       "sent",
       '421["get","api/camera/thumbnail","raw-camera-uuid",{"token":"secret"}]',
-      "socket-1"
+      expect.stringMatching(/:socket-1$/u)
     );
     expect(JSON.stringify(write.mock.calls)).not.toMatch(/raw-camera-uuid|secret/);
   });

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.34
+
+- Scope CDP WebSocket identities to their browser session so repeated Chrome request IDs cannot cross-wire delayed acknowledgements.
+- Accept camera thumbnail URLs nested inside the acknowledged SmartThings Web response envelope while keeping host, content type, redirect, and size validation fail-closed.
+
 ## 0.1.33
 
 - Wait for asynchronously rendered named controls and give camera detail pages a longer bounded settle window so thumbnail ACKs can complete.

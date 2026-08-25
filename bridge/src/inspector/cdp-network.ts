@@ -26,6 +26,8 @@ interface TrackedResponse {
   type: string;
 }
 
+let nextCdpSessionId = 1;
+
 export async function installCdpNetworkObserver(
   session: CdpSessionLike,
   sink: CaptureSink,
@@ -34,21 +36,22 @@ export async function installCdpNetworkObserver(
 ): Promise<void> {
   const limit = options.responseBodyLimitBytes ?? DEFAULT_CAPTURE_TEXT_LIMIT_BYTES;
   const tracked = new Map<string, TrackedResponse>();
+  const sessionScope = `cdp_session_${nextCdpSessionId++}`;
   await session.send("Network.enable");
 
   session.on("Network.webSocketFrameSent", (payload) => {
-    observeRawTextFrame(options.onRawWebSocketFrame, "sent", payload);
+    observeRawTextFrame(options.onRawWebSocketFrame, "sent", payload, sessionScope);
     write(sink, redact, "cdp-websocket-frame", {
       direction: "sent",
-      ...connectionMetadata(payload),
+      ...connectionMetadata(payload, sessionScope),
       payload: normalizeFrame(payload, limit, redact)
     });
   });
   session.on("Network.webSocketFrameReceived", (payload) => {
-    observeRawTextFrame(options.onRawWebSocketFrame, "received", payload);
+    observeRawTextFrame(options.onRawWebSocketFrame, "received", payload, sessionScope);
     write(sink, redact, "cdp-websocket-frame", {
       direction: "received",
-      ...connectionMetadata(payload),
+      ...connectionMetadata(payload, sessionScope),
       payload: normalizeFrame(payload, limit, redact)
     });
   });
@@ -95,15 +98,16 @@ function write(sink: CaptureSink, redact: Redact, source: CaptureSource, payload
   sink.write(sanitizeCaptureRecord(source, payload, redact));
 }
 
-function connectionMetadata(payload: unknown): { connectionId?: string } {
+function connectionMetadata(payload: unknown, sessionScope: string): { connectionId?: string } {
   const requestId = readString(payload, "requestId");
-  return requestId ? { connectionId: requestId } : {};
+  return requestId ? { connectionId: `${sessionScope}:${requestId}` } : {};
 }
 
 function observeRawTextFrame(
   observer: CdpNetworkOptions["onRawWebSocketFrame"],
   direction: "sent" | "received",
-  payload: unknown
+  payload: unknown,
+  sessionScope: string
 ): void {
   if (!observer) return;
   const requestId = readString(payload, "requestId");
@@ -112,7 +116,7 @@ function observeRawTextFrame(
   const opcode = response ? readNumber(response, "opcode") : undefined;
   if (!requestId || opcode !== 1 || typeof payloadData !== "string") return;
   try {
-    observer(direction, payloadData, requestId);
+    observer(direction, payloadData, `${sessionScope}:${requestId}`);
   } catch {
     // Image extraction must never interrupt the sanitized capture pipeline.
   }
