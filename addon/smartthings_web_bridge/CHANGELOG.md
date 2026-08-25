@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.53
+
+- Retain verified device-detail routes in bounded process memory so controls do not repeat the full location/card search after a warm page expires.
+- Revalidate the exact visible device identity before every direct-route reuse and discard stale or redirected routes.
+- Keep route data ephemeral; nothing new is persisted to disk.
+
 ## 0.1.52
 
 - Prefer the single accessibility `switch` when one observed Cake toggle also exposes its underlying `checkbox`.

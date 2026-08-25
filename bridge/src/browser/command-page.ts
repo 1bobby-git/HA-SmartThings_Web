@@ -40,6 +40,9 @@ interface WarmDevicePage {
 }
 
 const WARM_DETAIL_IDENTITY_TIMEOUT_MS = 500;
+const VERIFIED_ROUTE_IDENTITY_TIMEOUT_MS = 5_000;
+const VERIFIED_ROUTE_TTL_MS = 24 * 60 * 60_000;
+const MAX_VERIFIED_DETAIL_ROUTES = 256;
 const WARM_CONTROL_PROBE_TIMEOUT_MS = 1_500;
 const FRESH_CONTROL_PROBE_TIMEOUT_MS = 5_000;
 const LABELED_SCOPE_POLL_MS = 100;
@@ -50,6 +53,7 @@ const LOCATION_ROUTE_POLL_ATTEMPTS = 30;
 export class SmartThingsWebUiCommandExecutor {
   #uiQueue: Promise<void> = Promise.resolve();
   #warmDevicePage: WarmDevicePage | undefined;
+  readonly #verifiedDetailRoutes = new Map<string, { detailUrl: string; verifiedAt: number }>();
   readonly #warmPageTtlMs: number;
 
   constructor(
@@ -187,6 +191,23 @@ export class SmartThingsWebUiCommandExecutor {
         }
       }
     }
+    const routedPage = await this.#openVerifiedDetailPage(manager, input);
+    if (routedPage) {
+      let keepWarm = false;
+      try {
+        await executeDeviceControl(routedPage, input, FRESH_CONTROL_PROBE_TIMEOUT_MS);
+        this.#rememberSuccessfulDevicePage(routedPage, manager, input);
+        keepWarm = this.#warmPageTtlMs > 0;
+        return;
+      } catch (error) {
+        this.#verifiedDetailRoutes.delete(deviceRouteKey(input));
+        if (!(error instanceof Error) || error.message !== "command_control_not_found") {
+          throw error;
+        }
+      } finally {
+        if (!keepWarm) await routedPage.close().catch(() => undefined);
+      }
+    }
     const page = (await manager.openCommandPage()) as CommandPageLike;
     let keepWarm = false;
     try {
@@ -198,18 +219,8 @@ export class SmartThingsWebUiCommandExecutor {
         preferRooms: Boolean(input.roomName)
       });
       await executeDeviceControl(page, input, FRESH_CONTROL_PROBE_TIMEOUT_MS);
-      if (this.#warmPageTtlMs > 0) {
-        this.#warmDevicePage = {
-          page,
-          manager,
-          locationId: input.locationId,
-          ...(input.roomName ? { roomName: input.roomName } : {}),
-          deviceName: input.deviceName,
-          detailUrl: page.url(),
-          lastUsedAt: Date.now()
-        };
-        keepWarm = true;
-      }
+      this.#rememberSuccessfulDevicePage(page, manager, input);
+      keepWarm = this.#warmPageTtlMs > 0;
     } finally {
       if (!keepWarm) await page.close().catch(() => undefined);
     }
@@ -399,6 +410,68 @@ export class SmartThingsWebUiCommandExecutor {
     return undefined;
   }
 
+  async #openVerifiedDetailPage(
+    manager: CommandPageManagerLike,
+    input: { deviceName: string; locationId: string; roomName?: string }
+  ): Promise<CommandPageLike | undefined> {
+    const key = deviceRouteKey(input);
+    const cached = this.#verifiedDetailRoutes.get(key);
+    if (!cached) return undefined;
+    if (Date.now() - cached.verifiedAt >= VERIFIED_ROUTE_TTL_MS) {
+      this.#verifiedDetailRoutes.delete(key);
+      return undefined;
+    }
+    const page = (await manager.openCommandPage()) as CommandPageLike;
+    try {
+      await page.goto(cached.detailUrl, { waitUntil: "domcontentloaded" });
+      if (
+        page.url() !== cached.detailUrl ||
+        !isSmartThingsDeviceDetail(page.url()) ||
+        !(await hasExactVisibleDeviceIdentity(
+          page,
+          input.deviceName,
+          VERIFIED_ROUTE_IDENTITY_TIMEOUT_MS
+        ))
+      ) {
+        throw new Error("verified_detail_route_invalid");
+      }
+      cached.verifiedAt = Date.now();
+      return page;
+    } catch {
+      this.#verifiedDetailRoutes.delete(key);
+      await page.close().catch(() => undefined);
+      return undefined;
+    }
+  }
+
+  #rememberSuccessfulDevicePage(
+    page: CommandPageLike,
+    manager: CommandPageManagerLike,
+    input: { deviceName: string; locationId: string; roomName?: string }
+  ): void {
+    const detailUrl = page.url();
+    if (isSmartThingsDeviceDetail(detailUrl)) {
+      const key = deviceRouteKey(input);
+      this.#verifiedDetailRoutes.delete(key);
+      this.#verifiedDetailRoutes.set(key, { detailUrl, verifiedAt: Date.now() });
+      if (this.#verifiedDetailRoutes.size > MAX_VERIFIED_DETAIL_ROUTES) {
+        const oldest = this.#verifiedDetailRoutes.keys().next().value;
+        if (oldest) this.#verifiedDetailRoutes.delete(oldest);
+      }
+    }
+    if (this.#warmPageTtlMs > 0) {
+      this.#warmDevicePage = {
+        page,
+        manager,
+        locationId: input.locationId,
+        ...(input.roomName ? { roomName: input.roomName } : {}),
+        deviceName: input.deviceName,
+        detailUrl,
+        lastUsedAt: Date.now()
+      };
+    }
+  }
+
   async #invalidateWarmPage(): Promise<void> {
     const cached = this.#warmDevicePage;
     this.#warmDevicePage = undefined;
@@ -408,9 +481,18 @@ export class SmartThingsWebUiCommandExecutor {
   }
 }
 
+function deviceRouteKey(input: {
+  deviceName: string;
+  locationId: string;
+  roomName?: string;
+}): string {
+  return JSON.stringify([input.locationId, input.roomName ?? "", input.deviceName]);
+}
+
 async function hasExactVisibleDeviceIdentity(
   page: CommandPageLike,
-  deviceName: string
+  deviceName: string,
+  timeoutMs = WARM_DETAIL_IDENTITY_TIMEOUT_MS
 ): Promise<boolean> {
   const heading = page.getByRole("heading", { name: exactName(deviceName) });
   const headingCount = await heading.count();
@@ -419,7 +501,7 @@ async function hasExactVisibleDeviceIdentity(
     try {
       await heading.first().waitFor({
         state: "visible",
-        timeout: WARM_DETAIL_IDENTITY_TIMEOUT_MS
+        timeout: timeoutMs
       });
       return true;
     } catch {
@@ -432,7 +514,7 @@ async function hasExactVisibleDeviceIdentity(
   try {
     await label.first().waitFor({
       state: "visible",
-      timeout: WARM_DETAIL_IDENTITY_TIMEOUT_MS
+      timeout: timeoutMs
     });
     return true;
   } catch {

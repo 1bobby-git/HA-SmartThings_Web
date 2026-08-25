@@ -211,6 +211,57 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     }
   });
 
+  test("reopens a previously verified detail route after the warm page expires", async () => {
+    let now = 100;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const firstPage = new FakeCommandPage();
+    const routedPage = new FakeCommandPage();
+    const detailUrl = "https://my.smartthings.com/location/loc_001/device/device_raw_001";
+    firstPage.card.click.mockImplementation(async () => {
+      firstPage.currentUrl = detailUrl;
+    });
+    routedPage.goto = vi.fn(async (url: string) => {
+      routedPage.currentUrl = url;
+    });
+    const pages = [firstPage, routedPage];
+    const manager = { openCommandPage: vi.fn(async () => pages.shift()!) };
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => manager,
+      undefined,
+      { warmPageTtlMs: 1_000 }
+    );
+    try {
+      await executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" });
+
+      now = 1_101;
+      await executor.executeDeviceAction({
+        deviceName: "Safe plug",
+        locationId: "loc_001",
+        command: "off",
+        action: "off",
+        component: "main",
+        capability: "switch",
+        attribute: "switch",
+        arguments: []
+      });
+
+      expect(firstPage.close).toHaveBeenCalledTimes(1);
+      expect(manager.openCommandPage).toHaveBeenCalledTimes(2);
+      expect(routedPage.goto).toHaveBeenCalledWith(detailUrl, {
+        waitUntil: "domcontentloaded"
+      });
+      expect(routedPage.detailHeading.waitFor).toHaveBeenCalledWith({
+        state: "visible",
+        timeout: 5_000
+      });
+      expect(routedPage.card.click).not.toHaveBeenCalled();
+      expect(routedPage.toggle.click).toHaveBeenCalledTimes(1);
+      expect(routedPage.close).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   test("uses the only visible switch when the power control has no accessible Power name", async () => {
     const page = new FakeCommandPage();
     const missingNamedSwitch = new FakeLocator(0, true);
