@@ -16,6 +16,7 @@ export interface BrowserContextLike {
 
 export class KeeperPageManager {
   #keeper: BrowserPageLike | undefined;
+  #restoredPagesReconciled = false;
   readonly #commandPages = new WeakSet<BrowserPageLike>();
 
   constructor(private readonly context: BrowserContextLike) {}
@@ -24,7 +25,28 @@ export class KeeperPageManager {
     return this.#keeper && !this.#keeper.isClosed() ? this.#keeper : undefined;
   }
 
+  async reconcileRestoredPages(): Promise<BrowserPageLike | undefined> {
+    if (this.#restoredPagesReconciled) return this.currentKeeper();
+    const pages = this.context.pages().filter((page) => !page.isClosed());
+    const keeper =
+      this.currentKeeper() ??
+      pages.find((page) => isConcreteLocationUrl(page.url())) ??
+      pages.find((page) => isCleanGenericLocationUrl(page.url())) ??
+      pages.find((page) => isKeeperCandidateUrl(page.url())) ??
+      pages.find((page) => isSamsungLoginUrl(page.url())) ??
+      pages.find((page) => page.url() === "about:blank");
+    this.#keeper = keeper;
+    for (const page of pages) {
+      if (page === keeper) continue;
+      await page.close().catch(() => undefined);
+      if (!page.isClosed()) throw new Error("restored_page_close_failed");
+    }
+    this.#restoredPagesReconciled = true;
+    return keeper;
+  }
+
   async ensureKeeper(): Promise<BrowserPageLike> {
+    await this.reconcileRestoredPages();
     const candidates = this.context
       .pages()
       .filter(
@@ -56,7 +78,8 @@ export class KeeperPageManager {
 
   async recoverKeeper(): Promise<BrowserPageLike> {
     const keeper = await this.ensureKeeper();
-    await keeper.goto(KEEPER_URL, { waitUntil: "domcontentloaded" });
+    const target = isConcreteLocationUrl(keeper.url()) ? keeper.url() : KEEPER_URL;
+    await keeper.goto(target, { waitUntil: "domcontentloaded" });
     return keeper;
   }
 
@@ -108,6 +131,34 @@ function isKeeperSettledUrl(value: string): boolean {
     return (
       url.origin === "https://my.smartthings.com" &&
       isLocationPath(url.pathname) &&
+      url.search === "" &&
+      url.hash === ""
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isConcreteLocationUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.origin === "https://my.smartthings.com" &&
+      /^\/location\/[^/]+\/?$/u.test(url.pathname) &&
+      url.search === "" &&
+      url.hash === ""
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isCleanGenericLocationUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.origin === "https://my.smartthings.com" &&
+      /^\/location\/?$/u.test(url.pathname) &&
       url.search === "" &&
       url.hash === ""
     );

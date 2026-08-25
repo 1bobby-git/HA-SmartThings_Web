@@ -61,7 +61,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.47";
+const bridgeVersion = "0.1.48";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -414,6 +414,8 @@ async function attachContext(
   const restoredSettledKeeperPresent = context
     .pages()
     .some((page) => !page.isClosed() && isSettledSmartThingsLocation(page.url()));
+
+  await keeperManager.reconcileRestoredPages();
 
   installBrowserObserver(context, sink, redact, {
     onRawWebSocketFrame: (direction, payload, connectionId) =>

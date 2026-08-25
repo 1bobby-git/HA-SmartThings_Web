@@ -198,7 +198,7 @@ describe("createBridgeRuntime", () => {
   test("wires the authenticated command API through an isolated UI page and push confirmation", async () => {
     const root = createTempRoot();
     const context = new FakeContext([
-      new FakePage("https://my.smartthings.com/location/loc-synthetic-001")
+      new FakePage("https://my.smartthings.com/location/raw-location-001")
     ]);
     const runtime = await createBridgeRuntime(
       createDeps(root, { chromium: { launchPersistentContext: vi.fn(async () => context) } })
@@ -507,9 +507,12 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
 
     expect(keeper.goto).toHaveBeenCalledTimes(1);
-    expect(keeper.goto).toHaveBeenCalledWith("https://my.smartthings.com/location", {
+    expect(keeper.goto).toHaveBeenCalledWith(
+      "https://my.smartthings.com/location/loc-synthetic-001",
+      {
       waitUntil: "domcontentloaded"
-    });
+      }
+    );
   });
 
   test("updates safe protocol counters when duplicate sanitized DEVICE_EVENT frames arrive", async () => {
@@ -677,8 +680,7 @@ describe("createBridgeRuntime", () => {
 
     const isolatedRoot = createTempRoot();
     const isolatedContext = new FakeContext([
-      new FakePage("https://my.smartthings.com/location/loc-synthetic-001"),
-      new FakePage("https://my.smartthings.com/advanced")
+      new FakePage("https://my.smartthings.com/location/loc-synthetic-001")
     ]);
     const isolatedRuntime = await createBridgeRuntime(
       createDeps(isolatedRoot, {
@@ -687,6 +689,8 @@ describe("createBridgeRuntime", () => {
     );
     runtimes.push(isolatedRuntime);
     await isolatedRuntime.browserStartup;
+    const activeExtraPage = await isolatedContext.newPage();
+    await activeExtraPage.goto("https://my.smartthings.com/advanced");
     const isolatedSocket = await attachRuntimeSocket(isolatedContext);
     await emitCompleteSnapshot(isolatedSocket);
     await emitFirstDeviceEvent(isolatedSocket);

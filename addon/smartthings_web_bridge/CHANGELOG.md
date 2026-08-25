@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.48
+
+- Restore Chromium session cookies across a clean app restart while pruning every restored tab except one verified SmartThings keeper before network observation starts.
+- Preserve the concrete SmartThings location route on keeper recovery and fail closed when a command page has no verifiable location id.
+- Revalidate the exact warm device detail URL and visible identity before every cached control action.
+- Bound first-load control probes at 5 seconds and warm same-device probes at 1.5 seconds, prioritizing already-rendered localized labels before bounded late-render waits while preserving actual click and push-confirmation safety windows.
+- Wait for delayed SmartThings SPA location-route changes before reporting a location change failure.
+
 ## 0.1.47
 
 - Map the live Air Purifier `percent` slider and space-delimited `supportedAcFanModes` state into Home Assistant fan speed, number, preset, and mode-backed on/off controls.

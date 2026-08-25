@@ -47,6 +47,7 @@ class FakeLocator {
 
 class FakeCommandPage {
   card = new FakeLocator(1);
+  detailHeading = new FakeLocator(1);
   readonly toggle = new FakeLocator(1);
   readonly close = vi.fn(async () => undefined);
   waitForTimeout?: ReturnType<typeof vi.fn>;
@@ -63,6 +64,7 @@ class FakeCommandPage {
   async goto(_url: string): Promise<void> {}
 
   getByRole(role: string, options?: { name?: string | RegExp }): FakeLocator {
+    if (role === "heading") return this.detailHeading;
     if (role === "button") {
       if (options?.name) {
         expect(options.name).toBeInstanceOf(RegExp);
@@ -103,7 +105,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
 
     expect(manager.openCommandPage).toHaveBeenCalledTimes(1);
     expect(page.card.click).toHaveBeenCalledTimes(1);
-    expect(page.toggle.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 15_000 });
+    expect(page.toggle.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 5_000 });
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
     expect(page.close).toHaveBeenCalledTimes(1);
   });
@@ -141,8 +143,48 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(manager.openCommandPage).toHaveBeenCalledTimes(1);
     expect(page.card.click).toHaveBeenCalledTimes(1);
     expect(page.toggle.click).toHaveBeenCalledTimes(2);
+    expect(page.toggle.waitFor).toHaveBeenNthCalledWith(1, {
+      state: "visible",
+      timeout: 5_000
+    });
+    expect(page.toggle.waitFor).toHaveBeenNthCalledWith(2, {
+      state: "visible",
+      timeout: 1_500
+    });
     expect(page.close).not.toHaveBeenCalled();
     expect(executor.hasWarmCommandPage()).toBe(true);
+    expect(page.detailHeading.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 500 });
+  });
+
+  test("invalidates a warm page whose visible detail identity drifted", async () => {
+    const stalePage = new FakeCommandPage();
+    const freshPage = new FakeCommandPage();
+    const pages = [stalePage, freshPage];
+    const manager = { openCommandPage: vi.fn(async () => pages.shift()!) };
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => manager,
+      undefined,
+      { warmPageTtlMs: 30_000 }
+    );
+
+    await executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" });
+    stalePage.detailHeading = new FakeLocator(0, true);
+    await executor.executeDeviceAction({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      command: "off",
+      action: "off",
+      component: "main",
+      capability: "switch",
+      attribute: "switch",
+      arguments: []
+    });
+
+    expect(manager.openCommandPage).toHaveBeenCalledTimes(2);
+    expect(stalePage.close).toHaveBeenCalledTimes(1);
+    expect(stalePage.toggle.click).toHaveBeenCalledTimes(1);
+    expect(freshPage.card.click).toHaveBeenCalledTimes(1);
+    expect(freshPage.toggle.click).toHaveBeenCalledTimes(1);
   });
 
   test("closes an expired warm command page before background discovery resumes", async () => {
@@ -182,6 +224,10 @@ describe("SmartThingsWebUiCommandExecutor", () => {
 
     await executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" });
 
+    expect(missingNamedSwitch.waitFor).toHaveBeenCalledWith({
+      state: "visible",
+      timeout: 5_000
+    });
     expect(missingNamedSwitch.click).not.toHaveBeenCalled();
     expect(uniqueSwitch.click).toHaveBeenCalledTimes(1);
     expect(page.close).toHaveBeenCalledTimes(1);
@@ -797,7 +843,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       arguments: []
     });
 
-    expect(refresh.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 15_000 });
+    expect(refresh.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 5_000 });
     expect(refresh.click).toHaveBeenCalledTimes(1);
     expect(ambiguousButtons.click).not.toHaveBeenCalled();
   });
@@ -813,6 +859,21 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" })
     ).rejects.toThrow("command_location_unknown");
     expect(page.card.click).not.toHaveBeenCalled();
+  });
+
+  test("fails closed when a normalized command page has no concrete location route", async () => {
+    const page = new FakeCommandPage();
+    page.currentUrl = "https://my.smartthings.com/location";
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => ({ openCommandPage: vi.fn(async () => page) }),
+      (raw) => raw
+    );
+
+    await expect(
+      executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" })
+    ).rejects.toThrow("command_location_unknown");
+    expect(page.card.click).not.toHaveBeenCalled();
+    expect(page.toggle.click).not.toHaveBeenCalled();
   });
 
   test("changes location through the accessible picker before targeting the device", async () => {
@@ -844,6 +905,38 @@ describe("SmartThingsWebUiCommandExecutor", () => {
 
     expect(picker.click).toHaveBeenCalledTimes(1);
     expect(target.click).toHaveBeenCalledTimes(1);
+    expect(page.card.click).toHaveBeenCalledTimes(1);
+  });
+
+  test("waits for an asynchronous SPA location route before targeting the device", async () => {
+    const page = new FakeCommandPage();
+    page.currentUrl = "https://my.smartthings.com/location/raw-current";
+    const picker = new FakeLocator(1);
+    const target = new FakeLocator(1);
+    target.click.mockImplementation(async () => undefined);
+    page.waitForTimeout = vi.fn(async () => {
+      page.currentUrl = "https://my.smartthings.com/location/raw-target";
+    });
+    const originalGetByRole = page.getByRole.bind(page);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Other home")) {
+        return picker;
+      }
+      if (role === "link") return target;
+      return originalGetByRole(role, options);
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => ({ openCommandPage: vi.fn(async () => page) }),
+      (raw) => (raw === "raw-current" ? "loc_999" : "loc_001")
+    );
+
+    await executor.executeSwitch({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      locationNames: { loc_001: "Target home", loc_999: "Other home" }
+    });
+
+    expect(page.waitForTimeout).toHaveBeenCalled();
     expect(page.card.click).toHaveBeenCalledTimes(1);
   });
 
@@ -1026,6 +1119,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     const page = new FakeCommandPage();
     const card = new FakeLocator(1);
     const missingNamedSlider = new FakeLocator(0, true);
+    const missingEnglishLabel = new FakeLocator(0, true);
     const label = new FakeLocator(1);
     const swatch = new FakeLocator(1);
     const rangeInput = new FakeLocator(1);
@@ -1042,7 +1136,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       return new FakeLocator(0, true);
     });
     page.getByText = vi.fn((text?: string) =>
-      text === "팬 속도" ? label : new FakeLocator(0, true)
+      text === "팬 속도" ? label : missingEnglishLabel
     );
     const executor = new SmartThingsWebUiCommandExecutor(() => ({
       openCommandPage: vi.fn(async () => page)
@@ -1060,7 +1154,59 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
 
     expect(label.locator).toHaveBeenCalledWith("..");
+    expect(missingEnglishLabel.waitFor).not.toHaveBeenCalled();
+    expect(rangeInput.waitFor).toHaveBeenCalledWith({
+      state: "visible",
+      timeout: 5_000
+    });
     expect(rangeInput.fill).toHaveBeenCalledWith("55", { timeout: 15_000 });
+  });
+
+  test("waits for a late-rendered exact swatch label before rejecting the control", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const missingNamedSlider = new FakeLocator(0, true);
+    let labelVisible = false;
+    const lateLabel = new FakeLocator(0);
+    lateLabel.count = vi.fn(async () => (labelVisible ? 1 : 0));
+    const swatch = new FakeLocator(1);
+    const rangeInput = new FakeLocator(1);
+    lateLabel.locator = vi.fn(() => swatch);
+    swatch.getByRole = vi.fn((role: string) =>
+      role === "slider" ? rangeInput : new FakeLocator(0, true)
+    );
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Air purifier")) {
+        return card;
+      }
+      if (role === "button") return card;
+      if (role === "slider") return missingNamedSlider;
+      return new FakeLocator(0, true);
+    });
+    page.getByText = vi.fn((text?: string) =>
+      text === "팬 속도" ? lateLabel : new FakeLocator(0, true)
+    );
+    page.waitForTimeout = vi.fn(async () => {
+      labelVisible = true;
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "Air purifier",
+      locationId: "loc_001",
+      command: "setNumber",
+      action: "setNumber",
+      component: "main",
+      capability: "fanSpeedPercent",
+      attribute: "percent",
+      arguments: [60]
+    });
+
+    expect(page.waitForTimeout).toHaveBeenCalled();
+    expect(lateLabel.waitFor).toHaveBeenCalled();
+    expect(rangeInput.fill).toHaveBeenCalledWith("60", { timeout: 15_000 });
   });
 
   test("clicks a generic toggle scoped by its visible swatch label", async () => {

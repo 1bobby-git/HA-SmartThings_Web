@@ -35,8 +35,17 @@ interface WarmDevicePage {
   locationId: string;
   roomName?: string;
   deviceName: string;
+  detailUrl: string;
   lastUsedAt: number;
 }
+
+const WARM_DETAIL_IDENTITY_TIMEOUT_MS = 500;
+const WARM_CONTROL_PROBE_TIMEOUT_MS = 1_500;
+const FRESH_CONTROL_PROBE_TIMEOUT_MS = 5_000;
+const LABELED_SCOPE_POLL_MS = 100;
+const LABELED_SCOPE_VISIBLE_PROBE_MS = 25;
+const LOCATION_ROUTE_POLL_MS = 100;
+const LOCATION_ROUTE_POLL_ATTEMPTS = 30;
 
 export class SmartThingsWebUiCommandExecutor {
   #uiQueue: Promise<void> = Promise.resolve();
@@ -168,7 +177,7 @@ export class SmartThingsWebUiCommandExecutor {
     const warmPage = await this.#warmPageFor(manager, input);
     if (warmPage) {
       try {
-        await executeDeviceControl(warmPage, input);
+        await executeDeviceControl(warmPage, input, WARM_CONTROL_PROBE_TIMEOUT_MS);
         if (this.#warmDevicePage) this.#warmDevicePage.lastUsedAt = Date.now();
         return;
       } catch (error) {
@@ -188,7 +197,7 @@ export class SmartThingsWebUiCommandExecutor {
       await openDeviceDetail(page, input.deviceName, input.roomName, {
         preferRooms: Boolean(input.roomName)
       });
-      await executeDeviceControl(page, input);
+      await executeDeviceControl(page, input, FRESH_CONTROL_PROBE_TIMEOUT_MS);
       if (this.#warmPageTtlMs > 0) {
         this.#warmDevicePage = {
           page,
@@ -196,6 +205,7 @@ export class SmartThingsWebUiCommandExecutor {
           locationId: input.locationId,
           ...(input.roomName ? { roomName: input.roomName } : {}),
           deviceName: input.deviceName,
+          detailUrl: page.url(),
           lastUsedAt: Date.now()
         };
         keepWarm = true;
@@ -322,7 +332,8 @@ export class SmartThingsWebUiCommandExecutor {
     locationNames: Readonly<Record<string, string>> | undefined
   ): Promise<void> {
     const routeLocation = locationIdFromUrl(page.url());
-    if (!routeLocation || !this.normalizeLocationId) return;
+    if (!this.normalizeLocationId) return;
+    if (!routeLocation) throw new Error("command_location_unknown");
     const currentLocationId = this.normalizeLocationId(routeLocation);
     if (currentLocationId === targetLocationId) return;
     const currentName = locationNames?.[currentLocationId];
@@ -346,11 +357,7 @@ export class SmartThingsWebUiCommandExecutor {
     if ((await target.count()) !== 1) throw new Error("command_location_target_not_found");
     await target.click({ timeout: 15_000 });
 
-    const changedRoute = locationIdFromUrl(page.url());
-    if (
-      !changedRoute ||
-      this.normalizeLocationId(changedRoute) !== targetLocationId
-    ) {
+    if (!(await waitForLocationRoute(page, targetLocationId, this.normalizeLocationId))) {
       throw new Error("command_location_change_failed");
     }
   }
@@ -382,7 +389,9 @@ export class SmartThingsWebUiCommandExecutor {
       cached.roomName === input.roomName &&
       !cached.page.isClosed() &&
       Date.now() - cached.lastUsedAt < this.#warmPageTtlMs &&
-      isSmartThingsLocation(cached.page.url())
+      cached.page.url() === cached.detailUrl &&
+      isSmartThingsLocation(cached.page.url()) &&
+      (await hasExactVisibleDeviceIdentity(cached.page, input.deviceName))
     ) {
       return cached.page;
     }
@@ -397,6 +406,52 @@ export class SmartThingsWebUiCommandExecutor {
       await cached.page.close().catch(() => undefined);
     }
   }
+}
+
+async function hasExactVisibleDeviceIdentity(
+  page: CommandPageLike,
+  deviceName: string
+): Promise<boolean> {
+  const heading = page.getByRole("heading", { name: exactName(deviceName) });
+  const headingCount = await heading.count();
+  if (headingCount > 1) return false;
+  if (headingCount === 1) {
+    try {
+      await heading.first().waitFor({
+        state: "visible",
+        timeout: WARM_DETAIL_IDENTITY_TIMEOUT_MS
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  const label = page.getByText(deviceName, { exact: true });
+  if ((await label.count()) !== 1) return false;
+  try {
+    await label.first().waitFor({
+      state: "visible",
+      timeout: WARM_DETAIL_IDENTITY_TIMEOUT_MS
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForLocationRoute(
+  page: CommandPageLike,
+  targetLocationId: string,
+  normalizeLocationId: (rawLocationId: string) => string
+): Promise<boolean> {
+  for (let attempt = 0; attempt <= LOCATION_ROUTE_POLL_ATTEMPTS; attempt += 1) {
+    const route = locationIdFromUrl(page.url());
+    if (route && normalizeLocationId(route) === targetLocationId) return true;
+    if (attempt === LOCATION_ROUTE_POLL_ATTEMPTS || !page.waitForTimeout) break;
+    await page.waitForTimeout(LOCATION_ROUTE_POLL_MS);
+  }
+  return false;
 }
 
 async function openDeviceDetail(
@@ -457,7 +512,8 @@ async function executeDeviceControl(
     controlLabel?: string;
     optionLabel?: string;
     optionCommand?: string;
-  }
+  },
+  probeTimeoutMs: number
 ): Promise<void> {
   if (input.command === "on" || input.command === "off") {
     if (input.controlLabel) {
@@ -465,40 +521,41 @@ async function executeDeviceControl(
         page,
         "switch",
         exactOrLocalized(input.controlLabel),
-        input.controlLabel
+        input.controlLabel,
+        probeTimeoutMs
       );
       return;
     }
     const label = controlLabelFor(input.attribute);
     try {
       if (label) {
-        await clickRoleOrLabeledControl(page, "switch", /^(?:Power|전원)$/iu, label);
+        await clickRoleOrLabeledControl(page, "switch", /^(?:Power|전원)$/iu, label, probeTimeoutMs);
       } else {
-        await clickRoleControl(page, "switch", /^(?:Power|전원)$/iu);
+        await clickRoleControl(page, "switch", /^(?:Power|전원)$/iu, probeTimeoutMs);
       }
     } catch (error) {
       if (!(error instanceof Error) || error.message !== "command_control_not_found") {
         throw error;
       }
-      await clickRoleControl(page, "switch");
+      await clickRoleControl(page, "switch", undefined, probeTimeoutMs);
     }
     return;
   }
   if (input.command === "refresh") {
-    await clickRoleControl(page, "button", /^(?:Refresh|새로고침)$/iu);
+    await clickRoleControl(page, "button", /^(?:Refresh|새로고침)$/iu, probeTimeoutMs);
     return;
   }
   if (input.command === "press") {
     if (!input.controlLabel) throw new Error("command_control_not_found");
-    await clickRoleOrLabeledControl(page, "button", exactName(input.controlLabel), input.controlLabel);
+    await clickRoleOrLabeledControl(page, "button", exactName(input.controlLabel), input.controlLabel, probeTimeoutMs);
     return;
   }
   if (input.command === "mute" || input.command === "unmute") {
     const label = input.controlLabel ?? controlLabelFor(input.attribute);
     if (label) {
-      await clickRoleOrLabeledControl(page, "switch", /^(?:Mute|Muted|음소거)$/iu, label);
+      await clickRoleOrLabeledControl(page, "switch", /^(?:Mute|Muted|음소거)$/iu, label, probeTimeoutMs);
     } else {
-      await clickRoleControl(page, "switch", /^(?:Mute|Muted|음소거)$/iu);
+      await clickRoleControl(page, "switch", /^(?:Mute|Muted|음소거)$/iu, probeTimeoutMs);
     }
     return;
   }
@@ -508,7 +565,13 @@ async function executeDeviceControl(
       throw new Error("command_execution_failed");
     }
     const label = input.controlLabel ?? controlLabelFor(input.attribute);
-    const slider = await findRoleOrLabeledControl(page, "slider", label ? exactOrLocalized(label) : undefined, label);
+    const slider = await findRoleOrLabeledControl(
+      page,
+      "slider",
+      label ? exactOrLocalized(label) : undefined,
+      label,
+      probeTimeoutMs
+    );
     await slider.fill(String(value), { timeout: 15_000 });
     return;
   }
@@ -523,24 +586,29 @@ async function executeDeviceControl(
       input.optionCommand &&
       label
     ) {
-      await clickLabeledSwatchCommand(page, label, input.optionCommand);
+      await clickLabeledSwatchCommand(page, label, input.optionCommand, probeTimeoutMs);
       return;
     }
     try {
-      const select = await findRoleControl(page, "combobox", label ? exactOrLocalized(label) : undefined);
+      const select = await findRoleControl(
+        page,
+        "combobox",
+        label ? exactOrLocalized(label) : undefined,
+        probeTimeoutMs
+      );
       await select.click({ timeout: 15_000 });
       await clickExactlyOne(page.getByRole("option", { name: exactName(input.optionLabel ?? value) }));
     } catch (error) {
       if (!(error instanceof Error) || error.message !== "command_control_not_found" || !label) {
         throw error;
       }
-      await clickLabeledSwatchOption(page, label, input.optionLabel ?? value);
+      await clickLabeledSwatchOption(page, label, input.optionLabel ?? value, probeTimeoutMs);
     }
     return;
   }
   if (isCoverButtonCommand(input.command)) {
     if (!input.controlLabel) throw new Error("command_control_not_found");
-    await clickRoleOrLabeledControl(page, "button", exactName(input.controlLabel), input.controlLabel);
+    await clickRoleOrLabeledControl(page, "button", exactName(input.controlLabel), input.controlLabel, probeTimeoutMs);
     return;
   }
   if (input.command === "playTrackAndResume") {
@@ -549,25 +617,29 @@ async function executeDeviceControl(
       throw new Error("command_execution_failed");
     }
     const name = /Play track and resume|트랙.*재생|재생.*재개/iu;
-    const textbox = await findRoleControl(page, "textbox", name);
+    const textbox = await findRoleControl(page, "textbox", name, probeTimeoutMs);
     await textbox.fill(value, { timeout: 15_000 });
-    await clickRoleControl(page, "button", name);
+    await clickRoleControl(page, "button", name, probeTimeoutMs);
     return;
   }
   const name = mediaActionName(input.command);
   if (!name) throw new Error("command_control_not_found");
-  await clickRoleControl(page, "button", name);
+  await clickRoleControl(page, "button", name, probeTimeoutMs);
 }
 
 async function findRoleControl(
   page: CommandPageLike,
   role: string,
-  preferredName?: RegExp
+  preferredName: RegExp | undefined,
+  probeTimeoutMs: number
 ): Promise<CommandLocatorLike> {
   if (preferredName) {
     const preferred = page.getByRole(role, { name: preferredName });
     try {
-      await preferred.first().waitFor({ state: "visible", timeout: 15_000 });
+      await preferred.first().waitFor({
+        state: "visible",
+        timeout: probeTimeoutMs
+      });
       if ((await preferred.count()) === 1) {
         return preferred;
       }
@@ -581,7 +653,10 @@ async function findRoleControl(
   }
   const fallback = page.getByRole(role);
   try {
-    await fallback.first().waitFor({ state: "visible", timeout: 15_000 });
+    await fallback.first().waitFor({
+      state: "visible",
+      timeout: probeTimeoutMs
+    });
   } catch {
     throw new Error("command_control_not_found");
   }
@@ -592,9 +667,10 @@ async function findRoleControl(
 async function clickRoleControl(
   page: CommandPageLike,
   role: string,
-  preferredName?: RegExp
+  preferredName: RegExp | undefined,
+  probeTimeoutMs: number
 ): Promise<void> {
-  const control = await findRoleControl(page, role, preferredName);
+  const control = await findRoleControl(page, role, preferredName, probeTimeoutMs);
   await control.click({ timeout: 15_000 });
 }
 
@@ -602,7 +678,8 @@ async function findRoleOrLabeledControl(
   page: CommandPageLike,
   role: string,
   preferredName: RegExp | undefined,
-  label: string | undefined
+  label: string | undefined,
+  probeTimeoutMs: number
 ): Promise<CommandLocatorLike> {
   if (preferredName) {
     const preferred = page.getByRole(role, { name: preferredName });
@@ -610,7 +687,7 @@ async function findRoleOrLabeledControl(
     if (preferredCount > 1) throw new Error("command_control_ambiguous");
     if (preferredCount === 1) {
       try {
-        await preferred.first().waitFor({ state: "visible", timeout: 1_000 });
+        await preferred.first().waitFor({ state: "visible", timeout: probeTimeoutMs });
         return preferred;
       } catch {
         // The observed visible label below is the next authoritative scope.
@@ -619,107 +696,122 @@ async function findRoleOrLabeledControl(
   }
   if (label) {
     try {
-      return await findLabeledSwatchControl(page, label, role);
+      return await findLabeledSwatchControl(page, label, role, probeTimeoutMs);
     } catch (error) {
       if (!(error instanceof Error) || error.message !== "command_control_not_found") {
         throw error;
       }
     }
   }
-  return await findRoleControl(page, role, preferredName);
+  return await findRoleControl(page, role, preferredName, probeTimeoutMs);
 }
 
 async function clickRoleOrLabeledControl(
   page: CommandPageLike,
   role: string,
   preferredName: RegExp,
-  label: string
+  label: string,
+  probeTimeoutMs: number
 ): Promise<void> {
-  const control = await findRoleOrLabeledControl(page, role, preferredName, label);
+  const control = await findRoleOrLabeledControl(page, role, preferredName, label, probeTimeoutMs);
   await control.click({ timeout: 15_000 });
 }
 
 async function clickLabeledSwatchOption(
   page: CommandPageLike,
   label: string,
-  option: string
+  option: string,
+  probeTimeoutMs: number
 ): Promise<void> {
-  const variants = labelVariants(label);
-  for (const variant of variants) {
-    const scope = await labeledSwatchScope(page, variant);
-    if (!scope) continue;
-    const control = scope.getByRole("button", { name: exactName(option) });
-    try {
-      await control.first().waitFor({ state: "visible", timeout: 5_000 });
-    } catch {
-      continue;
-    }
-    if ((await control.count()) !== 1) throw new Error("command_control_ambiguous");
-    await control.click({ timeout: 15_000 });
-    return;
+  const scope = await labeledSwatchScope(page, labelVariants(label), probeTimeoutMs);
+  if (!scope) throw new Error("command_control_not_found");
+  const control = scope.getByRole("button", { name: exactName(option) });
+  try {
+    await control.first().waitFor({
+      state: "visible",
+      timeout: probeTimeoutMs
+    });
+  } catch {
+    throw new Error("command_control_not_found");
   }
-  throw new Error("command_control_not_found");
+  if ((await control.count()) !== 1) throw new Error("command_control_ambiguous");
+  await control.click({ timeout: 15_000 });
 }
 
 async function clickLabeledSwatchCommand(
   page: CommandPageLike,
   label: string,
-  command: string
+  command: string,
+  probeTimeoutMs: number
 ): Promise<void> {
   if (!/^[A-Za-z0-9_.:-]{1,160}$/u.test(command)) {
     throw new Error("command_control_not_found");
   }
-  for (const variant of labelVariants(label)) {
-    const scope = await labeledSwatchScope(page, variant);
-    if (!scope) continue;
-    const control = scope.locator(`[data-command="${command}"]`);
-    try {
-      await control.first().waitFor({ state: "visible", timeout: 5_000 });
-    } catch {
-      continue;
-    }
-    if ((await control.count()) !== 1) throw new Error("command_control_ambiguous");
-    await control.click({ timeout: 15_000 });
-    return;
+  const scope = await labeledSwatchScope(page, labelVariants(label), probeTimeoutMs);
+  if (!scope) throw new Error("command_control_not_found");
+  const control = scope.locator(`[data-command="${command}"]`);
+  try {
+    await control.first().waitFor({
+      state: "visible",
+      timeout: probeTimeoutMs
+    });
+  } catch {
+    throw new Error("command_control_not_found");
   }
-  throw new Error("command_control_not_found");
+  if ((await control.count()) !== 1) throw new Error("command_control_ambiguous");
+  await control.click({ timeout: 15_000 });
 }
 
 async function findLabeledSwatchControl(
   page: CommandPageLike,
   label: string,
-  role: string
+  role: string,
+  probeTimeoutMs: number
 ): Promise<CommandLocatorLike> {
-  const variants = labelVariants(label);
-  for (const variant of variants) {
-    const scope = await labeledSwatchScope(page, variant);
-    if (!scope) continue;
-    const control = scope.getByRole(role);
-    try {
-      await control.first().waitFor({ state: "visible", timeout: 5_000 });
-    } catch {
-      continue;
-    }
-    if ((await control.count()) !== 1) throw new Error("command_control_ambiguous");
-    return control;
+  const scope = await labeledSwatchScope(page, labelVariants(label), probeTimeoutMs);
+  if (!scope) throw new Error("command_control_not_found");
+  const control = scope.getByRole(role);
+  try {
+    await control.first().waitFor({
+      state: "visible",
+      timeout: probeTimeoutMs
+    });
+  } catch {
+    throw new Error("command_control_not_found");
   }
-  throw new Error("command_control_not_found");
+  if ((await control.count()) !== 1) throw new Error("command_control_ambiguous");
+  return control;
 }
 
 async function labeledSwatchScope(
   page: CommandPageLike,
-  label: string
+  labels: string[],
+  probeTimeoutMs: number
 ): Promise<CommandLocatorLike | undefined> {
-  const labelLocator = page.getByText(label, { exact: true });
-  try {
-    await labelLocator.first().waitFor({ state: "visible", timeout: 5_000 });
-  } catch {
-    return undefined;
+  const deadline = Date.now() + probeTimeoutMs;
+  const maxAttempts = Math.ceil(probeTimeoutMs / LABELED_SCOPE_POLL_MS) + 1;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    for (const label of labels) {
+      const labelLocator = page.getByText(label, { exact: true });
+      const count = await labelLocator.count();
+      if (count > 1) throw new Error("command_control_ambiguous");
+      if (count === 0) continue;
+      const remainingMs = Math.max(1, deadline - Date.now());
+      try {
+        await labelLocator.first().waitFor({
+          state: "visible",
+          timeout: Math.min(LABELED_SCOPE_VISIBLE_PROBE_MS, remainingMs)
+        });
+        return labelLocator.locator("..");
+      } catch {
+        // Keep checking every exact localized variant until the shared deadline.
+      }
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0 || attempt === maxAttempts - 1 || !page.waitForTimeout) break;
+    await page.waitForTimeout(Math.min(LABELED_SCOPE_POLL_MS, remainingMs));
   }
-  const count = await labelLocator.count();
-  if (count === 0) return undefined;
-  if (count !== 1) throw new Error("command_control_ambiguous");
-  return labelLocator.locator("..");
+  return undefined;
 }
 
 function labelVariants(label: string): string[] {

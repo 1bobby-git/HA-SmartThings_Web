@@ -39,6 +39,50 @@ class FakeContext {
 }
 
 describe("KeeperPageManager", () => {
+  test("prunes unrelated restored tabs before choosing one keeper", async () => {
+    const location = new FakePage("https://my.smartthings.com/location/restored-home");
+    const login = new FakePage("https://account.samsung.com/accounts/v1/ST/signInGate");
+    const advanced = new FakePage("https://my.smartthings.com/advanced");
+    const unrelated = new FakePage("https://example.test/restored");
+    const blank = new FakePage("about:blank");
+    const context = new FakeContext([location, login, advanced, unrelated, blank]);
+    const manager = new KeeperPageManager(context);
+
+    const keeper = await manager.reconcileRestoredPages();
+
+    expect(keeper).toBe(location);
+    expect(location.close).not.toHaveBeenCalled();
+    expect(login.close).toHaveBeenCalledTimes(1);
+    expect(advanced.close).toHaveBeenCalledTimes(1);
+    expect(unrelated.close).toHaveBeenCalledTimes(1);
+    expect(blank.close).toHaveBeenCalledTimes(1);
+    expect(location.goto).not.toHaveBeenCalled();
+  });
+
+  test("prefers a concrete restored location over an earlier generic location tab", async () => {
+    const generic = new FakePage(KEEPER_URL);
+    const concrete = new FakePage("https://my.smartthings.com/location/restored-home");
+    const manager = new KeeperPageManager(new FakeContext([generic, concrete]));
+
+    const keeper = await manager.reconcileRestoredPages();
+
+    expect(keeper).toBe(concrete);
+    expect(generic.close).toHaveBeenCalledTimes(1);
+    expect(concrete.close).not.toHaveBeenCalled();
+  });
+
+  test("fails startup isolation when a restored extra tab cannot be closed", async () => {
+    const keeper = new FakePage("https://my.smartthings.com/location/restored-home");
+    const stuck = new FakePage("https://example.test/stuck");
+    stuck.close.mockRejectedValueOnce(new Error("close_failed"));
+    const manager = new KeeperPageManager(new FakeContext([keeper, stuck]));
+
+    await expect(manager.reconcileRestoredPages()).rejects.toThrow(
+      "restored_page_close_failed"
+    );
+    expect(stuck.isClosed()).toBe(false);
+  });
+
   test("keeps exactly one /location keeper and closes duplicates", async () => {
     const first = new FakePage(KEEPER_URL);
     const second = new FakePage(`${KEEPER_URL}?duplicate=true`);
@@ -98,6 +142,18 @@ describe("KeeperPageManager", () => {
     expect(keeper).toBe(canonical);
     expect(canonical.goto).not.toHaveBeenCalled();
     expect(context.created).toHaveLength(0);
+  });
+
+  test("recovers a concrete location keeper without discarding its verified route", async () => {
+    const concreteUrl = "https://my.smartthings.com/location/loc-synthetic-001";
+    const keeper = new FakePage(concreteUrl);
+    const manager = new KeeperPageManager(new FakeContext([keeper]));
+
+    await manager.recoverKeeper();
+
+    expect(keeper.goto).toHaveBeenCalledWith(concreteUrl, {
+      waitUntil: "domcontentloaded"
+    });
   });
 
   test("tracks keeper identity and navigates a drifted keeper back without creating a tab", async () => {

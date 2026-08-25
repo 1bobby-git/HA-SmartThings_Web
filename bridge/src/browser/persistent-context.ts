@@ -71,7 +71,9 @@ export function createPersistentContextLaunch(paths: PersistentContextPaths): Pe
       viewport: { width: 1440, height: 1000 },
       args: [
         "--no-first-run",
-        "--no-default-browser-check"
+        "--no-default-browser-check",
+        "--restore-last-session",
+        "--hide-crash-restore-bubble"
       ]
     }
   };
