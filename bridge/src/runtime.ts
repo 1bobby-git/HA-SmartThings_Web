@@ -115,7 +115,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   let currentKeeperManager: KeeperPageManager | undefined;
   const commandExecutor = new SmartThingsWebUiCommandExecutor(
     () => currentKeeperManager,
-    (rawLocationId) => aliases.alias("location", rawLocationId)
+    (rawLocationId) =>
+      aliases.alias("location", aliases.alias("location", rawLocationId))
   );
   const commands = new SafeCommandService({
     devices,
