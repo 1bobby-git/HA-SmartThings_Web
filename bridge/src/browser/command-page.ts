@@ -53,8 +53,10 @@ export class SmartThingsWebUiCommandExecutor {
           await device.first().waitFor({ state: "visible", timeout: 5_000 });
         } catch {
           device = await scrollForDevice(page, input.deviceName);
-          if (!device && input.roomName) {
-            device = await findDeviceInRoom(page, input.deviceName, input.roomName);
+          if (!device) {
+            device = await findDeviceInRooms(page, input.deviceName).catch(
+              () => undefined
+            );
           }
           device ??= await searchForDevice(page, input.deviceName);
         }
@@ -119,24 +121,14 @@ export class SmartThingsWebUiCommandExecutor {
   }
 }
 
-async function findDeviceInRoom(
+async function findDeviceInRooms(
   page: CommandPageLike,
-  deviceName: string,
-  roomName: string
+  deviceName: string
 ): Promise<CommandLocatorLike> {
   const url = new URL(page.url());
   const route = url.pathname.match(/^(\/location\/[^/]+)(?:\/.*)?$/u)?.[1];
   if (!route) throw new Error("command_room_not_found");
   await page.goto(`${url.origin}${route}/rooms`, { waitUntil: "domcontentloaded" });
-  const room = page.getByRole("link", { name: exactName(roomName) });
-  try {
-    await room.first().waitFor({ state: "visible", timeout: 15_000 });
-  } catch {
-    throw new Error("command_room_not_found");
-  }
-  if ((await room.count()) !== 1) throw new Error("command_room_not_found");
-  await room.click({ timeout: 15_000 });
-
   let device = deviceLocator(page, deviceName);
   try {
     await device.first().waitFor({ state: "visible", timeout: 15_000 });
@@ -145,7 +137,9 @@ async function findDeviceInRoom(
     try {
       await device.first().waitFor({ state: "visible", timeout: 10_000 });
     } catch {
-      throw new Error("command_target_not_found");
+      const scrolled = await scrollForDevice(page, deviceName);
+      if (!scrolled) throw new Error("command_target_not_found");
+      device = scrolled;
     }
   }
   return device;
