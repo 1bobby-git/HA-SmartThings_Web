@@ -101,7 +101,9 @@ export class SmartThingsWebUiCommandExecutor {
     // Navigation only: device state and controls still come from observed Socket.IO data.
     const page = await this.openLocationPage(input.locationId, input.locationNames);
     try {
-      await openDeviceDetail(page, input.deviceName, input.roomName);
+      await openDeviceDetail(page, input.deviceName, input.roomName, {
+        preferRooms: Boolean(input.roomName)
+      });
       await page.waitForTimeout?.(1_500);
     } finally {
       await page.close().catch(() => undefined);
@@ -214,8 +216,16 @@ export class SmartThingsWebUiCommandExecutor {
 async function openDeviceDetail(
   page: CommandPageLike,
   deviceName: string,
-  roomName: string | undefined
+  roomName: string | undefined,
+  options?: { preferRooms?: boolean }
 ): Promise<void> {
+  if (options?.preferRooms && roomName) {
+    const roomDevice = await findDeviceInRooms(page, deviceName, roomName);
+    if ((await roomDevice.count()) !== 1) throw new Error("command_target_ambiguous");
+    await roomDevice.click({ timeout: 15_000 });
+    return;
+  }
+
   let device = deviceLocator(page, deviceName);
   try {
     await device.first().waitFor({ state: "visible", timeout: 15_000 });

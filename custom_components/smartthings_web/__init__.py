@@ -113,9 +113,14 @@ def _migrate_entity_registry(
     old_to_new: dict[str, str] = {}
     switch_ids: set[str] = set()
     primary_domain_switch_ids: set[str] = set()
+    current_fan_ids: set[str] = set()
+    current_device_ids: set[str] = set()
     for device in inventory.devices.values():
         if device.location_id != entry.data[CONF_LOCATION_ID]:
             continue
+        current_device_ids.add(device.device_id)
+        if is_fan_device(device):
+            current_fan_ids.add(device.device_id)
         for state in device.states.values():
             new_unique_id = entity_unique_id(device.device_id, state)
             old_unique_id = f"{new_unique_id}_{state.attribute}"
@@ -137,9 +142,27 @@ def _migrate_entity_registry(
         ):
             registry.async_remove(entity_entry.entity_id)
             continue
+        if (
+            entity_entry.domain == Platform.FAN
+            and _stale_fan_unique_id(entity_entry.unique_id, current_device_ids, current_fan_ids)
+        ):
+            registry.async_remove(entity_entry.entity_id)
+            continue
         new_unique_id = old_to_new.get(entity_entry.unique_id)
         if new_unique_id is None:
             continue
         existing = registry.async_get_entity_id(entity_entry.domain, DOMAIN, new_unique_id)
         if existing is None:
             registry.async_update_entity(entity_entry.entity_id, new_unique_id=new_unique_id)
+
+
+def _stale_fan_unique_id(
+    unique_id: str,
+    current_device_ids: set[str],
+    current_fan_ids: set[str],
+) -> bool:
+    """Return whether an old device fan entity no longer matches inventory."""
+    if not unique_id.endswith("_fan"):
+        return False
+    device_id = unique_id.removesuffix("_fan")
+    return device_id in current_device_ids and device_id not in current_fan_ids

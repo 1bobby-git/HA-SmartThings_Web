@@ -13,6 +13,11 @@ export interface CdpSessionLike {
 
 export interface CdpNetworkOptions {
   responseBodyLimitBytes?: number;
+  onRawWebSocketFrame?: (
+    direction: "sent" | "received",
+    payload: string,
+    connectionId: string
+  ) => void;
 }
 
 interface TrackedResponse {
@@ -31,20 +36,22 @@ export async function installCdpNetworkObserver(
   const tracked = new Map<string, TrackedResponse>();
   await session.send("Network.enable");
 
-  session.on("Network.webSocketFrameSent", (payload) =>
+  session.on("Network.webSocketFrameSent", (payload) => {
+    observeRawTextFrame(options.onRawWebSocketFrame, "sent", payload);
     write(sink, redact, "cdp-websocket-frame", {
       direction: "sent",
       ...connectionMetadata(payload),
       payload: normalizeFrame(payload, limit, redact)
-    })
-  );
-  session.on("Network.webSocketFrameReceived", (payload) =>
+    });
+  });
+  session.on("Network.webSocketFrameReceived", (payload) => {
+    observeRawTextFrame(options.onRawWebSocketFrame, "received", payload);
     write(sink, redact, "cdp-websocket-frame", {
       direction: "received",
       ...connectionMetadata(payload),
       payload: normalizeFrame(payload, limit, redact)
-    })
-  );
+    });
+  });
   session.on("Network.eventSourceMessageReceived", (payload) =>
     write(sink, redact, "cdp-eventsource", normalizeEventSource(payload, limit, redact))
   );
@@ -91,6 +98,24 @@ function write(sink: CaptureSink, redact: Redact, source: CaptureSource, payload
 function connectionMetadata(payload: unknown): { connectionId?: string } {
   const requestId = readString(payload, "requestId");
   return requestId ? { connectionId: requestId } : {};
+}
+
+function observeRawTextFrame(
+  observer: CdpNetworkOptions["onRawWebSocketFrame"],
+  direction: "sent" | "received",
+  payload: unknown
+): void {
+  if (!observer) return;
+  const requestId = readString(payload, "requestId");
+  const response = readObject(payload, "response");
+  const payloadData = response ? readString(response, "payloadData") : undefined;
+  const opcode = response ? readNumber(response, "opcode") : undefined;
+  if (!requestId || opcode !== 1 || typeof payloadData !== "string") return;
+  try {
+    observer(direction, payloadData, requestId);
+  } catch {
+    // Image extraction must never interrupt the sanitized capture pipeline.
+  }
 }
 
 function normalizeFrame(payload: unknown, limitBytes: number, redact: Redact): unknown {

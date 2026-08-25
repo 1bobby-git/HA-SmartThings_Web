@@ -33,6 +33,7 @@ export interface CaptureRow {
 
 const sanitizedRecords = new WeakSet<object>();
 const maxRecentCaptureLimit = 1000;
+const captureBusyTimeoutMs = 250;
 
 export function sanitizeCaptureRecord(
   source: CaptureSource,
@@ -57,8 +58,11 @@ export class CaptureStore {
 
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    this.#db = new DatabaseSync(path);
+    this.#db = new DatabaseSync(path, { timeout: captureBusyTimeoutMs });
     this.#db.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA busy_timeout = ${captureBusyTimeoutMs};
+
       CREATE TABLE IF NOT EXISTS captures (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         source TEXT NOT NULL,
@@ -73,11 +77,18 @@ export class CaptureStore {
     if (record.__sanitized !== true || !sanitizedRecords.has(record)) {
       throw new Error("capture records must pass through sanitizer before persistence");
     }
-    this.#db
-      .prepare(
-        "INSERT INTO captures (source, received_at, payload_json, payload_hash) VALUES (?, ?, ?, ?)"
-      )
-      .run(record.source, record.receivedAt, JSON.stringify(record.payload), record.payloadHash);
+    try {
+      this.#db
+        .prepare(
+          "INSERT INTO captures (source, received_at, payload_json, payload_hash) VALUES (?, ?, ?, ?)"
+        )
+        .run(record.source, record.receivedAt, JSON.stringify(record.payload), record.payloadHash);
+    } catch (error) {
+      if (isSqliteBusyError(error)) {
+        return;
+      }
+      throw error;
+    }
   }
 
   listRecent(limit: number): CaptureRow[] {
@@ -99,4 +110,18 @@ export class CaptureStore {
   close(): void {
     this.#db.close();
   }
+}
+
+function isSqliteBusyError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const code = "code" in error ? error.code : undefined;
+  if (code === "SQLITE_BUSY" || code === "SQLITE_LOCKED") {
+    return true;
+  }
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /\bdatabase is (?:locked|busy)\b/i.test(error.message);
 }

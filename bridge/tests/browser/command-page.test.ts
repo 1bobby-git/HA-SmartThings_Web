@@ -100,6 +100,40 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(page.close).toHaveBeenCalledTimes(1);
   });
 
+  test("inspects room-scoped device details from the rooms route before waiting on the overview", async () => {
+    const page = new FakeCommandPage();
+    const overviewCard = new FakeLocator(1, true);
+    const roomCard = new FakeLocator(1);
+    const container = new FakeLocator(1);
+    container.filter = vi.fn(() => page.card);
+    page.card = overviewCard;
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp) return page.card;
+      if (role === "button") return container;
+      return page.toggle;
+    });
+    page.goto = vi.fn(async (url: string) => {
+      page.currentUrl = url;
+      page.card = roomCard;
+    });
+    const manager = { openCommandPage: vi.fn(async () => page) };
+    const executor = new SmartThingsWebUiCommandExecutor(() => manager);
+
+    await executor.inspectDeviceDetails({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      roomName: "Kitchen"
+    });
+
+    expect(page.goto).toHaveBeenCalledWith("https://my.smartthings.com/location/loc_001/rooms", {
+      waitUntil: "domcontentloaded"
+    });
+    expect(overviewCard.waitFor).not.toHaveBeenCalled();
+    expect(roomCard.click).toHaveBeenCalledTimes(1);
+    expect(page.toggle.click).not.toHaveBeenCalled();
+    expect(page.close).toHaveBeenCalledTimes(1);
+  });
+
   test("fails closed when the accessible device target is ambiguous", async () => {
     const page = new FakeCommandPage();
     page.card = new FakeLocator(2);

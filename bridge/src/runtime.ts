@@ -61,7 +61,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.31";
+const bridgeVersion = "0.1.32";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -418,10 +418,18 @@ async function attachContext(
       cameraImages.observeRawWebSocketFrame(direction, payload, connectionId)
   });
   context.on?.("page", (page) => {
-    void installCdpForPage(context, page as BrowserPageLike, sink, redact, observedCdpPages, log);
+    void installCdpForPage(
+      context,
+      page as BrowserPageLike,
+      sink,
+      redact,
+      observedCdpPages,
+      log,
+      cameraImages
+    );
     onNewPage();
   });
-  await installCdpForPages(context, sink, redact, observedCdpPages, log);
+  await installCdpForPages(context, sink, redact, observedCdpPages, log, cameraImages);
 
   let keeper = await keeperManager.ensureKeeper();
   if (restoredSettledKeeperPresent && classifySmartThingsUrl(keeper.url()) === "smartthings_location") {
@@ -448,10 +456,13 @@ async function installCdpForPages(
   sink: CaptureSink,
   redact: (value: unknown) => unknown,
   observedCdpPages: WeakSet<object>,
-  log: BridgeRuntimeLog
+  log: BridgeRuntimeLog,
+  cameraImages: CameraImageStore
 ): Promise<void> {
   await Promise.all(
-    context.pages().map((page) => installCdpForPage(context, page, sink, redact, observedCdpPages, log))
+    context.pages().map((page) =>
+      installCdpForPage(context, page, sink, redact, observedCdpPages, log, cameraImages)
+    )
   );
 }
 
@@ -461,14 +472,18 @@ async function installCdpForPage(
   sink: CaptureSink,
   redact: (value: unknown) => unknown,
   observedCdpPages: WeakSet<object>,
-  log: BridgeRuntimeLog
+  log: BridgeRuntimeLog,
+  cameraImages: CameraImageStore
 ): Promise<void> {
   if (observedCdpPages.has(page) || !context.newCDPSession) {
     return;
   }
   try {
     const session = await context.newCDPSession(page);
-    await installCdpNetworkObserver(session, sink, redact);
+    await installCdpNetworkObserver(session, sink, redact, {
+      onRawWebSocketFrame: (direction, payload, connectionId) =>
+        cameraImages.observeRawWebSocketFrame(direction, payload, connectionId)
+    });
     observedCdpPages.add(page);
   } catch {
     log.warn("cdp_observer_install_failed");

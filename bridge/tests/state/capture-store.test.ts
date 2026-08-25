@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, test } from "vitest";
 
 import { CaptureStore, sanitizeCaptureRecord } from "../../src/state/capture-store.js";
@@ -77,6 +78,53 @@ describe("CaptureStore", () => {
     } finally {
       store?.close();
       rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("persists while an external read-only inspector holds a read transaction", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-capture-"));
+    const sqlitePath = join(root, "capture.sqlite");
+    let store: CaptureStore | undefined;
+    let inspector: DatabaseSync | undefined;
+    try {
+      store = new CaptureStore(sqlitePath);
+      inspector = new DatabaseSync(sqlitePath, { readOnly: true });
+      inspector.exec("BEGIN");
+      inspector.prepare("SELECT COUNT(*) AS count FROM captures").get();
+
+      expect(() =>
+        store?.write(sanitizeCaptureRecord("unit", { value: "under-read-lock" }, (value) => value))
+      ).not.toThrow();
+
+      expect(store.listRecent(5).map((row) => row.payload)).toContain('{"value":"under-read-lock"}');
+    } finally {
+      inspector?.exec("ROLLBACK");
+      inspector?.close();
+      store?.close();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("drops a capture instead of throwing when another writer holds the database lock", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-capture-"));
+    const sqlitePath = join(root, "capture.sqlite");
+    let store: CaptureStore | undefined;
+    let locker: DatabaseSync | undefined;
+    try {
+      store = new CaptureStore(sqlitePath);
+      locker = new DatabaseSync(sqlitePath);
+      locker.exec("BEGIN EXCLUSIVE");
+
+      expect(() =>
+        store?.write(sanitizeCaptureRecord("unit", { value: "under-write-lock" }, (value) => value))
+      ).not.toThrow();
+    } finally {
+      locker?.exec("ROLLBACK");
+      locker?.close();
+      const rows = store?.listRecent(5) ?? [];
+      store?.close();
+      rmSync(root, { force: true, recursive: true });
+      expect(rows.map((row) => row.payload)).not.toContain('{"value":"under-write-lock"}');
     }
   });
 });

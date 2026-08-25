@@ -731,6 +731,56 @@ describe("createBridgeRuntime", () => {
     );
   });
 
+  test("serves camera image bytes discovered from CDP websocket thumbnail ACKs", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchWithMedia = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.startsWith("https://media.st-av.net/")) {
+        return new Response(Uint8Array.from([31, 32, 33]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg", "content-length": "3" }
+        });
+      }
+      return originalFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchWithMedia);
+    try {
+      const { baseUrl, context } = await startReadyRuntime();
+      const token = await exchangeBridgeToken(baseUrl);
+      const headers = { authorization: `Bearer ${token}` };
+
+      await context.cdpSessions[0]?.emit("Network.webSocketFrameSent", {
+        requestId: "cdp-socket-camera",
+        response: {
+          opcode: 1,
+          payloadData: '421["get","api/camera/thumbnail","raw-camera-uuid",{}]'
+        }
+      });
+      await context.cdpSessions[0]?.emit("Network.webSocketFrameReceived", {
+        requestId: "cdp-socket-camera",
+        response: {
+          opcode: 1,
+          payloadData:
+            '431[null,{"url":"https://media.st-av.net/camera/image.jpg?token=secret"}]'
+        }
+      });
+
+      const response = await fetchFirstImage(baseUrl, headers);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("image/jpeg");
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from([31, 32, 33]));
+      expect(
+        fetchWithMedia.mock.calls.some(([input, init]) =>
+          input.toString().startsWith("https://media.st-av.net/") &&
+          init?.redirect === "error"
+        )
+      ).toBe(true);
+    } finally {
+      vi.stubGlobal("fetch", originalFetch);
+    }
+  });
+
   test("keeps an armed probe active for a component-less contact event", async () => {
     const { baseUrl, socket } = await startReadyRuntime();
     const arm = await postProbeArm(baseUrl, { actionType: "contact_open" });
@@ -1356,6 +1406,35 @@ async function postProbeArm(baseUrl: string, body: unknown): Promise<Response> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body)
   });
+}
+
+async function exchangeBridgeToken(baseUrl: string): Promise<string> {
+  const pairingCode = await fetch(`${baseUrl}/api/v1/pairing-code`, { method: "POST" }).then(
+    (response) => response.json()
+  ) as { code: string };
+  const token = await fetch(`${baseUrl}/api/v1/pair`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code: pairingCode.code })
+  }).then((response) => response.json()) as { token: string };
+  return token.token;
+}
+
+async function fetchFirstImage(
+  baseUrl: string,
+  headers: { authorization: string }
+): Promise<Response> {
+  let lastResponse: Response | undefined;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    for (const deviceId of ["dev_001", "dev_002", "dev_003", "dev_004", "dev_005"]) {
+      const response = await fetch(`${baseUrl}/api/v1/images/${deviceId}`, { headers });
+      if (response.status === 200) return response;
+      lastResponse = response;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  if (!lastResponse) throw new Error("image response missing");
+  return lastResponse;
 }
 
 async function getProbeSnapshot(baseUrl: string): Promise<PhysicalActionProbeSnapshot> {

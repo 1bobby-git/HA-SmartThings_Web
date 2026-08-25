@@ -163,6 +163,36 @@ describe("installCdpNetworkObserver", () => {
     ]);
   });
 
+  test("offers raw CDP text websocket frames only to the explicit in-memory observer before sanitization", async () => {
+    const session = new FakeSession();
+    const write = vi.fn();
+    const onRawWebSocketFrame = vi.fn();
+
+    await installCdpNetworkObserver(session, { write }, () => ({ redacted: true }), {
+      onRawWebSocketFrame
+    });
+    await session.emit("Network.webSocketFrameSent", {
+      requestId: "socket-1",
+      response: {
+        payloadData:
+          '421["get","api/camera/thumbnail","raw-camera-uuid",{"token":"secret"}]',
+        opcode: 1
+      }
+    });
+    await session.emit("Network.webSocketFrameReceived", {
+      requestId: "socket-1",
+      response: { payloadData: "raw-binary-value", opcode: 2 }
+    });
+
+    expect(onRawWebSocketFrame).toHaveBeenCalledOnce();
+    expect(onRawWebSocketFrame).toHaveBeenCalledWith(
+      "sent",
+      '421["get","api/camera/thumbnail","raw-camera-uuid",{"token":"secret"}]',
+      "socket-1"
+    );
+    expect(JSON.stringify(write.mock.calls)).not.toMatch(/raw-camera-uuid|secret/);
+  });
+
   test("redacts CDP opcode-1 websocket payloadData before byte bounding and persistence", async () => {
     await withPersistedCaptures(async (store, redact) => {
       const session = new FakeSession();

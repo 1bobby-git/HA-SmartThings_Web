@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.32
+
+- Serve camera thumbnail image bytes discovered from CDP-observed SmartThings Web Socket.IO ACKs.
+- Keep capture storage non-fatal when a concurrent inspector holds the SQLite database.
+- Remove stale Home Assistant `fan` registry entries that no longer classify as fan devices in the latest selected-location inventory.
+
 ## 0.1.31
 
 - Correlate Socket.IO snapshot, detail, protocol, and camera thumbnail acknowledgements by WebSocket connection as well as ACK number.
