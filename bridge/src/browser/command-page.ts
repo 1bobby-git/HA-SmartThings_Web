@@ -648,16 +648,15 @@ async function uniqueRoleCandidate(
   roles: readonly string[],
   preferredName?: RegExp
 ): Promise<CommandLocatorLike | undefined> {
-  let candidate: CommandLocatorLike | undefined;
   for (const role of roles) {
     const control = scope.getByRole(role, preferredName ? { name: preferredName } : undefined);
     const count = await control.count();
-    if (count > 1 || (count === 1 && candidate)) {
+    if (count > 1) {
       throw new Error("command_control_ambiguous");
     }
-    if (count === 1) candidate = control;
+    if (count === 1) return control;
   }
-  return candidate;
+  return undefined;
 }
 
 async function findRoleControl(

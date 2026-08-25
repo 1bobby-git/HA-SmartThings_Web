@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.52
+
+- Prefer the single accessibility `switch` when one observed Cake toggle also exposes its underlying `checkbox`.
+- Continue to fail closed when the preferred role itself resolves to multiple controls.
+- Preserve the exact-label scope and warm device-detail reuse for fast consecutive commands.
+
 ## 0.1.51
 
 - Use the exact visible device-card opener on the current location view before falling back to the room route.

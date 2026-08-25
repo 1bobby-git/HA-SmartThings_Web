@@ -1307,6 +1307,80 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(checkbox.click).toHaveBeenCalledWith({ timeout: 15_000 });
   });
 
+  test("prefers one accessible switch when the same observed toggle also exposes a checkbox", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const missingNamed = new FakeLocator(0, true);
+    const label = new FakeLocator(1);
+    const swatch = new FakeLocator(1);
+    const accessibleSwitch = new FakeLocator(1);
+    const underlyingCheckbox = new FakeLocator(1);
+    label.locator = vi.fn(() => swatch);
+    swatch.getByRole = vi.fn((role: string) =>
+      role === "switch" ? accessibleSwitch : underlyingCheckbox
+    );
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button") return card;
+      if (options?.name) return missingNamed;
+      return missingNamed;
+    });
+    page.getByText = vi.fn((text: string) =>
+      text === "Power" ? label : new FakeLocator(0, true)
+    );
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      command: "on",
+      action: "on",
+      component: "main",
+      capability: "switch",
+      attribute: "switch",
+      controlLabel: "Power",
+      arguments: []
+    });
+
+    expect(accessibleSwitch.click).toHaveBeenCalledWith({ timeout: 15_000 });
+    expect(underlyingCheckbox.click).not.toHaveBeenCalled();
+  });
+
+  test("fails closed when an observed label contains multiple accessible switches", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const missing = new FakeLocator(0, true);
+    const label = new FakeLocator(1);
+    const swatch = new FakeLocator(1);
+    const ambiguousSwitches = new FakeLocator(2);
+    label.locator = vi.fn(() => swatch);
+    swatch.getByRole = vi.fn((role: string) =>
+      role === "switch" ? ambiguousSwitches : missing
+    );
+    page.getByRole = vi.fn((role: string) => (role === "button" ? card : missing));
+    page.getByText = vi.fn((text: string) => (text === "Power" ? label : missing));
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await expect(
+      executor.executeDeviceAction({
+        deviceName: "Safe plug",
+        locationId: "loc_001",
+        command: "on",
+        action: "on",
+        component: "main",
+        capability: "switch",
+        attribute: "switch",
+        controlLabel: "Power",
+        arguments: []
+      })
+    ).rejects.toThrow("command_control_ambiguous");
+
+    expect(ambiguousSwitches.click).not.toHaveBeenCalled();
+  });
+
   test("selects an observed option from its exact enumerated control", async () => {
     const page = new FakeCommandPage();
     const card = new FakeLocator(1);
