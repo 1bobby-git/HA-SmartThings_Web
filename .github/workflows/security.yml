@@ -1,0 +1,78 @@
+name: Security checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "17 18 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node-security:
+    name: Node and repository security
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify direct SmartThings API boundary
+        run: npm run audit:api-free
+
+      - name: Scan production source for secrets
+        run: npm run audit:secrets
+
+      - name: Verify sanitized fixtures
+        run: npm run audit:fixtures
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  python-tests:
+    name: Home Assistant integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install HTTP client test dependencies
+        run: python -m pip install --disable-pip-version-check "aiohttp>=3.10,<4" "yarl>=1.9,<2"
+
+      - name: Compile integration
+        run: python -m compileall -q custom_components/smartthings_web
+
+      - name: Run integration tests
+        run: python -m unittest discover -s custom_components/smartthings_web/tests -p "test_*.py"

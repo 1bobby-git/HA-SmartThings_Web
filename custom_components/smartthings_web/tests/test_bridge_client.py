@@ -14,11 +14,48 @@ package = ModuleType("smartthings_web")
 package.__path__ = [str(PACKAGE_ROOT)]  # type: ignore[attr-defined]
 sys.modules.setdefault("smartthings_web", package)
 
-from smartthings_web.bridge_client import SmartThingsWebBridgeClient, parse_inventory  # noqa: E402
+from smartthings_web.bridge_client import (  # noqa: E402
+    BridgeClientError,
+    SmartThingsWebBridgeClient,
+    parse_inventory,
+)
 
 
 class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
     """Keep HA's request open through browser actuation and push confirmation."""
+
+    def test_accepts_only_local_bridge_addresses(self) -> None:
+        accepted = (
+            "http://local-smartthings-web-bridge:8100",
+            "http://localhost:8099",
+            "http://127.0.0.1:8099",
+            "http://192.168.1.25:8099",
+            "http://[fd00::25]:8099",
+            "https://bridge.local",
+            "https://bridge.home.arpa",
+        )
+
+        for base_url in accepted:
+            with self.subTest(base_url=base_url):
+                client = SmartThingsWebBridgeClient(object(), base_url)  # type: ignore[arg-type]
+                self.assertTrue(client._base_url.startswith(("http://", "https://")))
+
+    def test_rejects_public_or_ambiguous_bridge_addresses(self) -> None:
+        rejected = (
+            "https://example.com",
+            "http://8.8.8.8:8099",
+            "http://user:password@bridge.local",
+            "http://bridge.local/api",
+            "http://bridge.local?token=secret",
+            "http://bridge.local/#fragment",
+            "ftp://bridge.local",
+            "not a url",
+        )
+
+        for base_url in rejected:
+            with self.subTest(base_url=base_url):
+                with self.assertRaisesRegex(BridgeClientError, "invalid_bridge_url"):
+                    SmartThingsWebBridgeClient(object(), base_url)  # type: ignore[arg-type]
 
     async def test_switch_command_uses_extended_request_timeout(self) -> None:
         client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]

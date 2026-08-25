@@ -143,6 +143,40 @@ describe("CameraImageStore", () => {
     expect(store.get("dev_001")).toBeUndefined();
   });
 
+  test("bounds a chunked image response before buffering the complete body", async () => {
+    let cancelled = false;
+    let pulls = 0;
+    const response = new Response(
+      new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            pulls += 1;
+            controller.enqueue(Uint8Array.from([pulls, pulls]));
+          },
+          cancel() {
+            cancelled = true;
+          }
+        },
+        { highWaterMark: 0 }
+      ),
+      { status: 200, headers: { "content-type": "image/jpeg" } }
+    );
+    const arrayBufferSpy = vi.spyOn(response, "arrayBuffer");
+    const fetchImage = vi.fn(async () => response);
+    const store = createStore(fetchImage, 3);
+
+    store.observeRawWebSocketFrame(
+      "received",
+      '42["api/subscription DEVICE_EVENT",{"data":{"device_event":{"device_id":"raw-camera-uuid","attribute":"image","value":"https://media.st-av.net/image"}}}]'
+    );
+    await store.whenIdle();
+
+    expect(arrayBufferSpy).not.toHaveBeenCalled();
+    expect(cancelled).toBe(true);
+    expect(pulls).toBeLessThanOrEqual(2);
+    expect(store.get("dev_001")).toBeUndefined();
+  });
+
   test("restores a cached image after restart without persisting the signed URL", async () => {
     const root = temporaryRoot();
     const fetchImage = vi.fn(async () =>
