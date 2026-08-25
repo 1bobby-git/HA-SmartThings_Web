@@ -71,9 +71,9 @@ under a visible swatch label. Button swatches likewise put the visible label
 beside an icon-only button. Enumerated swatches render each visible option
 label beside a button carrying the authoritative `data-command`; they are not
 comboboxes. Toggle swatches also keep their label beside a generic switch.
-Version 0.1.36 follows those exact boundaries: it scopes device
-selection to real device wrappers, scopes sliders/buttons to their observed
-swatch label, and retains an atomic `status` to `label` to `command` mapping
+Versions 0.1.36 and 0.1.37 follow those exact boundaries: they scope device
+selection to real device wrappers, scope sliders/buttons to their observed
+swatch label, and retain an atomic `status` to `label` to `command` mapping
 from `possibleStates`.
 
 ## Camera behavior
@@ -98,6 +98,12 @@ profile is stored at `/data/chromium-profile`. The web application performs its
 own Socket.IO authentication and reauthentication. Cookies, CSRF values, user
 identifiers, and authentication payloads are not copied into source or Bridge
 configuration.
+
+The 0.1.37 Supervisor rebuild preserved that profile directory, but the next
+SmartThings navigation was redirected to Samsung login. This is an observed
+session expiry, not evidence that the profile was replaced. The add-on keeps
+liveness and Ingress available while readiness and inventory synchronization
+remain blocked until the user completes manual browser reauthentication.
 
 The supplied capture was labelled safe but still contained account-related
 metadata inside a third-party feature-delivery URL. It was therefore treated as

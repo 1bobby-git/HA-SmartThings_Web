@@ -8,6 +8,13 @@ Session restore was validated once on the live HAOS 18.2 install with bridge 0.1
 
 The 0.1.25 Supervisor update repeated the same automatic session and complete-snapshot restore and remained ready beyond the former 120-second snapshot boundary. This is a second add-on/browser restart observation, not a host reboot or long-idle result.
 
+The 0.1.37 Supervisor rebuild preserved `/data/chromium-profile` but was
+redirected to Samsung Account login instead of restoring the location. The
+Bridge correctly stayed live with `LOGIN_REQUIRED` and blocked readiness and
+snapshot publication. This later observation means restart persistence is
+best-effort: the profile is durable, but the Samsung web session can still
+expire and require manual Ingress/noVNC reauthentication.
+
 Manual testing must continue to record logout, later-release restart, and host reboot behavior before any broad compatibility claim.
 
 The SmartThings Web setting text says login is maintained while the web page remains open and may end when the browser closes. Phase 1 therefore treats the live Chromium process and keeper tab as runtime requirements rather than assuming persisted cookies are sufficient.
