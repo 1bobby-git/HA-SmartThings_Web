@@ -27,6 +27,7 @@ import {
   HAOS_ROLLBACK_MANIFEST_SHA256,
   HAOS_ROLLBACK_RUNTIME_PATH,
   HAOS_ROLLBACK_RUNTIME_SHA256,
+  HAOS_ROLLBACK_VERSION,
   parseHaosCandidateManifestHashGuestResponse,
   parseHaosRuntimeHashGuestResponse
 } from "../tools/haos-candidate-deploy-core.js";
@@ -210,7 +211,8 @@ describe("HAOS deployment command construction", () => {
 
     expect(rollback).toContain(ROLLBACK_ARCHIVE);
     expect(rollback).toContain(HAOS_ROLLBACK_MANIFEST_SHA256);
-    expect(rollback).toContain("0\\.1\\.25");
+    expect(rollback).toContain(HAOS_ROLLBACK_VERSION.replace(/\./gu, "\\."));
+    expect(rollback).not.toContain("0\\.1\\.25");
     expect(rollback).toContain(`rm -rf '${layout.addonSource}'`);
     expect(rollback).toContain(`mv '${layout.rollbackSource}' '${layout.addonSource}'`);
     expect(cleanup).toContain(`rm -rf '${layout.temporaryRoot}'`);

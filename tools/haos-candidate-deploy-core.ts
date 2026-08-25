@@ -1,10 +1,10 @@
 import type { HaosAppInfo, HaosCandidatePreflightResult } from "./haos-candidate-preflight-core.js";
 import { parseGuestExecText } from "./haos-runtime-api-audit-core.js";
 
-export const HAOS_ROLLBACK_COMMIT_SHA = "0c05a5d57336a4de76bdecc0a091fd5071cbbd71";
-export const HAOS_ROLLBACK_VERSION = "0.1.31";
+export const HAOS_ROLLBACK_COMMIT_SHA = "aeaf1aa8536bcaa5c78bf54efe6b2fca2ed6444d";
+export const HAOS_ROLLBACK_VERSION = "0.1.32";
 export const HAOS_ROLLBACK_MANIFEST_SHA256 =
-  "79a6ed7b10b9077d5572d4e60ae21c794f1031f5561ccdec0f059f02c3f82b96";
+  "4aa24132c80b0fe976136d0e13bdb6e38c10e3400e39c1289776d09c7ef02dd7";
 export const HAOS_ROLLBACK_RUNTIME_PATH =
   "/app/dist/bridge/src/inspector/protocol-analyzer.js";
 export const HAOS_ROLLBACK_RUNTIME_SHA256 =
@@ -268,6 +268,7 @@ export function buildHaosRollbackSourceRemoteScript(
 ): string {
   validateLayout(layout);
   requireSha256(rollbackArchiveSha256);
+  const rollbackVersionPattern = HAOS_ROLLBACK_VERSION.replace(/\./gu, "\\.");
   return [
     "set -eu",
     "umask 077",
@@ -279,7 +280,7 @@ export function buildHaosRollbackSourceRemoteScript(
       `${layout.rollbackSource}/addon-package-manifest.json`,
       HAOS_ROLLBACK_MANIFEST_SHA256
     ),
-    `grep -Eq ${shellQuote("^version:[[:space:]]*\"?0\\.1\\.25\"?[[:space:]]*$")} ${shellQuote(`${layout.rollbackSource}/config.yaml`)}`,
+    `grep -Eq ${shellQuote(`^version:[[:space:]]*"?${rollbackVersionPattern}"?[[:space:]]*$`)} ${shellQuote(`${layout.rollbackSource}/config.yaml`)}`,
     `rm -rf ${shellQuote(layout.addonSource)}`,
     `mv ${shellQuote(layout.rollbackSource)} ${shellQuote(layout.addonSource)}`,
     `touch ${shellQuote(`${layout.addonSource}/config.yaml`)}`,
