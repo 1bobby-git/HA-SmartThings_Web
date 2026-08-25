@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.37
+
+- Recover Bridge startup after the sanitized diagnostic database crossed Node's 2 GiB whole-file read limit.
+- Keep the newest 50,000 diagnostic captures so the same restart failure cannot recur while preserving inventory and alias tables.
+
 ## 0.1.36
 
 - Scope similarly named devices to the real SmartThings `data-testid=device` cards so room drag wrappers cannot make commands ambiguous.
