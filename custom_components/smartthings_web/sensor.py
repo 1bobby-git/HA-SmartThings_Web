@@ -149,6 +149,8 @@ class SmartThingsWebSensor(SmartThingsWebEntity, SensorEntity):
     def native_unit_of_measurement(self) -> str | None:
         """Return the reported unit."""
         state = self.bridge_state
+        if state and type(state.value) not in (int, float):
+            return None
         if state and state.unit:
             return {
                 "C": "°C",

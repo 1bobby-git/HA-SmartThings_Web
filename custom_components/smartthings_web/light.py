@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from homeassistant.components.light import LightEntity
+from homeassistant.components.light import ColorMode, LightEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -41,6 +41,9 @@ async def async_setup_entry(
 
 class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
     """One light whose commands are confirmed by a newer push event."""
+
+    _attr_color_mode = ColorMode.ONOFF
+    _attr_supported_color_modes = {ColorMode.ONOFF}
 
     def __init__(
         self, runtime: SmartThingsWebRuntime, device: BridgeDevice, state: BridgeState
