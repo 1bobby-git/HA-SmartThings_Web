@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from ipaddress import ip_address
 import json
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -22,6 +24,10 @@ from .models import (
 )
 
 
+_LOCAL_DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_LOCAL_DNS_SUFFIXES = (".local", ".home.arpa")
+
+
 class BridgeClientError(Exception):
     """Bridge communication failed."""
 
@@ -34,11 +40,23 @@ class SmartThingsWebBridgeClient:
     """Client for the local Bridge HTTP/SSE API."""
 
     def __init__(self, session: ClientSession, base_url: str, token: str | None = None) -> None:
-        url = URL(base_url)
-        if url.scheme not in {"http", "https"} or not url.host or url.user or url.query_string:
+        try:
+            url = URL(base_url)
+        except (TypeError, ValueError) as err:
+            raise BridgeClientError("invalid_bridge_url") from err
+        if (
+            url.scheme not in {"http", "https"}
+            or not url.host
+            or url.user
+            or url.password
+            or url.query_string
+            or url.fragment
+            or url.path not in {"", "/"}
+            or not _is_local_bridge_host(url.host)
+        ):
             raise BridgeClientError("invalid_bridge_url")
         self._session = session
-        self._base_url = str(url.with_path("").with_query(None)).rstrip("/")
+        self._base_url = str(url.with_path("").with_query(None).with_fragment(None)).rstrip("/")
         self._token = token
 
     async def async_pair(self, code: str) -> str:
@@ -193,6 +211,29 @@ class SmartThingsWebBridgeClient:
             raise
         except (ClientError, TimeoutError, ValueError) as err:
             raise BridgeClientError("bridge_request_failed") from err
+
+
+def _is_local_bridge_host(host: str) -> bool:
+    """Allow only loopback/private addresses and local DNS names."""
+    normalized = host.rstrip(".").lower()
+    if not normalized:
+        return False
+    try:
+        address = ip_address(normalized)
+    except ValueError:
+        labels = normalized.split(".")
+        if not all(_LOCAL_DNS_LABEL.fullmatch(label) for label in labels):
+            return False
+        return (
+            len(labels) == 1
+            or normalized == "localhost"
+            or normalized.endswith(_LOCAL_DNS_SUFFIXES)
+        )
+    return (
+        not address.is_unspecified
+        and not address.is_multicast
+        and (address.is_loopback or address.is_private or address.is_link_local)
+    )
 
 
 def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:

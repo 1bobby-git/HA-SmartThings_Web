@@ -145,10 +145,15 @@ export class CameraImageStore {
     if (!response.ok) return;
     const contentType = safeContentType(response.headers.get("content-type"));
     if (!contentType) return;
-    const declaredLength = Number(response.headers.get("content-length"));
-    if (Number.isFinite(declaredLength) && declaredLength > this.#maxBytes) return;
-    const body = Buffer.from(await response.arrayBuffer());
-    if (body.length === 0 || body.length > this.#maxBytes) return;
+    const declaredLengthHeader = response.headers.get("content-length");
+    if (declaredLengthHeader !== null) {
+      const declaredLength = Number(declaredLengthHeader);
+      if (!Number.isSafeInteger(declaredLength) || declaredLength < 0 || declaredLength > this.#maxBytes) {
+        return;
+      }
+    }
+    const body = await readBoundedResponseBody(response, this.#maxBytes);
+    if (!body) return;
     const capturedAt = this.#now().toISOString();
     const bodyPath = join(this.#root, `${deviceId}.bin`);
     const metadataPath = join(this.#root, `${deviceId}.json`);
@@ -166,6 +171,31 @@ export class CameraImageStore {
     chmodSync(bodyPath, 0o600);
     chmodSync(metadataPath, 0o600);
   }
+}
+
+async function readBoundedResponseBody(response: Response, maxBytes: number): Promise<Buffer | undefined> {
+  const reader = response.body?.getReader();
+  if (!reader) return undefined;
+
+  const chunks: Buffer[] = [];
+  let byteLength = 0;
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) break;
+      if (!result.value || result.value.byteLength === 0) continue;
+      byteLength += result.value.byteLength;
+      if (byteLength > maxBytes) {
+        await reader.cancel("camera_image_too_large").catch(() => undefined);
+        return undefined;
+      }
+      chunks.push(Buffer.from(result.value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return byteLength === 0 ? undefined : Buffer.concat(chunks, byteLength);
 }
 
 function safeImageUrl(value: string): string | undefined {

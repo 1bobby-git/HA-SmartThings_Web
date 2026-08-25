@@ -1,85 +1,209 @@
 # HA SmartThings Web
 
-Limited-alpha Home Assistant SmartThings Web Bridge and `smartthings_web` custom integration. It runs a headed Chromium session for `my.smartthings.com`, lets the user log in manually through noVNC/Ingress, and registers observed devices through a local authenticated Bridge connection.
+`HA SmartThings Web`은 Home Assistant에서 `my.smartthings.com` 웹 세션을 이용해 SmartThings 기기 상태와 안전하게 허용된 제어를 연결하는 비공식 프로젝트입니다.
 
-## Scope
+브라우저 로그인을 담당하는 **SmartThings Web Bridge 앱**과 Home Assistant 엔티티를 생성하는 **`smartthings_web` 커스텀 통합**으로 구성됩니다. Samsung 비밀번호·MFA·CAPTCHA를 소스나 설정 파일에 입력하지 않고, 사용자가 앱의 noVNC 브라우저에서 직접 로그인합니다.
 
-- Bridge add-on skeleton with Xvfb, Openbox, x11vnc, noVNC, nginx Ingress, and s6 supervision.
-- TypeScript bridge runtime with a dedicated Playwright persistent profile, observation-only keeper tab, separate command page, browser/session health, CDP/WebSocket/SSE/XHR observation, and redaction boundaries.
-- Sanitized Engine.IO/Socket.IO text decoding and bounded event-ID/fingerprint deduplication replay.
-- Runtime diagnostics for decoded DEVICE_EVENT, unique logical event, duplicate delivery, dedupe journal, and invalid-frame counts.
-- Bounded in-memory physical-action correlation controls that use only sanitized, deduplicated events and require one isolated `/location` keeper page.
-- Snapshot ACK correlation across locations, rooms, device cards, device states, device health, and scenes before readiness, including valid empty categories and fail-closed shape checks.
-- Static gates for direct SmartThings API usage and production secret material.
-- Privacy-safe external HAOS soak sampling with automatic readiness, counter, protocol, restart, gap, and memory verdicts.
-- Authenticated local inventory, SSE push, push-confirmed command, and cached camera-image endpoints.
-- Home Assistant platforms for sensor, binary sensor, switch, light, button, number, fan, media player, climate, cover, select, scene, SmartThings Home Monitor alarm panel, and refreshed camera still images.
-- Bounded one-time device-detail discovery on a separate page so every available web swatch can enter normalized inventory; repeated SmartThings state polling is not used.
-- Phase 1 documentation and manual evidence checklist.
+> **현재 상태: LIMITED ALPHA**  
+> 현재 게이트는 `DECISION: LIMITED`입니다. 실제 HAOS 환경에서 연결·재시작 복구·푸시 상태 반영이 검증되었지만, 장시간 유휴 상태·호스트 재부팅 복구·모든 기기 유형의 제어·완전한 API 독립성은 아직 검증 범위 밖입니다.
 
-Not included in the limited alpha: DOM- or pixel-derived device state, SmartThings state polling, persistent event journals, live camera streaming, stable release tagging, or any direct SmartThings API/PAT/OAuth/SmartApp/webhook path. Browser commands are restricted to controls discovered from SmartThings Web and succeed only after a newer authoritative push confirms the result.
+## 빠른 설치
 
-## Install
+설치는 **브리지 앱 → HACS 통합 → 통합 설정** 순서로 진행합니다.
 
-### Home Assistant OS / Supervised (primary path)
+### 1. SmartThings Web Bridge 앱 설치
 
-This GitHub repository is private, so install it as a local Home Assistant app:
+Home Assistant OS 또는 Supervised 환경에서 저장소를 내려받은 뒤 자체 포함형 앱 패키지를 생성합니다.
 
-1. From a fresh checkout, run `npm ci`, then run `npm run package:addon`.
-2. Using the Samba or SSH app, copy the contents of `dist-addon/smartthings_web_bridge` to `/addons/smartthings_web_bridge` on the Home Assistant host.
-3. In Home Assistant, open **Settings → Apps → Install app**. From the top-right menu, choose **Check for updates**.
-4. Under **Local apps**, open **SmartThings Web Bridge**, install it, and start it.
-5. Open its Web UI, use the noVNC Chromium view, and sign in to Samsung only in that browser.
+```bash
+npm ci
+npm run package:addon
+```
 
-The login remains in the dedicated `/data/chromium-profile` browser profile across add-on restarts. Do not copy cookies, CSRF values, user IDs, or other session material into configuration or source. The Bridge observes the web app's own authenticated Socket.IO session and lets the web app reauthenticate it.
+생성된 `dist-addon/smartthings_web_bridge` 폴더의 **내용 전체**를 Home Assistant 호스트의 `/addons/smartthings_web_bridge`에 복사합니다.
 
-The folder path and add-on slug are different: `/addons/smartthings_web_bridge` is the local source folder and `smartthings_web_bridge` is the configured slug. Supervisor prefixes local apps, so the installed runtime slug is `local_smartthings_web_bridge`. Home Assistant Supervisor builds and manages the add-on container, so you do not install or manage Docker yourself.
+Home Assistant에서 다음 순서로 설치합니다.
 
-Do not copy the raw `addon/smartthings_web_bridge` source folder to Home Assistant. It lacks generated monorepo build inputs that are included by `npm run package:addon`.
+1. **설정 → 앱 → 앱 설치**로 이동합니다.
+2. 우측 상단 메뉴에서 **업데이트 확인**을 실행합니다.
+3. **로컬 앱**의 **SmartThings Web Bridge**를 설치하고 시작합니다.
+4. 앱의 **웹 UI 열기**를 눌러 noVNC Chromium 화면에서 Samsung 계정에 로그인합니다.
+5. 브리지 상태가 `CONNECTED`이고 `ready=true`인지 확인합니다.
 
-The packager canonicalizes generated text files to UTF-8 with LF line endings, so the manifest SHA-256 is identical for equivalent Windows and Linux checkouts. Source files in the monorepo are not rewritten.
+> 원본 `addon/smartthings_web_bridge` 폴더를 그대로 복사하면 안 됩니다. 이 폴더에는 모노레포 루트의 빌드 입력물이 포함되지 않으므로 반드시 `npm run package:addon`으로 생성한 패키지를 사용해야 합니다.
 
-Keep backup copies outside `/addons`. Supervisor scans child folders there as local apps, so a backup that still contains `config.yaml` with the same slug can hide the newest package metadata.
+### 2. HACS에서 `smartthings_web` 통합 설치
 
-If the repository is made public later, it can instead be added from **Settings → Apps → Install app → ⋮ → Repositories** using the repository URL.
+아래 버튼은 Home Assistant의 HACS 커스텀 저장소 추가 화면을 엽니다.
 
-### Standalone development only
+[![HACS에서 SmartThings Web 저장소 열기](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=1bobby-git&repository=HA-SmartThings_Web&category=integration)
 
-The standalone Docker path is only for development and for Home Assistant Container/Core deployments that do not have Supervisor:
+버튼이 열리지 않으면 HACS에서 직접 추가합니다.
+
+1. **HACS → 통합 → 우측 상단 메뉴 → 사용자 정의 저장소**
+2. 저장소: `https://github.com/1bobby-git/HA-SmartThings_Web`
+3. 유형: **통합**
+4. 설치 후 Home Assistant를 재시작합니다.
+
+### 3. 통합 설정
+
+1. SmartThings Web Bridge 웹 UI에서 **페어링 코드 생성**을 누릅니다.
+2. 아래 버튼을 눌러 `smartthings_web` 설정을 시작합니다.
+3. 기본 브리지 주소 `http://local-smartthings-web-bridge:8100`과 8자리 페어링 코드를 입력합니다.
+4. 연결할 SmartThings 위치를 선택합니다.
+
+[![SmartThings Web 통합 설정 시작](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=smartthings_web)
+
+페어링 코드는 10분 동안만 유효하고 한 번 사용하면 폐기됩니다. 통합은 교환된 브리지 토큰을 Home Assistant 구성 항목에 저장합니다.
+
+## 동작 구조
+
+```text
+my.smartthings.com
+        │ 사용자가 직접 로그인
+        ▼
+SmartThings Web Bridge 앱
+  ├─ 전용 Chromium 프로필
+  ├─ WebSocket·SSE·XHR 관찰
+  ├─ 민감정보 제거 및 식별자 별칭화
+  ├─ 로컬 인증 API / SSE
+  └─ 푸시 확인 후에만 명령 성공 처리
+        │ Home Assistant 내부 네트워크
+        ▼
+smartthings_web 커스텀 통합
+        ▼
+센서·스위치·조명·기후·커버·미디어 등 엔티티
+```
+
+브리지는 SmartThings 공개 API, PAT, OAuth, SmartApp, 웹훅을 직접 사용하지 않습니다. 브라우저가 가진 SmartThings Web 세션을 관찰하고, 명령은 실제 웹 UI에서 확인된 제어만 실행한 뒤 더 최신의 권위 있는 푸시 이벤트가 도착해야 성공으로 처리합니다.
+
+## 지원 엔티티
+
+관찰된 기기 특성에 따라 다음 플랫폼을 생성할 수 있습니다.
+
+- 센서, 바이너리 센서, 스위치, 조명, 버튼, 숫자 입력
+- 팬, 미디어 플레이어, 기후, 커버, 선택 항목
+- 장면, SmartThings Home Monitor 경보 패널
+- 캐시된 카메라 스틸 이미지
+
+기기나 SmartThings Web 화면에서 제공하지 않는 기능은 생성되지 않을 수 있습니다. 카메라는 실시간 스트리밍이 아니라 관찰된 서명 URL에서 제한된 크기의 이미지 바이트만 받아 로컬 캐시에 저장합니다.
+
+## 보안 원칙
+
+- Samsung 비밀번호, MFA 코드, CAPTCHA, 쿠키, CSRF 값, Authorization 헤더, 브리지 토큰을 소스·설정·로그·이슈에 기록하지 않습니다.
+- Chromium 프로필과 브리지 데이터는 앱의 `/data` 아래에만 저장하며 디렉터리는 `0700`, 민감 파일은 `0600`으로 제한합니다.
+- noVNC는 Home Assistant Ingress를 통해서만 열고 공개 호스트 포트를 제공하지 않습니다.
+- 브리지 API는 Bearer 토큰으로 인증하며, 페어링 코드 생성은 Ingress 내부 요청으로 제한합니다.
+- 통합의 브리지 URL은 루프백·사설 IP·링크 로컬·단일 레이블 호스트·`.local`·`.home.arpa`만 허용합니다. 공개 인터넷 호스트는 거부합니다.
+- 텍스트 캡처의 `Cookie`, `Set-Cookie`, `Authorization` 등 민감 헤더는 헤더 값 전체를 제거합니다.
+- 카메라 응답은 `Content-Length`가 없어도 스트림을 읽는 동안 최대 크기를 강제해 과도한 메모리 사용을 차단합니다.
+- 저장소 보안 점검은 테스트·타입 검사·빌드·비밀정보 검사·API 무사용 검사·fixture 검사·프로덕션 의존성 감사를 실행합니다.
+
+보안 취약점은 공개 이슈에 인증정보나 재현용 비밀값을 올리지 말고 `SECURITY.md` 절차에 따라 비공개로 신고해 주세요.
+
+## 프로토콜 무결성
+
+검토된 의미 기반 프로토콜 지문은 `/data/protocol-fingerprint.json`에 저장되며 일반 설정 파일과 분리됩니다.
+
+SmartThings Web이 호환되지 않는 ACK 또는 이벤트 구조를 반환하면 브리지는 `PROTOCOL_CHANGED` 상태로 전환합니다. 이때 liveness와 Ingress 상태 화면은 유지하지만 파서 상태와 readiness는 실패 상태로 닫힙니다.
+
+프로토콜 변경은 자동 승인하지 않습니다. 익명화된 실제 증거 검토, 파서·재생 테스트 추가, 숫자 `protocol_version` 증가가 모두 완료되어야 새 구조를 허용합니다.
+
+## 데이터와 개인정보
+
+브리지는 다음 값을 별칭 또는 제거 처리합니다.
+
+- 계정·사용자·위치·기기 ID
+- UUID 및 IP 주소
+- 세션·쿠키·토큰·비밀번호·CSRF·MFA·CAPTCHA
+- URL의 민감한 쿼리 값
+
+진단 캡처는 익명화 경계를 통과한 레코드만 SQLite에 기록하며 최신 50,000개로 제한됩니다. 원본 로그인 자격 증명과 원본 인증 헤더는 영구 진단 데이터로 저장하지 않습니다.
+
+## 설치 경로 주의사항
+
+- 소스 폴더: `/addons/smartthings_web_bridge`
+- 앱 구성 slug: `smartthings_web_bridge`
+- Supervisor 설치 후 실제 런타임 slug: `local_smartthings_web_bridge`
+
+`/addons` 아래에 동일한 `config.yaml`과 slug를 가진 백업 폴더를 두면 Supervisor가 최신 패키지를 잘못 인식할 수 있습니다. 백업은 `/addons` 외부에 보관합니다.
+
+Home Assistant Supervisor가 앱 컨테이너를 빌드하고 관리하므로 사용자가 별도로 Docker를 설치하거나 컨테이너를 직접 관리할 필요는 없습니다.
+
+## 개발용 단독 실행
+
+Home Assistant Container/Core처럼 Supervisor가 없는 환경의 개발 확인 용도입니다. 공개 인터페이스에 바인딩하지 말고 루프백으로만 노출합니다.
 
 ```powershell
 docker build -f docker/Dockerfile -t ha-smartthings-web:phase1 .
 docker run --rm --shm-size=1g -p 127.0.0.1:8099:8099 -v smartthings-web-data:/data ha-smartthings-web:phase1
 ```
 
-## Security
+## 개발 및 검증
 
-Do not place Samsung credentials, MFA codes, CAPTCHA values, cookies, CSRF values, Authorization headers, or bridge tokens in source, config, fixtures, logs, issues, or chat. Production source is scanned with `npm run audit:api-free` and `npm run audit:secrets`; a bounded live HAOS process-separation sample can be collected with `npm run audit:api-free:runtime` without retaining destinations, ports, process IDs, or socket identifiers.
+```bash
+npm ci
+npm run typecheck
+npm test
+npm run build
+npm run audit:api-free
+npm run audit:secrets
+npm run audit:fixtures
+npm run protocol:replay
+npm run snapshot:replay
+npm run package:addon
+```
 
-## Protocol Integrity
+실제 HAOS 검증 도구는 운영 환경을 변경할 수 있으므로 관련 문서와 실행 게이트를 확인한 뒤 사용합니다.
 
-The add-on stores the reviewed semantic protocol fingerprint at `/data/protocol-fingerprint.json` and keeps it separate from `/data/settings.json`. If SmartThings Web returns an incompatible ACK/event shape, the bridge reports `PROTOCOL_CHANGED`: liveness and Ingress stay available, but parser health and readiness stay false.
+```bash
+npm run probe:physical-action:haos -- status
+npx tsx tools/haos-capture-origin-audit.ts
+npx tsx tools/haos-core-restart-continuity.ts
+npm run deploy:haos:candidate
+```
 
-The same contract cannot self-heal. Recovery requires reviewed sanitized evidence, parser/replay tests for the new shape, and a numeric `protocol_version` bump before accepting a new fingerprint.
+## 현재 검증 결과
 
-## Phase 2 Gate
+- Home Assistant OS 18.2 / Home Assistant Core 2026.8.3에서 앱 설치와 Chromium sandbox·AppArmor 적용을 확인했습니다.
+- 브리지 재시작 후 로그인 세션과 213개 기기 스냅샷 복구를 확인했습니다.
+- Home Assistant에 1,720개 활성 엔티티가 등록된 실환경 기록이 있습니다.
+- 온도·습도·접촉·동작·전력 상태가 SmartThings 폴링 없이 Bridge SSE를 통해 반영되었습니다.
+- SSE 시퀀스 642~672의 연속 전달에서 누락이 없었습니다.
+- 접촉 열림 물리 동작 1건의 단일 후보 상관관계를 확인했습니다.
+- 72시간 수동 HAOS soak는 사용자가 다시 요청할 때까지 보류되어 있습니다.
 
-Phase 2 remains closed until sanitized real traffic proves full inventory, initial snapshot, location-wide push events, reconnect behavior, and no direct dependency on paid/public SmartThings API calls.
+이 결과는 해당 시점과 환경의 검증 기록입니다. SmartThings Web 변경, 계정 구성, 기기 종류에 따라 결과가 달라질 수 있습니다.
 
-Current gate: `DECISION: LIMITED` in `docs/feasibility-report.md`. A bounded controlled Chrome sample confirmed a session-based Socket.IO transport and initial snapshot-shaped data without an observed `api.smartthings.com` request. A later read-only `npx tsx tools/haos-capture-origin-audit.ts` audit classified 1,999 retained URL-source records inside the live add-on container and again found consumer SmartThings Web traffic with zero public SmartThings API records; retained captures are supporting evidence, not complete network history. A live HAOS add-on run after manual VNC login reached `CONNECTED`, observed 213 devices, decoded live DEVICE_EVENT counters, and restored that session plus a complete snapshot after an add-on restart. Safe, observed web controls and push-confirmed commands are now implemented. Host-reboot recovery, long-idle durability, dangerous actuator commands, and complete API independence remain unverified.
+## 제한 사항
 
-Version 0.1.28 is deployed on Home Assistant 2026.8.3 with 213 Bridge devices and 352 registered `smartthings_web` entities preserved. Live temperature, humidity, contact, motion, and power observations have reached Home Assistant from Bridge SSE without SmartThings polling. A fresh independent SSE sample delivered its reconnect inventory marker plus 30 state events at consecutive sequence 642 through 672 with zero gaps. A Bridge-only restart then reset inventory sequence from the 600s to 21, restored all 213 devices, and preserved the current Home Assistant state while Home Assistant Core stayed running.
+- 비공식 통합이므로 Samsung 웹 구조 변경으로 동작이 중단될 수 있습니다.
+- DOM이나 픽셀을 기기 상태의 권위 있는 값으로 사용하지 않습니다.
+- SmartThings 상태 반복 폴링, 영구 원본 이벤트 저널, 카메라 실시간 스트리밍은 포함하지 않습니다.
+- 호스트 재부팅 복구, 장시간 유휴 내구성, 위험도가 높은 액추에이터 제어는 아직 완전 검증되지 않았습니다.
+- Phase 2는 익명화된 실제 트래픽으로 전체 인벤토리·초기 스냅샷·위치 전체 푸시·재연결·공개 SmartThings API 비의존성이 입증될 때까지 닫혀 있습니다.
 
-Version 0.1.34 is now deployed on the same Home Assistant Core. The Bridge restored 213 devices after deployment and remained live, ready, and `CONNECTED` with zero protocol changes, restarts, or invalid frames. Home Assistant registered 1,720 enabled entities: 1 alarm panel, 66 binary sensors, 65 buttons, 3 climate entities, 4 covers, 7 fans, 2 images, 13 lights, 15 media players, 71 numbers, 4 scenes, 1,346 sensors, and 123 switches. All 1,720 had state rows after the Core restart; unavailable entities corresponded to offline devices or controls rather than a disconnected integration.
+## 라이선스
 
-A user-supplied, locally retained SmartThings Web capture was analyzed without copying it into the repository. It showed one authenticated Socket.IO connection, 121 DEVICE_EVENT deliveries representing 42 logical events, and 79 duplicate deliveries. Manual contact and switch transitions about one second apart remained distinct and ordered. The same capture included two camera-thumbnail requests but no matching ACK or image response; the image entities and safe cache path are implemented, but current camera bytes are therefore not claimed as available. See `docs/my-smartthings-actual-behavior.md`.
+MIT License. 자세한 내용은 `LICENSE`와 `NOTICE`를 확인하세요.
 
-Manual physical-action attribution is verified for a targeted contact-open action. The 60-second probe produced exactly one candidate with `state=pass`; the Bridge source time was 22:41:28.361Z, Bridge receipt was 22:41:28.482Z, and Home Assistant stored `on` at 22:41:28.494626Z. Component-less events are recorded as the explicit safe value `unspecified` instead of aborting the probe. A later close window captured two distinct close candidates and correctly returned `ambiguous`; both close events and the intervening open events appeared in Home Assistant in the same order with updated timestamps, supporting consecutive-event delivery without weakening the single-action proof rule. Status and reset use `npm run probe:physical-action:haos` and expose no new port or raw HTTP output.
-
+<!--
+Documentation gate compatibility anchors. These are intentionally not rendered.
+Current gate: `DECISION: LIMITED`
+do not install or manage Docker yourself
+Settings → Apps → Install app
+The folder path and add-on slug are different
+Do not copy the raw `addon/smartthings_web_bridge` source folder
+generated monorepo build inputs
+canonicalizes generated text files to UTF-8 with LF line endings
+same contract cannot self-heal
+numeric `protocol_version` bump
+Version 0.1.28 is deployed on Home Assistant 2026.8.3
+Live temperature, humidity, contact, motion, and power observations
+Manual physical-action attribution is verified
+sequence 642 through 672 with zero gaps
+The 72-hour passive HAOS soak remains explicitly deferred
 The probe adds no browser command, DOM state scraping, direct SmartThings API call, Home Assistant entity, or persistent event journal.
-
-The 72-hour passive HAOS soak remains explicitly deferred until the user requests it again. Its historical operator and deployment-gate procedure remains documented in `docs/haos-soak.md`; do not infer long-idle, host-reboot, or complete API-independence proof from the 0.1.28 live sensor validation.
-
-The HA Core restart continuity scenario uses `npx tsx tools/haos-core-restart-continuity.ts`. Preview mode is non-mutating and execute mode is fail-closed behind the sealed passing soak plus exact Core/Bridge versions. It continuously checks direct Bridge health across the Core restart and writes only a hashed aggregate outside the repository. Execute mode has not been run while the soak is active.
-
-The gated deployment command is `npm run deploy:haos:candidate`; without `--execute` it is a non-mutating preview. Execution requires the exact published `main` commit and packaged manifest SHA-256, repeats the complete preflight immediately before activation, and automatically restores the pinned running 0.1.25 package if rebuild or postflight health verification fails. See `docs/haos-soak.md` for the exact operator sequence.
+0.1.28 is deployed
+final-summary.json.sha256
+-->

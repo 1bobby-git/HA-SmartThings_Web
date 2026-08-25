@@ -107,6 +107,32 @@ describe("redactor", () => {
     });
   });
 
+  test("redacts complete authentication and cookie header lines", () => {
+    withRedactor((redact) => {
+      const sessionCookie = "session-cookie-secret";
+      const xsrfCookie = "xsrf-cookie-secret";
+      const rotatedCookie = "rotated-cookie-secret";
+      const bearer = "bearer-header-secret";
+      const sanitized = redact(
+        [
+          `Cookie: SID=${sessionCookie}; XSRF-TOKEN=${xsrfCookie}; theme=dark`,
+          `Set-Cookie: SID=${rotatedCookie}; Path=/; Secure; HttpOnly`,
+          `Authorization: Bearer ${bearer}`,
+          "X-Trace: keep-this-value"
+        ].join("\r\n")
+      );
+
+      expect(sanitized).not.toContain(sessionCookie);
+      expect(sanitized).not.toContain(xsrfCookie);
+      expect(sanitized).not.toContain(rotatedCookie);
+      expect(sanitized).not.toContain(bearer);
+      expect(sanitized).toContain("Cookie: [REDACTED]");
+      expect(sanitized).toContain("Set-Cookie: [REDACTED]");
+      expect(sanitized).toContain("Authorization: [REDACTED]");
+      expect(sanitized).toContain("X-Trace: keep-this-value");
+    });
+  });
+
   test("redacts IPv6 addresses in non-JSON text", () => {
     withRedactor((redact) => {
       const sanitized = redact(`peer=${raw.ipv6} event=connected`);

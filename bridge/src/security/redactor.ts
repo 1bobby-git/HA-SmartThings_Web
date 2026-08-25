@@ -13,6 +13,8 @@ type JsonValue =
 const REDACTED = "[REDACTED]";
 const sensitiveKeyPattern =
   /(?:authorization|cookie|set[-_]?cookie|password|token|secret|csrf|mfa|captcha|session(?:[-_]?id)?|session[-_]?token)/i;
+const sensitiveHeaderLinePattern =
+  /\b(authorization|proxy-authorization|cookie|set-cookie|x-csrf-token|x-xsrf-token|csrf-token)(\s*:\s*)[^\r\n]*/gi;
 const locationKeyPattern = /(?:^|[_-])locations?(?:[_-]?ids?)?$|locationIds?/i;
 const deviceKeyPattern = /(?:^|[_-])devices?(?:[_-]?ids?)?$|deviceIds?/i;
 const accountKeyPattern = /(?:^|[_-])accounts?(?:[_-]?ids?)?$|accountIds?/i;
@@ -107,6 +109,11 @@ export function createRedactor(aliasStore: SqliteAliasStore) {
           : candidate;
         return isIP(address) ? REDACTED : candidate;
       });
+
+    output = output.replace(
+      sensitiveHeaderLinePattern,
+      (_match, key: string, sep: string) => `${key}${sep}${REDACTED}`
+    );
 
     output = output.replace(
       /(authorization|cookie|set[-_]?cookie|password|token|secret|csrf|mfa|captcha|session(?:[-_]?id)?|session[-_]?token)(\s*[:=]\s*)(?:Bearer\s+)?[^\s,;&"']+/gi,
