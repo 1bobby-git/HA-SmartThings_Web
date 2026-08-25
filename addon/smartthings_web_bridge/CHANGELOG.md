@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.54
+
+- Recognize the live Cake `/location/<id>/rooms/device/<id>` detail route in addition to the direct `/location/<id>/device/<id>` route.
+- Keep exact visible device-identity validation before retaining or reusing either route.
+- Restore warm-page reuse for room-originated device details instead of closing them after every command.
+
 ## 0.1.53
 
 - Retain verified device-detail routes in bounded process memory so controls do not repeat the full location/card search after a warm page expires.

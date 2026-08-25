@@ -89,6 +89,12 @@ confirmed only by newer push events and produced ordered companion power
 changes of `0 W → 16 W → 0 W` in Home Assistant within about two seconds of
 their Bridge timestamps.
 
+A later live room-card inspection confirmed that Cake opens room-originated
+details at `/location/<id>/rooms/device/<id>`, while dashboard-originated
+details can use `/location/<id>/device/<id>`. Version 0.1.54 accepts both only
+after the exact visible device identity is revalidated, allowing the verified
+detail page and its process-memory route to be reused for later controls.
+
 ## Camera behavior
 
 The supplied capture contained two thumbnail requests and no corresponding ACK

@@ -216,7 +216,8 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     const firstPage = new FakeCommandPage();
     const routedPage = new FakeCommandPage();
-    const detailUrl = "https://my.smartthings.com/location/loc_001/device/device_raw_001";
+    const detailUrl =
+      "https://my.smartthings.com/location/loc_001/rooms/device/device_raw_001";
     firstPage.card.click.mockImplementation(async () => {
       firstPage.currentUrl = detailUrl;
     });

@@ -1182,7 +1182,7 @@ function isSmartThingsDeviceDetail(value: string): boolean {
     const url = new URL(value);
     return (
       url.origin === "https://my.smartthings.com" &&
-      /^\/location\/[^/]+\/device\/[^/]+\/?$/u.test(url.pathname) &&
+      /^\/location\/[^/]+\/(?:rooms\/)?device\/[^/]+\/?$/u.test(url.pathname) &&
       url.search === "" &&
       url.hash === ""
     );
