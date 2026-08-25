@@ -80,7 +80,7 @@ export class SmartThingsWebUiCommandExecutor {
     if (currentLocationId === targetLocationId) return;
     const currentName = locationNames?.[currentLocationId];
     const targetName = locationNames?.[targetLocationId];
-    if (!currentName || !targetName) throw new Error("command_location_mismatch");
+    if (!currentName || !targetName) throw new Error("command_location_unknown");
 
     let picker = page.getByRole("button", { name: new RegExp(escapeRegExp(currentName), "u") });
     if ((await picker.count()) !== 1) {
@@ -88,15 +88,15 @@ export class SmartThingsWebUiCommandExecutor {
         has: page.getByText(currentName, { exact: true })
       });
     }
-    if ((await picker.count()) !== 1) throw new Error("command_location_mismatch");
+    if ((await picker.count()) !== 1) throw new Error("command_location_picker_not_found");
     await picker.click({ timeout: 15_000 });
     const target = page.getByRole("link", { name: exactName(targetName) });
     try {
       await target.first().waitFor({ state: "visible", timeout: 15_000 });
     } catch {
-      throw new Error("command_location_mismatch");
+      throw new Error("command_location_target_not_found");
     }
-    if ((await target.count()) !== 1) throw new Error("command_location_mismatch");
+    if ((await target.count()) !== 1) throw new Error("command_location_target_not_found");
     await target.click({ timeout: 15_000 });
 
     const changedRoute = locationIdFromUrl(page.url());
@@ -104,7 +104,7 @@ export class SmartThingsWebUiCommandExecutor {
       !changedRoute ||
       this.normalizeLocationId(changedRoute) !== targetLocationId
     ) {
-      throw new Error("command_location_mismatch");
+      throw new Error("command_location_change_failed");
     }
   }
 }

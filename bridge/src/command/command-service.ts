@@ -50,6 +50,10 @@ export type SafeCommandErrorCode =
   | "command_browser_unavailable"
   | "command_login_required"
   | "command_location_mismatch"
+  | "command_location_unknown"
+  | "command_location_picker_not_found"
+  | "command_location_target_not_found"
+  | "command_location_change_failed"
   | "command_target_not_found"
   | "command_target_ambiguous"
   | "command_search_not_found"
@@ -304,6 +308,10 @@ function isExecutorErrorCode(value: string): value is SafeCommandErrorCode {
     "command_browser_unavailable",
     "command_login_required",
     "command_location_mismatch",
+    "command_location_unknown",
+    "command_location_picker_not_found",
+    "command_location_target_not_found",
+    "command_location_change_failed",
     "command_target_not_found",
     "command_target_ambiguous",
     "command_search_not_found",

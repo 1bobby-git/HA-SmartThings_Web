@@ -180,7 +180,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
 
     await expect(
       executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" })
-    ).rejects.toThrow("command_location_mismatch");
+    ).rejects.toThrow("command_location_unknown");
     expect(page.card.click).not.toHaveBeenCalled();
   });
 
