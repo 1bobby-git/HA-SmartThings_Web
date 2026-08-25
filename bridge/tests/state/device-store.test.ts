@@ -526,6 +526,76 @@ describe("DeviceStore", () => {
     );
   });
 
+  test("captures enumerated possibleStates as status options with atomic label mappings", () => {
+    const store = new DeviceStore();
+
+    observeDeviceDetails(store, [
+      detailSwatch("ENUMERATED", "enumerated", {
+        swatchId: "identifier_enum001",
+        label: "Mode",
+        attributeName: "mode",
+        possibleStates: [
+          { status: "cool", label: "Cooling", command: "setCool" },
+          { status: "windFree", label: "Wind free", command: "setMode" }
+        ]
+      }),
+      detailSwatch("ENUMERATED", "enumerated", {
+        swatchId: "identifier_enum002",
+        label: "Broken duplicate",
+        attributeName: "brokenMode",
+        possibleStates: [
+          { status: "cool", label: "Cooling", command: "setCool" },
+          { status: "cool", label: "Cooling duplicate", command: "setCoolingDuplicate" }
+        ]
+      }),
+      detailSwatch("ENUMERATED", "enumerated", {
+        swatchId: "identifier_enum003",
+        label: "Broken incomplete",
+        attributeName: "incompleteMode",
+        possibleStates: [
+          { status: "sleep", label: "Sleep", command: "setSleep" },
+          { status: "away", label: "Away" }
+        ]
+      }),
+      detailSwatch("ENUMERATED", "enumerated", {
+        swatchId: "identifier_enum004",
+        label: "Broken object key",
+        attributeName: "unsafeMode",
+        possibleStates: [
+          { status: "__proto__", label: "Unsafe", command: "setUnsafe" }
+        ]
+      })
+    ]);
+
+    expect(store.snapshot().devices[0]?.controls).toEqual([
+      expect.objectContaining({
+        id: "identifier_enum001",
+        kind: "enumerated",
+        options: ["cool", "windFree"],
+        optionLabels: {
+          cool: "Cooling",
+          windFree: "Wind free"
+        },
+        optionCommands: {
+          cool: "setCool",
+          windFree: "setMode"
+        }
+      }),
+      expect.not.objectContaining({
+        id: "identifier_enum002",
+        options: expect.any(Array)
+      }),
+      expect.not.objectContaining({
+        id: "identifier_enum003",
+        options: expect.any(Array)
+      }),
+      expect.not.objectContaining({
+        id: "identifier_enum004",
+        options: expect.any(Array)
+      })
+    ]);
+  });
+
   test("keeps pending detail ACKs isolated by websocket connection", () => {
     const store = new DeviceStore();
 

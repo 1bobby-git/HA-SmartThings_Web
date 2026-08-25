@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.36
+
+- Scope similarly named devices to the real SmartThings `data-testid=device` cards so room drag wrappers cannot make commands ambiguous.
+- Drive detail sliders, toggles, and buttons from their visible swatch labels, matching the actual generic range, switch, and icon-button markup.
+- Normalize enumerated `possibleStates` atomically and click only the observed status-to-command mapping while confirming the newer pushed status.
+
 ## 0.1.35
 
 - Prefer one exact SmartThings device-card name before partial-name matches so similarly named speakers remain safely addressable without weakening duplicate-name ambiguity checks.

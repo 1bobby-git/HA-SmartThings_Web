@@ -15,6 +15,7 @@ interface CommandLocatorLike {
 interface CommandPageLike extends BrowserPageLike {
   getByRole(role: string, options?: { name?: string | RegExp }): CommandLocatorLike;
   getByText(text: string, options?: { exact?: boolean }): CommandLocatorLike;
+  locator(selector: string): CommandLocatorLike;
   mouse?: {
     move(x: number, y: number): Promise<unknown>;
     wheel(deltaX: number, deltaY: number): Promise<unknown>;
@@ -82,6 +83,8 @@ export class SmartThingsWebUiCommandExecutor {
     attribute: string;
     arguments: unknown[];
     controlLabel?: string;
+    optionLabel?: string;
+    optionCommand?: string;
   }): Promise<void> {
     const manager = this.getManager();
     if (!manager) {
@@ -268,10 +271,17 @@ async function executeDeviceControl(
     attribute: string;
     arguments: unknown[];
     controlLabel?: string;
+    optionLabel?: string;
+    optionCommand?: string;
   }
 ): Promise<void> {
   if (input.command === "on" || input.command === "off") {
-    await clickRoleControl(page, "switch", /^(?:Power|전원)$/iu);
+    const label = input.controlLabel ?? controlLabelFor(input.attribute);
+    if (label) {
+      await clickRoleOrLabeledControl(page, "switch", /^(?:Power|전원)$/iu, label);
+    } else {
+      await clickRoleControl(page, "switch", /^(?:Power|전원)$/iu);
+    }
     return;
   }
   if (input.command === "refresh") {
@@ -280,11 +290,16 @@ async function executeDeviceControl(
   }
   if (input.command === "press") {
     if (!input.controlLabel) throw new Error("command_control_not_found");
-    await clickRoleControl(page, "button", exactName(input.controlLabel));
+    await clickRoleOrLabeledControl(page, "button", exactName(input.controlLabel), input.controlLabel);
     return;
   }
   if (input.command === "mute" || input.command === "unmute") {
-    await clickRoleControl(page, "switch", /^(?:Mute|Muted|음소거)$/iu);
+    const label = input.controlLabel ?? controlLabelFor(input.attribute);
+    if (label) {
+      await clickRoleOrLabeledControl(page, "switch", /^(?:Mute|Muted|음소거)$/iu, label);
+    } else {
+      await clickRoleControl(page, "switch", /^(?:Mute|Muted|음소거)$/iu);
+    }
     return;
   }
   if (input.command === "setNumber" || input.command === "setVolume" || input.command === "setPosition") {
@@ -293,7 +308,7 @@ async function executeDeviceControl(
       throw new Error("command_execution_failed");
     }
     const label = input.controlLabel ?? controlLabelFor(input.attribute);
-    const slider = await findRoleControl(page, "slider", label ? exactOrLocalized(label) : undefined);
+    const slider = await findRoleOrLabeledControl(page, "slider", label ? exactOrLocalized(label) : undefined, label);
     await slider.fill(String(value), { timeout: 15_000 });
     return;
   }
@@ -303,14 +318,29 @@ async function executeDeviceControl(
       throw new Error("command_execution_failed");
     }
     const label = input.controlLabel ?? controlLabelFor(input.attribute);
-    const select = await findRoleControl(page, "combobox", label ? exactOrLocalized(label) : undefined);
-    await select.click({ timeout: 15_000 });
-    await clickExactlyOne(page.getByRole("option", { name: exactName(value) }));
+    if (
+      (input.command === "setOption" || input.command === "setFanMode") &&
+      input.optionCommand &&
+      label
+    ) {
+      await clickLabeledSwatchCommand(page, label, input.optionCommand);
+      return;
+    }
+    try {
+      const select = await findRoleControl(page, "combobox", label ? exactOrLocalized(label) : undefined);
+      await select.click({ timeout: 15_000 });
+      await clickExactlyOne(page.getByRole("option", { name: exactName(input.optionLabel ?? value) }));
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "command_control_not_found" || !label) {
+        throw error;
+      }
+      await clickLabeledSwatchOption(page, label, input.optionLabel ?? value);
+    }
     return;
   }
   if (isCoverButtonCommand(input.command)) {
     if (!input.controlLabel) throw new Error("command_control_not_found");
-    await clickRoleControl(page, "button", exactName(input.controlLabel));
+    await clickRoleOrLabeledControl(page, "button", exactName(input.controlLabel), input.controlLabel);
     return;
   }
   if (input.command === "playTrackAndResume") {
@@ -366,6 +396,119 @@ async function clickRoleControl(
 ): Promise<void> {
   const control = await findRoleControl(page, role, preferredName);
   await control.click({ timeout: 15_000 });
+}
+
+async function findRoleOrLabeledControl(
+  page: CommandPageLike,
+  role: string,
+  preferredName: RegExp | undefined,
+  label: string | undefined
+): Promise<CommandLocatorLike> {
+  try {
+    return await findRoleControl(page, role, preferredName);
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "command_control_not_found" || !label) {
+      throw error;
+    }
+    return await findLabeledSwatchControl(page, label, role);
+  }
+}
+
+async function clickRoleOrLabeledControl(
+  page: CommandPageLike,
+  role: string,
+  preferredName: RegExp,
+  label: string
+): Promise<void> {
+  const control = await findRoleOrLabeledControl(page, role, preferredName, label);
+  await control.click({ timeout: 15_000 });
+}
+
+async function clickLabeledSwatchOption(
+  page: CommandPageLike,
+  label: string,
+  option: string
+): Promise<void> {
+  const variants = labelVariants(label);
+  for (const variant of variants) {
+    const scope = await labeledSwatchScope(page, variant);
+    if (!scope) continue;
+    const control = scope.getByRole("button", { name: exactName(option) });
+    try {
+      await control.first().waitFor({ state: "visible", timeout: 5_000 });
+    } catch {
+      continue;
+    }
+    if ((await control.count()) !== 1) throw new Error("command_control_ambiguous");
+    await control.click({ timeout: 15_000 });
+    return;
+  }
+  throw new Error("command_control_not_found");
+}
+
+async function clickLabeledSwatchCommand(
+  page: CommandPageLike,
+  label: string,
+  command: string
+): Promise<void> {
+  if (!/^[A-Za-z0-9_.:-]{1,160}$/u.test(command)) {
+    throw new Error("command_control_not_found");
+  }
+  for (const variant of labelVariants(label)) {
+    const scope = await labeledSwatchScope(page, variant);
+    if (!scope) continue;
+    const control = scope.locator(`[data-command="${command}"]`);
+    try {
+      await control.first().waitFor({ state: "visible", timeout: 5_000 });
+    } catch {
+      continue;
+    }
+    if ((await control.count()) !== 1) throw new Error("command_control_ambiguous");
+    await control.click({ timeout: 15_000 });
+    return;
+  }
+  throw new Error("command_control_not_found");
+}
+
+async function findLabeledSwatchControl(
+  page: CommandPageLike,
+  label: string,
+  role: string
+): Promise<CommandLocatorLike> {
+  const variants = labelVariants(label);
+  for (const variant of variants) {
+    const scope = await labeledSwatchScope(page, variant);
+    if (!scope) continue;
+    const control = scope.getByRole(role);
+    try {
+      await control.first().waitFor({ state: "visible", timeout: 5_000 });
+    } catch {
+      continue;
+    }
+    if ((await control.count()) !== 1) throw new Error("command_control_ambiguous");
+    return control;
+  }
+  throw new Error("command_control_not_found");
+}
+
+async function labeledSwatchScope(
+  page: CommandPageLike,
+  label: string
+): Promise<CommandLocatorLike | undefined> {
+  const labelLocator = page.getByText(label, { exact: true });
+  try {
+    await labelLocator.first().waitFor({ state: "visible", timeout: 5_000 });
+  } catch {
+    return undefined;
+  }
+  const count = await labelLocator.count();
+  if (count === 0) return undefined;
+  if (count !== 1) throw new Error("command_control_ambiguous");
+  return labelLocator.locator("..");
+}
+
+function labelVariants(label: string): string[] {
+  return label.split("|").filter((value) => value.length > 0);
 }
 
 async function clickExactlyOne(control: CommandLocatorLike): Promise<void> {
@@ -504,9 +647,10 @@ function deviceLocator(page: CommandPageLike, deviceName: string): CommandLocato
 }
 
 function exactTextCardLocator(page: CommandPageLike, deviceName: string): CommandLocatorLike {
-  return page.getByRole("button").filter({
+  const deviceCards = page.locator("[data-testid='device']");
+  return deviceCards.filter({
     has: page.getByText(deviceName, { exact: true })
-  });
+  }).getByRole("button");
 }
 
 async function visibleExactTextCard(

@@ -40,6 +40,8 @@ export interface BridgeDeviceControl {
   command?: string;
   commands?: string[];
   options?: string[];
+  optionLabels?: Record<string, string>;
+  optionCommands?: Record<string, string>;
   min?: number;
   max?: number;
   step?: number;
@@ -219,7 +221,7 @@ export class DeviceStore {
         online: device.online,
         states: [...device.states.values()].sort(byState).map(cloneState),
         ...(device.controls.size > 0
-          ? { controls: [...device.controls.values()].sort(byId).map((value) => ({ ...value })) }
+          ? { controls: [...device.controls.values()].sort(byId).map(cloneControl) }
           : {})
       })),
       scenes: [...this.#scenes.values()].sort(byId).map((value) => ({ ...value }))
@@ -497,7 +499,7 @@ export class DeviceStore {
         type: device.type,
         online: device.online,
         states: new Map(device.states.map((state) => [stateKey(state), cloneState(state)])),
-        controls: new Map((device.controls ?? []).map((control) => [control.id, { ...control }]))
+        controls: new Map((device.controls ?? []).map((control) => [control.id, cloneControl(control)]))
       });
     }
   }
@@ -761,6 +763,9 @@ function controlFromSwatch(row: Record<string, unknown>): BridgeDeviceControl | 
     command: nested?.command,
     commands: nested?.commands ?? nested?.supportedCommands ?? toggleCommands(nested),
     options: nested?.options ?? nested?.values ?? nested?.supportedValues,
+    possibleStates: nested?.possibleStates,
+    optionLabels: nested?.optionLabels,
+    optionCommands: nested?.optionCommands,
     min: nested?.min ?? nested?.minimum ?? nested?.minValue,
     max: nested?.max ?? nested?.maximum ?? nested?.maxValue,
     step: nested?.step ?? nested?.interval ?? nested?.increment
@@ -786,7 +791,10 @@ function controlFromParts(input: Record<string, unknown> | undefined): BridgeDev
   }
   const command = safeToken(readString(input.command)) ? readString(input.command) : undefined;
   const commands = tokenList(input.commands);
-  const options = displayStringList(input.options);
+  const possibleStateOptions = possibleStates(input.possibleStates);
+  const options = possibleStateOptions === undefined ? displayStringList(input.options) : possibleStateOptions?.options ?? [];
+  const optionLabels = possibleStateOptions === undefined ? safeOptionMap(input.optionLabels, options) : possibleStateOptions?.optionLabels;
+  const optionCommands = possibleStateOptions === undefined ? safeOptionMap(input.optionCommands, options, true) : possibleStateOptions?.optionCommands;
   const min = finiteNumber(input.min);
   const max = finiteNumber(input.max);
   const step = finiteNumber(input.step);
@@ -801,10 +809,66 @@ function controlFromParts(input: Record<string, unknown> | undefined): BridgeDev
     ...(command ? { command } : {}),
     ...(commands.length > 0 ? { commands } : {}),
     ...(options.length > 0 ? { options } : {}),
+    ...(optionLabels ? { optionLabels } : {}),
+    ...(optionCommands ? { optionCommands } : {}),
     ...(min !== undefined ? { min } : {}),
     ...(max !== undefined ? { max } : {}),
     ...(step !== undefined ? { step } : {})
   };
+}
+
+function possibleStates(value: unknown): { options: string[]; optionLabels: Record<string, string>; optionCommands: Record<string, string> } | null | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const options: string[] = [];
+  const labels = new Set<string>();
+  const commands = new Set<string>();
+  const optionLabels: Record<string, string> = {};
+  const optionCommands: Record<string, string> = {};
+  for (const item of value) {
+    const record = asRecord(item);
+    const status = safeDisplayString(readString(record?.status));
+    const label = safeDisplayString(readString(record?.label));
+    const command = safeToken(readString(record?.command)) ? readString(record?.command) : null;
+    if (
+      !status ||
+      unsafeOptionKey(status) ||
+      !label ||
+      !command ||
+      options.includes(status) ||
+      labels.has(label) ||
+      commands.has(command)
+    ) {
+      return null;
+    }
+    options.push(status);
+    labels.add(label);
+    commands.add(command);
+    optionLabels[status] = label;
+    optionCommands[status] = command;
+  }
+  return { options, optionLabels, optionCommands };
+}
+
+function safeOptionMap(value: unknown, options: string[], requireToken = false): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  const record = asRecord(value);
+  if (!record || options.length === 0) return undefined;
+  const result: Record<string, string> = {};
+  for (const option of options) {
+    if (unsafeOptionKey(option)) return undefined;
+    const text = readString(record[option]);
+    const safe = requireToken
+      ? safeToken(text) ? text : null
+      : safeDisplayString(text);
+    if (!safe) return undefined;
+    result[option] = safe;
+  }
+  return Object.keys(result).length === options.length ? result : undefined;
+}
+
+function unsafeOptionKey(value: string): boolean {
+  return value === "__proto__" || value === "prototype" || value === "constructor";
 }
 
 function isControlKind(value: string | null): value is BridgeDeviceControl["kind"] {
@@ -965,6 +1029,14 @@ function setIfChanged<T>(map: Map<string, T>, key: string, value: T): boolean {
   if (current && JSON.stringify(current) === JSON.stringify(value)) return false;
   map.set(key, value);
   return true;
+}
+
+function cloneControl(control: BridgeDeviceControl): BridgeDeviceControl {
+  return {
+    ...control,
+    ...(control.optionLabels ? { optionLabels: { ...control.optionLabels } } : {}),
+    ...(control.optionCommands ? { optionCommands: { ...control.optionCommands } } : {})
+  };
 }
 
 function cloneState(state: BridgeDeviceState): BridgeDeviceState {

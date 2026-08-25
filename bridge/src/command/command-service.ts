@@ -71,6 +71,8 @@ export interface SafeCommandExecutor {
     roomName?: string;
     controlId?: string;
     controlLabel?: string;
+    optionLabel?: string;
+    optionCommand?: string;
   }): Promise<void>;
   executeScene?(input: {
     action?: string;
@@ -137,6 +139,11 @@ interface DedupeEntry {
   fingerprint: string;
   result: Promise<SafeCommandResult>;
 }
+
+type ResolvedDeviceRequest = SafeCommandRequest & {
+  optionLabel?: string;
+  optionCommand?: string;
+};
 
 const oldRequestKeys = ["deviceId", "component", "capability", "command", "arguments", "clientRequestId"] as const;
 const newRequestKeys = ["targetType", "targetId", "component", "capability", "attribute", "command", "arguments", "clientRequestId", "controlId", "controlLabel"] as const;
@@ -240,7 +247,9 @@ export class SafeCommandService {
         locationNames,
         ...(roomName ? { roomName } : {}),
         ...(effective.controlId ? { controlId: effective.controlId } : {}),
-        ...(effective.controlLabel ? { controlLabel: effective.controlLabel } : {})
+        ...(effective.controlLabel ? { controlLabel: effective.controlLabel } : {}),
+        ...(effective.optionLabel ? { optionLabel: effective.optionLabel } : {}),
+        ...(effective.optionCommand ? { optionCommand: effective.optionCommand } : {})
       });
     } catch (error) {
       confirmation.cancel();
@@ -472,7 +481,7 @@ function armStateForCommand(command: string): string | undefined {
   return { armAway: "ARMED_AWAY", armStay: "ARMED_STAY", disarm: "DISARMED" }[command];
 }
 
-function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest): SafeCommandRequest {
+function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest): ResolvedDeviceRequest {
   if (request.command === "refresh" && (!request.component || !request.capability)) {
     const state = device.states[0];
     if (!state) throw new SafeCommandError("capability_not_found");
@@ -483,7 +492,8 @@ function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest)
       attribute: request.attribute ?? state.attribute
     };
   }
-  if (!isControlBoundCommand(request.command)) return request;
+  const observedFanMode = request.command === "setFanMode" && Boolean(request.controlId);
+  if (!isControlBoundCommand(request.command) && !observedFanMode) return request;
   if (!request.controlId) throw new SafeCommandError("invalid_control_id");
   const control = device.controls?.find((candidate) => candidate.id === request.controlId);
   if (!control) throw new SafeCommandError("capability_not_found");
@@ -491,13 +501,15 @@ function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest)
   if (request.capability && request.capability !== control.capability) throw new SafeCommandError("invalid_capability");
   if (request.attribute && request.attribute !== control.attribute) throw new SafeCommandError("invalid_capability");
   if (request.controlLabel && request.controlLabel !== control.label) throw new SafeCommandError("invalid_control_label");
-  validateObservedControlCommand(control, request.command, request.arguments);
+  const option = validateObservedControlCommand(control, request.command, request.arguments);
   return {
     ...request,
     component: control.component,
     capability: control.capability,
     attribute: control.attribute,
-    controlLabel: control.label
+    controlLabel: control.label,
+    ...(option?.label ? { optionLabel: option.label } : {}),
+    ...(option?.command ? { optionCommand: option.command } : {})
   };
 }
 
@@ -550,20 +562,29 @@ function validateObservedControlCommand(
   control: NonNullable<BridgeDevice["controls"]>[number],
   command: string,
   args: BridgeJsonValue[]
-): void {
+): { label?: string; command?: string } | undefined {
   if (dangerousControl(control)) throw new SafeCommandError("unsupported_command");
   if (command === "press") {
     if (control.kind !== "button") throw new SafeCommandError("capability_not_found");
-    return;
+    return undefined;
   }
-  if (command === "setOption") {
+  if (command === "setOption" || command === "setFanMode") {
     if (control.kind !== "enumerated") throw new SafeCommandError("capability_not_found");
     const option = args[0];
     if (typeof option !== "string" || !(control.options ?? []).includes(option)) {
       throw new SafeCommandError("invalid_arguments");
     }
-    if (!safeOptionAttribute(control.attribute)) throw new SafeCommandError("unsupported_command");
-    return;
+    if (
+      command === "setOption"
+        ? !safeOptionAttribute(control.attribute)
+        : control.attribute !== "fanMode" && control.attribute !== "airPurifierMode"
+    ) {
+      throw new SafeCommandError("unsupported_command");
+    }
+    return {
+      ...(control.optionLabels?.[option] ? { label: control.optionLabels[option] } : {}),
+      ...(control.optionCommands?.[option] ? { command: control.optionCommands[option] } : {})
+    };
   }
   if (command === "setPosition") {
     if (control.kind !== "slider" || control.attribute !== "shadeLevel") {
@@ -577,13 +598,13 @@ function validateObservedControlCommand(
       throw new SafeCommandError("invalid_arguments");
     }
     if (!controlSupportsCommand(control, command, false)) throw new SafeCommandError("unsupported_command");
-    return;
+    return undefined;
   }
   if (isCoverButtonCommand(command)) {
     if (control.kind !== "button") throw new SafeCommandError("capability_not_found");
     if (!COVER_ATTRIBUTES.has(control.attribute)) throw new SafeCommandError("unsupported_command");
     if (!controlSupportsCommand(control, command, true)) throw new SafeCommandError("unsupported_command");
-    return;
+    return undefined;
   }
   throw new SafeCommandError("unsupported_command");
 }

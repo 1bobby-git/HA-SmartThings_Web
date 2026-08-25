@@ -63,6 +63,19 @@ actionable. A command is successful only after a newer authoritative push
 confirms the requested value. Missing controls fail closed instead of clicking
 a similarly shaped page element.
 
+The user-supplied Cake `2.57.0` asset and its published source maps were also
+reviewed as implementation evidence. They show that room drag wrappers and
+device cards can both be buttons, while each real device is wrapped by
+`data-testid="device"`. Detail sliders use a generic `aria-label="range"`
+under a visible swatch label. Button swatches likewise put the visible label
+beside an icon-only button. Enumerated swatches render each visible option
+label beside a button carrying the authoritative `data-command`; they are not
+comboboxes. Toggle swatches also keep their label beside a generic switch.
+Version 0.1.36 follows those exact boundaries: it scopes device
+selection to real device wrappers, scopes sliders/buttons to their observed
+swatch label, and retains an atomic `status` to `label` to `command` mapping
+from `possibleStates`.
+
 ## Camera behavior
 
 The supplied capture contained two thumbnail requests and no corresponding ACK

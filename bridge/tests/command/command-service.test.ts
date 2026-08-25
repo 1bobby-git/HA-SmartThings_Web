@@ -246,6 +246,91 @@ describe("SafeCommandService", () => {
     }))).rejects.toMatchObject({ code: "invalid_control_id" });
   });
 
+  test("uses possibleStates status for setOption confirmation and passes observed label and command to the executor", async () => {
+    const store = readyDeviceStore();
+    observeDeviceDetails(store, [
+      detailSwatch("ENUMERATED", "enumerated", {
+        swatchId: "identifier_enum002",
+        label: "Mode",
+        attributeName: "mode",
+        possibleStates: [
+          { status: "cool", label: "Cooling", command: "setCool" },
+          { status: "windFree", label: "Wind free", command: "setMode" }
+        ]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async (input) => {
+        expect(input.optionLabel).toBe("Wind free");
+        expect(input.optionCommand).toBe("setMode");
+        store.observe(received(deviceEventFrame("windFree", "2026-08-25T00:00:01Z", "mode")));
+      })
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 1_000,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute(deviceCommand("setOption", "request_028", {
+      attribute: "mode",
+      arguments: ["windFree"],
+      controlId: "identifier_enum002"
+    }))).resolves.toMatchObject({ status: "confirmed" });
+    expect(executor.executeDeviceAction).toHaveBeenCalledWith(expect.objectContaining({
+      command: "setOption",
+      arguments: ["windFree"],
+      optionLabel: "Wind free",
+      optionCommand: "setMode"
+    }));
+
+    await expect(service.execute({
+      ...deviceCommand("setOption", "request_029", {
+        attribute: "mode",
+        arguments: ["windFree"],
+        controlId: "identifier_enum002"
+      }),
+      optionLabel: "Injected"
+    })).rejects.toMatchObject({ code: "unknown_key" });
+  });
+
+  test("passes observed possibleStates mapping for a control-bound fan mode", async () => {
+    const store = readyDeviceStore();
+    observeDeviceDetails(store, [
+      detailSwatch("ENUMERATED", "enumerated", {
+        swatchId: "identifier_enumfan",
+        label: "Fan mode",
+        attributeName: "fanMode",
+        possibleStates: [
+          { status: "auto", label: "Auto", command: "setAuto" },
+          { status: "sleep", label: "Sleep", command: "setSleep" }
+        ]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async (input) => {
+        expect(input.optionLabel).toBe("Sleep");
+        expect(input.optionCommand).toBe("setSleep");
+        store.observe(received(deviceEventFrame("sleep", "2026-08-25T00:00:01Z", "fanMode")));
+      })
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 1_000,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute(deviceCommand("setFanMode", "request_030", {
+      attribute: "fanMode",
+      arguments: ["sleep"],
+      controlId: "identifier_enumfan"
+    }))).resolves.toMatchObject({ status: "confirmed" });
+  });
+
   test("executes only observed cover controls and confirms matching newer state", async () => {
     const store = readyDeviceStore();
     observeDeviceDetails(store, [

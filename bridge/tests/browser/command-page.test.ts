@@ -32,15 +32,15 @@ class FakeLocator {
     return this;
   }
 
-  getByRole(): FakeLocator {
+  getByRole(_role?: string, _options?: { name?: string | RegExp }): FakeLocator {
     return this;
   }
 
-  getByText(): FakeLocator {
+  getByText(_text?: string, _options?: { exact?: boolean }): FakeLocator {
     return this;
   }
 
-  locator(): FakeLocator {
+  locator(_selector?: string): FakeLocator {
     return this;
   }
 }
@@ -75,8 +75,13 @@ class FakeCommandPage {
     return this.toggle;
   }
 
-  getByText(): FakeLocator {
+  getByText(_text?: string, _options?: { exact?: boolean }): FakeLocator {
     return new FakeLocator(0);
+  }
+
+  locator(selector: string): FakeLocator {
+    expect(selector).toBe("[data-testid='device']");
+    return new FakeLocator(0, true);
   }
 }
 
@@ -242,21 +247,24 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     const hiddenNamedCard = new FakeLocator(1, true);
     const visibleCard = new FakeLocator(1);
     const deviceText = new FakeLocator(1);
-    visibleCard.filter = vi.fn(() => visibleCard);
+    const deviceScope = new FakeLocator(1);
+    deviceScope.filter = vi.fn(() => visibleCard);
+    page.locator = vi.fn(() => deviceScope);
+    page.getByText = vi.fn(() => deviceText);
     page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
       if (role === "button" && options?.name) return hiddenNamedCard;
       if (role === "button") return visibleCard;
       return page.toggle;
     });
-    page.getByText = vi.fn(() => deviceText);
     const executor = new SmartThingsWebUiCommandExecutor(() => ({
       openCommandPage: vi.fn(async () => page)
     }));
 
     await executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" });
 
+    expect(page.locator).toHaveBeenCalledWith("[data-testid='device']");
     expect(page.getByText).toHaveBeenCalledWith("Safe plug", { exact: true });
-    expect(visibleCard.filter).toHaveBeenCalledWith({ has: deviceText });
+    expect(deviceScope.filter).toHaveBeenCalledWith({ has: deviceText });
     expect(visibleCard.click).toHaveBeenCalledTimes(1);
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
   });
@@ -264,16 +272,18 @@ describe("SmartThingsWebUiCommandExecutor", () => {
   test("prefers one exact device name over multiple partial-name cards", async () => {
     const page = new FakeCommandPage();
     const partialCards = new FakeLocator(5);
-    const allCards = new FakeLocator(5);
+    const roomWrapperButtons = new FakeLocator(2);
+    const deviceScope = new FakeLocator(4);
     const exactCard = new FakeLocator(1);
     const exactText = new FakeLocator(1);
-    allCards.filter = vi.fn(() => exactCard);
+    deviceScope.filter = vi.fn(() => exactCard);
+    page.locator = vi.fn(() => deviceScope);
+    page.getByText = vi.fn(() => exactText);
     page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
       if (role === "button" && options?.name instanceof RegExp) return partialCards;
-      if (role === "button") return allCards;
+      if (role === "button") return roomWrapperButtons;
       return page.toggle;
     });
-    page.getByText = vi.fn(() => exactText);
     const executor = new SmartThingsWebUiCommandExecutor(() => ({
       openCommandPage: vi.fn(async () => page)
     }));
@@ -289,25 +299,29 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       arguments: [45]
     });
 
+    expect(page.locator).toHaveBeenCalledWith("[data-testid='device']");
     expect(page.getByText).toHaveBeenCalledWith("거실", { exact: true });
-    expect(allCards.filter).toHaveBeenCalledWith({ has: exactText });
+    expect(deviceScope.filter).toHaveBeenCalledWith({ has: exactText });
     expect(exactCard.click).toHaveBeenCalledTimes(1);
     expect(partialCards.click).not.toHaveBeenCalled();
+    expect(roomWrapperButtons.click).not.toHaveBeenCalled();
     expect(page.toggle.fill).toHaveBeenCalledWith("45", { timeout: 15_000 });
   });
 
   test("waits for a late exact device-name card before falling back to partial ambiguity", async () => {
     const page = new FakeCommandPage();
     const partialCards = new FakeLocator(5);
-    const allCards = new FakeLocator(5);
+    const roomWrapperButtons = new FakeLocator(2);
+    const deviceScope = new FakeLocator(4);
     const lateExactCard = new FakeLocator(0, false, 1);
-    allCards.filter = vi.fn(() => lateExactCard);
+    page.getByText = vi.fn(() => new FakeLocator(0, false, 1));
+    deviceScope.filter = vi.fn(() => lateExactCard);
+    page.locator = vi.fn(() => deviceScope);
     page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
       if (role === "button" && options?.name instanceof RegExp) return partialCards;
-      if (role === "button") return allCards;
+      if (role === "button") return roomWrapperButtons;
       return page.toggle;
     });
-    page.getByText = vi.fn(() => new FakeLocator(0, false, 1));
     const executor = new SmartThingsWebUiCommandExecutor(() => ({
       openCommandPage: vi.fn(async () => page)
     }));
@@ -326,21 +340,24 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(lateExactCard.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 15_000 });
     expect(lateExactCard.click).toHaveBeenCalledTimes(1);
     expect(partialCards.click).not.toHaveBeenCalled();
+    expect(roomWrapperButtons.click).not.toHaveBeenCalled();
     expect(page.toggle.fill).toHaveBeenCalledWith("45", { timeout: 15_000 });
   });
 
   test("keeps ambiguity when multiple exact device-name cards exist", async () => {
     const page = new FakeCommandPage();
     const partialCards = new FakeLocator(5);
-    const allCards = new FakeLocator(5);
+    const roomWrapperButtons = new FakeLocator(2);
+    const deviceScope = new FakeLocator(4);
     const duplicateExactCards = new FakeLocator(2);
-    allCards.filter = vi.fn(() => duplicateExactCards);
+    page.getByText = vi.fn(() => new FakeLocator(2));
+    deviceScope.filter = vi.fn(() => duplicateExactCards);
+    page.locator = vi.fn(() => deviceScope);
     page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
       if (role === "button" && options?.name instanceof RegExp) return partialCards;
-      if (role === "button") return allCards;
+      if (role === "button") return roomWrapperButtons;
       return page.toggle;
     });
-    page.getByText = vi.fn(() => new FakeLocator(2));
     const executor = new SmartThingsWebUiCommandExecutor(() => ({
       openCommandPage: vi.fn(async () => page)
     }));
@@ -351,6 +368,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
 
     expect(duplicateExactCards.click).not.toHaveBeenCalled();
     expect(partialCards.click).not.toHaveBeenCalled();
+    expect(roomWrapperButtons.click).not.toHaveBeenCalled();
     expect(page.toggle.click).not.toHaveBeenCalled();
   });
 
@@ -444,6 +462,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     const visible = new FakeLocator(1);
     const container = new FakeLocator(1);
     container.filter = vi.fn(() => (scrolls >= 2 ? visible : hidden));
+    page.locator = vi.fn(() => container);
     page.card = hidden;
     page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
       if (role === "button" && options?.name) return hidden;
@@ -564,6 +583,80 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(slider.fill).toHaveBeenCalledWith("60", { timeout: 15_000 });
   });
 
+  test("fills a range input scoped by the visible swatch label when the slider name is generic", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const missingNamedSlider = new FakeLocator(0, true);
+    const label = new FakeLocator(1);
+    const swatch = new FakeLocator(1);
+    const rangeInput = new FakeLocator(1);
+    label.locator = vi.fn(() => swatch);
+    swatch.getByRole = vi.fn((role: string) => (role === "slider" ? rangeInput : new FakeLocator(0, true)));
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Speaker")) return card;
+      if (role === "button") return card;
+      if (role === "slider") return missingNamedSlider;
+      return new FakeLocator(0, true);
+    });
+    page.getByText = vi.fn((text?: string) => (text === "Volume" ? label : new FakeLocator(0, true)));
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "Speaker",
+      locationId: "loc_001",
+      command: "setVolume",
+      action: "setVolume",
+      component: "main",
+      capability: "audioVolume",
+      attribute: "volume",
+      controlLabel: "Volume",
+      arguments: [45]
+    });
+
+    expect(label.locator).toHaveBeenCalledWith("..");
+    expect(swatch.getByRole).toHaveBeenCalledWith("slider");
+    expect(rangeInput.fill).toHaveBeenCalledWith("45", { timeout: 15_000 });
+  });
+
+  test("clicks a generic toggle scoped by its visible swatch label", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const missingNamedSwitch = new FakeLocator(0, true);
+    const label = new FakeLocator(1);
+    const swatch = new FakeLocator(1);
+    const toggle = new FakeLocator(1);
+    label.locator = vi.fn(() => swatch);
+    swatch.getByRole = vi.fn((role: string) => (role === "switch" ? toggle : new FakeLocator(0, true)));
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Speaker")) return card;
+      if (role === "button") return card;
+      if (role === "switch") return missingNamedSwitch;
+      return new FakeLocator(0, true);
+    });
+    page.getByText = vi.fn((text: string) => (text === "Power" ? label : new FakeLocator(0, true)));
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "Speaker",
+      locationId: "loc_001",
+      command: "on",
+      action: "on",
+      component: "main",
+      capability: "switch",
+      attribute: "switch",
+      controlLabel: "Power",
+      arguments: []
+    });
+
+    expect(label.locator).toHaveBeenCalledWith("..");
+    expect(swatch.getByRole).toHaveBeenCalledWith("switch");
+    expect(toggle.click).toHaveBeenCalledWith({ timeout: 15_000 });
+  });
+
   test("selects an observed option from its exact enumerated control", async () => {
     const page = new FakeCommandPage();
     const card = new FakeLocator(1);
@@ -598,6 +691,122 @@ describe("SmartThingsWebUiCommandExecutor", () => {
 
     expect(combo.click).toHaveBeenCalledWith({ timeout: 15_000 });
     expect(option.click).toHaveBeenCalledWith({ timeout: 15_000 });
+  });
+
+  test("clicks the observed enum data-command inside the labeled swatch when no combobox exists", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const missingCombo = new FakeLocator(0, true);
+    const label = new FakeLocator(1);
+    const swatch = new FakeLocator(1);
+    const option = new FakeLocator(1);
+    label.locator = vi.fn(() => swatch);
+    swatch.getByRole = vi.fn(() => new FakeLocator(0, true));
+    swatch.locator = vi.fn((selector: string) =>
+      selector === '[data-command="setEco"]' ? option : new FakeLocator(0, true)
+    );
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Air purifier")) {
+        return card;
+      }
+      if (role === "button") return card;
+      if (role === "combobox") return missingCombo;
+      return new FakeLocator(0, true);
+    });
+    page.getByText = vi.fn((text?: string) => (text === "Mode" ? label : new FakeLocator(0, true)));
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "Air purifier",
+      locationId: "loc_001",
+      command: "setOption",
+      action: "setOption",
+      component: "main",
+      capability: "customMode",
+      attribute: "mode",
+      controlLabel: "Mode",
+      optionCommand: "setEco",
+      arguments: ["eco"]
+    });
+
+    expect(label.locator).toHaveBeenCalledWith("..");
+    expect(swatch.locator).toHaveBeenCalledWith('[data-command="setEco"]');
+    expect(option.click).toHaveBeenCalledWith({ timeout: 15_000 });
+  });
+
+  test("clicks the observed fan-mode data-command inside the labeled swatch", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const label = new FakeLocator(1);
+    const swatch = new FakeLocator(1);
+    const option = new FakeLocator(1);
+    label.locator = vi.fn(() => swatch);
+    swatch.locator = vi.fn((selector: string) =>
+      selector === '[data-command="setSleep"]' ? option : new FakeLocator(0, true)
+    );
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Air purifier")) {
+        return card;
+      }
+      if (role === "button") return card;
+      return new FakeLocator(0, true);
+    });
+    page.getByText = vi.fn((text?: string) => (text === "Fan mode" ? label : new FakeLocator(0, true)));
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "Air purifier",
+      locationId: "loc_001",
+      command: "setFanMode",
+      action: "setFanMode",
+      component: "main",
+      capability: "fanMode",
+      attribute: "fanMode",
+      controlLabel: "Fan mode",
+      optionCommand: "setSleep",
+      arguments: ["sleep"]
+    });
+
+    expect(swatch.locator).toHaveBeenCalledWith('[data-command="setSleep"]');
+    expect(option.click).toHaveBeenCalledWith({ timeout: 15_000 });
+  });
+
+  test("does not guess enum option labels when observed option text is not rendered", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const missingCombo = new FakeLocator(0, true);
+    const label = new FakeLocator(1);
+    const swatch = new FakeLocator(1);
+    label.locator = vi.fn(() => swatch);
+    swatch.getByRole = vi.fn(() => new FakeLocator(0, true));
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Air purifier")) {
+        return card;
+      }
+      if (role === "button") return card;
+      if (role === "combobox") return missingCombo;
+      return new FakeLocator(0, true);
+    });
+    page.getByText = vi.fn((text?: string) => (text === "Mode" ? label : new FakeLocator(0, true)));
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await expect(executor.executeDeviceAction({
+      deviceName: "Air purifier",
+      locationId: "loc_001",
+      command: "setOption",
+      action: "setOption",
+      component: "main",
+      capability: "customMode",
+      attribute: "mode",
+      controlLabel: "Mode",
+      arguments: ["eco"]
+    })).rejects.toThrow("command_control_not_found");
   });
 
   test("never falls back to an unrelated single control when the observed name is missing", async () => {
