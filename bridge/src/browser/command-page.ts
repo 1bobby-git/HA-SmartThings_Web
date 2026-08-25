@@ -12,6 +12,11 @@ interface CommandLocatorLike {
 interface CommandPageLike extends BrowserPageLike {
   getByRole(role: string, options?: { name?: string | RegExp }): CommandLocatorLike;
   getByText(text: string, options?: { exact?: boolean }): CommandLocatorLike;
+  mouse?: {
+    move(x: number, y: number): Promise<unknown>;
+    wheel(deltaX: number, deltaY: number): Promise<unknown>;
+  };
+  waitForTimeout?(timeout: number): Promise<unknown>;
 }
 
 type CommandPageManagerLike = Pick<KeeperPageManager, "openCommandPage">;
@@ -46,7 +51,9 @@ export class SmartThingsWebUiCommandExecutor {
         try {
           await device.first().waitFor({ state: "visible", timeout: 5_000 });
         } catch {
-          device = await searchForDevice(page, input.deviceName);
+          device =
+            (await scrollForDevice(page, input.deviceName)) ??
+            (await searchForDevice(page, input.deviceName));
         }
       }
       if ((await device.count()) !== 1) {
@@ -107,6 +114,21 @@ export class SmartThingsWebUiCommandExecutor {
       throw new Error("command_location_change_failed");
     }
   }
+}
+
+async function scrollForDevice(
+  page: CommandPageLike,
+  deviceName: string
+): Promise<CommandLocatorLike | undefined> {
+  if (!page.mouse || !page.waitForTimeout) return undefined;
+  await page.mouse.move(960, 540);
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    await page.mouse.wheel(0, 700);
+    await page.waitForTimeout(250);
+    const device = exactTextCardLocator(page, deviceName);
+    if ((await device.count()) > 0) return device;
+  }
+  return undefined;
 }
 
 async function searchForDevice(

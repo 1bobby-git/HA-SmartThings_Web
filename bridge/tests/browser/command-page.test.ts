@@ -215,4 +215,39 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(target.click).toHaveBeenCalledTimes(1);
     expect(page.card.click).toHaveBeenCalledTimes(1);
   });
+
+  test("scrolls the location page until a virtualized accessible card is rendered", async () => {
+    const page = new FakeCommandPage() as FakeCommandPage & {
+      mouse: { move: ReturnType<typeof vi.fn>; wheel: ReturnType<typeof vi.fn> };
+      waitForTimeout: ReturnType<typeof vi.fn>;
+    };
+    let scrolls = 0;
+    const hidden = new FakeLocator(0, true);
+    const visible = new FakeLocator(1);
+    const container = new FakeLocator(1);
+    container.filter = vi.fn(() => (scrolls >= 2 ? visible : hidden));
+    page.card = hidden;
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name) return hidden;
+      if (role === "button") return container;
+      if (role === "textbox") return new FakeLocator(0);
+      return page.toggle;
+    });
+    page.mouse = {
+      move: vi.fn(async () => undefined),
+      wheel: vi.fn(async () => {
+        scrolls += 1;
+      })
+    };
+    page.waitForTimeout = vi.fn(async () => undefined);
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" });
+
+    expect(page.mouse.wheel).toHaveBeenCalledTimes(2);
+    expect(visible.click).toHaveBeenCalledTimes(1);
+    expect(page.toggle.click).toHaveBeenCalledTimes(1);
+  });
 });
