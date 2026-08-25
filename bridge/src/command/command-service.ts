@@ -27,7 +27,7 @@ export interface SafeCommandResult {
   status: "confirmed" | "already_confirmed";
   sequence: number;
   transport: "smartthings_web_ui";
-  confirmation: "device_event" | "security_arm_state_event" | "current_state";
+  confirmation: "device_event" | "inventory_snapshot" | "security_arm_state_event" | "current_state";
 }
 
 type DeviceActionCommand =
@@ -256,7 +256,12 @@ export class SafeCommandService {
       throw commandError(error);
     }
     confirmation.startTimeout(this.options.timeoutMs);
-    return confirmed(request.clientRequestId, await confirmation.result, "device_event");
+    const evidence = await confirmation.result;
+    return confirmed(
+      request.clientRequestId,
+      evidence.sequence,
+      evidence.source === "inventory_snapshot" ? "inventory_snapshot" : "device_event"
+    );
   }
 
   async #executeScene(
@@ -281,7 +286,7 @@ export class SafeCommandService {
       throw commandError(error);
     }
     confirmation.startTimeout(this.options.timeoutMs);
-    return confirmed(request.clientRequestId, await confirmation.result, "device_event");
+    return confirmed(request.clientRequestId, (await confirmation.result).sequence, "device_event");
   }
 
   async #executeLocation(
@@ -309,7 +314,11 @@ export class SafeCommandService {
       throw commandError(error);
     }
     confirmation.startTimeout(this.options.timeoutMs);
-    return confirmed(request.clientRequestId, await confirmation.result, "security_arm_state_event");
+    return confirmed(
+      request.clientRequestId,
+      (await confirmation.result).sequence,
+      "security_arm_state_event"
+    );
   }
 }
 
@@ -371,11 +380,33 @@ function findState(device: BridgeDevice, component: string, capability: string, 
 }
 
 function waitForState(options: { devices: DeviceStore; request: SafeCommandRequest; attribute: string; desired: BridgeJsonValue | undefined; afterSequence: number; resync: () => Promise<unknown> }): ConfirmationWait {
+  const snapshotMatches = () => {
+    if (options.desired === undefined) return false;
+    const device = options.devices
+      .snapshot()
+      .devices.find((candidate) => candidate.id === options.request.targetId);
+    const state = device?.states.find(
+      (candidate) =>
+        candidate.component === options.request.component &&
+        candidate.capability === options.request.capability &&
+        candidate.attribute === options.attribute
+    );
+    return state !== undefined && JSON.stringify(state.value) === JSON.stringify(options.desired);
+  };
   return waitForPredicate({
     devices: options.devices,
     afterSequence: options.afterSequence,
     resync: options.resync,
-    matches: (event) => event.type === "state" && event.deviceId === options.request.targetId && event.state.component === options.request.component && event.state.capability === options.request.capability && event.state.attribute === options.attribute && (options.desired === undefined || JSON.stringify(event.state.value) === JSON.stringify(options.desired))
+    matches: (event) =>
+      (event.type === "state" &&
+        event.deviceId === options.request.targetId &&
+        event.state.component === options.request.component &&
+        event.state.capability === options.request.capability &&
+        event.state.attribute === options.attribute &&
+        (options.desired === undefined ||
+          JSON.stringify(event.state.value) === JSON.stringify(options.desired))) ||
+      (event.type === "inventory" && snapshotMatches()),
+    matchesSnapshot: snapshotMatches
   });
 }
 
@@ -402,28 +433,38 @@ function waitForLocationArmState(options: { devices: DeviceStore; locationId: st
 }
 
 interface ConfirmationWait {
-  result: Promise<number>;
+  result: Promise<ConfirmationEvidence>;
   cancel: () => void;
   startTimeout: (timeoutMs: number) => void;
 }
 
-function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: () => Promise<unknown>; matches: (event: BridgeDeviceStoreEvent) => boolean }): ConfirmationWait {
+interface ConfirmationEvidence {
+  sequence: number;
+  source: "event" | "inventory_snapshot";
+}
+
+function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: () => Promise<unknown>; matches: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean }): ConfirmationWait {
   let settled = false;
   let unsubscribe: () => void = () => undefined;
   let timer: NodeJS.Timeout | undefined;
   let rejectResult: (error: SafeCommandError) => void = () => undefined;
+  let resolveResult: (evidence: ConfirmationEvidence) => void = () => undefined;
   const cleanup = () => {
     if (settled) return;
     settled = true;
     if (timer) clearTimeout(timer);
     unsubscribe();
   };
-  const result = new Promise<number>((resolve, reject) => {
+  const result = new Promise<ConfirmationEvidence>((resolve, reject) => {
+    resolveResult = resolve;
     rejectResult = reject;
     unsubscribe = options.devices.subscribe((event) => {
       if (event.sequence <= options.afterSequence || !options.matches(event)) return;
       cleanup();
-      resolve(event.sequence);
+      resolve({
+        sequence: event.sequence,
+        source: event.type === "inventory" ? "inventory_snapshot" : "event"
+      });
     });
   });
   return {
@@ -431,8 +472,24 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
     startTimeout: (timeoutMs) => {
       if (settled || timer) return;
       timer = setTimeout(() => {
-        cleanup();
-        void options.resync().catch(() => undefined).finally(() => rejectResult(new SafeCommandError("command_confirmation_timeout")));
+        timer = undefined;
+        void options
+          .resync()
+          .catch(() => undefined)
+          .then(() => {
+            if (settled) return;
+            const sequence = options.devices.snapshot().sequence;
+            if (
+              sequence > options.afterSequence &&
+              options.matchesSnapshot?.() === true
+            ) {
+              cleanup();
+              resolveResult({ sequence, source: "inventory_snapshot" });
+              return;
+            }
+            cleanup();
+            rejectResult(new SafeCommandError("command_confirmation_timeout"));
+          });
       }, timeoutMs);
     },
     cancel: () => {
@@ -492,8 +549,42 @@ function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest)
       attribute: request.attribute ?? state.attribute
     };
   }
+  if (request.command === "on" || request.command === "off") {
+    const attribute = request.attribute ?? "switch";
+    const matching = (device.controls ?? []).filter(
+      (control) =>
+        control.kind === "toggle" &&
+        control.component === request.component &&
+        control.capability === request.capability &&
+        control.attribute === attribute &&
+        (!request.controlId || control.id === request.controlId)
+    );
+    if (matching.length > 1) throw new SafeCommandError("command_control_ambiguous");
+    const control = matching[0];
+    if (request.controlId && !control) throw new SafeCommandError("capability_not_found");
+    if (control) {
+      if (request.controlLabel && request.controlLabel !== control.label) {
+        throw new SafeCommandError("invalid_control_label");
+      }
+      if (dangerousControl(control)) throw new SafeCommandError("unsupported_command");
+      const hasExplicitCommand = Boolean(control.command || (control.commands?.length ?? 0) > 0);
+      if (hasExplicitCommand && !controlSupportsCommand(control, request.command, false)) {
+        throw new SafeCommandError("unsupported_command");
+      }
+      return {
+        ...request,
+        attribute,
+        controlId: control.id,
+        controlLabel: control.label
+      };
+    }
+  }
   const observedFanMode = request.command === "setFanMode" && Boolean(request.controlId);
-  if (!isControlBoundCommand(request.command) && !observedFanMode) return request;
+  const observedControlCommand = isControlBoundCommand(request.command) && Boolean(request.controlId);
+  if (!observedControlCommand && !observedFanMode) {
+    if (requiresObservedControl(request.command)) throw new SafeCommandError("invalid_control_id");
+    return request;
+  }
   if (!request.controlId) throw new SafeCommandError("invalid_control_id");
   const control = device.controls?.find((candidate) => candidate.id === request.controlId);
   if (!control) throw new SafeCommandError("capability_not_found");
@@ -551,7 +642,20 @@ const COVER_ATTRIBUTES = new Set([
 const dangerousControlPattern = /(?:^|[_\s:-])(?:lock|unlock|valve|door|garage)(?:$|[_\s:-])|doorstate/iu;
 
 function isControlBoundCommand(command: string): boolean {
-  return command === "press" || command === "setOption" || command === "setPosition" || isCoverButtonCommand(command);
+  return (
+    requiresObservedControl(command) ||
+    command === "setNumber" ||
+    command === "setVolume"
+  );
+}
+
+function requiresObservedControl(command: string): boolean {
+  return (
+    command === "press" ||
+    command === "setOption" ||
+    command === "setPosition" ||
+    isCoverButtonCommand(command)
+  );
 }
 
 function isCoverButtonCommand(command: string): boolean {
@@ -585,6 +689,20 @@ function validateObservedControlCommand(
       ...(control.optionLabels?.[option] ? { label: control.optionLabels[option] } : {}),
       ...(control.optionCommands?.[option] ? { command: control.optionCommands[option] } : {})
     };
+  }
+  if (command === "setNumber" || command === "setVolume") {
+    if (control.kind !== "slider") throw new SafeCommandError("capability_not_found");
+    const value = args[0];
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new SafeCommandError("invalid_arguments");
+    }
+    if (
+      (control.min !== undefined && value < control.min) ||
+      (control.max !== undefined && value > control.max)
+    ) {
+      throw new SafeCommandError("invalid_arguments");
+    }
+    return undefined;
   }
   if (command === "setPosition") {
     if (control.kind !== "slider" || control.attribute !== "shadeLevel") {

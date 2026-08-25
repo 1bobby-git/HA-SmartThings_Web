@@ -60,6 +60,15 @@ class SmartThingsWebFan(SmartThingsWebDeviceEntity, FanEntity):
     def supported_features(self) -> FanEntityFeature:
         """Expose only fan controls backed by pushed state or detail metadata."""
         features = FanEntityFeature(0)
+        device = self.bridge_device
+        if device is not None and (
+            _state_obj(device, "switch") is not None
+            or any(
+                control.kind == "toggle" and control.attribute == "switch"
+                for control in device.controls.values()
+            )
+        ):
+            features |= FanEntityFeature.TURN_ON | FanEntityFeature.TURN_OFF
         if self.percentage is not None:
             features |= FanEntityFeature.SET_SPEED
         if self.preset_modes:
@@ -116,11 +125,18 @@ class SmartThingsWebFan(SmartThingsWebDeviceEntity, FanEntity):
         attribute = "airPurifierMode" if _state(self.bridge_device, "airPurifierMode") is not None else "fanMode"
         await self._async_command("setFanMode", [preset_mode], attribute=attribute)
 
-    async def async_turn_on(self, percentage: int | None = None, **kwargs: object) -> None:
+    async def async_turn_on(
+        self,
+        percentage: int | None = None,
+        preset_mode: str | None = None,
+        **kwargs: object,
+    ) -> None:
         """Turn on the fan-like device."""
         await self._async_command("on", [])
         if percentage is not None:
             await self.async_set_percentage(percentage)
+        if preset_mode is not None:
+            await self.async_set_preset_mode(preset_mode)
 
     async def async_turn_off(self, **kwargs: object) -> None:
         """Turn off the fan-like device."""

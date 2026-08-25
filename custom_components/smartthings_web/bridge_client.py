@@ -26,6 +26,55 @@ from .models import (
 
 _LOCAL_DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _LOCAL_DNS_SUFFIXES = (".local", ".home.arpa")
+_SAFE_BRIDGE_ERROR_CODES = {
+    "bridge_api_unavailable",
+    "bridge_auth_failed",
+    "bridge_command_unconfirmed",
+    "bridge_event_stream_failed",
+    "bridge_not_connected",
+    "bridge_request_failed",
+    "bridge_response_invalid",
+    "camera_image_not_found",
+    "camera_image_unavailable",
+    "capability_not_found",
+    "client_request_conflict",
+    "command_api_unavailable",
+    "command_browser_unavailable",
+    "command_confirmation_timeout",
+    "command_control_ambiguous",
+    "command_control_not_found",
+    "command_execution_failed",
+    "command_location_change_failed",
+    "command_location_mismatch",
+    "command_location_picker_not_found",
+    "command_location_target_not_found",
+    "command_location_unknown",
+    "command_login_required",
+    "command_room_not_found",
+    "command_search_ambiguous",
+    "command_search_not_found",
+    "command_target_ambiguous",
+    "command_target_not_found",
+    "content_type_unsupported",
+    "device_not_found",
+    "device_offline",
+    "ingress_required",
+    "internal_error",
+    "invalid_arguments",
+    "invalid_body",
+    "invalid_capability",
+    "invalid_client_request_id",
+    "invalid_component",
+    "invalid_control_id",
+    "invalid_control_label",
+    "invalid_device_id",
+    "invalid_pairing_code",
+    "method_not_allowed",
+    "not_found",
+    "unauthorized",
+    "unknown_key",
+    "unsupported_command",
+}
 
 
 class BridgeClientError(Exception):
@@ -210,7 +259,7 @@ class SmartThingsWebBridgeClient:
                 if response.status in {401, 403}:
                     raise BridgeAuthError("bridge_auth_failed")
                 if response.status >= 400:
-                    raise BridgeClientError("bridge_request_failed")
+                    raise BridgeClientError(await _safe_bridge_error_code(response))
                 value = await response.json(content_type="application/json")
                 if not isinstance(value, dict):
                     raise BridgeClientError("bridge_response_invalid")
@@ -219,6 +268,20 @@ class SmartThingsWebBridgeClient:
             raise
         except (ClientError, TimeoutError, ValueError) as err:
             raise BridgeClientError("bridge_request_failed") from err
+
+
+async def _safe_bridge_error_code(response: Any) -> str:
+    """Return only fixed Bridge error tokens from non-2xx JSON bodies."""
+    try:
+        value = await response.json(content_type="application/json")
+    except (ClientError, TimeoutError, ValueError, TypeError):
+        return "bridge_request_failed"
+    if not isinstance(value, dict):
+        return "bridge_request_failed"
+    error = value.get("error")
+    if isinstance(error, str) and error in _SAFE_BRIDGE_ERROR_CODES:
+        return error
+    return "bridge_request_failed"
 
 
 def _is_local_bridge_host(host: str) -> bool:

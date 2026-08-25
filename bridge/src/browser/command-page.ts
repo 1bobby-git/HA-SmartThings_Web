@@ -25,11 +25,45 @@ interface CommandPageLike extends BrowserPageLike {
 
 type CommandPageManagerLike = Pick<KeeperPageManager, "openCommandPage">;
 
+interface WarmPageOptions {
+  warmPageTtlMs?: number;
+}
+
+interface WarmDevicePage {
+  page: CommandPageLike;
+  manager: CommandPageManagerLike;
+  locationId: string;
+  roomName?: string;
+  deviceName: string;
+  lastUsedAt: number;
+}
+
 export class SmartThingsWebUiCommandExecutor {
+  #uiQueue: Promise<void> = Promise.resolve();
+  #warmDevicePage: WarmDevicePage | undefined;
+  readonly #warmPageTtlMs: number;
+
   constructor(
     private readonly getManager: () => CommandPageManagerLike | undefined,
-    private readonly normalizeLocationId?: (rawLocationId: string) => string
-  ) {}
+    private readonly normalizeLocationId?: (rawLocationId: string) => string,
+    options?: WarmPageOptions
+  ) {
+    const ttl = options?.warmPageTtlMs ?? 0;
+    this.#warmPageTtlMs = Number.isFinite(ttl) ? Math.max(0, Math.min(300_000, ttl)) : 0;
+  }
+
+  hasWarmCommandPage(): boolean {
+    const cached = this.#warmDevicePage;
+    if (!cached) return false;
+    if (
+      cached.page.isClosed() ||
+      Date.now() - cached.lastUsedAt >= this.#warmPageTtlMs
+    ) {
+      void this.#invalidateWarmPage();
+      return false;
+    }
+    return true;
+  }
 
   async executeSwitch(input: {
     deviceName: string;
@@ -86,11 +120,66 @@ export class SmartThingsWebUiCommandExecutor {
     optionLabel?: string;
     optionCommand?: string;
   }): Promise<void> {
+    await this.#runExclusive(() => this.#executeDeviceAction(input));
+  }
+
+  async #executeDeviceAction(input: {
+    deviceName: string;
+    locationId: string;
+    locationNames?: Readonly<Record<string, string>>;
+    roomName?: string;
+    command:
+      | "on"
+      | "off"
+      | "refresh"
+      | "press"
+      | "setNumber"
+      | "setVolume"
+      | "play"
+      | "pause"
+      | "stop"
+      | "nextTrack"
+      | "previousTrack"
+      | "mute"
+      | "unmute"
+      | "playTrackAndResume"
+      | "setFanMode"
+      | "setOption"
+      | "open"
+      | "close"
+      | "stop"
+      | "pause"
+      | "openShade"
+      | "closeShade"
+      | "setPosition";
+    action: string;
+    component: string;
+    capability: string;
+    attribute: string;
+    arguments: unknown[];
+    controlLabel?: string;
+    optionLabel?: string;
+    optionCommand?: string;
+  }): Promise<void> {
     const manager = this.getManager();
     if (!manager) {
       throw new Error("command_browser_unavailable");
     }
+    const warmPage = await this.#warmPageFor(manager, input);
+    if (warmPage) {
+      try {
+        await executeDeviceControl(warmPage, input);
+        if (this.#warmDevicePage) this.#warmDevicePage.lastUsedAt = Date.now();
+        return;
+      } catch (error) {
+        await this.#invalidateWarmPage();
+        if (!(error instanceof Error) || error.message !== "command_control_not_found") {
+          throw error;
+        }
+      }
+    }
     const page = (await manager.openCommandPage()) as CommandPageLike;
+    let keepWarm = false;
     try {
       if (!isSmartThingsLocation(page.url())) {
         throw new Error("command_login_required");
@@ -100,8 +189,19 @@ export class SmartThingsWebUiCommandExecutor {
         preferRooms: Boolean(input.roomName)
       });
       await executeDeviceControl(page, input);
+      if (this.#warmPageTtlMs > 0) {
+        this.#warmDevicePage = {
+          page,
+          manager,
+          locationId: input.locationId,
+          ...(input.roomName ? { roomName: input.roomName } : {}),
+          deviceName: input.deviceName,
+          lastUsedAt: Date.now()
+        };
+        keepWarm = true;
+      }
     } finally {
-      await page.close().catch(() => undefined);
+      if (!keepWarm) await page.close().catch(() => undefined);
     }
   }
 
@@ -112,7 +212,18 @@ export class SmartThingsWebUiCommandExecutor {
     roomName?: string;
     detailSettleMs?: number;
   }): Promise<void> {
+    await this.#runExclusive(() => this.#inspectDeviceDetails(input));
+  }
+
+  async #inspectDeviceDetails(input: {
+    deviceName: string;
+    locationId: string;
+    locationNames?: Readonly<Record<string, string>>;
+    roomName?: string;
+    detailSettleMs?: number;
+  }): Promise<void> {
     // Navigation only: device state and controls still come from observed Socket.IO data.
+    await this.#invalidateWarmPage();
     const page = await this.openLocationPage(input.locationId, input.locationNames);
     try {
       await openDeviceDetail(page, input.deviceName, input.roomName, {
@@ -129,6 +240,15 @@ export class SmartThingsWebUiCommandExecutor {
     locationId: string;
     locationNames?: Readonly<Record<string, string>>;
   }): Promise<void> {
+    await this.#runExclusive(() => this.#executeScene(input));
+  }
+
+  async #executeScene(input: {
+    sceneName: string;
+    locationId: string;
+    locationNames?: Readonly<Record<string, string>>;
+  }): Promise<void> {
+    await this.#invalidateWarmPage();
     const page = await this.openLocationPage(input.locationId, input.locationNames);
     try {
       let scene = page.getByRole("button", { name: exactName(input.sceneName) });
@@ -148,6 +268,15 @@ export class SmartThingsWebUiCommandExecutor {
     locationNames?: Readonly<Record<string, string>>;
     action: "armAway" | "armStay" | "disarm";
   }): Promise<void> {
+    await this.#runExclusive(() => this.#executeLocationAction(input));
+  }
+
+  async #executeLocationAction(input: {
+    locationId: string;
+    locationNames?: Readonly<Record<string, string>>;
+    action: "armAway" | "armStay" | "disarm";
+  }): Promise<void> {
+    await this.#invalidateWarmPage();
     const page = await this.openLocationPage(input.locationId, input.locationNames);
     try {
       const actionName = locationActionName(input.action);
@@ -225,6 +354,49 @@ export class SmartThingsWebUiCommandExecutor {
       throw new Error("command_location_change_failed");
     }
   }
+
+  async #runExclusive<T>(work: () => Promise<T>): Promise<T> {
+    const previous = this.#uiQueue;
+    let release: () => void = () => undefined;
+    this.#uiQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous.catch(() => undefined);
+    try {
+      return await work();
+    } finally {
+      release();
+    }
+  }
+
+  async #warmPageFor(
+    manager: CommandPageManagerLike,
+    input: { deviceName: string; locationId: string; roomName?: string }
+  ): Promise<CommandPageLike | undefined> {
+    const cached = this.#warmDevicePage;
+    if (
+      cached &&
+      cached.manager === manager &&
+      cached.locationId === input.locationId &&
+      cached.deviceName === input.deviceName &&
+      cached.roomName === input.roomName &&
+      !cached.page.isClosed() &&
+      Date.now() - cached.lastUsedAt < this.#warmPageTtlMs &&
+      isSmartThingsLocation(cached.page.url())
+    ) {
+      return cached.page;
+    }
+    await this.#invalidateWarmPage();
+    return undefined;
+  }
+
+  async #invalidateWarmPage(): Promise<void> {
+    const cached = this.#warmDevicePage;
+    this.#warmDevicePage = undefined;
+    if (cached && !cached.page.isClosed()) {
+      await cached.page.close().catch(() => undefined);
+    }
+  }
 }
 
 async function openDeviceDetail(
@@ -234,6 +406,16 @@ async function openDeviceDetail(
   options?: { preferRooms?: boolean }
 ): Promise<void> {
   if (options?.preferRooms && roomName) {
+    const overviewDevice = deviceLocator(page, deviceName);
+    if ((await overviewDevice.count()) === 1) {
+      try {
+        await overviewDevice.first().waitFor({ state: "visible", timeout: 1_000 });
+        await overviewDevice.click({ timeout: 15_000 });
+        return;
+      } catch {
+        // The exact room remains the authoritative fallback for virtualized overview cards.
+      }
+    }
     const roomDevice = await findDeviceInRooms(page, deviceName, roomName);
     if ((await roomDevice.count()) !== 1) throw new Error("command_target_ambiguous");
     await roomDevice.click({ timeout: 15_000 });
@@ -278,7 +460,16 @@ async function executeDeviceControl(
   }
 ): Promise<void> {
   if (input.command === "on" || input.command === "off") {
-    const label = input.controlLabel ?? controlLabelFor(input.attribute);
+    if (input.controlLabel) {
+      await clickRoleOrLabeledControl(
+        page,
+        "switch",
+        exactOrLocalized(input.controlLabel),
+        input.controlLabel
+      );
+      return;
+    }
+    const label = controlLabelFor(input.attribute);
     try {
       if (label) {
         await clickRoleOrLabeledControl(page, "switch", /^(?:Power|전원)$/iu, label);
@@ -413,14 +604,29 @@ async function findRoleOrLabeledControl(
   preferredName: RegExp | undefined,
   label: string | undefined
 ): Promise<CommandLocatorLike> {
-  try {
-    return await findRoleControl(page, role, preferredName);
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== "command_control_not_found" || !label) {
-      throw error;
+  if (preferredName) {
+    const preferred = page.getByRole(role, { name: preferredName });
+    const preferredCount = await preferred.count();
+    if (preferredCount > 1) throw new Error("command_control_ambiguous");
+    if (preferredCount === 1) {
+      try {
+        await preferred.first().waitFor({ state: "visible", timeout: 1_000 });
+        return preferred;
+      } catch {
+        // The observed visible label below is the next authoritative scope.
+      }
     }
-    return await findLabeledSwatchControl(page, label, role);
   }
+  if (label) {
+    try {
+      return await findLabeledSwatchControl(page, label, role);
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "command_control_not_found") {
+        throw error;
+      }
+    }
+  }
+  return await findRoleControl(page, role, preferredName);
 }
 
 async function clickRoleOrLabeledControl(
@@ -517,7 +723,23 @@ async function labeledSwatchScope(
 }
 
 function labelVariants(label: string): string[] {
-  return label.split("|").filter((value) => value.length > 0);
+  const localized: Record<string, string[]> = {
+    "air purifier mode": ["Air purifier mode", "공기청정기 모드"],
+    "detection frequency": ["Detection frequency", "감지 주기"],
+    "fan mode": ["Fan mode", "팬 모드"],
+    "fan speed": ["Fan speed", "팬 속도"],
+    level: ["Level", "레벨"],
+    mute: ["Mute", "Muted", "음소거"],
+    muted: ["Mute", "Muted", "음소거"],
+    power: ["Power", "전원"],
+    refresh: ["Refresh", "새로고침"],
+    volume: ["Volume", "볼륨"]
+  };
+  const variants = label.split("|").filter((value) => value.length > 0);
+  for (const value of [...variants]) {
+    variants.push(...(localized[value.trim().toLowerCase()] ?? []));
+  }
+  return [...new Set(variants)];
 }
 
 async function clickExactlyOne(control: CommandLocatorLike): Promise<void> {
@@ -564,7 +786,7 @@ function isCoverButtonCommand(command: string): boolean {
 }
 
 function exactOrLocalized(value: string): RegExp {
-  return new RegExp(`^(?:${value.split("|").map(escapeRegExp).join("|")})$`, "iu");
+  return new RegExp(`^(?:${labelVariants(value).map(escapeRegExp).join("|")})$`, "iu");
 }
 
 async function findDeviceInRooms(
@@ -593,6 +815,16 @@ async function findDeviceInRooms(
       }
     }
     await room.click({ timeout: 15_000 });
+  }
+  const accessibleDevice = deviceLocator(page, deviceName);
+  const accessibleCount = await accessibleDevice.count();
+  if (accessibleCount === 1) {
+    try {
+      await accessibleDevice.first().waitFor({ state: "visible", timeout: 1_000 });
+      return accessibleDevice;
+    } catch {
+      // Fall through to the exact visible card and bounded render waits.
+    }
   }
   let device = await visibleExactTextCard(page, deviceName, 15_000);
   if (!device) {

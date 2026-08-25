@@ -116,6 +116,12 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
 
         self.assertEqual(request.await_args.kwargs["timeout_seconds"], 90)
 
+    async def test_request_json_preserves_safe_bridge_error_code(self) -> None:
+        client = SmartThingsWebBridgeClient(_FakeSession(504, {"error": "command_confirmation_timeout"}), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
+
+        with self.assertRaisesRegex(BridgeClientError, "command_confirmation_timeout"):
+            await client._request_json("POST", "/api/v1/commands", auth=True)  # type: ignore[attr-defined]
+
     async def test_generic_command_sends_target_and_control_metadata(self) -> None:
         client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
 
@@ -203,3 +209,26 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
         self.assertEqual(parsed.scenes["scene_001"].name, "Movie")
         self.assertEqual(parsed.devices["dev_001"].controls["volume_slider"].maximum, 100.0)
         self.assertNotIn("now_playing", parsed.devices["dev_001"].controls)
+
+
+class _FakeResponse:
+    def __init__(self, status: int, payload: dict[str, Any]) -> None:
+        self.status = status
+        self._payload = payload
+
+    async def __aenter__(self) -> "_FakeResponse":
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
+    async def json(self, *, content_type: str | None = None) -> dict[str, Any]:
+        return self._payload
+
+
+class _FakeSession:
+    def __init__(self, status: int, payload: dict[str, Any]) -> None:
+        self._response = _FakeResponse(status, payload)
+
+    def request(self, *_args: object, **_kwargs: object) -> _FakeResponse:
+        return self._response

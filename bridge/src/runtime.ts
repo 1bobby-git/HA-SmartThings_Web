@@ -61,7 +61,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.39";
+const bridgeVersion = "0.1.46";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -123,7 +123,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   const commandExecutor = new SmartThingsWebUiCommandExecutor(
     () => currentKeeperManager,
     (rawLocationId) =>
-      aliases.alias("location", aliases.alias("location", rawLocationId))
+      aliases.alias("location", aliases.alias("location", rawLocationId)),
+    { warmPageTtlMs: 60_000 }
   );
   const commands = new SafeCommandService({
     devices,
@@ -149,6 +150,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       return (
         report.ready &&
         report.details.state === "CONNECTED" &&
+        !commandExecutor.hasWarmCommandPage() &&
         isProbeBrowserIsolated(currentContext, currentKeeperManager) &&
         physicalActionProbe.snapshot(getProbeEvidence()).state !== "armed"
       );

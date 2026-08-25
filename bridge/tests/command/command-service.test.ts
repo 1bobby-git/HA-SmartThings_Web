@@ -46,6 +46,37 @@ describe("SafeCommandService", () => {
     });
   });
 
+  test("binds switch commands to the matching observed toggle control", async () => {
+    const store = readyDeviceStore();
+    observeDeviceDetails(store, [
+      detailSwatch("TOGGLE", "toggle", {
+        swatchId: "identifier_toggle001",
+        label: "Secondary outlet",
+        commands: ["on", "off"]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => {
+        store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:01Z")));
+      })
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 1_000,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute(command("on", "request_028"))).resolves.toMatchObject({
+      status: "confirmed"
+    });
+    expect(executor.executeDeviceAction).toHaveBeenCalledWith(expect.objectContaining({
+      controlId: "identifier_toggle001",
+      controlLabel: "Secondary outlet"
+    }));
+  });
+
   test("deduplicates identical client request ids and rejects conflicting reuse", async () => {
     const store = readyDeviceStore();
     const executor: SafeCommandExecutor = {
@@ -117,6 +148,31 @@ describe("SafeCommandService", () => {
 
     await expect(service.execute(command("on", "request_006"))).rejects.toMatchObject({
       code: "command_confirmation_timeout"
+    });
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  test("accepts the requested switch state from the timeout full snapshot resync", async () => {
+    const store = readyDeviceStore();
+    const resync = vi.fn(async () => {
+      store.observe(sent('429["find","api/device/status",{}]'));
+      store.observe(
+        received(
+          '439[null,[{"deviceId":"dev_001","locationId":"loc_001","componentId":"main","capabilityId":"identifier_switch","attributeName":"switch","value":"on","unit":null,"timestamp":"2026-08-25T00:00:02Z"}]]'
+        )
+      );
+    });
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: { executeDeviceAction: vi.fn(async () => undefined) },
+      timeoutMs: 10,
+      resync
+    });
+
+    await expect(service.execute(command("on", "request_029"))).resolves.toMatchObject({
+      status: "confirmed",
+      confirmation: "inventory_snapshot"
     });
     expect(resync).toHaveBeenCalledTimes(1);
   });

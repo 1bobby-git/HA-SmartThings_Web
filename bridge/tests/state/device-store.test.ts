@@ -211,6 +211,32 @@ describe("DeviceStore", () => {
     }
   });
 
+  test("restores a persisted location whose optional updatedAt is null", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-null-location-time-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const first = new DeviceStore({ sqlitePath });
+      observeLocationSnapshot(first, {
+        locationId: "loc_001",
+        name: "Home",
+        armState: "DISARMED",
+        updatedAt: null
+      });
+      const beforeRestart = first.snapshot();
+      first.close();
+
+      const restored = new DeviceStore({ sqlitePath });
+      expect(restored.snapshot()).toEqual(beforeRestart);
+      restored.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
   test("captures scenes and location arm state from snapshots", () => {
     const store = new DeviceStore();
     const listener = vi.fn();

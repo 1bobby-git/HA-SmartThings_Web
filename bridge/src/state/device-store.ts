@@ -546,7 +546,10 @@ function parsePersistedInventory(value: unknown): BridgeInventory | undefined {
       item?.updatedAt === undefined || item?.updatedAt === null
         ? item?.updatedAt
         : validTimestamp(item.updatedAt);
-    if (armState === null || (item?.updatedAt !== undefined && updatedAt === null)) {
+    if (
+      armState === null ||
+      (item?.updatedAt !== undefined && item.updatedAt !== null && updatedAt === null)
+    ) {
       return undefined;
     }
     locations.push({

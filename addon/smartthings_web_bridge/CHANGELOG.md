@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.1.46
+
+- Wait for the persistent Chromium context to close before the add-on process exits so session state can be flushed during a normal rebuild or restart.
+- Retain the restart-safe cached inventory and push-confirmed UI command repairs from 0.1.45.
+
+## 0.1.45
+
+- Restore persisted inventories containing a valid `null` location update timestamp instead of discarding the entire cached snapshot after a Bridge restart.
+- Retain the push-confirmed, UI-only warm command path and Home Assistant fan/error fixes from 0.1.44.
+
+## 0.1.44
+
+- Keep commands on the SmartThings Web UI click path only; remove the aborted direct Socket.IO command fallback from the release candidate.
+- Retain the 0.1.43 command-page serialization and sanitized Bridge error-code propagation.
+- Reuse a verified device-detail command page for sixty seconds so consecutive controls avoid a new tab, room navigation, and React detail render while preserving exact-target and push confirmation checks.
+- Open a unique visible device directly from the location overview before using the exact-room fallback, and match known English/Korean control labels without waiting on the wrong locale.
+- Pause background detail discovery while the warm command page is active, then close the page automatically before discovery resumes.
+
+## 0.1.43
+
+- Serialize SmartThings Web detail-discovery pages and user command pages so background control discovery cannot overlap the actual control click flow in the shared browser context.
+- Preserve fixed Bridge command error codes in Home Assistant exceptions while keeping response bodies sanitized and secret-free.
+
+## 0.1.42
+
+- Match the current Home Assistant fan `turn_on` percentage and preset-mode service signature so HA no longer rejects fan power-on before reaching the Bridge.
+- Use an already unique visible room device target immediately and prefer the exact observed labeled swatch before waiting on a missing accessible control name.
+- Remove the two fixed 15-second waits observed ahead of a successful air-purifier power command while preserving unique-target and ambiguity checks.
+
+## 0.1.41
+
+- Treat an empty `api/device` result for a selected location as an authoritative zero-device snapshot instead of a permanent protocol mismatch.
+- Advance the reviewed protocol contract so a previously persisted empty-location false positive cannot keep the Bridge blocked after the confirmed compatible snapshot shape returns.
+- Include the 0.1.40 exact-toggle command routing and newer full-inventory command confirmation repair.
+
+## 0.1.40
+
+- Bind switch, light, fan, and media power commands to the exact observed SmartThings toggle instead of a different generic power control on multi-toggle devices.
+- Accept a newer full SmartThings Web inventory snapshot as authoritative command confirmation when the direct push is missed, while retaining exact device/component/capability/attribute/value, sequence, and timestamp guards.
+- Keep command state push/snapshot-grounded without optimistic Home Assistant mutation or SmartThings status polling.
+
 ## 0.1.39
 
 - Add the official SmartThings icon to the Home Assistant add-on and local custom-integration brand assets, including the high-density integration variant.

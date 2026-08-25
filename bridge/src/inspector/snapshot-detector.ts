@@ -139,9 +139,7 @@ function classifySnapshotResponse(
   const data = ackArgs[0] === null ? ackArgs[1] : ackArgs;
   if (Array.isArray(data)) {
     if (data.length === 0) {
-      return categoryHint !== "device_cards"
-        ? { category: categoryHint, count: 0 }
-        : null;
+      return { category: categoryHint, count: 0 };
     }
     const objects = data.map(asRecord);
     if (objects.some((value) => value === undefined)) {

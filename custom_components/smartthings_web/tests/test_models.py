@@ -511,6 +511,24 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertEqual(result.sequence, 42)
         self.assertEqual(result.confirmation, "device_event")
 
+    def test_command_result_accepts_authoritative_inventory_resync_confirmation(self) -> None:
+        result = parse_command_result(
+            {
+                "schemaVersion": 1,
+                "clientRequestId": "request_12345678",
+                "status": "confirmed",
+                "sequence": 43,
+                "transport": "smartthings_web_ui",
+                "confirmation": "inventory_snapshot",
+            },
+            "request_12345678",
+            "device",
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.sequence, 43)
+        self.assertEqual(result.confirmation, "inventory_snapshot")
+
     def test_command_result_rejects_wrong_request_or_unverified_confirmation(self) -> None:
         base = {
             "schemaVersion": 1,

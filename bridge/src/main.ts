@@ -7,6 +7,7 @@ import { createBridgeRuntime, type BridgeRuntime } from "./runtime.js";
 
 export interface ShutdownProcessLike {
   once(signal: string, handler: () => void): unknown;
+  exit(code?: number): unknown;
 }
 
 export interface ShutdownLogLike {
@@ -25,10 +26,17 @@ export function installShutdownHandlers(
   processLike: ShutdownProcessLike = process,
   log: ShutdownLogLike = console
 ): void {
+  let shuttingDown = false;
   const shutdown = () => {
-    runtime.stop().catch(() => {
-      log.error("bridge_stop_failed");
-    });
+    if (shuttingDown) return;
+    shuttingDown = true;
+    void runtime.stop().then(
+      () => processLike.exit(0),
+      () => {
+        log.error("bridge_stop_failed");
+        processLike.exit(1);
+      }
+    );
   };
   processLike.once("SIGTERM", shutdown);
   processLike.once("SIGINT", shutdown);

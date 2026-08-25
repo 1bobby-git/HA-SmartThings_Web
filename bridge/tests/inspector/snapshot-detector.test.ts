@@ -288,15 +288,21 @@ describe("SnapshotDetector", () => {
     }
   );
 
-  test("emits protocol_changed without raw args when a known empty response is invalid for its category", () => {
+  test("accepts an empty device-card response as an authoritative zero-device snapshot", () => {
     const detector = new SnapshotDetector();
     detector.observeSentFrame('421["find","api/device",{}]');
 
     expect(detector.observeReceivedFrame("431[null,[]]")).toEqual({
-      kind: "protocol_changed",
-      surface: "snapshot:device_cards:response_shape"
+      kind: "snapshot",
+      requestEvent: "find",
+      category: "device_cards",
+      count: 0
     });
-    expect(detector.snapshot()).toEqual({ complete: false, categories: {}, pendingRequests: 0 });
+    expect(detector.snapshot()).toEqual({
+      complete: false,
+      categories: { device_cards: 0 },
+      pendingRequests: 0
+    });
   });
 
   test("keeps unrelated and unknown ACK traffic null even when it is snapshot-shaped", () => {

@@ -97,7 +97,12 @@ class BridgeCommandResult:
 
     status: Literal["confirmed", "already_confirmed"]
     sequence: int
-    confirmation: Literal["device_event", "current_state", "security_arm_state_event"]
+    confirmation: Literal[
+        "device_event",
+        "inventory_snapshot",
+        "current_state",
+        "security_arm_state_event",
+    ]
 
 
 @dataclass
@@ -607,7 +612,12 @@ def parse_command_result(
         or raw.get("transport") != "smartthings_web_ui"
         or status not in {"confirmed", "already_confirmed"}
         or confirmation
-        not in {"device_event", "current_state", "security_arm_state_event"}
+        not in {
+            "device_event",
+            "inventory_snapshot",
+            "current_state",
+            "security_arm_state_event",
+        }
         or not isinstance(sequence, int)
         or isinstance(sequence, bool)
         or sequence < 0
@@ -615,8 +625,10 @@ def parse_command_result(
         return None
     if confirmation == "security_arm_state_event" and target_type != "location":
         return None
+    if confirmation == "inventory_snapshot" and target_type != "device":
+        return None
     if status == "confirmed" and confirmation != "device_event":
-        if confirmation != "security_arm_state_event":
+        if confirmation not in {"inventory_snapshot", "security_arm_state_event"}:
             return None
     if status == "already_confirmed" and confirmation != "current_state":
         return None
