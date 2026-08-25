@@ -7,14 +7,21 @@ class FakeLocator {
   readonly fill = vi.fn(async () => undefined);
   readonly waitFor: ReturnType<typeof vi.fn>;
 
-  constructor(private readonly matches: number, waitFails = false) {
+  private waited = false;
+
+  constructor(
+    private readonly matches: number,
+    waitFails = false,
+    private readonly matchesAfterWait?: number
+  ) {
     this.waitFor = vi.fn(async () => {
       if (waitFails) throw new Error("not_visible");
+      this.waited = true;
     });
   }
 
   async count(): Promise<number> {
-    return this.matches;
+    return this.waited && this.matchesAfterWait !== undefined ? this.matchesAfterWait : this.matches;
   }
 
   first(): FakeLocator {
@@ -42,6 +49,7 @@ class FakeCommandPage {
   card = new FakeLocator(1);
   readonly toggle = new FakeLocator(1);
   readonly close = vi.fn(async () => undefined);
+  waitForTimeout?: ReturnType<typeof vi.fn>;
   currentUrl = "https://my.smartthings.com/location/loc_001";
 
   url(): string {
@@ -87,6 +95,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
 
   test("opens a device detail only to trigger the web app detail snapshot", async () => {
     const page = new FakeCommandPage();
+    page.waitForTimeout = vi.fn(async () => undefined);
     const manager = { openCommandPage: vi.fn(async () => page) };
     const executor = new SmartThingsWebUiCommandExecutor(() => manager);
 
@@ -96,7 +105,25 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
 
     expect(page.card.click).toHaveBeenCalledTimes(1);
+    expect(page.waitForTimeout).toHaveBeenCalledWith(1_500);
     expect(page.toggle.click).not.toHaveBeenCalled();
+    expect(page.close).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps camera detail pages open for the requested thumbnail settle window", async () => {
+    const page = new FakeCommandPage();
+    page.waitForTimeout = vi.fn(async () => undefined);
+    const manager = { openCommandPage: vi.fn(async () => page) };
+    const executor = new SmartThingsWebUiCommandExecutor(() => manager);
+
+    await executor.inspectDeviceDetails({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      detailSettleMs: 5_000
+    });
+
+    expect(page.card.click).toHaveBeenCalledTimes(1);
+    expect(page.waitForTimeout).toHaveBeenCalledWith(5_000);
     expect(page.close).toHaveBeenCalledTimes(1);
   });
 
@@ -230,6 +257,40 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(visibleCard.filter).toHaveBeenCalledWith({ has: deviceText });
     expect(visibleCard.click).toHaveBeenCalledTimes(1);
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
+  });
+
+  test("waits for a preferred Refresh button before falling back to ambiguous buttons", async () => {
+    const page = new FakeCommandPage();
+    const refresh = new FakeLocator(0, false, 1);
+    const ambiguousButtons = new FakeLocator(2);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Safe plug Off")) {
+        return page.card;
+      }
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Refresh")) {
+        return refresh;
+      }
+      if (role === "button") return ambiguousButtons;
+      return page.toggle;
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      command: "refresh",
+      action: "refresh",
+      component: "main",
+      capability: "refresh",
+      attribute: "refresh",
+      arguments: []
+    });
+
+    expect(refresh.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 15_000 });
+    expect(refresh.click).toHaveBeenCalledTimes(1);
+    expect(ambiguousButtons.click).not.toHaveBeenCalled();
   });
 
   test("fails closed when the command page is on a different location", async () => {
@@ -404,6 +465,117 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
 
     expect(slider.fill).toHaveBeenCalledWith("60", { timeout: 15_000 });
+  });
+
+  test("selects an observed option from its exact enumerated control", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const combo = new FakeLocator(1);
+    const option = new FakeLocator(1);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Air purifier")) {
+        return card;
+      }
+      if (role === "button") return card;
+      if (role === "combobox" && options?.name instanceof RegExp && options.name.test("Mode")) {
+        return combo;
+      }
+      if (role === "option" && options?.name instanceof RegExp && options.name.test("eco")) return option;
+      return new FakeLocator(0, true);
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "Air purifier",
+      locationId: "loc_001",
+      command: "setOption",
+      action: "setOption",
+      component: "main",
+      capability: "customMode",
+      attribute: "mode",
+      controlLabel: "Mode",
+      arguments: ["eco"]
+    });
+
+    expect(combo.click).toHaveBeenCalledWith({ timeout: 15_000 });
+    expect(option.click).toHaveBeenCalledWith({ timeout: 15_000 });
+  });
+
+  test("never falls back to an unrelated single control when the observed name is missing", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const unrelatedCombo = new FakeLocator(1);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Air purifier")) {
+        return card;
+      }
+      if (role === "button") return card;
+      if (role === "combobox" && options?.name !== undefined) return new FakeLocator(0, true);
+      if (role === "combobox") return unrelatedCombo;
+      return new FakeLocator(0, true);
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await expect(executor.executeDeviceAction({
+      deviceName: "Air purifier",
+      locationId: "loc_001",
+      command: "setOption",
+      action: "setOption",
+      component: "main",
+      capability: "customMode",
+      attribute: "mode",
+      controlLabel: "Mode",
+      arguments: ["eco"]
+    })).rejects.toThrowError("command_control_not_found");
+
+    expect(unrelatedCombo.click).not.toHaveBeenCalled();
+  });
+
+  test("uses observed cover button labels and position sliders", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const open = new FakeLocator(1);
+    const slider = new FakeLocator(1);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Shade")) return card;
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Open shade")) return open;
+      if (role === "button") return card;
+      if (role === "slider") return slider;
+      return new FakeLocator(0, true);
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "Shade",
+      locationId: "loc_001",
+      command: "openShade",
+      action: "openShade",
+      component: "main",
+      capability: "windowShade",
+      attribute: "windowShade",
+      controlLabel: "Open shade",
+      arguments: []
+    });
+    await executor.executeDeviceAction({
+      deviceName: "Shade",
+      locationId: "loc_001",
+      command: "setPosition",
+      action: "setPosition",
+      component: "main",
+      capability: "windowShadeLevel",
+      attribute: "shadeLevel",
+      controlLabel: "Shade level",
+      arguments: [45]
+    });
+
+    expect(open.click).toHaveBeenCalledWith({ timeout: 15_000 });
+    expect(slider.fill).toHaveBeenCalledWith("45", { timeout: 15_000 });
   });
 
   test("executes one exact scene card and one Home Monitor action", async () => {

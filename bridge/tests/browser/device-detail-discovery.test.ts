@@ -50,6 +50,23 @@ describe("DeviceDetailDiscovery", () => {
     discovery.reset();
     expect(await discovery.runOne()).toBe("failed");
   });
+
+  test("requests a longer detail settle window for camera image devices", async () => {
+    const inspectDeviceDetails = vi.fn(async () => undefined);
+    const discovery = new DeviceDetailDiscovery({
+      inventory: () => cameraInventory(),
+      inspector: { inspectDeviceDetails },
+      canInspect: () => true
+    });
+
+    expect(await discovery.runOne()).toBe("inspected");
+    expect(inspectDeviceDetails).toHaveBeenCalledWith({
+      deviceName: "Home camera",
+      locationId: "loc_001",
+      locationNames: { loc_001: "Home" },
+      detailSettleMs: 5_000
+    });
+  });
 });
 
 function inventory(): BridgeInventory {
@@ -84,6 +101,36 @@ function inventory(): BridgeInventory {
             component: "main",
             capability: "refresh",
             attribute: "refresh"
+          }
+        ]
+      }
+    ],
+    scenes: []
+  };
+}
+
+function cameraInventory(): BridgeInventory {
+  return {
+    schemaVersion: 1,
+    sequence: 1,
+    locations: [{ id: "loc_001", name: "Home" }],
+    rooms: [],
+    devices: [
+      {
+        id: "dev_camera",
+        locationId: "loc_001",
+        roomId: null,
+        name: "Home camera",
+        type: null,
+        online: true,
+        states: [
+          {
+            component: "main",
+            capability: "videoCapture",
+            attribute: "image",
+            value: null,
+            unit: null,
+            updatedAt: null
           }
         ]
       }

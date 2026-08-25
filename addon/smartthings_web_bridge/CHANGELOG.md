@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.33
+
+- Wait for asynchronously rendered named controls and give camera detail pages a longer bounded settle window so thumbnail ACKs can complete.
+- Add push-only Home Assistant cover and climate entities plus observed enumerated select controls.
+- Bind select, cover, and position commands to observed safe web controls and newer matching push confirmation while rejecting lock, valve, door, and garage control shapes.
+
 ## 0.1.32
 
 - Serve camera thumbnail image bytes discovered from CDP-observed SmartThings Web Socket.IO ACKs.

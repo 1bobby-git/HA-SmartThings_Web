@@ -198,6 +198,136 @@ describe("SafeCommandService", () => {
     }))).resolves.toMatchObject({ status: "confirmed" });
   });
 
+  test("requires observed enumerated controls and exact option pushes for setOption", async () => {
+    const store = readyDeviceStore();
+    observeDeviceDetails(store, [
+      detailSwatch("ENUMERATED", "enumerated", {
+        swatchId: "identifier_enum001",
+        label: "Mode",
+        attributeName: "mode",
+        command: "setMode",
+        options: ["eco", "auto"]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => {
+        store.observe(received(deviceEventFrame("eco", "2026-08-25T00:00:01Z", "mode")));
+      })
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 1_000,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute(deviceCommand("setOption", "request_021", {
+      attribute: "mode",
+      arguments: ["eco"],
+      controlId: "identifier_enum001",
+      controlLabel: "Mode"
+    }))).resolves.toMatchObject({ status: "confirmed" });
+    expect(executor.executeDeviceAction).toHaveBeenCalledWith(expect.objectContaining({
+      command: "setOption",
+      controlId: "identifier_enum001",
+      controlLabel: "Mode",
+      attribute: "mode"
+    }));
+
+    await expect(service.execute(deviceCommand("setOption", "request_022", {
+      attribute: "mode",
+      arguments: ["away"],
+      controlId: "identifier_enum001"
+    }))).rejects.toMatchObject({ code: "invalid_arguments" });
+    await expect(service.execute(deviceCommand("setOption", "request_023", {
+      attribute: "mode",
+      arguments: ["eco"]
+    }))).rejects.toMatchObject({ code: "invalid_control_id" });
+  });
+
+  test("executes only observed cover controls and confirms matching newer state", async () => {
+    const store = readyDeviceStore();
+    observeDeviceDetails(store, [
+      detailSwatch("BUTTON", "button", {
+        swatchId: "identifier_open001",
+        label: "Open shade",
+        attributeName: "windowShade",
+        commands: ["openShade"]
+      }),
+      detailSwatch("SLIDER", "slider", {
+        swatchId: "identifier_position001",
+        label: "Shade level",
+        attributeName: "shadeLevel",
+        command: "setPosition",
+        min: 0,
+        max: 100,
+        step: 1
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async (input) => {
+        if (input.command === "openShade") {
+          store.observe(received(deviceEventFrame("open", "2026-08-25T00:00:01Z", "windowShade")));
+        }
+        if (input.command === "setPosition") {
+          store.observe(received(deviceEventFrame(45, "2026-08-25T00:00:02Z", "shadeLevel")));
+        }
+      })
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 1_000,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute(deviceCommand("openShade", "request_024", {
+      attribute: "windowShade",
+      arguments: [],
+      controlId: "identifier_open001"
+    }))).resolves.toMatchObject({ status: "confirmed" });
+    await expect(service.execute(deviceCommand("setPosition", "request_025", {
+      attribute: "shadeLevel",
+      arguments: [45],
+      controlId: "identifier_position001"
+    }))).resolves.toMatchObject({ status: "confirmed" });
+
+    await expect(service.execute(deviceCommand("setPosition", "request_026", {
+      attribute: "shadeLevel",
+      arguments: [150],
+      controlId: "identifier_position001"
+    }))).rejects.toMatchObject({ code: "invalid_arguments" });
+  });
+
+  test("rejects dangerous cover-shaped commands even when a control is observed", async () => {
+    const store = readyDeviceStore();
+    observeDeviceDetails(store, [
+      detailSwatch("BUTTON", "button", {
+        swatchId: "identifier_lock001",
+        label: "Open door lock",
+        capabilityId: "lock",
+        attributeName: "lock",
+        commands: ["open"]
+      })
+    ]);
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: { executeDeviceAction: vi.fn(async () => undefined) },
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute(deviceCommand("open", "request_027", {
+      attribute: "lock",
+      arguments: [],
+      controlId: "identifier_lock001",
+      capability: "lock"
+    }))).rejects.toMatchObject({ code: "unsupported_command" });
+  });
+
   test("rejects stale or wrong-device confirmations for generic device commands", async () => {
     const store = readyDeviceStore();
     const resync = vi.fn(async () => undefined);
@@ -323,16 +453,18 @@ function command(value: "on" | "off", clientRequestId: string) {
 function deviceCommand(
   commandName: string,
   clientRequestId: string,
-  overrides: { attribute: string; arguments: unknown[] }
+  overrides: { attribute: string; arguments: unknown[]; controlId?: string; controlLabel?: string; capability?: string }
 ) {
   return {
     targetType: "device",
     targetId: "dev_001",
     component: "main",
-    capability: "identifier_switch",
+    capability: overrides.capability ?? "identifier_switch",
     command: commandName,
     arguments: overrides.arguments,
     attribute: overrides.attribute,
+    ...(overrides.controlId ? { controlId: overrides.controlId } : {}),
+    ...(overrides.controlLabel ? { controlLabel: overrides.controlLabel } : {}),
     clientRequestId
   };
 }
@@ -376,6 +508,30 @@ function readyDeviceStore(): DeviceStore {
     )
   );
   return store;
+}
+
+function observeDeviceDetails(store: DeviceStore, rows: Record<string, unknown>[]): void {
+  store.observe(sent('424["get","api/device","identifier_rawdevice",{}]'));
+  store.observe(received(`434${JSON.stringify([null, { data: rows }])}`));
+}
+
+function detailSwatch(
+  type: string,
+  key: string,
+  overrides: Record<string, unknown>
+): Record<string, unknown> {
+  return {
+    type,
+    [key]: {
+      deviceId: "dev_001",
+      locationId: "loc_001",
+      componentId: "main",
+      capabilityId: "identifier_switch",
+      attributeName: "switch",
+      label: "Control",
+      ...overrides
+    }
+  };
 }
 
 function deviceEventFrame(

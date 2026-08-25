@@ -341,6 +341,30 @@ NUMBER_ATTRIBUTES = {
     "volume",
 }
 
+COVER_ATTRIBUTES = {
+    "shadeLevel",
+    "supportedWindowShadeCommands",
+    "windowShade",
+}
+
+CLIMATE_ATTRIBUTES = {
+    "coolingSetpoint",
+    "heatingSetpoint",
+    "supportedThermostatModes",
+    "targetTemperature",
+    "temperature",
+    "thermostatMode",
+}
+
+CLIMATE_MODE_ATTRIBUTES = {"supportedThermostatModes", "thermostatMode"}
+
+SELECT_PRIMARY_DOMAIN_ATTRIBUTES = (
+    COVER_ATTRIBUTES
+    | CLIMATE_MODE_ATTRIBUTES
+    | FAN_ATTRIBUTES
+    | MEDIA_ATTRIBUTES
+)
+
 
 def is_refreshable_device(device: BridgeDevice) -> bool:
     """Return whether a device has state that maps to a refresh action."""
@@ -369,6 +393,34 @@ def is_fan_device(device: BridgeDevice) -> bool:
     return device_has_any_state(device, FAN_LEVEL_ATTRIBUTES) and _device_has_fan_identity(device)
 
 
+def is_cover_device(device: BridgeDevice) -> bool:
+    """Return whether a device has window shade state/control evidence."""
+    if device_has_any_state(device, COVER_ATTRIBUTES):
+        return True
+    return any(
+        control.kind in {"button", "slider", "enumerated"}
+        and _control_mentions(control, "shade", "windowshade", "blind", "cover")
+        for control in device.controls.values()
+    )
+
+
+def is_climate_device(device: BridgeDevice) -> bool:
+    """Return whether a device has thermostat state/control evidence."""
+    attributes = {state.attribute for state in device.states.values()}
+    if "thermostatMode" in attributes and (
+        "temperature" in attributes
+        or "coolingSetpoint" in attributes
+        or "heatingSetpoint" in attributes
+        or "targetTemperature" in attributes
+    ):
+        return True
+    return any(
+        control.kind in {"enumerated", "slider"}
+        and control.attribute in CLIMATE_ATTRIBUTES
+        for control in device.controls.values()
+    )
+
+
 def number_state_allowed(device: BridgeDevice, state: BridgeState) -> bool:
     """Return whether a numeric state should be exposed as a control number."""
     if isinstance(state.value, bool) or not isinstance(state.value, (int, float)):
@@ -391,6 +443,40 @@ def number_controls(device: BridgeDevice) -> list[BridgeControl]:
         and control.attribute is not None
         and control.minimum is not None
         and control.maximum is not None
+    ]
+
+
+def cover_controls(device: BridgeDevice) -> list[BridgeControl]:
+    """Return controls that can safely target a cover device."""
+    return [
+        control
+        for control in device.controls.values()
+        if control.kind in {"button", "slider", "enumerated"}
+        and (
+            control.attribute in COVER_ATTRIBUTES
+            or _control_mentions(control, "shade", "windowshade", "blind", "cover")
+        )
+    ]
+
+
+def climate_controls(device: BridgeDevice) -> list[BridgeControl]:
+    """Return controls that can safely target a climate device."""
+    return [
+        control
+        for control in device.controls.values()
+        if control.kind in {"enumerated", "slider"}
+        and control.attribute in CLIMATE_ATTRIBUTES
+    ]
+
+
+def select_controls(device: BridgeDevice) -> list[BridgeControl]:
+    """Return observed enumerated controls with explicit options."""
+    return [
+        control
+        for control in device.controls.values()
+        if control.kind == "enumerated"
+        and bool(control.options)
+        and control.attribute not in SELECT_PRIMARY_DOMAIN_ATTRIBUTES
     ]
 
 

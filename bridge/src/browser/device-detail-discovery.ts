@@ -6,6 +6,7 @@ interface DeviceDetailInspector {
     locationId: string;
     locationNames?: Readonly<Record<string, string>>;
     roomName?: string;
+    detailSettleMs?: number;
   }): Promise<void>;
 }
 
@@ -55,7 +56,8 @@ export class DeviceDetailDiscovery {
         deviceName: device.name,
         locationId: device.locationId,
         locationNames,
-        ...(roomName ? { roomName } : {})
+        ...(roomName ? { roomName } : {}),
+        ...(isCameraImageDevice(device) ? { detailSettleMs: 5_000 } : {})
       });
       return "inspected";
     } catch {
@@ -71,4 +73,20 @@ export class DeviceDetailDiscovery {
       (this.#attempts.get(device.id) ?? 0) < this.#maxAttempts
     );
   }
+}
+
+const cameraImageAttributes = new Set([
+  "captureTime",
+  "clip",
+  "image",
+  "imageTransferProgress",
+  "stream"
+]);
+
+function isCameraImageDevice(device: BridgeDevice): boolean {
+  if (device.states.some((state) => cameraImageAttributes.has(state.attribute))) {
+    return true;
+  }
+  const identity = `${device.name} ${device.type ?? ""}`.toLowerCase();
+  return /\b(?:camera|cam)\b/u.test(identity) || /카메라/u.test(identity);
 }

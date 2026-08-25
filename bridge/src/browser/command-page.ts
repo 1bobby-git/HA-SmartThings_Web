@@ -67,7 +67,15 @@ export class SmartThingsWebUiCommandExecutor {
       | "mute"
       | "unmute"
       | "playTrackAndResume"
-      | "setFanMode";
+      | "setFanMode"
+      | "setOption"
+      | "open"
+      | "close"
+      | "stop"
+      | "pause"
+      | "openShade"
+      | "closeShade"
+      | "setPosition";
     action: string;
     component: string;
     capability: string;
@@ -97,6 +105,7 @@ export class SmartThingsWebUiCommandExecutor {
     locationId: string;
     locationNames?: Readonly<Record<string, string>>;
     roomName?: string;
+    detailSettleMs?: number;
   }): Promise<void> {
     // Navigation only: device state and controls still come from observed Socket.IO data.
     const page = await this.openLocationPage(input.locationId, input.locationNames);
@@ -104,7 +113,7 @@ export class SmartThingsWebUiCommandExecutor {
       await openDeviceDetail(page, input.deviceName, input.roomName, {
         preferRooms: Boolean(input.roomName)
       });
-      await page.waitForTimeout?.(1_500);
+      await page.waitForTimeout?.(input.detailSettleMs ?? 1_500);
     } finally {
       await page.close().catch(() => undefined);
     }
@@ -278,7 +287,7 @@ async function executeDeviceControl(
     await clickRoleControl(page, "switch", /^(?:Mute|Muted|음소거)$/iu);
     return;
   }
-  if (input.command === "setNumber" || input.command === "setVolume") {
+  if (input.command === "setNumber" || input.command === "setVolume" || input.command === "setPosition") {
     const value = input.arguments[0];
     if (typeof value !== "number" || !Number.isFinite(value)) {
       throw new Error("command_execution_failed");
@@ -288,7 +297,7 @@ async function executeDeviceControl(
     await slider.fill(String(value), { timeout: 15_000 });
     return;
   }
-  if (input.command === "setFanMode") {
+  if (input.command === "setFanMode" || input.command === "setOption") {
     const value = input.arguments[0];
     if (typeof value !== "string" || value.length === 0) {
       throw new Error("command_execution_failed");
@@ -297,6 +306,11 @@ async function executeDeviceControl(
     const select = await findRoleControl(page, "combobox", label ? exactOrLocalized(label) : undefined);
     await select.click({ timeout: 15_000 });
     await clickExactlyOne(page.getByRole("option", { name: exactName(value) }));
+    return;
+  }
+  if (isCoverButtonCommand(input.command)) {
+    if (!input.controlLabel) throw new Error("command_control_not_found");
+    await clickRoleControl(page, "button", exactName(input.controlLabel));
     return;
   }
   if (input.command === "playTrackAndResume") {
@@ -322,13 +336,17 @@ async function findRoleControl(
 ): Promise<CommandLocatorLike> {
   if (preferredName) {
     const preferred = page.getByRole(role, { name: preferredName });
-    if ((await preferred.count()) === 1) {
-      try {
-        await preferred.first().waitFor({ state: "visible", timeout: 15_000 });
+    try {
+      await preferred.first().waitFor({ state: "visible", timeout: 15_000 });
+      if ((await preferred.count()) === 1) {
         return preferred;
-      } catch {
-        // Fall through to the single-role fail-closed fallback.
       }
+      throw new Error("command_control_ambiguous");
+    } catch (error) {
+      if (error instanceof Error && error.message === "command_control_ambiguous") {
+        throw error;
+      }
+      throw new Error("command_control_not_found");
     }
   }
   const fallback = page.getByRole(role);
@@ -387,6 +405,10 @@ function controlLabelFor(attribute: string): string | undefined {
     fanMode: "Fan mode|팬 모드"
   };
   return labels[attribute];
+}
+
+function isCoverButtonCommand(command: string): boolean {
+  return ["open", "close", "stop", "pause", "openShade", "closeShade"].includes(command);
 }
 
 function exactOrLocalized(value: string): RegExp {

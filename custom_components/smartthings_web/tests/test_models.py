@@ -17,9 +17,13 @@ from models import (  # noqa: E402
     BridgeScene,
     BridgeState,
     SmartThingsWebRuntime,
+    climate_controls,
     control_kind,
     control_supports_command,
+    cover_controls,
     entity_unique_id,
+    is_climate_device,
+    is_cover_device,
     is_fan_device,
     is_image_device,
     is_media_device,
@@ -31,6 +35,7 @@ from models import (  # noqa: E402
     numeric_range_for,
     option_values,
     parse_command_result,
+    select_controls,
     sensor_extra_attributes,
     sensor_native_value,
     sensor_state_allowed,
@@ -383,6 +388,111 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
 
         self.assertTrue(is_fan_device(device))
         self.assertTrue(number_state_allowed(device, fan_speed))
+
+    def test_cover_helpers_require_cover_state_or_controls(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        shade = BridgeState(
+            "main",
+            "windowShade",
+            "windowShade",
+            "partially open",
+            None,
+            "2026-08-24T21:10:00Z",
+        )
+        level = BridgeState(
+            "main",
+            "windowShadeLevel",
+            "shadeLevel",
+            40,
+            "%",
+            "2026-08-24T21:10:00Z",
+        )
+        device.states = {shade.key: shade, level.key: level}
+        device.controls = {
+            "open": BridgeControl("open", "button", "Open", attribute="windowShade", commands=("open",)),
+            "level": BridgeControl(
+                "level",
+                "slider",
+                "Shade level",
+                attribute="shadeLevel",
+                minimum=0.0,
+                maximum=100.0,
+            ),
+        }
+
+        self.assertTrue(is_cover_device(device))
+        self.assertEqual([control.control_id for control in cover_controls(device)], ["open", "level"])
+
+    def test_climate_helpers_require_thermostat_state_or_controls(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        mode = BridgeState(
+            "main",
+            "thermostatMode",
+            "thermostatMode",
+            "cool",
+            None,
+            "2026-08-24T21:10:00Z",
+        )
+        temperature = BridgeState(
+            "main",
+            "temperatureMeasurement",
+            "temperature",
+            24,
+            "C",
+            "2026-08-24T21:10:00Z",
+        )
+        device.states = {mode.key: mode, temperature.key: temperature}
+        device.controls = {
+            "mode": BridgeControl(
+                "mode",
+                "enumerated",
+                "Thermostat mode",
+                attribute="thermostatMode",
+                options=("off", "cool", "heat"),
+            ),
+            "setpoint": BridgeControl(
+                "setpoint",
+                "slider",
+                "Target temperature",
+                attribute="targetTemperature",
+                minimum=16.0,
+                maximum=30.0,
+            ),
+        }
+
+        self.assertTrue(is_climate_device(device))
+        self.assertEqual([control.control_id for control in climate_controls(device)], ["mode", "setpoint"])
+
+    def test_select_helpers_only_return_observed_non_primary_enumerated_options(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        device.controls = {
+            "sound": BridgeControl(
+                "sound",
+                "enumerated",
+                "Sound mode",
+                attribute="soundMode",
+                options=("standard", "night"),
+            ),
+            "mode": BridgeControl(
+                "mode",
+                "enumerated",
+                "Thermostat mode",
+                attribute="thermostatMode",
+                options=("off", "cool"),
+            ),
+            "value": BridgeControl(
+                "value",
+                "value",
+                "Read only",
+                attribute="displayMode",
+                options=("a", "b"),
+            ),
+        }
+
+        self.assertEqual([control.control_id for control in select_controls(device)], ["sound"])
 
     def test_command_result_accepts_only_push_confirmed_response(self) -> None:
         result = parse_command_result(
