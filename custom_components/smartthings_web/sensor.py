@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
@@ -20,7 +21,14 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SmartThingsWebConfigEntry
 from .entity import SmartThingsWebEntity
-from .models import BridgeDevice, BridgeState, SmartThingsWebRuntime
+from .models import (
+    BridgeDevice,
+    BridgeState,
+    SmartThingsWebRuntime,
+    sensor_extra_attributes,
+    sensor_native_value,
+    sensor_state_allowed,
+)
 
 
 @dataclass(frozen=True)
@@ -68,6 +76,14 @@ SENSOR_STATES = {
     "veryFineDustLevel": SensorDescription(
         "PM1", SensorDeviceClass.PM1, default_unit="µg/m³"
     ),
+    "dustLevel": SensorDescription(
+        "PM10", SensorDeviceClass.PM10, default_unit="µg/m³"
+    ),
+    "rssi": SensorDescription(
+        "RSSI", SensorDeviceClass.SIGNAL_STRENGTH, default_unit="dBm"
+    ),
+    "lqi": SensorDescription("LQI", state_class=None),
+    "signalMetrics": SensorDescription("Received Signal Metrics", state_class=None),
 }
 
 
@@ -86,9 +102,13 @@ async def async_setup_entry(
             if device.location_id != runtime.location_id:
                 continue
             for state in device.states.values():
-                description = SENSOR_STATES.get(state.attribute)
+                if not sensor_state_allowed(state.attribute):
+                    continue
+                description = SENSOR_STATES.get(state.attribute) or SensorDescription(
+                    _attribute_name(state.attribute), state_class=None
+                )
                 unique_id = "_".join((device.device_id, *state.key))
-                if description is not None and unique_id not in known:
+                if unique_id not in known:
                     known.add(unique_id)
                     entities.append(SmartThingsWebSensor(runtime, device, state, description))
         if entities:
@@ -117,12 +137,28 @@ class SmartThingsWebSensor(SmartThingsWebEntity, SensorEntity):
     def native_value(self) -> Any:
         """Return the current scalar value."""
         state = self.bridge_state
-        return state.value if state and isinstance(state.value, (str, int, float)) else None
+        return sensor_native_value(state.value) if state else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose normalized complex values without forcing them into HA's state string."""
+        state = self.bridge_state
+        return sensor_extra_attributes(state.value) if state else {}
 
     @property
     def native_unit_of_measurement(self) -> str | None:
         """Return the reported unit."""
         state = self.bridge_state
         if state and state.unit:
-            return {"C": "°C", "F": "°F"}.get(state.unit, state.unit)
+            return {
+                "C": "°C",
+                "F": "°F",
+                "Î¼g/m^3": "µg/m³",
+                "µg/m^3": "µg/m³",
+            }.get(state.unit, state.unit)
         return self.description.default_unit
+
+
+def _attribute_name(attribute: str) -> str:
+    """Turn normalized camelCase attributes into readable entity names."""
+    return re.sub(r"(?<!^)(?=[A-Z])", " ", attribute).replace("_", " ").strip().title()

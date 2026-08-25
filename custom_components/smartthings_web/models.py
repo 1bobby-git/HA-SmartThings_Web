@@ -163,6 +163,23 @@ class SmartThingsWebRuntime:
 
 ControlKind = Literal["switch", "light"]
 
+BINARY_ATTRIBUTES = frozenset(
+    {
+        "acceleration",
+        "carbonMonoxide",
+        "contact",
+        "doorState",
+        "filterStatus",
+        "gas",
+        "motion",
+        "presence",
+        "smoke",
+        "sound",
+        "tamper",
+        "water",
+    }
+)
+
 
 def control_kind(device: BridgeDevice, switch_state: BridgeState) -> ControlKind | None:
     """Classify only verified, safe switch-shaped controls."""
@@ -183,6 +200,33 @@ def control_kind(device: BridgeDevice, switch_state: BridgeState) -> ControlKind
 def entity_unique_id(device_id: str, state: BridgeState) -> str:
     """Return the stable entity identity without duplicating the attribute."""
     return "_".join((device_id, *state.key))
+
+
+def sensor_state_allowed(attribute: str) -> bool:
+    """Return whether a normalized state needs a sensor representation."""
+    return attribute != "switch" and attribute not in BINARY_ATTRIBUTES
+
+
+def sensor_native_value(value: Any) -> Any:
+    """Return a HA-safe primary sensor value without dropping structured content."""
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        return value if len(value) <= 255 else "data"
+    if isinstance(value, list):
+        return f"{len(value)} items"
+    if isinstance(value, dict):
+        return "data"
+    return None
+
+
+def sensor_extra_attributes(value: Any) -> dict[str, Any]:
+    """Retain normalized structured or long values as entity attributes."""
+    if isinstance(value, (dict, list)) or (isinstance(value, str) and len(value) > 255):
+        return {"value": deepcopy(value)}
+    return {}
 
 
 def parse_command_result(

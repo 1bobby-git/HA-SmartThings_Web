@@ -17,6 +17,9 @@ from models import (  # noqa: E402
     control_kind,
     entity_unique_id,
     parse_command_result,
+    sensor_extra_attributes,
+    sensor_native_value,
+    sensor_state_allowed,
 )
 
 
@@ -164,6 +167,16 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             unique_id,
             "dev_001_identifier_component_main_identifier_capability_temperature_temperature",
         )
+
+    def test_generic_sensor_keeps_signal_metrics_and_structured_values(self) -> None:
+        self.assertTrue(sensor_state_allowed("signalMetrics"))
+        self.assertTrue(sensor_state_allowed("value"))
+        self.assertFalse(sensor_state_allowed("contact"))
+        self.assertFalse(sensor_state_allowed("switch"))
+        self.assertEqual(sensor_native_value("rssi: -61, lqi: 99"), "rssi: -61, lqi: 99")
+        structured = {"rssi": -61, "lqi": 99}
+        self.assertEqual(sensor_native_value(structured), "data")
+        self.assertEqual(sensor_extra_attributes(structured), {"value": structured})
 
     def test_command_result_accepts_only_push_confirmed_response(self) -> None:
         result = parse_command_result(

@@ -8,15 +8,24 @@
           "bridge_url": "Bridge 주소",
           "pairing_code": "페어링 코드"
         }
+      },
+      "location": {
+        "title": "SmartThings 위치 선택",
+        "description": "Home Assistant에 추가할 위치를 선택하세요.",
+        "data": {
+          "location_id": "위치"
+        }
       }
     },
     "error": {
       "cannot_connect": "Bridge에 연결할 수 없습니다",
       "invalid_pairing_code": "페어링 코드가 잘못되었거나 만료되었습니다",
-      "no_devices": "Bridge에서 발견한 기기가 없습니다"
+      "no_devices": "Bridge에서 발견한 위치가 없습니다",
+      "invalid_location": "표시된 위치 중 하나를 선택하세요"
     },
     "abort": {
-      "already_configured": "이 SmartThings 위치는 이미 구성되어 있습니다"
+      "already_configured": "이 SmartThings 위치는 이미 구성되어 있습니다",
+      "invalid_flow": "설정을 다시 시작하고 Bridge와 다시 페어링하세요"
     }
   }
 }

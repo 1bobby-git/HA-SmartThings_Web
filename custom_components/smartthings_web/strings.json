@@ -8,15 +8,24 @@
           "bridge_url": "Bridge URL",
           "pairing_code": "Pairing code"
         }
+      },
+      "location": {
+        "title": "Choose a SmartThings location",
+        "description": "Select the location to add to Home Assistant.",
+        "data": {
+          "location_id": "Location"
+        }
       }
     },
     "error": {
       "cannot_connect": "Could not connect to the Bridge",
       "invalid_pairing_code": "The pairing code is invalid or expired",
-      "no_devices": "The Bridge has not discovered any devices"
+      "no_devices": "The Bridge has not discovered any locations",
+      "invalid_location": "Select one of the available locations"
     },
     "abort": {
-      "already_configured": "This SmartThings location is already configured"
+      "already_configured": "This SmartThings location is already configured",
+      "invalid_flow": "Restart setup and pair with the Bridge again"
     }
   }
 }

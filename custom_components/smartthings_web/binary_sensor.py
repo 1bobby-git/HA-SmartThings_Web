@@ -21,7 +21,14 @@ class BinaryDescription:
 
 
 BINARY_STATES = {
+    "acceleration": BinaryDescription(
+        "Acceleration", "active", BinarySensorDeviceClass.MOVING
+    ),
     "contact": BinaryDescription("Contact", "open", BinarySensorDeviceClass.DOOR),
+    "doorState": BinaryDescription("Door", "open", BinarySensorDeviceClass.OPENING),
+    "filterStatus": BinaryDescription(
+        "Filter status", "replace", BinarySensorDeviceClass.PROBLEM
+    ),
     "motion": BinaryDescription("Motion", "active", BinarySensorDeviceClass.MOTION),
     "water": BinaryDescription("Moisture", "wet", BinarySensorDeviceClass.MOISTURE),
     "presence": BinaryDescription("Presence", "present", BinarySensorDeviceClass.PRESENCE),
