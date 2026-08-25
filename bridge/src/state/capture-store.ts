@@ -34,6 +34,8 @@ export interface CaptureRow {
 const sanitizedRecords = new WeakSet<object>();
 const maxRecentCaptureLimit = 1000;
 const captureBusyTimeoutMs = 250;
+const maxPersistedCaptureRows = 50_000;
+const capturePruneInterval = 1_000;
 
 export function sanitizeCaptureRecord(
   source: CaptureSource,
@@ -55,6 +57,7 @@ export function sanitizeCaptureRecord(
 
 export class CaptureStore {
   readonly #db: DatabaseSync;
+  #writesSincePrune = 0;
 
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -71,6 +74,7 @@ export class CaptureStore {
         payload_hash TEXT NOT NULL
       )
     `);
+    this.#pruneOldCaptures();
   }
 
   write(record: SanitizedCaptureRecord): void {
@@ -83,6 +87,10 @@ export class CaptureStore {
           "INSERT INTO captures (source, received_at, payload_json, payload_hash) VALUES (?, ?, ?, ?)"
         )
         .run(record.source, record.receivedAt, JSON.stringify(record.payload), record.payloadHash);
+      this.#writesSincePrune += 1;
+      if (this.#writesSincePrune >= capturePruneInterval) {
+        this.#pruneOldCaptures();
+      }
     } catch (error) {
       if (isSqliteBusyError(error)) {
         return;
@@ -109,6 +117,19 @@ export class CaptureStore {
 
   close(): void {
     this.#db.close();
+  }
+
+  #pruneOldCaptures(): void {
+    this.#db
+      .prepare(`
+        DELETE FROM captures
+        WHERE id < COALESCE(
+          (SELECT id FROM captures ORDER BY id DESC LIMIT 1 OFFSET ?),
+          0
+        )
+      `)
+      .run(maxPersistedCaptureRows - 1);
+    this.#writesSincePrune = 0;
   }
 }
 

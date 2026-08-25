@@ -116,7 +116,6 @@ function validateExistingPrivateFile(path: string): void {
     if (!descriptorStats.isFile()) {
       throw new Error(INVALID_PRIVATE_FILE_ERROR);
     }
-    readFileSync(fd);
     fchmodSync(fd, 0o600);
   } finally {
     closeSync(fd);

@@ -5,6 +5,8 @@
 - Scope similarly named devices to the real SmartThings `data-testid=device` cards so room drag wrappers cannot make commands ambiguous.
 - Drive detail sliders, toggles, and buttons from their visible swatch labels, matching the actual generic range, switch, and icon-button markup.
 - Normalize enumerated `possibleStates` atomically and click only the observed status-to-command mapping while confirming the newer pushed status.
+- Validate large private SQLite files by descriptor metadata instead of reading the entire database during startup.
+- Retain only the newest 50,000 sanitized diagnostic captures and reapply that bound while observations continue.
 
 ## 0.1.35
 

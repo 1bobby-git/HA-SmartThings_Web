@@ -5,6 +5,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  truncateSync,
   writeFileSync
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -92,6 +93,20 @@ describe("bootstrapDataPaths", () => {
 
       expect(paths.sqlitePath).toBe(sqlitePath);
       expect(readFileSync(sqlitePath, "utf8")).toBe("existing-db-content");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("validates a large existing database without reading the whole file", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-data-large-db-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      writeFileSync(sqlitePath, "sqlite-header", { encoding: "utf8" });
+      truncateSync(sqlitePath, 2_147_483_648);
+
+      expect(() => bootstrapDataPaths(root)).not.toThrow();
+      expect(statSync(sqlitePath).size).toBe(2_147_483_648);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

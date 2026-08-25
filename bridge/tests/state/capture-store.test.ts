@@ -127,4 +127,91 @@ describe("CaptureStore", () => {
       expect(rows.map((row) => row.payload)).not.toContain('{"value":"under-write-lock"}');
     }
   });
+
+  test("retains only the newest bounded diagnostic capture window on startup", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-capture-retention-"));
+    const sqlitePath = join(root, "capture.sqlite");
+    let store: CaptureStore | undefined;
+    let inspector: DatabaseSync | undefined;
+    try {
+      const seed = new DatabaseSync(sqlitePath);
+      seed.exec(`
+        CREATE TABLE captures (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          source TEXT NOT NULL,
+          received_at TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          payload_hash TEXT NOT NULL
+        );
+        WITH RECURSIVE rows(value) AS (
+          VALUES(1)
+          UNION ALL
+          SELECT value + 1 FROM rows WHERE value < 50010
+        )
+        INSERT INTO captures (source, received_at, payload_json, payload_hash)
+        SELECT 'unit', '2026-08-25T00:00:00Z', '{}', printf('%064d', value)
+        FROM rows;
+      `);
+      seed.close();
+
+      store = new CaptureStore(sqlitePath);
+      store.close();
+      store = undefined;
+      inspector = new DatabaseSync(sqlitePath, { readOnly: true });
+      const aggregate = inspector
+        .prepare("SELECT COUNT(*) AS count, MIN(id) AS minId, MAX(id) AS maxId FROM captures")
+        .get() as { count: number; minId: number; maxId: number };
+
+      expect(aggregate).toEqual({ count: 50000, minId: 11, maxId: 50010 });
+    } finally {
+      inspector?.close();
+      store?.close();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("reapplies the bounded capture window while new observations continue", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-capture-running-retention-"));
+    const sqlitePath = join(root, "capture.sqlite");
+    let store: CaptureStore | undefined;
+    let inspector: DatabaseSync | undefined;
+    try {
+      const seed = new DatabaseSync(sqlitePath);
+      seed.exec(`
+        CREATE TABLE captures (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          source TEXT NOT NULL,
+          received_at TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          payload_hash TEXT NOT NULL
+        );
+        WITH RECURSIVE rows(value) AS (
+          VALUES(1)
+          UNION ALL
+          SELECT value + 1 FROM rows WHERE value < 50000
+        )
+        INSERT INTO captures (source, received_at, payload_json, payload_hash)
+        SELECT 'unit', '2026-08-25T00:00:00Z', '{}', printf('%064d', value)
+        FROM rows;
+      `);
+      seed.close();
+
+      store = new CaptureStore(sqlitePath);
+      for (let index = 0; index < 1_000; index += 1) {
+        store.write(sanitizeCaptureRecord("unit", { index }, (value) => value));
+      }
+      store.close();
+      store = undefined;
+      inspector = new DatabaseSync(sqlitePath, { readOnly: true });
+      const aggregate = inspector
+        .prepare("SELECT COUNT(*) AS count, MIN(id) AS minId, MAX(id) AS maxId FROM captures")
+        .get() as { count: number; minId: number; maxId: number };
+
+      expect(aggregate).toEqual({ count: 50000, minId: 1001, maxId: 51000 });
+    } finally {
+      inspector?.close();
+      store?.close();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
 });
