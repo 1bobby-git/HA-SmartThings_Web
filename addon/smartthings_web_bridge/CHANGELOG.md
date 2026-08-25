@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.38
+
+- Foreground the isolated command page, activate the exact observed room before querying its lazily rendered device cards, and select the unique exact-name opener inside a multi-button card so commands follow the real SmartThings room UI without falling back to a same-named device or secondary card action.
+- Exclude Cake's hidden duplicate device wrappers from exact-card ambiguity checks while preserving fail-closed behavior for multiple visible exact matches.
+- Accept the one visible unnamed power switch used by the current Cake detail surface only when it is unambiguous; named and duplicated controls still fail closed.
+- Treat only the observed Feathers `BadRequest`/400 request-error ACK as a failed snapshot request; 404 and server-error shapes still surface a protocol change, and the protocol contract advances to clear the earlier false-positive block safely.
+- Keep command success dependent on a newer matching SmartThings push event; no optimistic state mutation or SmartThings polling is added.
+- Add Home Assistant control-mode options, local Bridge-token reauthentication, Samsung-login Repairs, redacted diagnostics, and migration of obsolete duplicate number entries.
+
 ## 0.1.37
 
 - Recover Bridge startup after the sanitized diagnostic database crossed Node's 2 GiB whole-file read limit.

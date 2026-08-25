@@ -36,6 +36,10 @@ class BridgeAuthError(BridgeClientError):
     """Bridge authentication failed."""
 
 
+class BridgeReadOnlyError(BridgeClientError):
+    """Write command blocked by the HA integration control mode."""
+
+
 class SmartThingsWebBridgeClient:
     """Client for the local Bridge HTTP/SSE API."""
 
@@ -71,6 +75,10 @@ class SmartThingsWebBridgeClient:
     async def async_get_inventory(self) -> BridgeInventory:
         """Fetch the current full inventory."""
         return parse_inventory(await self._request_json("GET", "/api/v1/inventory", auth=True))
+
+    async def async_get_health(self) -> dict[str, Any]:
+        """Fetch non-secret Bridge health metadata for repairs/diagnostics."""
+        return await self._request_json("GET", "/health/details")
 
     async def async_execute_switch(
         self,
@@ -234,6 +242,42 @@ def _is_local_bridge_host(host: str) -> bool:
         and not address.is_multicast
         and (address.is_loopback or address.is_private or address.is_link_local)
     )
+
+
+class ReadOnlyBridgeClient:
+    """Proxy the Bridge client while blocking every write-capable command."""
+
+    def __init__(self, client: SmartThingsWebBridgeClient) -> None:
+        self._client = client
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+    async def async_execute_switch(
+        self,
+        device_id: str,
+        component: str,
+        capability: str,
+        command: str,
+    ) -> BridgeCommandResult:
+        """Block switch commands when the entry is read-only."""
+        raise BridgeReadOnlyError("smartthings_web_read_only")
+
+    async def async_execute_command(
+        self,
+        *,
+        target_type: str,
+        target_id: str,
+        command: str,
+        component: str | None = None,
+        capability: str | None = None,
+        attribute: str | None = None,
+        control_id: str | None = None,
+        control_label: str | None = None,
+        arguments: list[Any] | None = None,
+    ) -> BridgeCommandResult:
+        """Block generic commands when the entry is read-only."""
+        raise BridgeReadOnlyError("smartthings_web_read_only")
 
 
 def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:

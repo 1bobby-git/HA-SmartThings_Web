@@ -15,6 +15,13 @@
         "data": {
           "location_id": "Location"
         }
+      },
+      "reauth_confirm": {
+        "title": "Renew Bridge pairing",
+        "description": "Generate a new pairing code in the Bridge add-on.",
+        "data": {
+          "pairing_code": "Pairing code"
+        }
       }
     },
     "error": {
@@ -26,6 +33,22 @@
     "abort": {
       "already_configured": "This SmartThings location is already configured",
       "invalid_flow": "Restart setup and pair with the Bridge again"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "SmartThings Web options",
+        "data": {
+          "control_mode": "Control mode"
+        }
+      }
+    }
+  },
+  "issues": {
+    "samsung_login_required": {
+      "title": "SmartThings Web Bridge needs Samsung login",
+      "description": "Open the Bridge add-on and renew the Samsung web login session. Home Assistant only renews the local Bridge pairing token."
     }
   }
 }

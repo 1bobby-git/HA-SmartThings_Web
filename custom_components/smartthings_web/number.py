@@ -18,6 +18,7 @@ from .models import (
     BridgeState,
     SmartThingsWebRuntime,
     control_label,
+    entity_unique_id,
     number_controls,
     number_state_allowed,
     numeric_range_for,
@@ -41,7 +42,12 @@ async def async_setup_entry(
             controls = number_controls(device)
             if controls:
                 for control in controls:
-                    unique_id = f"{device.device_id}_number_{control.control_id}"
+                    state = _matching_state(device, control)
+                    unique_id = (
+                        entity_unique_id(device.device_id, state)
+                        if state
+                        else f"{device.device_id}_number_{control.control_id}"
+                    )
                     if unique_id in known:
                         continue
                     known.add(unique_id)
@@ -49,7 +55,7 @@ async def async_setup_entry(
                         SmartThingsWebNumber(
                             runtime,
                             device,
-                            _matching_state(device, control),
+                            state,
                             control,
                         )
                     )
@@ -80,7 +86,7 @@ class SmartThingsWebNumber(SmartThingsWebDeviceEntity, NumberEntity):
     ) -> None:
         self.state_key = state.key if state else None
         self.control = control
-        suffix = f"number_{control.control_id}" if control else "_".join(state.key) if state else "number"
+        suffix = "_".join(state.key) if state else f"number_{control.control_id}" if control else "number"
         name = control_label(control, _name(control.attribute or "Number")) if control else _name(state.attribute) if state else "Number"
         super().__init__(runtime, device, suffix, name)
         if control and control.minimum is not None and control.maximum is not None:

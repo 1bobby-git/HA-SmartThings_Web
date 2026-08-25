@@ -15,6 +15,12 @@ snapshot publication. This later observation means restart persistence is
 best-effort: the profile is durable, but the Samsung web session can still
 expire and require manual Ingress/noVNC reauthentication.
 
+After that manual reauthentication, repeated 0.1.38 Bridge rebuilds reused the
+same dedicated profile and returned to `CONNECTED` with a complete 213-device
+snapshot without another login prompt. This confirms recovery for the current
+short rebuild window only; it does not change the host-reboot or long-idle
+limitations.
+
 Manual testing must continue to record logout, later-release restart, and host reboot behavior before any broad compatibility claim.
 
 The SmartThings Web setting text says login is maintained while the web page remains open and may end when the browser closes. Phase 1 therefore treats the live Chromium process and keeper tab as runtime requirements rather than assuming persisted cookies are sufficient.

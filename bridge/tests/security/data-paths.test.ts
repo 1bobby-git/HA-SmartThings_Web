@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 
+import { PROTOCOL_CONTRACT_VERSION } from "../../src/inspector/protocol-contract.js";
 import { bootstrapDataPaths } from "../../src/security/data-paths.js";
 
 function mode(path: string): number {
@@ -65,7 +66,7 @@ describe("bootstrapDataPaths", () => {
         '{"schema_version":1}\n'
       );
       expect(readFileSync(paths.protocolFingerprintPath, "utf8")).toBe(
-        '{"schema_version":1,"protocol_contract_version":1,"baseline":null,"current":null,"change_count":0,"mismatch_keys":[],"last_mismatch":null}\n'
+        `{"schema_version":1,"protocol_contract_version":${PROTOCOL_CONTRACT_VERSION},"baseline":null,"current":null,"change_count":0,"mismatch_keys":[],"last_mismatch":null}\n`
       );
       expect(firstSecret).toMatch(/^[a-f0-9]{64}$/);
       expect(secondSecret).toBe(firstSecret);

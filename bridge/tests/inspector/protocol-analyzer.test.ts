@@ -319,7 +319,7 @@ describe("ProtocolAnalyzer", () => {
       "snapshot:scenes:v1"
     ] satisfies SafeProtocolSurface[]);
     expect(new Set(REQUIRED_PROTOCOL_SURFACES).size).toBe(7);
-    expect(PROTOCOL_CONTRACT_VERSION).toBe(1);
+    expect(PROTOCOL_CONTRACT_VERSION).toBe(2);
     expect(PROTOCOL_CONTRACT_FINGERPRINT).toMatch(/^[a-f0-9]{64}$/);
   });
 

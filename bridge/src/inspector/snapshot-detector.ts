@@ -84,6 +84,9 @@ export class SnapshotDetector {
       return null;
     }
     this.#pending.delete(key);
+    if (isSnapshotRequestError(decoded.args)) {
+      return null;
+    }
     const classified = classifySnapshotResponse(decoded.args, pending.categoryHint);
     if (!classified) {
       return {
@@ -111,6 +114,18 @@ export class SnapshotDetector {
     this.#pending.clear();
     this.#categories.clear();
   }
+}
+
+function isSnapshotRequestError(ackArgs: unknown[]): boolean {
+  if (ackArgs.length !== 1) return false;
+  const error = asRecord(ackArgs[0]);
+  if (!error) return false;
+  return (
+    error["name"] === "BadRequest" &&
+    typeof error["message"] === "string" &&
+    error["className"] === "bad-request" &&
+    error["code"] === 400
+  );
 }
 
 function pendingKey(connectionId: string, ackId: number): string {

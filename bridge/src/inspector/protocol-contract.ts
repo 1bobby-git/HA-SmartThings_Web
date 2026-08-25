@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { SnapshotCategory } from "./snapshot-detector.js";
 
-export const PROTOCOL_CONTRACT_VERSION = 1;
+export const PROTOCOL_CONTRACT_VERSION = 2;
 
 export interface ProtocolIntegrityState {
   schema_version: 1;

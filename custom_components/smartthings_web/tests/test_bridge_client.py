@@ -16,6 +16,8 @@ sys.modules.setdefault("smartthings_web", package)
 
 from smartthings_web.bridge_client import (  # noqa: E402
     BridgeClientError,
+    BridgeReadOnlyError,
+    ReadOnlyBridgeClient,
     SmartThingsWebBridgeClient,
     parse_inventory,
 )
@@ -56,6 +58,42 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
             with self.subTest(base_url=base_url):
                 with self.assertRaisesRegex(BridgeClientError, "invalid_bridge_url"):
                     SmartThingsWebBridgeClient(object(), base_url)  # type: ignore[arg-type]
+
+    async def test_read_only_client_blocks_write_commands(self) -> None:
+        client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
+        readonly = ReadOnlyBridgeClient(client)
+
+        with self.assertRaises(BridgeReadOnlyError):
+            await readonly.async_execute_switch("dev_001", "main", "switch", "on")
+
+        with self.assertRaises(BridgeReadOnlyError):
+            await readonly.async_execute_command(
+                target_type="device",
+                target_id="dev_001",
+                command="refresh",
+            )
+
+    async def test_read_only_client_keeps_read_methods_available(self) -> None:
+        client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
+        request = AsyncMock(
+            return_value={
+                "schemaVersion": 1,
+                "ready": True,
+                "bridgeVersion": "0.1.38",
+                "protocolVersion": "2",
+                "locations": [],
+                "rooms": [],
+                "scenes": [],
+                "devices": [],
+            }
+        )
+        client._request_json = request  # type: ignore[method-assign]
+        readonly = ReadOnlyBridgeClient(client)
+
+        inventory = await readonly.async_get_inventory()
+
+        self.assertTrue(inventory.ready)
+        request.assert_awaited_once()
 
     async def test_switch_command_uses_extended_request_timeout(self) -> None:
         client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]

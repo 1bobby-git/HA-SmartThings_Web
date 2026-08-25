@@ -76,6 +76,19 @@ selection to real device wrappers, scope sliders/buttons to their observed
 swatch label, and retain an atomic `status` to `label` to `command` mapping
 from `possibleStates`.
 
+Version 0.1.38 adds fresh live Cake evidence for command targeting. One exact
+visible room device wrapper contained two descendant buttons while Cake also
+kept hidden duplicate markup, so unfiltered wrapper or descendant-button counts
+could report a false device ambiguity. The detail opener was the sole visible
+button containing the exact device name. Once opened, the power control exposed one
+accessible `switch`, one underlying `checkbox`, visible `Power` text, but no
+switch whose accessible name was exactly `Power`. The Bridge now validates one
+exact visible wrapper and one exact-name opener, then uses the only visible switch only
+when that fallback is unambiguous. A controlled `off → on → off` cycle was
+confirmed only by newer push events and produced ordered companion power
+changes of `0 W → 16 W → 0 W` in Home Assistant within about two seconds of
+their Bridge timestamps.
+
 ## Camera behavior
 
 The supplied capture contained two thumbnail requests and no corresponding ACK

@@ -13,11 +13,20 @@ from .bridge_client import BridgeAuthError, BridgeClientError, SmartThingsWebBri
 from .const import (
     CONF_BRIDGE_TOKEN,
     CONF_BRIDGE_URL,
+    CONF_CONTROL_MODE,
     CONF_LOCATION_ID,
+    CONTROL_MODE_READ_ONLY,
+    CONTROL_MODE_SAFE_CONTROL,
     DEFAULT_BRIDGE_URL,
     DOMAIN,
 )
 from .models import BridgeInventory, location_name
+
+
+CONTROL_MODE_OPTIONS = {
+    CONTROL_MODE_READ_ONLY: "Read only",
+    CONTROL_MODE_SAFE_CONTROL: "Safe control",
+}
 
 
 class SmartThingsWebConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -25,6 +34,14 @@ class SmartThingsWebConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
     _pending_pairing: tuple[str, str, BridgeInventory] | None = None
+    _reauth_data: dict[str, Any] | None = None
+
+    @staticmethod
+    def async_get_options_flow(
+        _config_entry: config_entries.ConfigEntry,
+    ) -> config_entries.OptionsFlow:
+        """Return the options flow for this entry."""
+        return SmartThingsWebOptionsFlow()
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         """Pair with the Bridge and select its main device location."""
@@ -97,6 +114,7 @@ class SmartThingsWebConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_BRIDGE_TOKEN: token,
                     CONF_LOCATION_ID: location_id,
                 },
+                options={CONF_CONTROL_MODE: CONTROL_MODE_SAFE_CONTROL},
             )
         return self.async_show_form(
             step_id="location",
@@ -104,3 +122,72 @@ class SmartThingsWebConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 {vol.Required(CONF_LOCATION_ID): vol.In(choices)}
             ),
         )
+
+    async def async_step_reauth(self, entry_data: dict[str, Any]):
+        """Start local Bridge token reauthentication."""
+        self._reauth_data = entry_data
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input: dict[str, Any] | None = None):
+        """Exchange a new pairing code for the local Bridge token."""
+        errors: dict[str, str] = {}
+        if self._reauth_data is None:
+            return self.async_abort(reason="invalid_flow")
+        if user_input is not None:
+            client = SmartThingsWebBridgeClient(
+                async_get_clientsession(self.hass),
+                self._reauth_data[CONF_BRIDGE_URL],
+            )
+            try:
+                token = await client.async_pair(user_input["pairing_code"])
+            except BridgeAuthError:
+                errors["base"] = "invalid_pairing_code"
+            except BridgeClientError:
+                errors["base"] = "cannot_connect"
+            else:
+                return self.async_update_reload_and_abort(
+                    self._get_reauth_entry(),
+                    data_updates={CONF_BRIDGE_TOKEN: token},
+                )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({vol.Required("pairing_code"): str}),
+            errors=errors,
+        )
+
+
+_OptionsFlowBase = getattr(config_entries, "OptionsFlowWithReload", config_entries.OptionsFlow)
+
+
+class SmartThingsWebOptionsFlow(_OptionsFlowBase):
+    """Configure SmartThings Web runtime behavior."""
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None):
+        """Update integration options."""
+        entry = self._entry
+        current = entry.options.get(CONF_CONTROL_MODE, CONTROL_MODE_SAFE_CONTROL)
+        if user_input is not None:
+            return self.async_create_entry(
+                title="",
+                data={
+                    CONF_CONTROL_MODE: user_input.get(CONF_CONTROL_MODE, current),
+                },
+            )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_CONTROL_MODE, default=current): vol.In(
+                        CONTROL_MODE_OPTIONS
+                    )
+                }
+            ),
+        )
+
+    @property
+    def _entry(self) -> config_entries.ConfigEntry:
+        entry = self.config_entry
+        if entry is None:
+            raise RuntimeError("Options flow config entry is not available")
+        return entry

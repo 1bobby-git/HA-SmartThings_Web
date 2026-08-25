@@ -9,7 +9,10 @@ import {
   type BridgeRuntimeDependencies
 } from "../src/runtime.js";
 import type { PhysicalActionProbeSnapshot } from "../src/inspector/physical-action-correlation-probe.js";
-import { PROTOCOL_CONTRACT_FINGERPRINT } from "../src/inspector/protocol-contract.js";
+import {
+  PROTOCOL_CONTRACT_FINGERPRINT,
+  PROTOCOL_CONTRACT_VERSION
+} from "../src/inspector/protocol-contract.js";
 import { ProtocolIntegrityStore } from "../src/state/protocol-integrity-store.js";
 import type { RuntimeStatusPatch } from "../src/state/runtime-state.js";
 import { createHealthReport } from "../src/server/health.js";
@@ -643,10 +646,10 @@ describe("createBridgeRuntime", () => {
       current: string | null;
       change_count: number;
     };
-    const expectedVersion = `1:${PROTOCOL_CONTRACT_FINGERPRINT.slice(0, 16)}`;
+    const expectedVersion = `${PROTOCOL_CONTRACT_VERSION}:${PROTOCOL_CONTRACT_FINGERPRINT.slice(0, 16)}`;
 
     expect(persisted).toMatchObject({
-      protocol_contract_version: 1,
+      protocol_contract_version: PROTOCOL_CONTRACT_VERSION,
       baseline: PROTOCOL_CONTRACT_FINGERPRINT,
       current: PROTOCOL_CONTRACT_FINGERPRINT,
       change_count: 0
@@ -962,7 +965,7 @@ describe("createBridgeRuntime", () => {
       state: "PROTOCOL_CHANGED",
       parserHealthy: false,
       protocolChangeCount: 1,
-      protocolVersion: `1:${PROTOCOL_CONTRACT_FINGERPRINT.slice(0, 16)}`
+      protocolVersion: `${PROTOCOL_CONTRACT_VERSION}:${PROTOCOL_CONTRACT_FINGERPRINT.slice(0, 16)}`
     });
     expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(false);
 
@@ -1023,7 +1026,7 @@ describe("createBridgeRuntime", () => {
     expect(secondRuntime.status.getSnapshot()).toMatchObject({
       state: "CONNECTED",
       protocolChangeCount: 0,
-      protocolVersion: `1:${PROTOCOL_CONTRACT_FINGERPRINT.slice(0, 16)}`
+      protocolVersion: `${PROTOCOL_CONTRACT_VERSION}:${PROTOCOL_CONTRACT_FINGERPRINT.slice(0, 16)}`
     });
     expect(createHealthReport(secondRuntime.status.getSnapshot()).ready).toBe(true);
   });
@@ -1058,7 +1061,7 @@ describe("createBridgeRuntime", () => {
       parserHealthy: false,
       chromiumRunning: false,
       keeperPresent: false,
-      protocolVersion: "1:discovering"
+      protocolVersion: `${PROTOCOL_CONTRACT_VERSION}:discovering`
     });
     expect(JSON.stringify(log.error.mock.calls)).not.toMatch(/not json|protocol-fingerprint|token|secret/i);
     expect(log.error).toHaveBeenCalledWith("protocol_integrity_store_failed");
@@ -1067,7 +1070,7 @@ describe("createBridgeRuntime", () => {
   test("preserves a persisted same-contract surface mismatch across healthy replay after restart", async () => {
     const root = createTempRoot();
     const seeded = new ProtocolIntegrityStore(join(root, "protocol-fingerprint.json"), {
-      contractVersion: 1
+      contractVersion: PROTOCOL_CONTRACT_VERSION
     });
     seeded.recordMismatch("snapshot:scenes:response_shape");
     expect(seeded.snapshot().changeCount).toBe(1);
@@ -1105,7 +1108,7 @@ describe("createBridgeRuntime", () => {
     });
     expect(
       new ProtocolIntegrityStore(join(root, "protocol-fingerprint.json"), {
-        contractVersion: 1
+        contractVersion: PROTOCOL_CONTRACT_VERSION
       }).snapshot().changeCount
     ).toBe(1);
   });

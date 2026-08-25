@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import { KEEPER_URL, KeeperPageManager } from "../../src/browser/keeper-page.js";
 
 class FakePage {
+  readonly bringToFront = vi.fn(async () => undefined);
   readonly close = vi.fn(async () => {
     this.closed = true;
   });
@@ -207,5 +208,6 @@ describe("KeeperPageManager", () => {
     expect(command.goto).toHaveBeenCalledWith(keeper.url(), {
       waitUntil: "domcontentloaded"
     });
+    expect(command.bringToFront).toHaveBeenCalledTimes(1);
   });
 });

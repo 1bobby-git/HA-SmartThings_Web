@@ -165,11 +165,12 @@ npm run deploy:haos:candidate
 
 ## 현재 검증 결과
 
-- SmartThings Web Bridge 앱과 Home Assistant 통합 `0.1.37`이 Home Assistant OS 18.2 / Home Assistant Core 2026.8.3에 설치되었습니다.
-- `0.1.37`은 2,158,272,512바이트까지 커진 진단 SQLite 파일을 시작 시 통째로 읽던 문제를 수정했습니다. 익명화된 진단 캡처는 최신 50,000개를 유지하며, 물리 파일 축소를 위한 `VACUUM` 실행까지 확인된 것은 아닙니다.
-- Home Assistant에는 현재 검증 기록 기준 215개 기기와 1,722개 등록 엔티티가 로드되었습니다.
-- 앱 재빌드 뒤 전용 Chromium 프로필은 유지됐지만 Samsung이 수동 로그인 화면으로 전환했습니다. 현재 브리지는 `LOGIN_REQUIRED` 상태에서 liveness와 Ingress만 유지하고, 사용자가 다시 로그인하기 전까지 readiness와 새 스냅샷 게시를 차단합니다.
-- 이전 `0.1.34` 실환경 검증에서는 온도·습도·접촉·동작·전력 상태의 Bridge SSE 반영, 연속 이벤트 전달, 접촉 열림 물리 동작의 단일 후보 상관관계를 확인했습니다.
+- SmartThings Web Bridge 앱과 Home Assistant 통합 `0.1.38`이 Home Assistant Core 2026.8.3에 설치되었습니다.
+- 수동 브라우저 재인증 뒤 반복 재빌드에서도 전용 Chromium 로그인이 유지됐고, Bridge는 `live=true`, `ready=true`, `CONNECTED`, 213개 관측 기기, 프로토콜 v2, 잘못된 프레임 0으로 복구됐습니다.
+- Home Assistant에는 215개 기기와 1,724개 활성 엔티티가 로드됐습니다. 14개 플랫폼에는 16개 `media_player`, 66개 `number`, 6개 `select`, 4개 `scene`, 1개 Home Monitor `alarm_control_panel`, 2개 `image`가 포함됩니다.
+- 안전한 무드등 연속 제어와 후속 실제 상태 변화에서 Bridge `updatedAt` 이후 Home Assistant `last_updated`가 스위치는 0.327초, 전력 0 W는 1.12초 뒤 갱신됐습니다. SmartThings 상태 폴링이나 낙관적 상태 변경은 사용하지 않았습니다.
+- 정확한 보이는 기기 래퍼가 식별되면 명령 탐색은 그 내부에서만 진행되며, 관측된 Feathers 400 오류만 스냅샷 요청 실패로 처리하고 404·서버 오류는 프로토콜 변경으로 노출합니다.
+- 감지주기 중복 엔티티와 활성 `smartthings_web` 수리 경고는 모두 0이었고, 제어 모드 옵션 창도 Core 재시작 뒤 정상적으로 열렸습니다.
 - 72시간 수동 HAOS soak는 사용자가 다시 요청할 때까지 보류되어 있습니다.
 
 이 결과는 해당 시점과 환경의 검증 기록입니다. SmartThings Web 변경, Samsung 세션 만료, 계정 구성, 기기 종류에 따라 결과가 달라질 수 있습니다.

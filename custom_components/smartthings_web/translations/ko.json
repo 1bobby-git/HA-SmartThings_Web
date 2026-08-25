@@ -15,6 +15,13 @@
         "data": {
           "location_id": "위치"
         }
+      },
+      "reauth_confirm": {
+        "title": "Bridge 페어링 갱신",
+        "description": "Bridge 애드온에서 새 페어링 코드를 생성한 뒤 입력하세요.",
+        "data": {
+          "pairing_code": "페어링 코드"
+        }
       }
     },
     "error": {
@@ -26,6 +33,22 @@
     "abort": {
       "already_configured": "이 SmartThings 위치는 이미 구성되어 있습니다",
       "invalid_flow": "설정을 다시 시작하고 Bridge와 다시 페어링하세요"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "SmartThings Web 옵션",
+        "data": {
+          "control_mode": "제어 모드"
+        }
+      }
+    }
+  },
+  "issues": {
+    "samsung_login_required": {
+      "title": "SmartThings Web Bridge에 Samsung 로그인이 필요합니다",
+      "description": "Bridge 애드온을 열어 Samsung 웹 로그인 세션을 갱신하세요. Home Assistant 재인증은 로컬 Bridge 페어링 토큰만 갱신합니다."
     }
   }
 }

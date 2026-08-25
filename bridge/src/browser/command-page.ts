@@ -96,7 +96,9 @@ export class SmartThingsWebUiCommandExecutor {
         throw new Error("command_login_required");
       }
       await this.ensureLocation(page, input.locationId, input.locationNames);
-      await openDeviceDetail(page, input.deviceName, input.roomName);
+      await openDeviceDetail(page, input.deviceName, input.roomName, {
+        preferRooms: Boolean(input.roomName)
+      });
       await executeDeviceControl(page, input);
     } finally {
       await page.close().catch(() => undefined);
@@ -277,10 +279,17 @@ async function executeDeviceControl(
 ): Promise<void> {
   if (input.command === "on" || input.command === "off") {
     const label = input.controlLabel ?? controlLabelFor(input.attribute);
-    if (label) {
-      await clickRoleOrLabeledControl(page, "switch", /^(?:Power|전원)$/iu, label);
-    } else {
-      await clickRoleControl(page, "switch", /^(?:Power|전원)$/iu);
+    try {
+      if (label) {
+        await clickRoleOrLabeledControl(page, "switch", /^(?:Power|전원)$/iu, label);
+      } else {
+        await clickRoleControl(page, "switch", /^(?:Power|전원)$/iu);
+      }
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "command_control_not_found") {
+        throw error;
+      }
+      await clickRoleControl(page, "switch");
     }
     return;
   }
@@ -567,6 +576,24 @@ async function findDeviceInRooms(
   const route = url.pathname.match(/^(\/location\/[^/]+)(?:\/.*)?$/u)?.[1];
   if (!route) throw new Error("command_room_not_found");
   await page.goto(`${url.origin}${route}/rooms`, { waitUntil: "domcontentloaded" });
+  if (roomName) {
+    const roomText = page.getByText(roomName, { exact: true });
+    let room = page.getByRole("button").filter({
+      has: roomText
+    });
+    if ((await room.count()) !== 1) {
+      const namedRoom = page.getByRole("button", { name: exactName(roomName) });
+      if ((await namedRoom.count()) === 1) {
+        room = namedRoom;
+      } else {
+        const heading = page.getByRole("heading", { name: exactName(roomName) });
+        if ((await heading.count()) !== 1) throw new Error("command_room_not_found");
+        room = heading.locator("..");
+        if ((await room.count()) !== 1) throw new Error("command_room_not_found");
+      }
+    }
+    await room.click({ timeout: 15_000 });
+  }
   let device = await visibleExactTextCard(page, deviceName, 15_000);
   if (!device) {
     device = deviceLocator(page, deviceName);
@@ -646,11 +673,22 @@ function deviceLocator(page: CommandPageLike, deviceName: string): CommandLocato
   });
 }
 
+function exactTextDeviceCardLocators(
+  page: CommandPageLike,
+  deviceName: string
+): { wrappers: CommandLocatorLike; opener: CommandLocatorLike } {
+  const exactText = page.getByText(deviceName, { exact: true });
+  const wrappers = page.locator("[data-testid='device']:visible").filter({
+    has: exactText
+  });
+  return {
+    wrappers,
+    opener: wrappers.getByRole("button").filter({ has: exactText })
+  };
+}
+
 function exactTextCardLocator(page: CommandPageLike, deviceName: string): CommandLocatorLike {
-  const deviceCards = page.locator("[data-testid='device']");
-  return deviceCards.filter({
-    has: page.getByText(deviceName, { exact: true })
-  }).getByRole("button");
+  return exactTextDeviceCardLocators(page, deviceName).opener;
 }
 
 async function visibleExactTextCard(
@@ -658,16 +696,40 @@ async function visibleExactTextCard(
   deviceName: string,
   timeout: number
 ): Promise<CommandLocatorLike | undefined> {
-  const exact = exactTextCardLocator(page, deviceName);
+  const { wrappers, opener } = exactTextDeviceCardLocators(page, deviceName);
   try {
-    await exact.first().waitFor({ state: "visible", timeout });
+    await wrappers.first().waitFor({ state: "visible", timeout });
   } catch {
     return undefined;
   }
-  const count = await exact.count();
-  if (count === 0) return undefined;
-  if (count !== 1) throw new Error("command_target_ambiguous");
-  return exact;
+  const wrapperCount = await wrappers.count();
+  if (wrapperCount === 0) return undefined;
+  if (wrapperCount !== 1) throw new Error("command_target_ambiguous");
+  const openerCount = await opener.count();
+  if (openerCount > 1) throw new Error("command_target_ambiguous");
+  if (openerCount === 1) {
+    try {
+      await opener.first().waitFor({ state: "visible", timeout });
+      return opener;
+    } catch {
+      // The exact wrapper is authoritative; try only another wrapper-scoped opener.
+    }
+  }
+
+  const scopedNamedOpener = wrappers.getByRole("button", {
+    name: new RegExp(escapeRegExp(deviceName), "u")
+  });
+  const scopedNamedCount = await scopedNamedOpener.count();
+  if (scopedNamedCount > 1) throw new Error("command_target_ambiguous");
+  if (scopedNamedCount === 1) {
+    try {
+      await scopedNamedOpener.first().waitFor({ state: "visible", timeout });
+      return scopedNamedOpener;
+    } catch {
+      // An exact visible wrapper must never fall through to a page-wide target.
+    }
+  }
+  throw new Error("command_target_not_found");
 }
 
 function exactName(value: string): RegExp {

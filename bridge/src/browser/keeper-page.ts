@@ -4,6 +4,7 @@ export const ADVANCED_URL = "https://my.smartthings.com/advanced";
 export interface BrowserPageLike {
   url(): string;
   isClosed(): boolean;
+  bringToFront?(): Promise<unknown>;
   goto(url: string, options?: { waitUntil?: "domcontentloaded" | "load" }): Promise<unknown>;
   close(): Promise<unknown>;
 }
@@ -69,6 +70,7 @@ export class KeeperPageManager {
     const page = await this.context.newPage();
     this.#commandPages.add(page);
     try {
+      await page.bringToFront?.();
       const keeperUrl = this.currentKeeper()?.url();
       const target = keeperUrl && isKeeperSettledUrl(keeperUrl) ? keeperUrl : KEEPER_URL;
       await page.goto(target, { waitUntil: "domcontentloaded" });

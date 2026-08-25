@@ -242,6 +242,52 @@ describe("SnapshotDetector", () => {
     expect(detector.snapshot().categories).toEqual({});
   });
 
+  test("ignores a standard Feathers request error without declaring a protocol change", () => {
+    const detector = new SnapshotDetector();
+    detector.observeSentFrame('421["find","api/device/status",{}]');
+
+    expect(
+      detector.observeReceivedFrame(
+        `431${JSON.stringify([
+          {
+            name: "BadRequest",
+            message: "request failed",
+            code: 400,
+            className: "bad-request",
+            data: {}
+          }
+        ])}`
+      )
+    ).toBeNull();
+    expect(detector.snapshot()).toEqual({ complete: false, categories: {}, pendingRequests: 0 });
+  });
+
+  test.each([404, 500])(
+    "surfaces HTTP %i-shaped snapshot errors as protocol changes",
+    (code) => {
+      const detector = new SnapshotDetector();
+      detector.observeSentFrame('421["find","api/device/status",{}]');
+
+      expect(
+        detector.observeReceivedFrame(
+          `431${JSON.stringify([
+            {
+              name: code === 404 ? "NotFound" : "GeneralError",
+              message: "request failed",
+              code,
+              className: code === 404 ? "not-found" : "general-error",
+              data: {}
+            }
+          ])}`
+        )
+      ).toEqual({
+        kind: "protocol_changed",
+        surface: "snapshot:device_states:response_shape"
+      });
+      expect(detector.snapshot()).toEqual({ complete: false, categories: {}, pendingRequests: 0 });
+    }
+  );
+
   test("emits protocol_changed without raw args when a known empty response is invalid for its category", () => {
     const detector = new SnapshotDetector();
     detector.observeSentFrame('421["find","api/device",{}]');
