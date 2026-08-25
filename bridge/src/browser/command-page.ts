@@ -7,6 +7,7 @@ interface CommandLocatorLike {
   filter(options: { has: CommandLocatorLike }): CommandLocatorLike;
   first(): CommandLocatorLike;
   getByRole(role: string, options?: { name?: string | RegExp }): CommandLocatorLike;
+  getByText(text: string, options?: { exact?: boolean }): CommandLocatorLike;
   locator(selector: string): CommandLocatorLike;
   waitFor(options: { state: "visible"; timeout: number }): Promise<unknown>;
 }
@@ -46,7 +47,7 @@ export class SmartThingsWebUiCommandExecutor {
       }
       await this.ensureLocation(page, input.locationId, input.locationNames);
 
-      let device: CommandLocatorLike | undefined = deviceLocator(page, input.deviceName);
+      let device = deviceLocator(page, input.deviceName);
       try {
         await device.first().waitFor({ state: "visible", timeout: 15_000 });
       } catch {
@@ -54,18 +55,27 @@ export class SmartThingsWebUiCommandExecutor {
         try {
           await device.first().waitFor({ state: "visible", timeout: 5_000 });
         } catch {
-          device = await scrollForDevice(page, input.deviceName);
-          if (!device) {
-            device = await findDeviceInRooms(
+          const scrolled = await scrollForDevice(page, input.deviceName);
+          if (scrolled) {
+            device = scrolled;
+          } else {
+            const roomDevice = await findDeviceInRooms(
               page,
               input.deviceName,
               input.roomName
             ).catch(
               () => undefined
             );
+            device = roomDevice ?? await searchForDevice(page, input.deviceName);
           }
-          device ??= await searchForDevice(page, input.deviceName);
         }
+      }
+      if ((await device.count()) !== 1) {
+        device = await findDeviceInRooms(
+          page,
+          input.deviceName,
+          input.roomName
+        ).catch(() => device);
       }
       if ((await device.count()) !== 1) {
         throw new Error("command_target_ambiguous");
@@ -152,7 +162,17 @@ async function findDeviceInRooms(
   if ((await device.count()) !== 1 && roomName) {
     const heading = page.getByRole("heading", { name: exactName(roomName) });
     if ((await heading.count()) === 1) {
-      const scoped = heading.locator("..").getByRole("button", {
+      const room = heading.locator("..");
+      const exactLabel = room.getByText(deviceName, { exact: true });
+      if ((await exactLabel.count()) === 1) {
+        try {
+          await exactLabel.first().waitFor({ state: "visible", timeout: 5_000 });
+          return exactLabel;
+        } catch {
+          // Fall back to the room-scoped accessible card below.
+        }
+      }
+      const scoped = room.getByRole("button", {
         name: new RegExp(escapeRegExp(deviceName), "u")
       });
       try {

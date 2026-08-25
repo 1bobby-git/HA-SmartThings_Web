@@ -29,6 +29,10 @@ class FakeLocator {
     return this;
   }
 
+  getByText(): FakeLocator {
+    return this;
+  }
+
   locator(): FakeLocator {
     return this;
   }
@@ -48,7 +52,7 @@ class FakeCommandPage {
     return false;
   }
 
-  async goto(): Promise<void> {}
+  async goto(_url: string): Promise<void> {}
 
   getByRole(role: string, options?: { name?: string | RegExp }): FakeLocator {
     if (role === "button") {
@@ -256,6 +260,38 @@ describe("SmartThingsWebUiCommandExecutor", () => {
 
     expect(page.mouse.wheel).toHaveBeenCalledTimes(2);
     expect(visible.click).toHaveBeenCalledTimes(1);
+    expect(page.toggle.click).toHaveBeenCalledTimes(1);
+  });
+
+  test("uses one exact device label inside its exact room when card buttons are ambiguous", async () => {
+    const page = new FakeCommandPage();
+    const ambiguousCards = new FakeLocator(2);
+    const heading = new FakeLocator(1);
+    const room = new FakeLocator(1);
+    const exactDeviceLabel = new FakeLocator(1);
+    heading.locator = vi.fn(() => room);
+    room.getByText = vi.fn(() => exactDeviceLabel);
+    page.card = ambiguousCards;
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "heading") return heading;
+      if (role === "button") return ambiguousCards;
+      return page.toggle;
+    });
+    page.goto = vi.fn(async (url: string) => {
+      page.currentUrl = url;
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeSwitch({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      roomName: "Kitchen"
+    });
+
+    expect(room.getByText).toHaveBeenCalledWith("Safe plug", { exact: true });
+    expect(exactDeviceLabel.click).toHaveBeenCalledTimes(1);
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
   });
 });
