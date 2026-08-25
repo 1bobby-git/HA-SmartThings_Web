@@ -307,9 +307,26 @@ FAN_ATTRIBUTES = {
     "airPurifierMode",
     "fanMode",
     "fanSpeed",
-    "level",
     "supportedAirPurifierModes",
     "supportedFanModes",
+}
+
+FAN_LEVEL_ATTRIBUTES = {"level"}
+
+FAN_IDENTITY_TERMS = {
+    "air conditioner",
+    "air purifier",
+    "airpurifier",
+    "circulator",
+    "fan",
+    "purifier",
+    "ventilator",
+    "ventilation",
+    "공기청정",
+    "서큘레이터",
+    "선풍기",
+    "팬",
+    "환풍",
 }
 
 NUMBER_ATTRIBUTES = {
@@ -345,7 +362,11 @@ def is_media_device(device: BridgeDevice) -> bool:
 
 def is_fan_device(device: BridgeDevice) -> bool:
     """Return whether a device has fan or air-purifier state."""
-    return device_has_any_state(device, FAN_ATTRIBUTES)
+    if device_has_any_state(device, FAN_ATTRIBUTES):
+        return True
+    if any(_control_has_fan_semantics(control) for control in device.controls.values()):
+        return True
+    return device_has_any_state(device, FAN_LEVEL_ATTRIBUTES) and _device_has_fan_identity(device)
 
 
 def number_state_allowed(device: BridgeDevice, state: BridgeState) -> bool:
@@ -356,7 +377,7 @@ def number_state_allowed(device: BridgeDevice, state: BridgeState) -> bool:
         return False
     if state.attribute in {"volume"} and is_media_device(device):
         return False
-    if state.attribute in {"level", "fanSpeed"} and not is_fan_device(device):
+    if state.attribute == "fanSpeed" and not is_fan_device(device):
         return False
     return True
 
@@ -722,6 +743,29 @@ def _control_mentions(control: BridgeControl, *needles: str) -> bool:
         )
     )
     return any(needle.lower() in haystack for needle in needles)
+
+
+def _control_has_fan_semantics(control: BridgeControl) -> bool:
+    if control.attribute in FAN_ATTRIBUTES or control.capability in FAN_ATTRIBUTES:
+        return True
+    return _text_has_fan_identity(
+        control.control_id,
+        control.label,
+        control.capability,
+        control.attribute,
+        *control.commands,
+    )
+
+
+def _device_has_fan_identity(device: BridgeDevice) -> bool:
+    return _text_has_fan_identity(device.name, device.device_type)
+
+
+def _text_has_fan_identity(*values: str | None) -> bool:
+    haystack = " ".join(value.lower() for value in values if isinstance(value, str))
+    if not haystack:
+        return False
+    return any(term in haystack for term in FAN_IDENTITY_TERMS)
 
 
 def _timestamp(value: str | None) -> datetime | None:

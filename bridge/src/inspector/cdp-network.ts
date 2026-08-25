@@ -32,11 +32,16 @@ export async function installCdpNetworkObserver(
   await session.send("Network.enable");
 
   session.on("Network.webSocketFrameSent", (payload) =>
-    write(sink, redact, "cdp-websocket-frame", { direction: "sent", payload: normalizeFrame(payload, limit, redact) })
+    write(sink, redact, "cdp-websocket-frame", {
+      direction: "sent",
+      ...connectionMetadata(payload),
+      payload: normalizeFrame(payload, limit, redact)
+    })
   );
   session.on("Network.webSocketFrameReceived", (payload) =>
     write(sink, redact, "cdp-websocket-frame", {
       direction: "received",
+      ...connectionMetadata(payload),
       payload: normalizeFrame(payload, limit, redact)
     })
   );
@@ -81,6 +86,11 @@ export async function installCdpNetworkObserver(
 
 function write(sink: CaptureSink, redact: Redact, source: CaptureSource, payload: unknown): void {
   sink.write(sanitizeCaptureRecord(source, payload, redact));
+}
+
+function connectionMetadata(payload: unknown): { connectionId?: string } {
+  const requestId = readString(payload, "requestId");
+  return requestId ? { connectionId: requestId } : {};
 }
 
 function normalizeFrame(payload: unknown, limitBytes: number, redact: Redact): unknown {

@@ -135,6 +135,31 @@ describe("installBrowserObserver", () => {
     });
   });
 
+  test("tags Playwright websocket frames with a per-socket connection id", () => {
+    const context = new Emitter();
+    const write = vi.fn();
+    installBrowserObserver(context, { write }, (value) => value);
+
+    const first = new Emitter() as Emitter & { url: () => string };
+    first.url = () => "wss://example.test/socket";
+    const second = new Emitter() as Emitter & { url: () => string };
+    second.url = () => "wss://example.test/socket";
+
+    context.emit("websocket", first);
+    context.emit("websocket", second);
+    first.emit("framesent", { payload: '421["find","api/room",{}]' });
+    second.emit("framereceived", { payload: "431[null,[]]" });
+
+    const frames = write.mock.calls
+      .map(([record]) => record)
+      .filter((record) => record.source === "playwright-websocket-frame")
+      .map((record) => record.payload);
+    expect(frames).toEqual([
+      expect.objectContaining({ direction: "sent", connectionId: "pw_ws_1" }),
+      expect.objectContaining({ direction: "received", connectionId: "pw_ws_2" })
+    ]);
+  });
+
   test("offers raw text frames only to the explicit in-memory observer before sanitization", () => {
     const context = new Emitter();
     const write = vi.fn();
@@ -150,7 +175,11 @@ describe("installBrowserObserver", () => {
     socket.emit("framesent", { payload: Uint8Array.from([1, 2, 3]) });
 
     expect(onRawWebSocketFrame).toHaveBeenCalledOnce();
-    expect(onRawWebSocketFrame).toHaveBeenCalledWith("received", "raw-session-only");
+    expect(onRawWebSocketFrame).toHaveBeenCalledWith(
+      "received",
+      "raw-session-only",
+      "pw_ws_1"
+    );
     expect(JSON.stringify(write.mock.calls)).not.toContain("raw-session-only");
   });
 

@@ -26,6 +26,7 @@ from models import (  # noqa: E402
     is_refreshable_device,
     location_arm_state,
     location_name,
+    number_controls,
     number_state_allowed,
     numeric_range_for,
     option_values,
@@ -295,6 +296,93 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertTrue(number_state_allowed(device, frequency))
         self.assertEqual(numeric_range_for(device, frequency), (10.0, 120.0, 5.0))
         self.assertEqual(option_values({"values": [{"value": "auto"}, {"name": "sleep"}]}), ["auto", "sleep"])
+
+    def test_level_only_devices_are_not_fans_without_fan_identity(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        level = BridgeState(
+            "main",
+            "switchLevel",
+            "level",
+            60,
+            "%",
+            "2026-08-24T21:10:00Z",
+        )
+        device.name = "Living Room Mood Light"
+        device.device_type = "Light"
+        device.states = {level.key: level}
+        device.controls = {
+            "level_slider": BridgeControl(
+                "level_slider",
+                "slider",
+                "Brightness",
+                component="main",
+                capability="switchLevel",
+                attribute="level",
+                minimum=0.0,
+                maximum=100.0,
+            )
+        }
+
+        self.assertFalse(is_fan_device(device))
+        self.assertTrue(number_state_allowed(device, level))
+        self.assertEqual([control.control_id for control in number_controls(device)], ["level_slider"])
+
+    def test_fan_identity_allows_level_based_fan_speed(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        level = BridgeState(
+            "main",
+            "switchLevel",
+            "level",
+            60,
+            "%",
+            "2026-08-24T21:10:00Z",
+        )
+        device.name = "Living Room Fan"
+        device.device_type = "Fan"
+        device.states = {level.key: level}
+
+        self.assertTrue(is_fan_device(device))
+        self.assertTrue(number_state_allowed(device, level))
+
+    def test_fan_semantic_controls_identify_fans_without_level_fallback(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        device.name = "Kitchen Air Purifier"
+        device.device_type = None
+        device.states = {}
+        device.controls = {
+            "mode": BridgeControl(
+                "mode",
+                "enumerated",
+                "Fan Mode",
+                component="main",
+                capability="fanMode",
+                attribute="fanMode",
+                options=("auto", "sleep"),
+            )
+        }
+
+        self.assertTrue(is_fan_device(device))
+
+    def test_fan_speed_state_identifies_fan_even_with_room_name(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        fan_speed = BridgeState(
+            "main",
+            "fanSpeed",
+            "fanSpeed",
+            40,
+            "%",
+            "2026-08-24T21:10:00Z",
+        )
+        device.name = "Living Room"
+        device.device_type = None
+        device.states = {fan_speed.key: fan_speed}
+
+        self.assertTrue(is_fan_device(device))
+        self.assertTrue(number_state_allowed(device, fan_speed))
 
     def test_command_result_accepts_only_push_confirmed_response(self) -> None:
         result = parse_command_result(

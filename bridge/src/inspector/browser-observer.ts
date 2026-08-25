@@ -18,7 +18,11 @@ export type Redact = (value: unknown) => unknown;
 
 export interface BrowserObserverOptions {
   textLimitBytes?: number;
-  onRawWebSocketFrame?: (direction: "sent" | "received", payload: string) => void;
+  onRawWebSocketFrame?: (
+    direction: "sent" | "received",
+    payload: string,
+    connectionId: string
+  ) => void;
 }
 
 export function installBrowserObserver(
@@ -30,6 +34,7 @@ export function installBrowserObserver(
   const textLimitBytes = options.textLimitBytes ?? DEFAULT_CAPTURE_TEXT_LIMIT_BYTES;
   const observedPages = new WeakSet<object>();
   const observedServiceWorkers = new WeakSet<object>();
+  let nextWebsocketConnectionId = 1;
 
   context.on("request", (request) => {
     write(sink, redact, "playwright-request", {
@@ -49,24 +54,31 @@ export function installBrowserObserver(
   });
 
   context.on("websocket", (socket) => {
-    write(sink, redact, "playwright-websocket", { url: callString(socket, "url") });
+    const connectionId = `pw_ws_${nextWebsocketConnectionId++}`;
+    write(sink, redact, "playwright-websocket", { url: callString(socket, "url"), connectionId });
     if (hasOn(socket)) {
       socket.on("framesent", (frame) => {
-        observeRawTextFrame(options.onRawWebSocketFrame, "sent", frame);
+        observeRawTextFrame(options.onRawWebSocketFrame, "sent", frame, connectionId);
         write(sink, redact, "playwright-websocket-frame", {
           direction: "sent",
+          connectionId,
           frame: normalizePlaywrightFrame(frame, textLimitBytes, redact)
         });
       });
       socket.on("framereceived", (frame) => {
-        observeRawTextFrame(options.onRawWebSocketFrame, "received", frame);
+        observeRawTextFrame(options.onRawWebSocketFrame, "received", frame, connectionId);
         write(sink, redact, "playwright-websocket-frame", {
           direction: "received",
+          connectionId,
           frame: normalizePlaywrightFrame(frame, textLimitBytes, redact)
         });
       });
       socket.on("close", () =>
-        write(sink, redact, "playwright-websocket", { url: callString(socket, "url"), event: "close" })
+        write(sink, redact, "playwright-websocket", {
+          url: callString(socket, "url"),
+          connectionId,
+          event: "close"
+        })
       );
     }
   });
@@ -87,7 +99,8 @@ export function installBrowserObserver(
 function observeRawTextFrame(
   observer: BrowserObserverOptions["onRawWebSocketFrame"],
   direction: "sent" | "received",
-  frame: unknown
+  frame: unknown,
+  connectionId: string
 ): void {
   if (!observer) return;
   const payload =
@@ -98,7 +111,7 @@ function observeRawTextFrame(
         : undefined;
   if (typeof payload !== "string") return;
   try {
-    observer(direction, payload);
+    observer(direction, payload, connectionId);
   } catch {
     // Image extraction must never interrupt the sanitized capture pipeline.
   }

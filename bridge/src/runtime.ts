@@ -61,7 +61,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.30";
+const bridgeVersion = "0.1.31";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -414,8 +414,8 @@ async function attachContext(
     .some((page) => !page.isClosed() && isSettledSmartThingsLocation(page.url()));
 
   installBrowserObserver(context, sink, redact, {
-    onRawWebSocketFrame: (direction, payload) =>
-      cameraImages.observeRawWebSocketFrame(direction, payload)
+    onRawWebSocketFrame: (direction, payload, connectionId) =>
+      cameraImages.observeRawWebSocketFrame(direction, payload, connectionId)
   });
   context.on?.("page", (page) => {
     void installCdpForPage(context, page as BrowserPageLike, sink, redact, observedCdpPages, log);

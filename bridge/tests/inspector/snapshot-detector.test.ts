@@ -82,6 +82,49 @@ describe("SnapshotDetector", () => {
     expect(detector.snapshot().complete).toBe(false);
   });
 
+  test("does not let the same ACK id on another websocket consume a pending snapshot request", () => {
+    const detector = new SnapshotDetector();
+
+    detector.observeSentFrame('421["find","api/room",{}]', "keeper");
+    expect(
+      detector.observeReceivedFrame(
+        `431${JSON.stringify([null, [{ actions: null, dateCreated: null, name: null }]])}`,
+        "detail"
+      )
+    ).toBeNull();
+    expect(
+      detector.observeReceivedFrame(
+        `431${JSON.stringify([null, [{ roomId: null, locationId: null }]])}`,
+        "keeper"
+      )
+    ).toEqual({ kind: "snapshot", requestEvent: "find", category: "rooms", count: 1 });
+
+    expect(detector.snapshot()).toMatchObject({
+      categories: { rooms: 1 },
+      pendingRequests: 0
+    });
+  });
+
+  test("keeps independent pending snapshot requests with the same ACK id on separate websockets", () => {
+    const detector = new SnapshotDetector();
+
+    detector.observeSentFrame('421["find","api/room",{}]', "keeper");
+    detector.observeSentFrame('421["find","api/scene",{}]', "detail");
+
+    expect(
+      detector.observeReceivedFrame(
+        `431${JSON.stringify([null, [{ actions: null, dateCreated: null, name: null }]])}`,
+        "detail"
+      )
+    ).toEqual({ kind: "snapshot", requestEvent: "find", category: "scenes", count: 1 });
+    expect(
+      detector.observeReceivedFrame(
+        `431${JSON.stringify([null, [{ roomId: null, locationId: null }]])}`,
+        "keeper"
+      )
+    ).toEqual({ kind: "snapshot", requestEvent: "find", category: "rooms", count: 1 });
+  });
+
   test("keeps the largest category count and can reset for a reconnect epoch", () => {
     const detector = new SnapshotDetector();
     const locations = fixture.correlations.find((entry) => entry.response_category === "locations");

@@ -69,10 +69,10 @@ export class ProtocolAnalyzer {
       return null;
     }
     if (frame.direction === "sent") {
-      this.#snapshotDetector.observeSentFrame(frame.text);
+      this.#snapshotDetector.observeSentFrame(frame.text, frame.connectionKey);
       return null;
     }
-    const snapshot = this.#snapshotDetector.observeReceivedFrame(frame.text);
+    const snapshot = this.#snapshotDetector.observeReceivedFrame(frame.text, frame.connectionKey);
     if (snapshot) {
       if (snapshot.kind === "protocol_changed") {
         this.#recordMismatch(snapshot.surface);
@@ -157,7 +157,7 @@ export class ProtocolAnalyzer {
 
 function extractTextFrame(
   record: SanitizedCaptureRecord
-): { direction: "sent" | "received"; text: string } | null {
+): { direction: "sent" | "received"; text: string; connectionKey: string } | null {
   if (record.source !== "playwright-websocket-frame" && record.source !== "cdp-websocket-frame") {
     return null;
   }
@@ -169,15 +169,25 @@ function extractTextFrame(
   if (direction !== "sent" && direction !== "received") {
     return null;
   }
+  const connectionId = readString(payload, "connectionId");
   if (record.source === "playwright-websocket-frame") {
     const frame = asRecord(payload["frame"]);
     const text = frame?.["truncated"] === true ? null : readString(frame, "payload");
-    return text === null ? null : { direction, text };
+    return text === null
+      ? null
+      : { direction, text, connectionKey: connectionKey(record.source, connectionId) };
   }
   const cdpPayload = asRecord(payload["payload"]);
   const response = asRecord(cdpPayload?.["response"]);
+  const cdpConnectionId = connectionId ?? readString(cdpPayload, "requestId");
   const text = response?.["truncated"] === true ? null : readString(response, "payloadData");
-  return text === null ? null : { direction, text };
+  return text === null
+    ? null
+    : { direction, text, connectionKey: connectionKey(record.source, cdpConnectionId) };
+}
+
+function connectionKey(source: SanitizedCaptureRecord["source"], connectionId: string | null): string {
+  return connectionId ? `${source}:${connectionId}` : `legacy:${source}`;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

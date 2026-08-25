@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.31
+
+- Correlate Socket.IO snapshot, detail, protocol, and camera thumbnail acknowledgements by WebSocket connection as well as ACK number.
+- Preserve numeric level controls while preventing generic light and blind levels from creating false fan entities.
+
 ## 0.1.30
 
 - Resynchronize inventory markers and expose normalized scenes, swatch controls, SmartThings Home Monitor, media, fan, number, button, and camera image surfaces.

@@ -526,6 +526,39 @@ describe("DeviceStore", () => {
     );
   });
 
+  test("keeps pending detail ACKs isolated by websocket connection", () => {
+    const store = new DeviceStore();
+
+    store.observe(sentFrame('421["get","api/device","identifier_rawdevice",{}]', "detail"));
+    store.observe(
+      receivedFrame(
+        `431${JSON.stringify([null, [{ locationId: "loc_001", name: "Home" }]])}`,
+        "keeper"
+      )
+    );
+    store.observe(
+      receivedFrame(
+        `431${JSON.stringify([
+          null,
+          {
+            data: [
+              detailSwatch("BUTTON", "button", {
+                swatchId: "identifier_button001",
+                label: "Refresh",
+                command: "refresh"
+              })
+            ]
+          }
+        ])}`,
+        "detail"
+      )
+    );
+
+    expect(store.snapshot().devices[0]?.controls).toEqual([
+      expect.objectContaining({ kind: "button", label: "Refresh", command: "refresh" })
+    ]);
+  });
+
   test("promotes VALUE detail swatches into normalized device states", () => {
     const store = new DeviceStore();
 
@@ -702,20 +735,28 @@ function liveStateEvent(overrides: Record<string, unknown>): SanitizedCaptureRec
   );
 }
 
-function sentFrame(text: string): SanitizedCaptureRecord {
-  return capture("sent", text);
+function sentFrame(text: string, connectionId?: string): SanitizedCaptureRecord {
+  return capture("sent", text, connectionId);
 }
 
-function receivedFrame(text: string): SanitizedCaptureRecord {
-  return capture("received", text);
+function receivedFrame(text: string, connectionId?: string): SanitizedCaptureRecord {
+  return capture("received", text, connectionId);
 }
 
-function capture(direction: "sent" | "received", text: string): SanitizedCaptureRecord {
+function capture(
+  direction: "sent" | "received",
+  text: string,
+  connectionId?: string
+): SanitizedCaptureRecord {
   return {
     __sanitized: true,
     source: "playwright-websocket-frame",
     receivedAt: "2026-08-24T21:00:00.000Z",
-    payload: { direction, frame: { payload: text, truncated: false } },
+    payload: {
+      direction,
+      ...(connectionId ? { connectionId } : {}),
+      frame: { payload: text, truncated: false }
+    },
     payloadHash: "fixture"
   };
 }

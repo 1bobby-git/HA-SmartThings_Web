@@ -43,7 +43,7 @@ interface PendingSnapshotRequest {
 
 export class SnapshotDetector {
   readonly #maxPendingRequests: number;
-  readonly #pending = new Map<number, PendingSnapshotRequest>();
+  readonly #pending = new Map<string, PendingSnapshotRequest>();
   readonly #categories = new Map<SnapshotCategory, number>();
 
   constructor(options: SnapshotDetectorOptions = {}) {
@@ -53,7 +53,7 @@ export class SnapshotDetector {
     }
   }
 
-  observeSentFrame(raw: string): void {
+  observeSentFrame(raw: string, connectionId = "legacy"): void {
     const decoded = decodeSocketIoTextFrame(raw);
     if (decoded.kind !== "event" || decoded.ackId === undefined) {
       return;
@@ -63,23 +63,27 @@ export class SnapshotDetector {
       return;
     }
     while (this.#pending.size >= this.#maxPendingRequests) {
-      const oldest = this.#pending.keys().next().value as number | undefined;
+      const oldest = this.#pending.keys().next().value as string | undefined;
       if (oldest === undefined) break;
       this.#pending.delete(oldest);
     }
-    this.#pending.set(decoded.ackId, { requestEvent: decoded.eventName, categoryHint });
+    this.#pending.set(pendingKey(connectionId, decoded.ackId), {
+      requestEvent: decoded.eventName,
+      categoryHint
+    });
   }
 
-  observeReceivedFrame(raw: string): SnapshotObservation | null {
+  observeReceivedFrame(raw: string, connectionId = "legacy"): SnapshotObservation | null {
     const decoded = decodeSocketIoTextFrame(raw);
     if (decoded.kind !== "ack" || decoded.ackId === undefined) {
       return null;
     }
-    const pending = this.#pending.get(decoded.ackId);
+    const key = pendingKey(connectionId, decoded.ackId);
+    const pending = this.#pending.get(key);
     if (!pending) {
       return null;
     }
-    this.#pending.delete(decoded.ackId);
+    this.#pending.delete(key);
     const classified = classifySnapshotResponse(decoded.args, pending.categoryHint);
     if (!classified) {
       return {
@@ -107,6 +111,10 @@ export class SnapshotDetector {
     this.#pending.clear();
     this.#categories.clear();
   }
+}
+
+function pendingKey(connectionId: string, ackId: number): string {
+  return `${connectionId}\u0000${ackId}`;
 }
 
 function classifySnapshotResponse(

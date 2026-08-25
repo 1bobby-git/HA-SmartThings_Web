@@ -39,6 +39,47 @@ describe("CameraImageStore", () => {
     });
   });
 
+  test("keeps pending thumbnail ACKs isolated by websocket connection", async () => {
+    const fetchImage = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      const bytes = url.includes("/camera-a/")
+        ? Uint8Array.from([10, 11])
+        : Uint8Array.from([20, 21]);
+      return new Response(bytes, {
+        status: 200,
+        headers: { "content-type": "image/jpeg", "content-length": String(bytes.byteLength) }
+      });
+    });
+    const store = createStore(fetchImage, undefined, (rawDeviceId) =>
+      rawDeviceId === "raw-camera-a" ? "dev_001" : "dev_002"
+    );
+
+    store.observeRawWebSocketFrame(
+      "sent",
+      '421["get","api/camera/thumbnail","raw-camera-a",{}]',
+      "socket-a"
+    );
+    store.observeRawWebSocketFrame(
+      "sent",
+      '421["get","api/camera/thumbnail","raw-camera-b",{}]',
+      "socket-b"
+    );
+    store.observeRawWebSocketFrame(
+      "received",
+      '431[null,{"url":"https://media.st-av.net/camera-b/image.jpg?token=secret"}]',
+      "socket-b"
+    );
+    store.observeRawWebSocketFrame(
+      "received",
+      '431[null,{"url":"https://media.st-av.net/camera-a/image.jpg?token=secret"}]',
+      "socket-a"
+    );
+    await store.whenIdle();
+
+    expect(store.get("dev_001")?.body).toEqual(Buffer.from([10, 11]));
+    expect(store.get("dev_002")?.body).toEqual(Buffer.from([20, 21]));
+  });
+
   test("refreshes from an authoritative DEVICE_EVENT image value", async () => {
     const fetchImage = vi.fn(async () =>
       new Response(Uint8Array.from([7, 8]), {
@@ -106,10 +147,14 @@ describe("CameraImageStore", () => {
   });
 });
 
-function createStore(fetchImage: typeof fetch, maxBytes?: number): CameraImageStore {
+function createStore(
+  fetchImage: typeof fetch,
+  maxBytes?: number,
+  aliasDeviceId: (rawDeviceId: string) => string = () => "dev_001"
+): CameraImageStore {
   return new CameraImageStore({
     dataDir: temporaryRoot(),
-    aliasDeviceId: () => "dev_001",
+    aliasDeviceId,
     fetchImage,
     now: () => new Date("2026-08-25T02:00:00.000Z"),
     ...(maxBytes === undefined ? {} : { maxBytes })

@@ -40,7 +40,7 @@ export class CameraImageStore {
   readonly #fetchImage: typeof fetch;
   readonly #now: () => Date;
   readonly #maxBytes: number;
-  readonly #pendingThumbnails = new Map<number, string>();
+  readonly #pendingThumbnails = new Map<string, string>();
   readonly #inFlight = new Set<Promise<void>>();
 
   constructor(options: CameraImageStoreOptions) {
@@ -53,7 +53,11 @@ export class CameraImageStore {
     this.#maxBytes = options.maxBytes ?? MAX_IMAGE_BYTES;
   }
 
-  observeRawWebSocketFrame(direction: "sent" | "received", raw: string): void {
+  observeRawWebSocketFrame(
+    direction: "sent" | "received",
+    raw: string,
+    connectionId = "legacy"
+  ): void {
     const decoded = decodeSocketIoTextFrame(raw);
     if (direction === "sent" && decoded.kind === "event") {
       if (
@@ -63,14 +67,15 @@ export class CameraImageStore {
         typeof decoded.args[1] === "string"
       ) {
         const alias = this.#safeAlias(decoded.args[1]);
-        if (alias) this.#pendingThumbnails.set(decoded.ackId, alias);
+        if (alias) this.#pendingThumbnails.set(pendingKey(connectionId, decoded.ackId), alias);
       }
       return;
     }
     if (direction !== "received") return;
     if (decoded.kind === "ack" && decoded.ackId !== undefined) {
-      const alias = this.#pendingThumbnails.get(decoded.ackId);
-      this.#pendingThumbnails.delete(decoded.ackId);
+      const key = pendingKey(connectionId, decoded.ackId);
+      const alias = this.#pendingThumbnails.get(key);
+      this.#pendingThumbnails.delete(key);
       if (!alias) return;
       const body = decoded.args[0] === null ? decoded.args[1] : decoded.args[0];
       const url = readString(asRecord(body)?.url);
@@ -175,6 +180,10 @@ function safeImageUrl(value: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function pendingKey(connectionId: string, ackId: number): string {
+  return `${connectionId}\u0000${ackId}`;
 }
 
 function safeContentType(value: string | null | undefined): BridgeCameraImage["contentType"] | undefined {

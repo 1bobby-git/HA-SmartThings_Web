@@ -139,6 +139,30 @@ describe("installCdpNetworkObserver", () => {
     expect(JSON.stringify(frameRecord.payload)).not.toMatch(/raw-location|secret-tail/);
   });
 
+  test("tags CDP websocket frames with the Chrome request id as connection id", async () => {
+    const session = new FakeSession();
+    const write = vi.fn();
+
+    await installCdpNetworkObserver(session, { write }, (value) => value);
+    await session.emit("Network.webSocketFrameSent", {
+      requestId: "socket-1",
+      response: { payloadData: '421["find","api/room",{}]', opcode: 1 }
+    });
+    await session.emit("Network.webSocketFrameReceived", {
+      requestId: "socket-2",
+      response: { payloadData: "431[null,[]]", opcode: 1 }
+    });
+
+    const frames = write.mock.calls
+      .map(([record]) => record)
+      .filter((record) => record.source === "cdp-websocket-frame")
+      .map((record) => record.payload);
+    expect(frames).toEqual([
+      expect.objectContaining({ direction: "sent", connectionId: "socket-1" }),
+      expect.objectContaining({ direction: "received", connectionId: "socket-2" })
+    ]);
+  });
+
   test("redacts CDP opcode-1 websocket payloadData before byte bounding and persistence", async () => {
     await withPersistedCaptures(async (store, redact) => {
       const session = new FakeSession();

@@ -124,7 +124,7 @@ export class DeviceStore {
   readonly #rooms = new Map<string, BridgeRoom>();
   readonly #devices = new Map<string, MutableDevice>();
   readonly #scenes = new Map<string, BridgeScene>();
-  readonly #pending = new Map<number, PendingSnapshot>();
+  readonly #pending = new Map<string, PendingSnapshot>();
   readonly #listeners = new Set<Listener>();
   readonly #normalizeStateToken: StateTokenNormalizer;
   readonly #db: DatabaseSync | undefined;
@@ -159,16 +159,16 @@ export class DeviceStore {
     if (frame.direction === "sent" && decoded.kind === "event") {
       const query = decoded.args[0];
       if (decoded.ackId !== undefined && decoded.eventName === "get" && query === "api/device") {
-        this.#pending.set(decoded.ackId, { query: "api/device/details" });
+        this.#pending.set(pendingKey(frame.connectionKey, decoded.ackId), { query: "api/device/details" });
       } else if (decoded.ackId !== undefined && decoded.eventName === "get" && query === "api/location") {
-        this.#pending.set(decoded.ackId, { query: "api/location" });
+        this.#pending.set(pendingKey(frame.connectionKey, decoded.ackId), { query: "api/location" });
       } else if (
           decoded.eventName === "find" &&
           decoded.ackId !== undefined &&
           typeof query === "string" &&
           SNAPSHOT_QUERIES.has(query as SnapshotQuery)
         ) {
-        this.#pending.set(decoded.ackId, { query: query as SnapshotQuery });
+        this.#pending.set(pendingKey(frame.connectionKey, decoded.ackId), { query: query as SnapshotQuery });
       }
       return;
     }
@@ -176,11 +176,12 @@ export class DeviceStore {
       return;
     }
     if (decoded.kind === "ack" && decoded.ackId !== undefined) {
-      const pending = this.#pending.get(decoded.ackId);
+      const key = pendingKey(frame.connectionKey, decoded.ackId);
+      const pending = this.#pending.get(key);
       if (!pending) {
         return;
       }
-      this.#pending.delete(decoded.ackId);
+      this.#pending.delete(key);
       if (this.#applySnapshot(pending.query, snapshotBody(decoded.args))) {
         const sequence = this.#nextSequence();
         this.#persist();
@@ -861,7 +862,7 @@ function finiteNumber(value: unknown): number | undefined {
 
 function extractTextFrame(
   record: SanitizedCaptureRecord
-): { direction: "sent" | "received"; text: string } | null {
+): { direction: "sent" | "received"; text: string; connectionKey: string } | null {
   if (record.source !== "playwright-websocket-frame" && record.source !== "cdp-websocket-frame") {
     return null;
   }
@@ -869,16 +870,27 @@ function extractTextFrame(
   if (!payload) return null;
   const direction = payload?.direction;
   if (direction !== "sent" && direction !== "received") return null;
+  const connectionId = readString(payload.connectionId);
   if (record.source === "playwright-websocket-frame") {
     const frame = asRecord(payload.frame);
     return frame?.truncated !== true && typeof frame?.payload === "string"
-      ? { direction, text: frame.payload }
+      ? { direction, text: frame.payload, connectionKey: connectionKey(record.source, connectionId) }
       : null;
   }
-  const response = asRecord(asRecord(payload.payload)?.response);
+  const cdpPayload = asRecord(payload.payload);
+  const response = asRecord(cdpPayload?.response);
+  const cdpConnectionId = connectionId ?? readString(cdpPayload?.requestId);
   return response?.truncated !== true && typeof response?.payloadData === "string"
-    ? { direction, text: response.payloadData }
+    ? { direction, text: response.payloadData, connectionKey: connectionKey(record.source, cdpConnectionId) }
     : null;
+}
+
+function connectionKey(source: SanitizedCaptureRecord["source"], connectionId: string | null): string {
+  return connectionId ? `${source}:${connectionId}` : `legacy:${source}`;
+}
+
+function pendingKey(connectionKey: string, ackId: number): string {
+  return `${connectionKey}\u0000${ackId}`;
 }
 
 function safeId(value: unknown, prefix: "loc" | "dev" | "identifier"): string | null {
