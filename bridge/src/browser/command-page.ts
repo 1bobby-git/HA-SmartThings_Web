@@ -461,6 +461,11 @@ async function openDeviceDetail(
   options?: { preferRooms?: boolean }
 ): Promise<void> {
   if (options?.preferRooms && roomName) {
+    const overviewDevice = await visibleExactTextCard(page, deviceName, 1_000);
+    if (overviewDevice) {
+      await overviewDevice.click({ timeout: 15_000 });
+      return;
+    }
     const roomDevice = await findDeviceInRooms(page, deviceName, roomName);
     if ((await roomDevice.count()) !== 1) throw new Error("command_target_ambiguous");
     await roomDevice.click({ timeout: 15_000 });

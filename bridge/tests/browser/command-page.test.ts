@@ -263,6 +263,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     await executor.executeDeviceAction({
       deviceName: "Safe plug",
       locationId: "loc_001",
+      roomName: "Living room",
       command: "on",
       action: "on",
       component: "main",
@@ -436,7 +437,6 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     page.getByText = vi.fn((text?: string) => (text === "Kitchen" ? roomText : deviceText));
     page.locator = vi.fn((selector: string) => {
       expect(selector).toBe("[data-testid='device']:visible");
-      if (!roomActive) throw new Error("device_cards_queried_before_room_activation");
       return deviceCards;
     });
     page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
@@ -469,6 +469,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     const missingButtons = new FakeLocator(0);
     const heading = new FakeLocator(1);
     const roomSurface = new FakeLocator(1);
+    const hiddenDevice = new FakeLocator(0, true);
     const visibleDevice = new FakeLocator(1);
     const deviceCards = new FakeLocator(1);
     let roomActive = false;
@@ -477,7 +478,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
     heading.locator = vi.fn(() => roomSurface);
     missingButtons.filter = vi.fn(() => missingButtons);
-    deviceCards.filter = vi.fn(() => visibleDevice);
+    deviceCards.filter = vi.fn(() => (roomActive ? visibleDevice : hiddenDevice));
     page.getByRole = vi.fn((role: string) => {
       if (role === "heading") return heading;
       if (role === "button") return missingButtons;
@@ -486,7 +487,6 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     page.getByText = vi.fn(() => new FakeLocator(1));
     page.locator = vi.fn((selector: string) => {
       expect(selector).toBe("[data-testid='device']:visible");
-      if (!roomActive) throw new Error("device_cards_queried_before_room_activation");
       return deviceCards;
     });
     page.goto = vi.fn(async (url: string) => {

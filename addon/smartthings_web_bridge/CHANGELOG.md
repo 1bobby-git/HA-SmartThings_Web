@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.51
+
+- Use the exact visible device-card opener on the current location view before falling back to the room route.
+- Keep the room fallback for virtualized cards, but never restore the unsafe page-wide named-button shortcut.
+
 ## 0.1.50
 
 - Remove the page-wide named-button shortcut that could select a device-card inline action instead of opening the detail route.

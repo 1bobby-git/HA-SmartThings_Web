@@ -165,7 +165,7 @@ npm run deploy:haos:candidate
 
 ## 현재 검증 결과
 
-- SmartThings Web Bridge 앱과 Home Assistant 통합 `0.1.50`은 일시적 SmartThings 500 snapshot 오류를 프로토콜 변경으로 오판하지 않고, 정확한 `data-testid="device"` 카드의 상세 열기 버튼만 사용하며, 실제 device detail 경로를 warm 제어 페이지로 재사용합니다. 애드온과 통합 구성요소 모두 SmartThings 아이콘을 사용합니다.
+- SmartThings Web Bridge 앱과 Home Assistant 통합 `0.1.51`은 일시적 SmartThings 500 snapshot 오류를 프로토콜 변경으로 오판하지 않고, 현재 위치 화면의 정확한 `data-testid="device"` 카드 상세 열기 버튼을 먼저 사용한 뒤 필요할 때만 방 화면으로 이동하며, 실제 device detail 경로를 warm 제어 페이지로 재사용합니다. 애드온과 통합 구성요소 모두 SmartThings 아이콘을 사용합니다.
 - Bridge 재시작 뒤 SmartThings Web 재로그인이 필요한 상태에서도 저장된 213개 inventory와 sequence 47을 즉시 복원했습니다. 실제 push/제어 재검증은 전용 Chromium 재인증 뒤 `ready=true`, `CONNECTED`로 돌아온 후 진행해야 합니다.
 - Home Assistant에는 215개 기기와 1,724개 활성 엔티티가 로드됐습니다. 14개 플랫폼에는 16개 `media_player`, 66개 `number`, 6개 `select`, 4개 `scene`, 1개 Home Monitor `alarm_control_panel`, 2개 `image`가 포함됩니다.
 - 안전한 무드등 연속 제어와 후속 실제 상태 변화에서 Bridge `updatedAt` 이후 Home Assistant `last_updated`가 스위치는 0.327초, 전력 0 W는 1.12초 뒤 갱신됐습니다. SmartThings 상태 폴링이나 낙관적 상태 변경은 사용하지 않았습니다.
