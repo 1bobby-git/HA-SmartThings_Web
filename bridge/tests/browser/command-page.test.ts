@@ -112,6 +112,9 @@ describe("SmartThingsWebUiCommandExecutor", () => {
 
   test("reuses one verified detail page for consecutive commands on the same device", async () => {
     const page = new FakeCommandPage();
+    page.card.click.mockImplementation(async () => {
+      page.currentUrl = "https://my.smartthings.com/location/loc_001/device/device_raw_001";
+    });
     const manager = { openCommandPage: vi.fn(async () => page) };
     const executor = new SmartThingsWebUiCommandExecutor(
       () => manager,
@@ -266,6 +269,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       if (role === "switch" && options?.name instanceof RegExp) {
         return options.name.test("Secondary outlet") ? secondaryOutlet : genericPower;
       }
+      if (role === "checkbox") return new FakeLocator(0);
       return new FakeLocator(2);
     });
     const executor = new SmartThingsWebUiCommandExecutor(() => ({
@@ -1242,9 +1246,48 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
 
     expect(label.locator).toHaveBeenCalledWith("..");
-    expect(swatch.getByRole).toHaveBeenCalledWith("switch");
     expect(toggle.click).toHaveBeenCalledWith({ timeout: 15_000 });
     expect(missingNamedSwitch.waitFor).not.toHaveBeenCalled();
+  });
+
+  test("clicks a checkbox toggle only inside its observed exact swatch label", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const missingSwitch = new FakeLocator(0, true);
+    const label = new FakeLocator(1);
+    const swatch = new FakeLocator(1);
+    const checkbox = new FakeLocator(1);
+    label.locator = vi.fn(() => swatch);
+    swatch.getByRole = vi.fn((role: string) => {
+      if (role === "checkbox") return checkbox;
+      return missingSwitch;
+    });
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Safe plug")) {
+        return card;
+      }
+      if (role === "button") return card;
+      return missingSwitch;
+    });
+    page.getByText = vi.fn((text: string) => (text === "Power" ? label : new FakeLocator(0, true)));
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      command: "off",
+      action: "off",
+      component: "main",
+      capability: "switch",
+      attribute: "switch",
+      controlLabel: "Power",
+      arguments: []
+    });
+
+    expect(label.locator).toHaveBeenCalledWith("..");
+    expect(checkbox.click).toHaveBeenCalledWith({ timeout: 15_000 });
   });
 
   test("selects an observed option from its exact enumerated control", async () => {

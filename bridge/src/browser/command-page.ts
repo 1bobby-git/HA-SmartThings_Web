@@ -390,7 +390,7 @@ export class SmartThingsWebUiCommandExecutor {
       !cached.page.isClosed() &&
       Date.now() - cached.lastUsedAt < this.#warmPageTtlMs &&
       cached.page.url() === cached.detailUrl &&
-      isSmartThingsLocation(cached.page.url()) &&
+      isSmartThingsDeviceDetail(cached.page.url()) &&
       (await hasExactVisibleDeviceIdentity(cached.page, input.deviceName))
     ) {
       return cached.page;
@@ -517,13 +517,7 @@ async function executeDeviceControl(
 ): Promise<void> {
   if (input.command === "on" || input.command === "off") {
     if (input.controlLabel) {
-      await clickRoleOrLabeledControl(
-        page,
-        "switch",
-        exactOrLocalized(input.controlLabel),
-        input.controlLabel,
-        probeTimeoutMs
-      );
+      await clickObservedToggleControl(page, input.controlLabel, probeTimeoutMs);
       return;
     }
     const label = controlLabelFor(input.attribute);
@@ -625,6 +619,50 @@ async function executeDeviceControl(
   const name = mediaActionName(input.command);
   if (!name) throw new Error("command_control_not_found");
   await clickRoleControl(page, "button", name, probeTimeoutMs);
+}
+
+async function clickObservedToggleControl(
+  page: CommandPageLike,
+  label: string,
+  probeTimeoutMs: number
+): Promise<void> {
+  const preferredName = exactOrLocalized(label);
+  const named = await uniqueRoleCandidate(page, ["switch", "checkbox"], preferredName);
+  if (named) {
+    await named.waitFor({ state: "visible", timeout: probeTimeoutMs });
+    await named.click({ timeout: 15_000 });
+    return;
+  }
+
+  const deadline = Date.now() + probeTimeoutMs;
+  const scope = await labeledSwatchScope(page, labelVariants(label), probeTimeoutMs);
+  if (!scope) throw new Error("command_control_not_found");
+  const remainingMs = Math.max(1, deadline - Date.now());
+  const scoped = await uniqueRoleCandidate(scope, ["switch", "checkbox"]);
+  if (!scoped) throw new Error("command_control_not_found");
+  try {
+    await scoped.waitFor({ state: "visible", timeout: remainingMs });
+  } catch {
+    throw new Error("command_control_not_found");
+  }
+  await scoped.click({ timeout: 15_000 });
+}
+
+async function uniqueRoleCandidate(
+  scope: Pick<CommandPageLike, "getByRole">,
+  roles: readonly string[],
+  preferredName?: RegExp
+): Promise<CommandLocatorLike | undefined> {
+  let candidate: CommandLocatorLike | undefined;
+  for (const role of roles) {
+    const control = scope.getByRole(role, preferredName ? { name: preferredName } : undefined);
+    const count = await control.count();
+    if (count > 1 || (count === 1 && candidate)) {
+      throw new Error("command_control_ambiguous");
+    }
+    if (count === 1) candidate = control;
+  }
+  return candidate;
 }
 
 async function findRoleControl(
@@ -1067,6 +1105,20 @@ function isSmartThingsLocation(value: string): boolean {
     return (
       url.origin === "https://my.smartthings.com" &&
       /^\/location(?:\/[^/]+)?\/?$/u.test(url.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isSmartThingsDeviceDetail(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.origin === "https://my.smartthings.com" &&
+      /^\/location\/[^/]+\/device\/[^/]+\/?$/u.test(url.pathname) &&
+      url.search === "" &&
+      url.hash === ""
     );
   } catch {
     return false;

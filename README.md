@@ -165,11 +165,11 @@ npm run deploy:haos:candidate
 
 ## 현재 검증 결과
 
-- SmartThings Web Bridge 앱과 Home Assistant 통합 `0.1.48`은 공기청정기/스피커 제어에 더해 세션 쿠키 복원, 복원 탭 정리, 구체적 location 검증, warm 장치 재검증, 짧은 제어 탐색을 적용하며, 애드온과 통합 구성요소 모두 SmartThings 아이콘을 사용합니다.
-- Bridge 재시작 뒤 SmartThings Web 재로그인이 필요한 상태에서도 프로토콜 v3의 저장된 213개 inventory와 sequence 47을 즉시 복원했습니다. 실제 push/제어 재검증은 전용 Chromium 재인증 뒤 `ready=true`, `CONNECTED`로 돌아온 후 진행해야 합니다.
+- SmartThings Web Bridge 앱과 Home Assistant 통합 `0.1.49`는 일시적 SmartThings 500 snapshot 오류를 프로토콜 변경으로 오판하지 않고, 실제 device detail 경로를 warm 제어 페이지로 재사용하며, 정확한 관찰 라벨 범위 안에서 switch/checkbox 토글을 안전하게 제어합니다. 애드온과 통합 구성요소 모두 SmartThings 아이콘을 사용합니다.
+- Bridge 재시작 뒤 SmartThings Web 재로그인이 필요한 상태에서도 저장된 213개 inventory와 sequence 47을 즉시 복원했습니다. 실제 push/제어 재검증은 전용 Chromium 재인증 뒤 `ready=true`, `CONNECTED`로 돌아온 후 진행해야 합니다.
 - Home Assistant에는 215개 기기와 1,724개 활성 엔티티가 로드됐습니다. 14개 플랫폼에는 16개 `media_player`, 66개 `number`, 6개 `select`, 4개 `scene`, 1개 Home Monitor `alarm_control_panel`, 2개 `image`가 포함됩니다.
 - 안전한 무드등 연속 제어와 후속 실제 상태 변화에서 Bridge `updatedAt` 이후 Home Assistant `last_updated`가 스위치는 0.327초, 전력 0 W는 1.12초 뒤 갱신됐습니다. SmartThings 상태 폴링이나 낙관적 상태 변경은 사용하지 않았습니다.
-- 정확한 보이는 기기 래퍼가 식별되면 명령 탐색은 그 내부에서만 진행되며, 관측된 Feathers 400 오류만 스냅샷 요청 실패로 처리하고 404·서버 오류는 프로토콜 변경으로 노출합니다.
+- 정확한 보이는 기기 래퍼가 식별되면 명령 탐색은 그 내부에서만 진행되며, 검토된 Feathers 400·일시적 GeneralError 500은 스냅샷 요청 실패로 처리하고 404 등 미검토 구조는 프로토콜 변경으로 노출합니다.
 - 감지주기 중복 엔티티와 활성 `smartthings_web` 수리 경고는 모두 0이었고, 제어 모드 옵션 창도 Core 재시작 뒤 정상적으로 열렸습니다.
 - 72시간 수동 HAOS soak는 사용자가 다시 요청할 때까지 보류되어 있습니다.
 

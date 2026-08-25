@@ -262,7 +262,7 @@ describe("SnapshotDetector", () => {
     expect(detector.snapshot()).toEqual({ complete: false, categories: {}, pendingRequests: 0 });
   });
 
-  test.each([404, 500])(
+  test.each([404])(
     "surfaces HTTP %i-shaped snapshot errors as protocol changes",
     (code) => {
       const detector = new SnapshotDetector();
@@ -287,6 +287,26 @@ describe("SnapshotDetector", () => {
       expect(detector.snapshot()).toEqual({ complete: false, categories: {}, pendingRequests: 0 });
     }
   );
+
+  test("ignores a standard Feathers 500 snapshot error without declaring a protocol change", () => {
+    const detector = new SnapshotDetector();
+    detector.observeSentFrame('421["find","api/device/status",{}]');
+
+    expect(
+      detector.observeReceivedFrame(
+        `431${JSON.stringify([
+          {
+            name: "GeneralError",
+            message: "Rejected HTTP Response",
+            code: 500,
+            className: "general-error",
+            data: { status: 500 }
+          }
+        ])}`
+      )
+    ).toBeNull();
+    expect(detector.snapshot()).toEqual({ complete: false, categories: {}, pendingRequests: 0 });
+  });
 
   test("accepts an empty device-card response as an authoritative zero-device snapshot", () => {
     const detector = new SnapshotDetector();

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.49
+
+- Treat a validated transient SmartThings `GeneralError` 500 snapshot response as a request failure instead of permanently entering `PROTOCOL_CHANGED`.
+- Advance the reviewed protocol contract to v4 so an earlier false-positive snapshot mismatch is cleared through the normal persisted-state migration.
+- Reuse verified `/location/<id>/device/<id>` pages for consecutive commands instead of reopening the full location/room flow.
+- Resolve observed exact-label toggles exposed as either an accessibility `switch` or native `checkbox`, while preserving ambiguity rejection.
+
 ## 0.1.48
 
 - Restore Chromium session cookies across a clean app restart while pruning every restored tab except one verified SmartThings keeper before network observation starts.

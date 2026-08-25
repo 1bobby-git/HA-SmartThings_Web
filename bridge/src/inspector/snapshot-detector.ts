@@ -120,12 +120,20 @@ function isSnapshotRequestError(ackArgs: unknown[]): boolean {
   if (ackArgs.length !== 1) return false;
   const error = asRecord(ackArgs[0]);
   if (!error) return false;
-  return (
+  const badRequest = (
     error["name"] === "BadRequest" &&
     typeof error["message"] === "string" &&
     error["className"] === "bad-request" &&
     error["code"] === 400
   );
+  const transientServerFailure = (
+    error["name"] === "GeneralError" &&
+    typeof error["message"] === "string" &&
+    error["className"] === "general-error" &&
+    error["code"] === 500 &&
+    asRecord(error["data"]) !== undefined
+  );
+  return badRequest || transientServerFailure;
 }
 
 function pendingKey(connectionId: string, ackId: number): string {
