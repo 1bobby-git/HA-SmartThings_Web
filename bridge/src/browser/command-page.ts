@@ -461,16 +461,6 @@ async function openDeviceDetail(
   options?: { preferRooms?: boolean }
 ): Promise<void> {
   if (options?.preferRooms && roomName) {
-    const overviewDevice = deviceLocator(page, deviceName);
-    if ((await overviewDevice.count()) === 1) {
-      try {
-        await overviewDevice.first().waitFor({ state: "visible", timeout: 1_000 });
-        await overviewDevice.click({ timeout: 15_000 });
-        return;
-      } catch {
-        // The exact room remains the authoritative fallback for virtualized overview cards.
-      }
-    }
     const roomDevice = await findDeviceInRooms(page, deviceName, roomName);
     if ((await roomDevice.count()) !== 1) throw new Error("command_target_ambiguous");
     await roomDevice.click({ timeout: 15_000 });
@@ -946,16 +936,6 @@ async function findDeviceInRooms(
       }
     }
     await room.click({ timeout: 15_000 });
-  }
-  const accessibleDevice = deviceLocator(page, deviceName);
-  const accessibleCount = await accessibleDevice.count();
-  if (accessibleCount === 1) {
-    try {
-      await accessibleDevice.first().waitFor({ state: "visible", timeout: 1_000 });
-      return accessibleDevice;
-    } catch {
-      // Fall through to the exact visible card and bounded render waits.
-    }
   }
   let device = await visibleExactTextCard(page, deviceName, 15_000);
   if (!device) {

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.50
+
+- Remove the page-wide named-button shortcut that could select a device-card inline action instead of opening the detail route.
+- Prefer the exact visible `data-testid="device"` wrapper and its unique name-bearing opener before locating any control.
+- Keep room activation ahead of virtualized device-card discovery so control lookup starts only on the intended device detail page.
+
 ## 0.1.49
 
 - Treat a validated transient SmartThings `GeneralError` 500 snapshot response as a request failure instead of permanently entering `PROTOCOL_CHANGED`.

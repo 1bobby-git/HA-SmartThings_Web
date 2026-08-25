@@ -236,8 +236,25 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(page.close).toHaveBeenCalledTimes(1);
   });
 
-  test("opens a unique visible overview device without navigating to the room route", async () => {
+  test("opens only the exact overview card opener when another named button is visible", async () => {
     const page = new FakeCommandPage();
+    const unsafeNamedButton = new FakeLocator(1);
+    const deviceText = new FakeLocator(1);
+    const visibleWrappers = new FakeLocator(1);
+    const exactWrapper = new FakeLocator(1);
+    const exactOpener = new FakeLocator(1);
+    visibleWrappers.filter = vi.fn(() => exactWrapper);
+    exactWrapper.getByRole = vi.fn(() => exactOpener);
+    exactOpener.filter = vi.fn(() => exactOpener);
+    page.getByText = vi.fn((text: string) =>
+      text === "Safe plug" ? deviceText : new FakeLocator(0, true)
+    );
+    page.locator = vi.fn(() => visibleWrappers);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name) return unsafeNamedButton;
+      if (role === "button") return unsafeNamedButton;
+      return page.toggle;
+    });
     page.goto = vi.fn(async () => undefined);
     const executor = new SmartThingsWebUiCommandExecutor(() => ({
       openCommandPage: vi.fn(async () => page)
@@ -246,7 +263,6 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     await executor.executeDeviceAction({
       deviceName: "Safe plug",
       locationId: "loc_001",
-      roomName: "Living room",
       command: "on",
       action: "on",
       component: "main",
@@ -256,7 +272,8 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
 
     expect(page.goto).not.toHaveBeenCalled();
-    expect(page.card.click).toHaveBeenCalledTimes(1);
+    expect(exactOpener.click).toHaveBeenCalledTimes(1);
+    expect(unsafeNamedButton.click).not.toHaveBeenCalled();
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
   });
 
@@ -358,7 +375,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(page.close).toHaveBeenCalledTimes(1);
   });
 
-  test("falls back to the exact room when the overview device is not visibly ready", async () => {
+  test("uses the exact room route without probing a page-wide overview button", async () => {
     const page = new FakeCommandPage();
     const overviewCard = new FakeLocator(1, true);
     const roomCard = new FakeLocator(1);
@@ -392,10 +409,10 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(page.goto).toHaveBeenCalledWith("https://my.smartthings.com/location/loc_001/rooms", {
       waitUntil: "domcontentloaded"
     });
-    expect(overviewCard.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 1_000 });
+    expect(overviewCard.waitFor).not.toHaveBeenCalled();
     expect(roomWrapper.click).toHaveBeenCalledTimes(1);
     expect(roomCard.click).toHaveBeenCalledTimes(1);
-    expect(missingExactWrappers.waitFor).not.toHaveBeenCalled();
+    expect(missingExactWrappers.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 15_000 });
     expect(page.toggle.click).not.toHaveBeenCalled();
     expect(page.close).toHaveBeenCalledTimes(1);
   });
