@@ -235,13 +235,11 @@ async function openDeviceDetail(
     return;
   }
 
-  let device = deviceLocator(page, deviceName);
-  try {
-    await device.first().waitFor({ state: "visible", timeout: 15_000 });
-  } catch {
-    device = exactTextCardLocator(page, deviceName);
+  let device = await visibleExactTextCard(page, deviceName, 15_000);
+  if (!device) {
+    device = deviceLocator(page, deviceName);
     try {
-      await device.first().waitFor({ state: "visible", timeout: 5_000 });
+      await device.first().waitFor({ state: "visible", timeout: 15_000 });
     } catch {
       const scrolled = await scrollForDevice(page, deviceName);
       if (scrolled) {
@@ -254,9 +252,11 @@ async function openDeviceDetail(
       }
     }
   }
+  if (!device) throw new Error("command_target_not_found");
   if ((await device.count()) !== 1) {
     device = await findDeviceInRooms(page, deviceName, roomName).catch(() => device);
   }
+  if (!device) throw new Error("command_target_not_found");
   if ((await device.count()) !== 1) throw new Error("command_target_ambiguous");
   await device.click({ timeout: 15_000 });
 }
@@ -424,13 +424,11 @@ async function findDeviceInRooms(
   const route = url.pathname.match(/^(\/location\/[^/]+)(?:\/.*)?$/u)?.[1];
   if (!route) throw new Error("command_room_not_found");
   await page.goto(`${url.origin}${route}/rooms`, { waitUntil: "domcontentloaded" });
-  let device = deviceLocator(page, deviceName);
-  try {
-    await device.first().waitFor({ state: "visible", timeout: 15_000 });
-  } catch {
-    device = exactTextCardLocator(page, deviceName);
+  let device = await visibleExactTextCard(page, deviceName, 15_000);
+  if (!device) {
+    device = deviceLocator(page, deviceName);
     try {
-      await device.first().waitFor({ state: "visible", timeout: 10_000 });
+      await device.first().waitFor({ state: "visible", timeout: 15_000 });
     } catch {
       const scrolled = await scrollForDevice(page, deviceName);
       if (!scrolled) throw new Error("command_target_not_found");
@@ -489,13 +487,10 @@ async function searchForDevice(
   if (searchCount !== 1) throw new Error("command_search_ambiguous");
   try {
     await search.fill(deviceName, { timeout: 15_000 });
-    let device = deviceLocator(page, deviceName);
-    try {
-      await device.first().waitFor({ state: "visible", timeout: 15_000 });
-    } catch {
-      device = exactTextCardLocator(page, deviceName);
-      await device.first().waitFor({ state: "visible", timeout: 5_000 });
-    }
+    const exact = await visibleExactTextCard(page, deviceName, 15_000);
+    if (exact) return exact;
+    const device = deviceLocator(page, deviceName);
+    await device.first().waitFor({ state: "visible", timeout: 15_000 });
     return device;
   } catch {
     throw new Error("command_target_not_found");
@@ -512,6 +507,23 @@ function exactTextCardLocator(page: CommandPageLike, deviceName: string): Comman
   return page.getByRole("button").filter({
     has: page.getByText(deviceName, { exact: true })
   });
+}
+
+async function visibleExactTextCard(
+  page: CommandPageLike,
+  deviceName: string,
+  timeout: number
+): Promise<CommandLocatorLike | undefined> {
+  const exact = exactTextCardLocator(page, deviceName);
+  try {
+    await exact.first().waitFor({ state: "visible", timeout });
+  } catch {
+    return undefined;
+  }
+  const count = await exact.count();
+  if (count === 0) return undefined;
+  if (count !== 1) throw new Error("command_target_ambiguous");
+  return exact;
 }
 
 function exactName(value: string): RegExp {

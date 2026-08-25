@@ -48,6 +48,10 @@ class FakeRoleLocator {
   first(): FakeRoleLocator {
     return this;
   }
+
+  filter(): FakeRoleLocator {
+    return this;
+  }
 }
 
 class FakePage extends FakeEmitter {
@@ -78,6 +82,10 @@ class FakePage extends FakeEmitter {
 
   getByRole(role: string): FakeRoleLocator {
     return new FakeRoleLocator(this, role);
+  }
+
+  getByText(): FakeRoleLocator {
+    return new FakeRoleLocator(this, "button");
   }
 }
 

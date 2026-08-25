@@ -64,9 +64,11 @@ class FakeCommandPage {
 
   getByRole(role: string, options?: { name?: string | RegExp }): FakeLocator {
     if (role === "button") {
-      expect(options?.name).toBeInstanceOf(RegExp);
-      expect((options?.name as RegExp).test("Safe plug Off")).toBe(true);
-      expect((options?.name as RegExp).test("Off Safe plug")).toBe(true);
+      if (options?.name) {
+        expect(options.name).toBeInstanceOf(RegExp);
+        expect((options.name as RegExp).test("Safe plug Off")).toBe(true);
+        expect((options.name as RegExp).test("Off Safe plug")).toBe(true);
+      }
       return this.card;
     }
     expect(role).toBe("switch");
@@ -259,10 +261,104 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
   });
 
+  test("prefers one exact device name over multiple partial-name cards", async () => {
+    const page = new FakeCommandPage();
+    const partialCards = new FakeLocator(5);
+    const allCards = new FakeLocator(5);
+    const exactCard = new FakeLocator(1);
+    const exactText = new FakeLocator(1);
+    allCards.filter = vi.fn(() => exactCard);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp) return partialCards;
+      if (role === "button") return allCards;
+      return page.toggle;
+    });
+    page.getByText = vi.fn(() => exactText);
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "거실",
+      locationId: "loc_001",
+      command: "setVolume",
+      action: "setVolume",
+      component: "main",
+      capability: "audioVolume",
+      attribute: "volume",
+      arguments: [45]
+    });
+
+    expect(page.getByText).toHaveBeenCalledWith("거실", { exact: true });
+    expect(allCards.filter).toHaveBeenCalledWith({ has: exactText });
+    expect(exactCard.click).toHaveBeenCalledTimes(1);
+    expect(partialCards.click).not.toHaveBeenCalled();
+    expect(page.toggle.fill).toHaveBeenCalledWith("45", { timeout: 15_000 });
+  });
+
+  test("waits for a late exact device-name card before falling back to partial ambiguity", async () => {
+    const page = new FakeCommandPage();
+    const partialCards = new FakeLocator(5);
+    const allCards = new FakeLocator(5);
+    const lateExactCard = new FakeLocator(0, false, 1);
+    allCards.filter = vi.fn(() => lateExactCard);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp) return partialCards;
+      if (role === "button") return allCards;
+      return page.toggle;
+    });
+    page.getByText = vi.fn(() => new FakeLocator(0, false, 1));
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "거실",
+      locationId: "loc_001",
+      command: "setVolume",
+      action: "setVolume",
+      component: "main",
+      capability: "audioVolume",
+      attribute: "volume",
+      arguments: [45]
+    });
+
+    expect(lateExactCard.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 15_000 });
+    expect(lateExactCard.click).toHaveBeenCalledTimes(1);
+    expect(partialCards.click).not.toHaveBeenCalled();
+    expect(page.toggle.fill).toHaveBeenCalledWith("45", { timeout: 15_000 });
+  });
+
+  test("keeps ambiguity when multiple exact device-name cards exist", async () => {
+    const page = new FakeCommandPage();
+    const partialCards = new FakeLocator(5);
+    const allCards = new FakeLocator(5);
+    const duplicateExactCards = new FakeLocator(2);
+    allCards.filter = vi.fn(() => duplicateExactCards);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp) return partialCards;
+      if (role === "button") return allCards;
+      return page.toggle;
+    });
+    page.getByText = vi.fn(() => new FakeLocator(2));
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await expect(executor.executeSwitch({ deviceName: "거실", locationId: "loc_001" })).rejects.toThrow(
+      "command_target_ambiguous"
+    );
+
+    expect(duplicateExactCards.click).not.toHaveBeenCalled();
+    expect(partialCards.click).not.toHaveBeenCalled();
+    expect(page.toggle.click).not.toHaveBeenCalled();
+  });
+
   test("waits for a preferred Refresh button before falling back to ambiguous buttons", async () => {
     const page = new FakeCommandPage();
     const refresh = new FakeLocator(0, false, 1);
     const ambiguousButtons = new FakeLocator(2);
+    ambiguousButtons.filter = vi.fn(() => new FakeLocator(0, true));
     page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
       if (role === "button" && options?.name instanceof RegExp && options.name.test("Safe plug Off")) {
         return page.card;
@@ -376,6 +472,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
   test("uses one exact device label inside its exact room when card buttons are ambiguous", async () => {
     const page = new FakeCommandPage();
     const ambiguousCards = new FakeLocator(2);
+    ambiguousCards.filter = vi.fn(() => new FakeLocator(0, true));
     const heading = new FakeLocator(1);
     const room = new FakeLocator(1);
     const exactDeviceLabel = new FakeLocator(1);

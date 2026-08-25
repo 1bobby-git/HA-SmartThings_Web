@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.35
+
+- Prefer one exact SmartThings device-card name before partial-name matches so similarly named speakers remain safely addressable without weakening duplicate-name ambiguity checks.
+
 ## 0.1.34
 
 - Scope CDP WebSocket identities to their browser session so repeated Chrome request IDs cannot cross-wire delayed acknowledgements.

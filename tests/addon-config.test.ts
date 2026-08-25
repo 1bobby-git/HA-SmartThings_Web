@@ -10,19 +10,19 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("publishes the camera correlation fix as version 0.1.34", () => {
+  test("publishes the exact device targeting fix as version 0.1.35", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.34");
-    expect(packageMetadata.version).toBe("0.1.34");
-    expect(protocolMetadata.bridge_version).toBe("0.1.34");
+    expect(config.version).toBe("0.1.35");
+    expect(packageMetadata.version).toBe("0.1.35");
+    expect(protocolMetadata.bridge_version).toBe("0.1.35");
     expect(protocolMetadata.protocol_version).toBe(1);
-    expect(runtime).toContain('const bridgeVersion = "0.1.34";');
-    expect(changelog).toContain("## 0.1.34");
+    expect(runtime).toContain('const bridgeVersion = "0.1.35";');
+    expect(changelog).toContain("## 0.1.35");
     expect(changelog).toContain("scenes");
     expect(changelog).toContain("SmartThings Home Monitor");
     expect(changelog).toContain("swatch controls");
