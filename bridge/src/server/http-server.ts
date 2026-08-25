@@ -158,6 +158,8 @@ function commandErrorStatus(code: SafeCommandError["code"]): number {
   if (
     code === "command_target_not_found" ||
     code === "command_target_ambiguous" ||
+    code === "command_search_not_found" ||
+    code === "command_search_ambiguous" ||
     code === "command_control_not_found" ||
     code === "command_control_ambiguous" ||
     code === "command_execution_failed"

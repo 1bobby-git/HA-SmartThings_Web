@@ -47,6 +47,8 @@ export type SafeCommandErrorCode =
   | "command_login_required"
   | "command_target_not_found"
   | "command_target_ambiguous"
+  | "command_search_not_found"
+  | "command_search_ambiguous"
   | "command_control_not_found"
   | "command_control_ambiguous"
   | "command_execution_failed"
@@ -292,6 +294,8 @@ function isExecutorErrorCode(value: string): value is SafeCommandErrorCode {
     "command_login_required",
     "command_target_not_found",
     "command_target_ambiguous",
+    "command_search_not_found",
+    "command_search_ambiguous",
     "command_control_not_found",
     "command_control_ambiguous"
   ].includes(value);

@@ -119,4 +119,22 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(visibleCard.click).toHaveBeenCalledTimes(1);
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
   });
+
+  test("reports when no accessible search fallback exists", async () => {
+    const page = new FakeCommandPage();
+    const hiddenCard = new FakeLocator(1, true);
+    page.getByRole = vi.fn((role: string) => {
+      if (role === "button") return hiddenCard;
+      if (role === "textbox") return new FakeLocator(0);
+      return page.toggle;
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await expect(executor.executeSwitch({ deviceName: "Safe plug" })).rejects.toThrow(
+      "command_search_not_found"
+    );
+    expect(page.toggle.click).not.toHaveBeenCalled();
+  });
 });

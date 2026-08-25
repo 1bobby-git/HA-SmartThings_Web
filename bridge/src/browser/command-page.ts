@@ -33,9 +33,9 @@ export class SmartThingsWebUiCommandExecutor {
         await device.first().waitFor({ state: "visible", timeout: 15_000 });
       } catch {
         const search = page.getByRole("textbox");
-        if ((await search.count()) !== 1) {
-          throw new Error("command_target_not_found");
-        }
+        const searchCount = await search.count();
+        if (searchCount === 0) throw new Error("command_search_not_found");
+        if (searchCount !== 1) throw new Error("command_search_ambiguous");
         try {
           await search.fill(input.deviceName, { timeout: 15_000 });
           device = deviceLocator(page, input.deviceName);
