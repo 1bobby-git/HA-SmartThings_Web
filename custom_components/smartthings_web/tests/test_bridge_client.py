@@ -14,7 +14,7 @@ package = ModuleType("smartthings_web")
 package.__path__ = [str(PACKAGE_ROOT)]  # type: ignore[attr-defined]
 sys.modules.setdefault("smartthings_web", package)
 
-from smartthings_web.bridge_client import SmartThingsWebBridgeClient  # noqa: E402
+from smartthings_web.bridge_client import SmartThingsWebBridgeClient, parse_inventory  # noqa: E402
 
 
 class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
@@ -40,3 +40,91 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
         await client.async_execute_switch("dev_001", "main", "switch", "on")
 
         self.assertEqual(request.await_args.kwargs["timeout_seconds"], 90)
+
+    async def test_generic_command_sends_target_and_control_metadata(self) -> None:
+        client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
+
+        async def confirmed(_method: str, _path: str, **kwargs: Any) -> dict[str, Any]:
+            request_id = kwargs["json_body"]["clientRequestId"]
+            return {
+                "schemaVersion": 1,
+                "status": "confirmed",
+                "clientRequestId": request_id,
+                "sequence": 43,
+                "transport": "smartthings_web_ui",
+                "confirmation": "security_arm_state_event",
+            }
+
+        request = AsyncMock(side_effect=confirmed)
+        client._request_json = request  # type: ignore[method-assign]
+
+        await client.async_execute_command(
+            target_type="location",
+            target_id="loc_001",
+            control_id="armState",
+            control_label="Home Monitor",
+            command="armAway",
+            arguments=[],
+        )
+
+        body = request.await_args.kwargs["json_body"]
+        self.assertEqual(body["targetType"], "location")
+        self.assertEqual(body["targetId"], "loc_001")
+        self.assertEqual(body["controlId"], "armState")
+        self.assertEqual(body["controlLabel"], "Home Monitor")
+        self.assertEqual(request.await_args.kwargs["timeout_seconds"], 90)
+
+    def test_inventory_parses_locations_scenes_and_non_value_controls(self) -> None:
+        parsed = parse_inventory(
+            {
+                "schemaVersion": 1,
+                "sequence": 5,
+                "ready": True,
+                "bridgeVersion": "0.1.30",
+                "protocolVersion": "1",
+                "locations": [
+                    {
+                        "id": "loc_001",
+                        "name": "Home",
+                        "armState": "disarmed",
+                        "updatedAt": "2026-08-24T21:10:00Z",
+                    }
+                ],
+                "rooms": [],
+                "scenes": [
+                    {
+                        "id": "scene_001",
+                        "locationId": "loc_001",
+                        "name": "Movie",
+                        "updatedAt": "2026-08-24T21:10:00Z",
+                    }
+                ],
+                "devices": [
+                    {
+                        "id": "dev_001",
+                        "locationId": "loc_001",
+                        "name": "Speaker",
+                        "online": True,
+                        "states": [],
+                        "controls": [
+                            {
+                                "id": "volume_slider",
+                                "kind": "slider",
+                                "label": "Volume",
+                                "attribute": "volume",
+                                "commands": ["volume"],
+                                "min": 0,
+                                "max": 100,
+                                "step": 1,
+                            },
+                            {"id": "now_playing", "kind": "value", "label": "Now Playing"},
+                        ],
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(parsed.sequence, 5)
+        self.assertEqual(parsed.scenes["scene_001"].name, "Movie")
+        self.assertEqual(parsed.devices["dev_001"].controls["volume_slider"].maximum, 100.0)
+        self.assertNotIn("now_playing", parsed.devices["dev_001"].controls)

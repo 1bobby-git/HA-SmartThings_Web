@@ -96,6 +96,17 @@ describe("api-free production audit", () => {
 
     expect(auditSmartThingsApiFree({ cwd: root })).toEqual([]);
   });
+
+  test("allows SmartThings Web UI observer class names without treating them as SDK clients", () => {
+    const root = seededTempDir();
+    write(
+      root,
+      "bridge/src/runtime.ts",
+      "const executor = new SmartThingsWebUiCommandExecutor(() => keeper);\n"
+    );
+
+    expect(auditSmartThingsApiFree({ cwd: root })).toEqual([]);
+  });
 });
 
 describe("secret production scan", () => {

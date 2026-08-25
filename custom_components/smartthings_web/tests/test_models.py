@@ -10,12 +10,24 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from models import (  # noqa: E402
+    BridgeControl,
     BridgeDevice,
     BridgeInventory,
+    BridgeLocation,
+    BridgeScene,
     BridgeState,
     SmartThingsWebRuntime,
     control_kind,
     entity_unique_id,
+    is_fan_device,
+    is_image_device,
+    is_media_device,
+    is_refreshable_device,
+    location_arm_state,
+    location_name,
+    number_state_allowed,
+    numeric_range_for,
+    option_values,
     parse_command_result,
     sensor_extra_attributes,
     sensor_native_value,
@@ -135,6 +147,29 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
 
         self.assertEqual(control_kind(device, switch), "switch")
 
+    def test_control_kind_avoids_duplicate_power_for_media_and_fan_devices(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        switch = BridgeState(
+            component="identifier_component_main",
+            capability="identifier_capability_switch",
+            attribute="switch",
+            value="off",
+            unit=None,
+            updated_at="2026-08-24T21:10:00Z",
+        )
+        playback = BridgeState(
+            component="main",
+            capability="media",
+            attribute="playbackStatus",
+            value="paused",
+            unit=None,
+            updated_at="2026-08-24T21:10:00Z",
+        )
+        device.states = {switch.key: switch, playback.key: playback}
+
+        self.assertIsNone(control_kind(device, switch))
+
     def test_control_kind_requires_light_specific_state_evidence(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")
         device = current.devices["dev_001"]
@@ -178,6 +213,79 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertEqual(sensor_native_value(structured), "data")
         self.assertEqual(sensor_extra_attributes(structured), {"value": structured})
 
+    def test_locations_and_scenes_merge_without_stale_metadata_overwrite(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        current.locations["loc_001"] = BridgeLocation(
+            "loc_001", "Home", "armedAway", "2026-08-24T21:10:00Z"
+        )
+        current.scenes["scene_001"] = BridgeScene(
+            "scene_001", "loc_001", "Movie", "2026-08-24T21:10:00Z"
+        )
+        latest = inventory(11, 21, "2026-08-24T21:11:00Z")
+        latest.locations["loc_001"] = BridgeLocation(
+            "loc_001", "Home", "disarmed", "2026-08-24T21:09:00Z"
+        )
+        latest.scenes["scene_001"] = BridgeScene(
+            "scene_001", "loc_001", "Old Movie", "2026-08-24T21:09:00Z"
+        )
+        runtime = SmartThingsWebRuntime(FakeClient(latest), "loc_001", current)
+
+        self.assertTrue(asyncio.run(runtime.handle_event({"type": "inventory", "sequence": 11})))
+
+        self.assertEqual(location_name(runtime.inventory, "loc_001"), "Home")
+        self.assertEqual(location_arm_state(runtime.inventory, "loc_001"), "armedAway")
+        self.assertEqual(runtime.inventory.scenes["scene_001"].name, "Movie")
+
+    def test_capability_helpers_identify_added_platform_surfaces(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        states = [
+            BridgeState("main", "signal", "signalMetrics", {"rssi": -61}, None, "2026-08-24T21:10:00Z"),
+            BridgeState("main", "media", "playbackStatus", "playing", None, "2026-08-24T21:10:00Z"),
+            BridgeState("main", "media", "volume", 20, "%", "2026-08-24T21:10:00Z"),
+            BridgeState("main", "fan", "fanMode", "auto", None, "2026-08-24T21:10:00Z"),
+            BridgeState("main", "fan", "level", 50, "%", "2026-08-24T21:10:00Z"),
+            BridgeState("main", "camera", "image", "data", None, "2026-08-24T21:10:00Z"),
+        ]
+        device.states = {state.key: state for state in states}
+        device.controls = {
+            "refresh_button": BridgeControl(
+                "refresh_button", "button", "Refresh", commands=("refresh",)
+            )
+        }
+
+        self.assertTrue(is_refreshable_device(device))
+        self.assertTrue(is_media_device(device))
+        self.assertTrue(is_fan_device(device))
+        self.assertTrue(is_image_device(device))
+        self.assertFalse(number_state_allowed(device, device.states[("main", "media", "volume")]))
+        self.assertTrue(number_state_allowed(device, device.states[("main", "fan", "level")]))
+
+    def test_number_range_and_options_parse_normalized_metadata(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        frequency = BridgeState(
+            "main",
+            "motion",
+            "detectionFrequency",
+            30,
+            "s",
+            "2026-08-24T21:10:00Z",
+        )
+        range_state = BridgeState(
+            "main",
+            "motion",
+            "detectionFrequencyRange",
+            {"minimum": 10, "maximum": 120, "step": 5},
+            "s",
+            "2026-08-24T21:10:00Z",
+        )
+        device.states = {frequency.key: frequency, range_state.key: range_state}
+
+        self.assertTrue(number_state_allowed(device, frequency))
+        self.assertEqual(numeric_range_for(device, frequency), (10.0, 120.0, 5.0))
+        self.assertEqual(option_values({"values": [{"value": "auto"}, {"name": "sleep"}]}), ["auto", "sleep"])
+
     def test_command_result_accepts_only_push_confirmed_response(self) -> None:
         result = parse_command_result(
             {
@@ -207,6 +315,21 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
 
         self.assertIsNone(parse_command_result({**base, "clientRequestId": "other_12345678"}, "request_12345678"))
         self.assertIsNone(parse_command_result({**base, "confirmation": "button_click"}, "request_12345678"))
+
+    def test_security_arm_confirmation_is_location_only(self) -> None:
+        raw = {
+            "schemaVersion": 1,
+            "clientRequestId": "request_12345678",
+            "status": "confirmed",
+            "sequence": 42,
+            "transport": "smartthings_web_ui",
+            "confirmation": "security_arm_state_event",
+        }
+
+        self.assertIsNone(parse_command_result(raw, "request_12345678", "device"))
+        result = parse_command_result(raw, "request_12345678", "location")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.confirmation, "security_arm_state_event")
 
 
 def inventory(sequence: int, value: int, updated_at: str) -> BridgeInventory:

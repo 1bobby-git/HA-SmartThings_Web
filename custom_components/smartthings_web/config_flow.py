@@ -17,7 +17,7 @@ from .const import (
     DEFAULT_BRIDGE_URL,
     DOMAIN,
 )
-from .models import BridgeInventory
+from .models import BridgeInventory, location_name
 
 
 class SmartThingsWebConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -72,7 +72,9 @@ class SmartThingsWebConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         location_ids = set(inventory.locations)
         location_ids.update(device.location_id for device in inventory.devices.values())
         choices = {
-            location_id: inventory.locations.get(location_id, f"Location {index}")
+            location_id: location_name(inventory, location_id)
+            if location_id in inventory.locations
+            else f"Location {index}"
             for index, location_id in enumerate(sorted(location_ids), start=1)
         }
         if user_input is not None:

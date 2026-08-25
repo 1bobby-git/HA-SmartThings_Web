@@ -12,6 +12,7 @@ import {
   type ProbeRuntimeEvidence
 } from "../inspector/physical-action-correlation-probe.js";
 import type { DeviceStore } from "../state/device-store.js";
+import type { CameraImageStore } from "../state/camera-image-store.js";
 import { createHealthReport } from "./health.js";
 import type { BridgeAuth } from "./bridge-auth.js";
 import { renderStatusPage } from "./status-page.js";
@@ -24,6 +25,7 @@ export interface BridgeHttpServerOptions {
   auth?: BridgeAuth;
   devices?: DeviceStore;
   commands?: Pick<SafeCommandService, "execute">;
+  images?: Pick<CameraImageStore, "get">;
   physicalActionProbe?: PhysicalActionCorrelationProbe;
   getProbeEvidence?: () => ProbeRuntimeEvidence;
 }
@@ -111,6 +113,22 @@ async function handleBridgeApiRequest(
     if (!options.auth.authenticate(request.headers.authorization)) {
       return writeError(response, 401, "unauthorized");
     }
+    const imageDeviceId = imageDeviceIdFromPath(path);
+    if (imageDeviceId) {
+      if (method !== "GET") return writeError(response, 405, "method_not_allowed");
+      if (!options.images) return writeError(response, 503, "camera_image_unavailable");
+      const image = options.images.get(imageDeviceId);
+      if (!image) return writeError(response, 404, "camera_image_not_found");
+      response.writeHead(200, {
+        "cache-control": "no-store",
+        "content-type": image.contentType,
+        "content-length": String(image.body.length),
+        "last-modified": new Date(image.capturedAt).toUTCString(),
+        "x-content-type-options": "nosniff"
+      });
+      response.end(image.body);
+      return;
+    }
     if (path === "/api/v1/commands") {
       if (method !== "POST") return writeError(response, 405, "method_not_allowed");
       if (!options.commands) return writeError(response, 503, "command_api_unavailable");
@@ -142,6 +160,11 @@ async function handleBridgeApiRequest(
     } else if (!response.headersSent) writeError(response, 500, "internal_error");
     else response.destroy();
   }
+}
+
+function imageDeviceIdFromPath(path: string): string | undefined {
+  const match = path.match(/^\/api\/v1\/images\/(dev_[0-9]{3,32})$/u);
+  return match?.[1];
 }
 
 function commandErrorStatus(code: SafeCommandError["code"]): number {

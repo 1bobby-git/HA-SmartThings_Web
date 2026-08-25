@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.30
+
+- Resynchronize inventory markers and expose normalized scenes, swatch controls, SmartThings Home Monitor, media, fan, number, button, and camera image surfaces.
+- Confirm generic commands only from newer SmartThings push state, scene-location events, or Home Monitor arm-state inventory.
+
 ## 0.1.29
 
 - Add a safe authenticated switch command endpoint that serializes per device and succeeds only after a newer push event confirms the requested state.

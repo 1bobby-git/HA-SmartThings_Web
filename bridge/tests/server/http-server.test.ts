@@ -399,6 +399,44 @@ describe("createBridgeHttpServer", () => {
     expect(timedOutBody).toBe(JSON.stringify({ error: "command_confirmation_timeout" }));
     expect(timedOutBody).not.toMatch(/token|deviceId|component|capability/i);
   });
+
+  test("serves only authenticated cached camera bytes without exposing their source URL", async () => {
+    const token = "c".repeat(32);
+    const get = vi.fn((deviceId: string) =>
+      deviceId === "dev_001"
+        ? {
+            body: Buffer.from([0xff, 0xd8, 0xff]),
+            contentType: "image/jpeg" as const,
+            capturedAt: "2026-08-25T02:00:00.000Z"
+          }
+        : undefined
+    );
+    const server = await createBridgeHttpServer({
+      store: createStore(),
+      host: "127.0.0.1",
+      port: 0,
+      auth: new BridgeAuth(token),
+      devices: new DeviceStore(),
+      images: { get }
+    });
+    servers.push(server);
+    const base = `http://127.0.0.1:${server.port}/api/v1/images/dev_001`;
+
+    const unauthorized = await fetch(base);
+    const response = await fetch(base, { headers: { authorization: `Bearer ${token}` } });
+    const missing = await fetch(base.replace("dev_001", "dev_002"), {
+      headers: { authorization: `Bearer ${token}` }
+    });
+
+    expect(unauthorized.status).toBe(401);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/jpeg");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
+    expect(missing.status).toBe(404);
+    expect(get).toHaveBeenCalledWith("dev_001");
+    expect(await missing.text()).toBe(JSON.stringify({ error: "camera_image_not_found" }));
+  });
 });
 
 function createStore(): RuntimeStatusStore {

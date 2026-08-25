@@ -294,4 +294,88 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(exactDeviceLabel.click).toHaveBeenCalledTimes(1);
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
   });
+
+  test("targets a device refresh button by its exact localized accessible name", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const refresh = new FakeLocator(1);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp) {
+        if (options.name.test("Safe sensor")) return card;
+        if (options.name.test("새로고침")) return refresh;
+      }
+      if (role === "button") return card;
+      return new FakeLocator(0, true);
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "Safe sensor",
+      locationId: "loc_001",
+      command: "refresh",
+      action: "refresh",
+      component: "main",
+      capability: "refresh",
+      attribute: "refresh",
+      arguments: []
+    });
+
+    expect(card.click).toHaveBeenCalledTimes(1);
+    expect(refresh.click).toHaveBeenCalledTimes(1);
+    expect(page.close).toHaveBeenCalledTimes(1);
+  });
+
+  test("fills the single observed numeric slider without optimistic state mutation", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const slider = new FakeLocator(1);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Motion sensor")) {
+        return card;
+      }
+      if (role === "button") return card;
+      if (role === "slider") return slider;
+      return new FakeLocator(0, true);
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "Motion sensor",
+      locationId: "loc_001",
+      command: "setNumber",
+      action: "setNumber",
+      component: "main",
+      capability: "detectionFrequency",
+      attribute: "detectionFrequency",
+      arguments: [60]
+    });
+
+    expect(slider.fill).toHaveBeenCalledWith("60", { timeout: 15_000 });
+  });
+
+  test("executes one exact scene card and one Home Monitor action", async () => {
+    const page = new FakeCommandPage();
+    const scene = new FakeLocator(1);
+    const disarm = new FakeLocator(1);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp) {
+        if (options.name.test("Evening")) return scene;
+        if (options.name.test("Disarm")) return disarm;
+      }
+      return new FakeLocator(0, true);
+    });
+    const manager = { openCommandPage: vi.fn(async () => page) };
+    const executor = new SmartThingsWebUiCommandExecutor(() => manager);
+
+    await executor.executeScene({ sceneName: "Evening", locationId: "loc_001" });
+    await executor.executeLocationAction({ locationId: "loc_001", action: "disarm" });
+
+    expect(scene.click).toHaveBeenCalledTimes(1);
+    expect(disarm.click).toHaveBeenCalledTimes(1);
+    expect(manager.openCommandPage).toHaveBeenCalledTimes(2);
+  });
 });

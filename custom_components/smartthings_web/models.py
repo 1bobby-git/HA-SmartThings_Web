@@ -37,6 +37,44 @@ class BridgeDevice:
     device_type: str | None
     online: bool
     states: dict[tuple[str, str, str], BridgeState] = field(default_factory=dict)
+    controls: dict[str, "BridgeControl"] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class BridgeControl:
+    """One normalized control discovered from SmartThings Web detail swatches."""
+
+    control_id: str
+    kind: str
+    label: str | None
+    component: str | None = None
+    capability: str | None = None
+    attribute: str | None = None
+    commands: tuple[str, ...] = ()
+    options: tuple[str, ...] = ()
+    minimum: float | None = None
+    maximum: float | None = None
+    step: float | None = None
+
+
+@dataclass(frozen=True)
+class BridgeLocation:
+    """One SmartThings location."""
+
+    location_id: str
+    name: str
+    arm_state: str | None = None
+    updated_at: str | None = None
+
+
+@dataclass(frozen=True)
+class BridgeScene:
+    """One SmartThings scene."""
+
+    scene_id: str
+    location_id: str
+    name: str
+    updated_at: str | None = None
 
 
 @dataclass
@@ -47,9 +85,10 @@ class BridgeInventory:
     ready: bool
     bridge_version: str
     protocol_version: str
-    locations: dict[str, str]
+    locations: dict[str, BridgeLocation | str]
     rooms: dict[str, tuple[str, str]]
     devices: dict[str, BridgeDevice]
+    scenes: dict[str, BridgeScene] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -58,7 +97,7 @@ class BridgeCommandResult:
 
     status: Literal["confirmed", "already_confirmed"]
     sequence: int
-    confirmation: Literal["device_event", "current_state"]
+    confirmation: Literal["device_event", "current_state", "security_arm_state_event"]
 
 
 @dataclass
@@ -117,15 +156,17 @@ class SmartThingsWebRuntime:
                 device_type=latest_device.device_type,
                 online=latest_device.online,
                 states=states,
+                controls={**existing.controls, **latest_device.controls},
             )
         merged = BridgeInventory(
             sequence=latest.sequence,
             ready=latest.ready,
             bridge_version=latest.bridge_version,
             protocol_version=latest.protocol_version,
-            locations={**current.locations, **latest.locations},
+            locations=_merge_locations(current.locations, latest.locations),
             rooms={**current.rooms, **latest.rooms},
             devices=devices,
+            scenes=_merge_scenes(current.scenes, latest.scenes),
         )
         if merged == current:
             return False
@@ -185,6 +226,8 @@ def control_kind(device: BridgeDevice, switch_state: BridgeState) -> ControlKind
     """Classify only verified, safe switch-shaped controls."""
     if switch_state.attribute != "switch":
         return None
+    if is_media_device(device) or is_fan_device(device):
+        return None
     attributes = {
         state.attribute
         for state in device.states.values()
@@ -200,6 +243,199 @@ def control_kind(device: BridgeDevice, switch_state: BridgeState) -> ControlKind
 def entity_unique_id(device_id: str, state: BridgeState) -> str:
     """Return the stable entity identity without duplicating the attribute."""
     return "_".join((device_id, *state.key))
+
+
+def location_name(inventory: BridgeInventory, location_id: str) -> str:
+    """Return a user-facing location name for old and new inventory shapes."""
+    location = inventory.locations.get(location_id)
+    if isinstance(location, BridgeLocation):
+        return location.name
+    if isinstance(location, str):
+        return location
+    return location_id
+
+
+def location_arm_state(inventory: BridgeInventory, location_id: str) -> str | None:
+    """Return the current SmartThings Home Monitor arm state if present."""
+    location = inventory.locations.get(location_id)
+    if isinstance(location, BridgeLocation):
+        return location.arm_state
+    return None
+
+
+def location_unique_id(location_id: str, suffix: str) -> str:
+    """Return a stable non-device unique ID."""
+    return f"{location_id}_{suffix}"
+
+
+def scene_unique_id(scene_id: str) -> str:
+    """Return a stable scene unique ID."""
+    return f"{scene_id}_scene"
+
+
+def device_has_any_state(device: BridgeDevice, attributes: set[str]) -> bool:
+    """Return whether a device exposes at least one of the requested attributes."""
+    return any(state.attribute in attributes for state in device.states.values())
+
+
+REFRESH_ATTRIBUTES = {
+    "battery",
+    "captureTime",
+    "clip",
+    "contact",
+    "image",
+    "imageTransferProgress",
+    "lqi",
+    "motion",
+    "rssi",
+    "signalMetrics",
+    "stream",
+}
+
+IMAGE_ATTRIBUTES = {"captureTime", "clip", "image", "imageTransferProgress", "stream"}
+
+MEDIA_ATTRIBUTES = {
+    "audioTrackData",
+    "mute",
+    "playbackStatus",
+    "supportedPlaybackCommands",
+    "supportedTrackControlCommands",
+    "volume",
+}
+
+FAN_ATTRIBUTES = {
+    "airPurifierMode",
+    "fanMode",
+    "fanSpeed",
+    "level",
+    "supportedAirPurifierModes",
+    "supportedFanModes",
+}
+
+NUMBER_ATTRIBUTES = {
+    "colorTemperature",
+    "coolingSetpoint",
+    "detectionFrequency",
+    "fanSpeed",
+    "heatingSetpoint",
+    "level",
+    "setpoint",
+    "targetTemperature",
+    "volume",
+}
+
+
+def is_refreshable_device(device: BridgeDevice) -> bool:
+    """Return whether a device has state that maps to a refresh action."""
+    return any(_control_mentions(control, "refresh") for control in device.controls.values()) or device_has_any_state(device, REFRESH_ATTRIBUTES)
+
+
+def is_image_device(device: BridgeDevice) -> bool:
+    """Return whether a device has camera/image-shaped state."""
+    return device_has_any_state(device, IMAGE_ATTRIBUTES)
+
+
+def is_media_device(device: BridgeDevice) -> bool:
+    """Return whether a device has media-player state."""
+    return any(
+        _control_mentions(control, "play", "pause", "track", "mute", "volume")
+        for control in device.controls.values()
+    ) or device_has_any_state(device, MEDIA_ATTRIBUTES)
+
+
+def is_fan_device(device: BridgeDevice) -> bool:
+    """Return whether a device has fan or air-purifier state."""
+    return device_has_any_state(device, FAN_ATTRIBUTES)
+
+
+def number_state_allowed(device: BridgeDevice, state: BridgeState) -> bool:
+    """Return whether a numeric state should be exposed as a control number."""
+    if isinstance(state.value, bool) or not isinstance(state.value, (int, float)):
+        return False
+    if state.attribute not in NUMBER_ATTRIBUTES:
+        return False
+    if state.attribute in {"volume"} and is_media_device(device):
+        return False
+    if state.attribute in {"level", "fanSpeed"} and not is_fan_device(device):
+        return False
+    return True
+
+
+def number_controls(device: BridgeDevice) -> list[BridgeControl]:
+    """Return slider controls discovered from detail swatches."""
+    return [
+        control
+        for control in device.controls.values()
+        if control.kind == "slider"
+        and control.attribute is not None
+        and control.minimum is not None
+        and control.maximum is not None
+    ]
+
+
+def refresh_controls(device: BridgeDevice) -> list[BridgeControl]:
+    """Return refresh button controls discovered from detail swatches."""
+    return [
+        control
+        for control in device.controls.values()
+        if control.kind == "button" and _control_mentions(control, "refresh")
+    ]
+
+
+def button_controls(device: BridgeDevice) -> list[BridgeControl]:
+    """Return non-value button controls discovered from detail swatches."""
+    return [control for control in device.controls.values() if control.kind == "button"]
+
+
+def control_label(control: BridgeControl, fallback: str) -> str:
+    """Return a readable control label."""
+    return control.label or fallback
+
+
+def numeric_range_for(device: BridgeDevice, state: BridgeState) -> tuple[float, float, float]:
+    """Infer a HA number range from sibling range metadata or conservative defaults."""
+    for sibling in device.states.values():
+        if sibling.component != state.component:
+            continue
+        if sibling.attribute not in {
+            f"{state.attribute}Range",
+            f"{state.attribute}Ranges",
+            "range",
+            "ranges",
+        }:
+            continue
+        parsed = _parse_numeric_range(sibling.value)
+        if parsed is not None:
+            return parsed
+    if state.attribute in {"level", "fanSpeed"}:
+        return (0.0, 100.0, 1.0)
+    if state.attribute == "detectionFrequency":
+        return (0.0, 3600.0, 1.0)
+    if state.attribute == "colorTemperature":
+        return (1500.0, 9000.0, 1.0)
+    return (0.0, 100.0, 1.0)
+
+
+def option_values(value: Any) -> list[str]:
+    """Extract option strings from normalized SmartThings option payloads."""
+    if isinstance(value, list):
+        result = []
+        for item in value:
+            if isinstance(item, str):
+                result.append(item)
+            elif isinstance(item, dict):
+                for key in ("value", "id", "name"):
+                    candidate = item.get(key)
+                    if isinstance(candidate, str):
+                        result.append(candidate)
+                        break
+        return result
+    if isinstance(value, dict):
+        for key in ("values", "options", "supportedValues", "supportedModes"):
+            nested = value.get(key)
+            if nested is not None:
+                return option_values(nested)
+    return []
 
 
 def sensor_state_allowed(attribute: str) -> bool:
@@ -230,7 +466,7 @@ def sensor_extra_attributes(value: Any) -> dict[str, Any]:
 
 
 def parse_command_result(
-    raw: dict[str, Any], client_request_id: str
+    raw: dict[str, Any], client_request_id: str, target_type: str | None = None
 ) -> BridgeCommandResult | None:
     """Accept only a result bound to this request and an authoritative state source."""
     status = raw.get("status")
@@ -241,17 +477,109 @@ def parse_command_result(
         or raw.get("clientRequestId") != client_request_id
         or raw.get("transport") != "smartthings_web_ui"
         or status not in {"confirmed", "already_confirmed"}
-        or confirmation not in {"device_event", "current_state"}
+        or confirmation
+        not in {"device_event", "current_state", "security_arm_state_event"}
         or not isinstance(sequence, int)
         or isinstance(sequence, bool)
         or sequence < 0
     ):
         return None
-    if status == "confirmed" and confirmation != "device_event":
+    if confirmation == "security_arm_state_event" and target_type != "location":
         return None
+    if status == "confirmed" and confirmation != "device_event":
+        if confirmation != "security_arm_state_event":
+            return None
     if status == "already_confirmed" and confirmation != "current_state":
         return None
     return BridgeCommandResult(status, sequence, confirmation)
+
+
+def parse_location(raw: Any) -> BridgeLocation | None:
+    """Parse old/new Bridge location shapes."""
+    if isinstance(raw, dict):
+        location_id = raw.get("id")
+        name = raw.get("name")
+        updated_at = raw.get("updatedAt")
+        if not isinstance(location_id, str) or not isinstance(name, str):
+            return None
+        if updated_at is not None and (
+            not isinstance(updated_at, str) or _timestamp(updated_at) is None
+        ):
+            return None
+        arm_state = raw.get("armState")
+        return BridgeLocation(
+            location_id=location_id,
+            name=name,
+            arm_state=arm_state if isinstance(arm_state, str) else None,
+            updated_at=updated_at,
+        )
+    return None
+
+
+def parse_scene(raw: Any) -> BridgeScene | None:
+    """Parse one normalized scene entry."""
+    if not isinstance(raw, dict):
+        return None
+    scene_id = raw.get("id")
+    location_id = raw.get("locationId")
+    name = raw.get("name")
+    updated_at = raw.get("updatedAt")
+    if not all(isinstance(value, str) and value for value in (scene_id, location_id, name)):
+        return None
+    if updated_at is not None and (
+        not isinstance(updated_at, str) or _timestamp(updated_at) is None
+    ):
+        return None
+    return BridgeScene(
+        scene_id=scene_id,
+        location_id=location_id,
+        name=name,
+        updated_at=updated_at,
+    )
+
+
+def parse_control(raw: Any) -> BridgeControl | None:
+    """Parse one normalized control from a detail swatch."""
+    if not isinstance(raw, dict):
+        return None
+    control_id = raw.get("id")
+    kind = raw.get("kind")
+    if (
+        not isinstance(control_id, str)
+        or kind not in {"button", "color", "enumerated", "slider", "toggle", "value"}
+    ):
+        return None
+    label = raw.get("label")
+    component = raw.get("component")
+    capability = raw.get("capability")
+    attribute = raw.get("attribute")
+    minimum = raw.get("min")
+    maximum = raw.get("max")
+    step = raw.get("step")
+    return BridgeControl(
+        control_id=control_id,
+        kind=kind,
+        label=label if isinstance(label, str) else None,
+        component=component if isinstance(component, str) else None,
+        capability=capability if isinstance(capability, str) else None,
+        attribute=attribute if isinstance(attribute, str) else None,
+        commands=tuple(
+            dict.fromkeys(
+                ([raw["command"]] if isinstance(raw.get("command"), str) else [])
+                + option_values(raw.get("commands"))
+            )
+        ),
+        options=tuple(option_values(raw.get("options"))),
+        minimum=float(minimum)
+        if isinstance(minimum, (int, float)) and not isinstance(minimum, bool)
+        else None,
+        maximum=float(maximum)
+        if isinstance(maximum, (int, float)) and not isinstance(maximum, bool)
+        else None,
+        step=float(step)
+        if isinstance(step, (int, float)) and not isinstance(step, bool)
+        else None,
+    )
 
 
 def parse_state(raw: dict[str, Any]) -> BridgeState | None:
@@ -290,6 +618,88 @@ def _state_is_newer(candidate: BridgeState, current: BridgeState) -> bool:
     if candidate_time is None:
         return False
     return candidate_time > current_time
+
+
+def _merge_locations(
+    current: dict[str, BridgeLocation | str],
+    latest: dict[str, BridgeLocation | str],
+) -> dict[str, BridgeLocation | str]:
+    merged = deepcopy(current)
+    for location_id, candidate in latest.items():
+        present = merged.get(location_id)
+        if (
+            isinstance(candidate, BridgeLocation)
+            and isinstance(present, BridgeLocation)
+            and not _metadata_is_newer(candidate.updated_at, present.updated_at)
+        ):
+            continue
+        merged[location_id] = candidate
+    return merged
+
+
+def _merge_scenes(
+    current: dict[str, BridgeScene], latest: dict[str, BridgeScene]
+) -> dict[str, BridgeScene]:
+    merged = deepcopy(current)
+    for scene_id, candidate in latest.items():
+        present = merged.get(scene_id)
+        if present is None or _metadata_is_newer(candidate.updated_at, present.updated_at):
+            merged[scene_id] = candidate
+    return merged
+
+
+def _metadata_is_newer(candidate: str | None, current: str | None) -> bool:
+    current_time = _timestamp(current)
+    candidate_time = _timestamp(candidate)
+    if current_time is None:
+        return True
+    if candidate_time is None:
+        return False
+    return candidate_time >= current_time
+
+
+def _parse_numeric_range(value: Any) -> tuple[float, float, float] | None:
+    if isinstance(value, dict):
+        minimum = _number_from_keys(value, "minimum", "min", "minValue")
+        maximum = _number_from_keys(value, "maximum", "max", "maxValue")
+        step = _number_from_keys(value, "step", "interval", "increment") or 1.0
+        if minimum is not None and maximum is not None and minimum < maximum:
+            return (minimum, maximum, step)
+    if isinstance(value, list) and value:
+        numbers = [
+            float(item)
+            for item in value
+            if isinstance(item, (int, float)) and not isinstance(item, bool)
+        ]
+        if len(numbers) >= 2:
+            return (min(numbers), max(numbers), 1.0)
+        for item in value:
+            parsed = _parse_numeric_range(item)
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _number_from_keys(value: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        candidate = value.get(key)
+        if isinstance(candidate, (int, float)) and not isinstance(candidate, bool):
+            return float(candidate)
+    return None
+
+
+def _control_mentions(control: BridgeControl, *needles: str) -> bool:
+    haystack = " ".join(
+        item.lower()
+        for item in (
+            control.control_id,
+            control.kind,
+            control.label or "",
+            control.attribute or "",
+            *control.commands,
+        )
+    )
+    return any(needle.lower() in haystack for needle in needles)
 
 
 def _timestamp(value: str | None) -> datetime | None:

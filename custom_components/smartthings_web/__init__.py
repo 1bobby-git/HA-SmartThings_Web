@@ -14,9 +14,27 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .bridge_client import BridgeAuthError, BridgeClientError, SmartThingsWebBridgeClient
 from .const import CONF_BRIDGE_TOKEN, CONF_BRIDGE_URL, CONF_LOCATION_ID, DOMAIN
-from .models import BridgeInventory, SmartThingsWebRuntime, entity_unique_id
+from .models import (
+    BridgeInventory,
+    SmartThingsWebRuntime,
+    entity_unique_id,
+    is_fan_device,
+    is_media_device,
+)
 
-PLATFORMS = [Platform.BINARY_SENSOR, Platform.LIGHT, Platform.SENSOR, Platform.SWITCH]
+PLATFORMS = [
+    Platform.ALARM_CONTROL_PANEL,
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.FAN,
+    Platform.IMAGE,
+    Platform.LIGHT,
+    Platform.MEDIA_PLAYER,
+    Platform.NUMBER,
+    Platform.SCENE,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 SmartThingsWebConfigEntry = ConfigEntry[SmartThingsWebRuntime]
 
 
@@ -94,6 +112,7 @@ def _migrate_entity_registry(
     registry = er.async_get(hass)
     old_to_new: dict[str, str] = {}
     switch_ids: set[str] = set()
+    primary_domain_switch_ids: set[str] = set()
     for device in inventory.devices.values():
         if device.location_id != entry.data[CONF_LOCATION_ID]:
             continue
@@ -103,11 +122,19 @@ def _migrate_entity_registry(
             old_to_new[old_unique_id] = new_unique_id
             if state.attribute == "switch":
                 switch_ids.update((old_unique_id, new_unique_id))
+                if is_media_device(device) or is_fan_device(device):
+                    primary_domain_switch_ids.update((old_unique_id, new_unique_id))
 
     for entity_entry in list(er.async_entries_for_config_entry(registry, entry.entry_id)):
         if entity_entry.platform != DOMAIN:
             continue
         if entity_entry.domain == Platform.BINARY_SENSOR and entity_entry.unique_id in switch_ids:
+            registry.async_remove(entity_entry.entity_id)
+            continue
+        if (
+            entity_entry.domain == Platform.SWITCH
+            and entity_entry.unique_id in primary_domain_switch_ids
+        ):
             registry.async_remove(entity_entry.entity_id)
             continue
         new_unique_id = old_to_new.get(entity_entry.unique_id)

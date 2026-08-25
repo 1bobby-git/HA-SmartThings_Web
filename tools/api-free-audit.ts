@@ -40,7 +40,7 @@ const rules: Array<{ rule: ApiFreeRule; pattern: RegExp }> = [
   },
   {
     rule: "official-smartthings-sdk",
-    pattern: /(?:@smartthings\/(?:core-)?sdk|pysmartthings|SmartThingsClient|new\s+SmartThings)/i
+    pattern: /(?:@smartthings\/(?:core-)?sdk|pysmartthings|\bSmartThingsClient\b|new\s+SmartThings(?:Client\b|\s*\())/i
   },
   { rule: "direct-http-client", pattern: /\b(?:fetch\s*\(|axios\b|node-fetch\b|got\b|undici\b)/i },
   {

@@ -36,6 +36,45 @@ export class SmartThingsWebUiCommandExecutor {
     locationNames?: Readonly<Record<string, string>>;
     roomName?: string;
   }): Promise<void> {
+    await this.executeDeviceAction({
+      ...input,
+      command: "on",
+      action: "on",
+      component: "main",
+      capability: "switch",
+      attribute: "switch",
+      arguments: []
+    });
+  }
+
+  async executeDeviceAction(input: {
+    deviceName: string;
+    locationId: string;
+    locationNames?: Readonly<Record<string, string>>;
+    roomName?: string;
+    command:
+      | "on"
+      | "off"
+      | "refresh"
+      | "press"
+      | "setNumber"
+      | "setVolume"
+      | "play"
+      | "pause"
+      | "stop"
+      | "nextTrack"
+      | "previousTrack"
+      | "mute"
+      | "unmute"
+      | "playTrackAndResume"
+      | "setFanMode";
+    action: string;
+    component: string;
+    capability: string;
+    attribute: string;
+    arguments: unknown[];
+    controlLabel?: string;
+  }): Promise<void> {
     const manager = this.getManager();
     if (!manager) {
       throw new Error("command_browser_unavailable");
@@ -82,18 +121,72 @@ export class SmartThingsWebUiCommandExecutor {
       }
       await device.click({ timeout: 15_000 });
 
-      const toggle = page.getByRole("switch");
-      try {
-        await toggle.first().waitFor({ state: "visible", timeout: 15_000 });
-      } catch {
-        throw new Error("command_control_not_found");
-      }
-      if ((await toggle.count()) !== 1) {
-        throw new Error("command_control_ambiguous");
-      }
-      await toggle.click({ timeout: 15_000 });
+      await executeDeviceControl(page, input);
     } finally {
       await page.close().catch(() => undefined);
+    }
+  }
+
+  async executeScene(input: {
+    sceneName: string;
+    locationId: string;
+    locationNames?: Readonly<Record<string, string>>;
+  }): Promise<void> {
+    const page = await this.openLocationPage(input.locationId, input.locationNames);
+    try {
+      let scene = page.getByRole("button", { name: exactName(input.sceneName) });
+      if ((await scene.count()) !== 1) {
+        scene = page.getByRole("button").filter({
+          has: page.getByText(input.sceneName, { exact: true })
+        });
+      }
+      await clickExactlyOne(scene);
+    } finally {
+      await page.close().catch(() => undefined);
+    }
+  }
+
+  async executeLocationAction(input: {
+    locationId: string;
+    locationNames?: Readonly<Record<string, string>>;
+    action: "armAway" | "armStay" | "disarm";
+  }): Promise<void> {
+    const page = await this.openLocationPage(input.locationId, input.locationNames);
+    try {
+      const actionName = locationActionName(input.action);
+      let action = page.getByRole("button", { name: actionName });
+      if ((await action.count()) !== 1) {
+        const monitor = page.getByRole("button", {
+          name: /^(?:SmartThings\s+)?Home Monitor$|^홈 모니터$/iu
+        });
+        await clickExactlyOne(monitor);
+        action = page.getByRole("button", { name: actionName });
+        try {
+          await action.first().waitFor({ state: "visible", timeout: 15_000 });
+        } catch {
+          throw new Error("command_control_not_found");
+        }
+      }
+      await clickExactlyOne(action);
+    } finally {
+      await page.close().catch(() => undefined);
+    }
+  }
+
+  private async openLocationPage(
+    locationId: string,
+    locationNames?: Readonly<Record<string, string>>
+  ): Promise<CommandPageLike> {
+    const manager = this.getManager();
+    if (!manager) throw new Error("command_browser_unavailable");
+    const page = (await manager.openCommandPage()) as CommandPageLike;
+    try {
+      if (!isSmartThingsLocation(page.url())) throw new Error("command_login_required");
+      await this.ensureLocation(page, locationId, locationNames);
+      return page;
+    } catch (error) {
+      await page.close().catch(() => undefined);
+      throw error;
     }
   }
 
@@ -135,6 +228,147 @@ export class SmartThingsWebUiCommandExecutor {
       throw new Error("command_location_change_failed");
     }
   }
+}
+
+async function executeDeviceControl(
+  page: CommandPageLike,
+  input: {
+    command: string;
+    attribute: string;
+    arguments: unknown[];
+    controlLabel?: string;
+  }
+): Promise<void> {
+  if (input.command === "on" || input.command === "off") {
+    await clickRoleControl(page, "switch", /^(?:Power|전원)$/iu);
+    return;
+  }
+  if (input.command === "refresh") {
+    await clickRoleControl(page, "button", /^(?:Refresh|새로고침)$/iu);
+    return;
+  }
+  if (input.command === "press") {
+    if (!input.controlLabel) throw new Error("command_control_not_found");
+    await clickRoleControl(page, "button", exactName(input.controlLabel));
+    return;
+  }
+  if (input.command === "mute" || input.command === "unmute") {
+    await clickRoleControl(page, "switch", /^(?:Mute|Muted|음소거)$/iu);
+    return;
+  }
+  if (input.command === "setNumber" || input.command === "setVolume") {
+    const value = input.arguments[0];
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new Error("command_execution_failed");
+    }
+    const label = input.controlLabel ?? controlLabelFor(input.attribute);
+    const slider = await findRoleControl(page, "slider", label ? exactOrLocalized(label) : undefined);
+    await slider.fill(String(value), { timeout: 15_000 });
+    return;
+  }
+  if (input.command === "setFanMode") {
+    const value = input.arguments[0];
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error("command_execution_failed");
+    }
+    const label = input.controlLabel ?? controlLabelFor(input.attribute);
+    const select = await findRoleControl(page, "combobox", label ? exactOrLocalized(label) : undefined);
+    await select.click({ timeout: 15_000 });
+    await clickExactlyOne(page.getByRole("option", { name: exactName(value) }));
+    return;
+  }
+  if (input.command === "playTrackAndResume") {
+    const value = input.arguments[0];
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error("command_execution_failed");
+    }
+    const name = /Play track and resume|트랙.*재생|재생.*재개/iu;
+    const textbox = await findRoleControl(page, "textbox", name);
+    await textbox.fill(value, { timeout: 15_000 });
+    await clickRoleControl(page, "button", name);
+    return;
+  }
+  const name = mediaActionName(input.command);
+  if (!name) throw new Error("command_control_not_found");
+  await clickRoleControl(page, "button", name);
+}
+
+async function findRoleControl(
+  page: CommandPageLike,
+  role: string,
+  preferredName?: RegExp
+): Promise<CommandLocatorLike> {
+  if (preferredName) {
+    const preferred = page.getByRole(role, { name: preferredName });
+    if ((await preferred.count()) === 1) {
+      try {
+        await preferred.first().waitFor({ state: "visible", timeout: 15_000 });
+        return preferred;
+      } catch {
+        // Fall through to the single-role fail-closed fallback.
+      }
+    }
+  }
+  const fallback = page.getByRole(role);
+  try {
+    await fallback.first().waitFor({ state: "visible", timeout: 15_000 });
+  } catch {
+    throw new Error("command_control_not_found");
+  }
+  if ((await fallback.count()) !== 1) throw new Error("command_control_ambiguous");
+  return fallback;
+}
+
+async function clickRoleControl(
+  page: CommandPageLike,
+  role: string,
+  preferredName?: RegExp
+): Promise<void> {
+  const control = await findRoleControl(page, role, preferredName);
+  await control.click({ timeout: 15_000 });
+}
+
+async function clickExactlyOne(control: CommandLocatorLike): Promise<void> {
+  try {
+    await control.first().waitFor({ state: "visible", timeout: 15_000 });
+  } catch {
+    throw new Error("command_control_not_found");
+  }
+  if ((await control.count()) !== 1) throw new Error("command_control_ambiguous");
+  await control.click({ timeout: 15_000 });
+}
+
+function mediaActionName(command: string): RegExp | undefined {
+  const labels: Record<string, RegExp> = {
+    play: /^(?:Play|재생)$/iu,
+    pause: /^(?:Pause|일시\s*정지)$/iu,
+    stop: /^(?:Stop|정지)$/iu,
+    nextTrack: /^(?:Next|Next track|다음|다음 트랙)$/iu,
+    previousTrack: /^(?:Previous|Previous track|이전|이전 트랙)$/iu
+  };
+  return labels[command];
+}
+
+function locationActionName(action: "armAway" | "armStay" | "disarm"): RegExp {
+  if (action === "armAway") return /^(?:Arm away|Away|외출|외출 모드)$/iu;
+  if (action === "armStay") return /^(?:Arm stay|Stay|재실|재실 모드)$/iu;
+  return /^(?:Disarm|Disarmed|해제|보안 해제)$/iu;
+}
+
+function controlLabelFor(attribute: string): string | undefined {
+  const labels: Record<string, string> = {
+    detectionFrequency: "Detection frequency|감지 주기",
+    volume: "Volume|볼륨",
+    fanSpeed: "Fan speed|팬 속도",
+    level: "Level|레벨",
+    airPurifierMode: "Air purifier mode|공기청정기 모드",
+    fanMode: "Fan mode|팬 모드"
+  };
+  return labels[attribute];
+}
+
+function exactOrLocalized(value: string): RegExp {
+  return new RegExp(`^(?:${value.split("|").map(escapeRegExp).join("|")})$`, "iu");
 }
 
 async function findDeviceInRooms(

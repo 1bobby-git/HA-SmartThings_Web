@@ -26,6 +26,7 @@ import { createBridgeHttpServer, type BridgeHttpServer } from "./server/http-ser
 import { createHealthReport, type HealthReport } from "./server/health.js";
 import { BridgeAuth } from "./server/bridge-auth.js";
 import { CaptureStore } from "./state/capture-store.js";
+import { CameraImageStore } from "./state/camera-image-store.js";
 import { DeviceStore } from "./state/device-store.js";
 import {
   ProtocolIntegrityStore,
@@ -59,7 +60,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.29";
+const bridgeVersion = "0.1.30";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -111,6 +112,10 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     normalizeStateToken: (value) =>
       aliases.alias("identifier", aliases.alias("identifier", value))
   });
+  const cameraImages = new CameraImageStore({
+    dataDir: paths.dataDir,
+    aliasDeviceId: (rawDeviceId) => aliases.alias("device", rawDeviceId)
+  });
   const physicalActionProbe = new PhysicalActionCorrelationProbe();
   let currentContext: ObservableContext | undefined;
   let currentKeeperManager: KeeperPageManager | undefined;
@@ -143,6 +148,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     auth,
     devices,
     commands,
+    images: cameraImages,
     physicalActionProbe,
     getProbeEvidence
   });
@@ -157,7 +163,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     log,
     protocolIntegritySnapshot?.compatible === false,
     physicalActionProbe,
-    devices
+    devices,
+    cameraImages
   );
   const sink = capturePipeline.sink;
   const heartbeat = () => {
@@ -221,7 +228,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       }
       try {
         const keeperManager = new KeeperPageManager(context);
-        await attachContext(context, keeperManager, sink, redactor, status, log, () => {
+        await attachContext(context, keeperManager, sink, redactor, cameraImages, status, log, () => {
           if (context === currentContext && keeperManager === currentKeeperManager) {
             physicalActionProbe.recordBrowserIsolation(isProbeBrowserIsolated(context, keeperManager));
           }
@@ -369,6 +376,7 @@ async function attachContext(
   keeperManager: KeeperPageManager,
   sink: CaptureSink,
   redact: (value: unknown) => unknown,
+  cameraImages: CameraImageStore,
   status: RuntimeStatusStore,
   log: BridgeRuntimeLog,
   onNewPage: () => void
@@ -378,7 +386,10 @@ async function attachContext(
     .pages()
     .some((page) => !page.isClosed() && isSettledSmartThingsLocation(page.url()));
 
-  installBrowserObserver(context, sink, redact);
+  installBrowserObserver(context, sink, redact, {
+    onRawWebSocketFrame: (direction, payload) =>
+      cameraImages.observeRawWebSocketFrame(direction, payload)
+  });
   context.on?.("page", (page) => {
     void installCdpForPage(context, page as BrowserPageLike, sink, redact, observedCdpPages, log);
     onNewPage();
@@ -444,7 +455,8 @@ function createStatusCapturePipeline(
   log: BridgeRuntimeLog,
   initiallyProtocolBlocked: boolean,
   physicalActionProbe: PhysicalActionCorrelationProbe,
-  devices: DeviceStore
+  devices: DeviceStore,
+  cameraImages: CameraImageStore
 ): { sink: CaptureSink; reset: () => void } {
   let analyzer = new ProtocolAnalyzer({ ttlMs: 300_000, maxEntries: 100_000 });
   let protocolFingerprintObserved = false;
@@ -453,6 +465,7 @@ function createStatusCapturePipeline(
     reset: () => {
       physicalActionProbe.fail("runtime_restarted");
       devices.reset();
+      cameraImages.reset();
       analyzer.reset();
       analyzer = new ProtocolAnalyzer({ ttlMs: 300_000, maxEntries: 100_000 });
       protocolFingerprintObserved = false;

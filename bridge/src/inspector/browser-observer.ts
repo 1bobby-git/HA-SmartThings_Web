@@ -18,6 +18,7 @@ export type Redact = (value: unknown) => unknown;
 
 export interface BrowserObserverOptions {
   textLimitBytes?: number;
+  onRawWebSocketFrame?: (direction: "sent" | "received", payload: string) => void;
 }
 
 export function installBrowserObserver(
@@ -50,18 +51,20 @@ export function installBrowserObserver(
   context.on("websocket", (socket) => {
     write(sink, redact, "playwright-websocket", { url: callString(socket, "url") });
     if (hasOn(socket)) {
-      socket.on("framesent", (frame) =>
+      socket.on("framesent", (frame) => {
+        observeRawTextFrame(options.onRawWebSocketFrame, "sent", frame);
         write(sink, redact, "playwright-websocket-frame", {
           direction: "sent",
           frame: normalizePlaywrightFrame(frame, textLimitBytes, redact)
-        })
-      );
-      socket.on("framereceived", (frame) =>
+        });
+      });
+      socket.on("framereceived", (frame) => {
+        observeRawTextFrame(options.onRawWebSocketFrame, "received", frame);
         write(sink, redact, "playwright-websocket-frame", {
           direction: "received",
           frame: normalizePlaywrightFrame(frame, textLimitBytes, redact)
-        })
-      );
+        });
+      });
       socket.on("close", () =>
         write(sink, redact, "playwright-websocket", { url: callString(socket, "url"), event: "close" })
       );
@@ -79,6 +82,26 @@ export function installBrowserObserver(
   }
 
   context.on("page", (page) => attachPage(page, sink, redact, observedPages));
+}
+
+function observeRawTextFrame(
+  observer: BrowserObserverOptions["onRawWebSocketFrame"],
+  direction: "sent" | "received",
+  frame: unknown
+): void {
+  if (!observer) return;
+  const payload =
+    typeof frame === "string"
+      ? frame
+      : typeof frame === "object" && frame !== null
+        ? (frame as Record<string, unknown>).payload
+        : undefined;
+  if (typeof payload !== "string") return;
+  try {
+    observer(direction, payload);
+  } catch {
+    // Image extraction must never interrupt the sanitized capture pipeline.
+  }
 }
 
 function write(sink: CaptureSink, redact: Redact, source: CaptureSource, payload: unknown): void {

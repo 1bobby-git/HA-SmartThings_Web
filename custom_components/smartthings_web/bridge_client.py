@@ -14,7 +14,10 @@ from .models import (
     BridgeCommandResult,
     BridgeDevice,
     BridgeInventory,
+    parse_control,
+    parse_location,
     parse_command_result,
+    parse_scene,
     parse_state,
 )
 
@@ -59,25 +62,78 @@ class SmartThingsWebBridgeClient:
         command: str,
     ) -> BridgeCommandResult:
         """Execute one safe switch command and require authoritative confirmation."""
+        return await self.async_execute_command(
+            target_type="device",
+            target_id=device_id,
+            component=component,
+            capability=capability,
+            command=command,
+            arguments=[],
+        )
+
+    async def async_execute_command(
+        self,
+        *,
+        target_type: str,
+        target_id: str,
+        command: str,
+        component: str | None = None,
+        capability: str | None = None,
+        attribute: str | None = None,
+        control_id: str | None = None,
+        control_label: str | None = None,
+        arguments: list[Any] | None = None,
+    ) -> BridgeCommandResult:
+        """Execute one generic command and require authoritative Bridge confirmation."""
         client_request_id = f"ha_{uuid4().hex}"
+        body: dict[str, Any] = {
+            "targetType": target_type,
+            "targetId": target_id,
+            "command": command,
+            "arguments": arguments or [],
+            "clientRequestId": client_request_id,
+        }
+        if component is not None:
+            body["component"] = component
+        if capability is not None:
+            body["capability"] = capability
+        if attribute is not None:
+            body["attribute"] = attribute
+        if control_id is not None:
+            body["controlId"] = control_id
+        if control_label is not None:
+            body["controlLabel"] = control_label
         raw = await self._request_json(
             "POST",
             "/api/v1/commands",
             auth=True,
-            json_body={
-                "deviceId": device_id,
-                "component": component,
-                "capability": capability,
-                "command": command,
-                "arguments": [],
-                "clientRequestId": client_request_id,
-            },
+            json_body=body,
             timeout_seconds=90,
         )
-        result = parse_command_result(raw, client_request_id)
+        result = parse_command_result(raw, client_request_id, target_type)
         if result is None:
             raise BridgeClientError("bridge_command_unconfirmed")
         return result
+
+    async def async_get_image(self, device_id: str) -> tuple[bytes, str | None]:
+        """Fetch one authenticated camera still through the local Bridge."""
+        if self._token is None:
+            raise BridgeAuthError("missing_bridge_token")
+        try:
+            async with self._session.get(
+                f"{self._base_url}/api/v1/images/{device_id}",
+                headers={"Authorization": f"Bearer {self._token}"},
+                timeout=ClientTimeout(total=30),
+            ) as response:
+                if response.status in {401, 403}:
+                    raise BridgeAuthError("bridge_auth_failed")
+                if response.status >= 400:
+                    raise BridgeClientError("bridge_request_failed")
+                return await response.read(), response.headers.get("Content-Type")
+        except BridgeClientError:
+            raise
+        except (ClientError, TimeoutError) as err:
+            raise BridgeClientError("bridge_request_failed") from err
 
     async def async_events(self) -> AsyncIterator[dict[str, Any]]:
         """Yield local push events without polling SmartThings."""
@@ -143,13 +199,11 @@ def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:
     """Validate the Bridge inventory response."""
     if raw.get("schemaVersion") != 1 or not isinstance(raw.get("devices"), list):
         raise BridgeClientError("bridge_response_invalid")
-    locations = {
-        item["id"]: item["name"]
-        for item in raw.get("locations", [])
-        if isinstance(item, dict)
-        and isinstance(item.get("id"), str)
-        and isinstance(item.get("name"), str)
-    }
+    locations = {}
+    for item in raw.get("locations", []):
+        parsed = parse_location(item)
+        if parsed is not None:
+            locations[parsed.location_id] = parsed
     rooms = {
         item["id"]: (item["locationId"], item["name"])
         for item in raw.get("rooms", [])
@@ -171,6 +225,11 @@ def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:
         for state_raw in item.get("states", []):
             if isinstance(state_raw, dict) and (state := parse_state(state_raw)) is not None:
                 states[state.key] = state
+        controls = {}
+        for control_raw in item.get("controls", []):
+            control = parse_control(control_raw)
+            if control is not None and control.kind != "value":
+                controls[control.control_id] = control
         room_id = item.get("roomId")
         device_type = item.get("type")
         devices[device_id] = BridgeDevice(
@@ -181,7 +240,13 @@ def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:
             device_type=device_type if isinstance(device_type, str) else None,
             online=item.get("online") is True,
             states=states,
+            controls=controls,
         )
+    scenes = {}
+    for item in raw.get("scenes", []):
+        parsed_scene = parse_scene(item)
+        if parsed_scene is not None:
+            scenes[parsed_scene.scene_id] = parsed_scene
     sequence = raw.get("sequence")
     bridge_version = raw.get("bridgeVersion")
     protocol_version = raw.get("protocolVersion")
@@ -193,4 +258,5 @@ def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:
         locations=locations,
         rooms=rooms,
         devices=devices,
+        scenes=scenes,
     )

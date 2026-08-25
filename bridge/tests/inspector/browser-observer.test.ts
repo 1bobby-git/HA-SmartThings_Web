@@ -135,6 +135,25 @@ describe("installBrowserObserver", () => {
     });
   });
 
+  test("offers raw text frames only to the explicit in-memory observer before sanitization", () => {
+    const context = new Emitter();
+    const write = vi.fn();
+    const onRawWebSocketFrame = vi.fn();
+    installBrowserObserver(context, { write }, () => ({ redacted: true }), {
+      onRawWebSocketFrame
+    });
+    const socket = new Emitter() as Emitter & { url: () => string };
+    socket.url = () => "wss://example.test/socket";
+
+    context.emit("websocket", socket);
+    socket.emit("framereceived", { payload: "raw-session-only" });
+    socket.emit("framesent", { payload: Uint8Array.from([1, 2, 3]) });
+
+    expect(onRawWebSocketFrame).toHaveBeenCalledOnce();
+    expect(onRawWebSocketFrame).toHaveBeenCalledWith("received", "raw-session-only");
+    expect(JSON.stringify(write.mock.calls)).not.toContain("raw-session-only");
+  });
+
   test("redacts Playwright websocket text before byte bounding and persistence", async () => {
     await withPersistedCaptures((store, redact) => {
       const context = new Emitter();

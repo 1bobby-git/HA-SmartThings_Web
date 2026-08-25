@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import type { SanitizedCaptureRecord } from "../../src/state/capture-store.js";
 import { DeviceStore } from "../../src/state/device-store.js";
@@ -202,7 +203,389 @@ describe("DeviceStore", () => {
       expect(restored.snapshot()).toEqual(beforeRestart);
       restored.close();
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
+  test("captures scenes and location arm state from snapshots", () => {
+    const store = new DeviceStore();
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    observeLocationSnapshot(store, {
+      locationId: "loc_001",
+      name: "Home",
+      armState: "STAY",
+      updatedAt: "2026-08-24T21:00:00.000Z"
+    });
+    observeSceneSnapshot(store, {
+      sceneId: "identifier_scenegoodnight",
+      locationId: "loc_001",
+      name: "Good night",
+      updatedAt: "2026-08-24T21:01:00.000Z"
+    });
+
+    expect(store.snapshot()).toMatchObject({
+      sequence: 2,
+      locations: [
+        {
+          id: "loc_001",
+          name: "Home",
+          armState: "STAY",
+          updatedAt: "2026-08-24T21:00:00.000Z"
+        }
+      ],
+      scenes: [
+        {
+          id: "identifier_scenegoodnight",
+          locationId: "loc_001",
+          name: "Good night",
+          updatedAt: "2026-08-24T21:01:00.000Z"
+        }
+      ]
+    });
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: "inventory", sequence: 2 })
+    );
+  });
+
+  test("captures api/location get rows that expose id instead of locationId", () => {
+    const store = new DeviceStore();
+
+    observeLocationSnapshot(store, {
+      id: "loc_001",
+      name: "Home",
+      armState: "DISARMED",
+      updatedAt: "2026-08-24T21:00:00.000Z"
+    });
+
+    expect(store.snapshot().locations).toEqual([
+      {
+        id: "loc_001",
+        name: "Home",
+        armState: "DISARMED",
+        updatedAt: "2026-08-24T21:00:00.000Z"
+      }
+    ]);
+  });
+
+  test("updates SmartThings Home Monitor arm state from security events", () => {
+    const store = new DeviceStore();
+    observeLocationSnapshot(store, {
+      locationId: "loc_001",
+      name: "Home",
+      armState: "DISARMED",
+      updatedAt: "2026-08-24T21:00:00.000Z"
+    });
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    store.observe(
+      receivedFrame(
+        `42${JSON.stringify([
+          "api/subscription SECURITY_ARM_STATE_EVENT",
+          {
+            data: {
+              location_id: "loc_001",
+              arm_state: "AWAY",
+              event_time: "2026-08-24T21:02:00.000Z"
+            }
+          }
+        ])}`
+      )
+    );
+
+    expect(store.snapshot().locations[0]).toMatchObject({
+      id: "loc_001",
+      armState: "AWAY",
+      updatedAt: "2026-08-24T21:02:00.000Z"
+    });
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "inventory", sequence: 2 })
+    );
+  });
+
+  test("updates SmartThings Home Monitor from live securityArmStateEvent shape", () => {
+    const store = new DeviceStore();
+    observeLocationSnapshot(store, {
+      locationId: "loc_001",
+      name: "Home",
+      armState: "DISARMED",
+      updatedAt: "2026-08-24T21:00:00.000Z"
+    });
+
+    store.observe(
+      receivedFrame(
+        `42${JSON.stringify([
+          "api/subscription SECURITY_ARM_STATE_EVENT",
+          {
+            data: {
+              eventTime: Date.parse("2026-08-24T21:03:00.000Z"),
+              securityArmStateEvent: {
+                locationId: "loc_001",
+                armState: "ARMED_AWAY",
+                eventId: "identifier_event001",
+                optionalArguments: {}
+              }
+            }
+          }
+        ])}`
+      )
+    );
+
+    expect(store.snapshot().locations[0]).toMatchObject({
+      armState: "ARMED_AWAY",
+      updatedAt: "2026-08-24T21:03:00.000Z"
+    });
+  });
+
+  test("rejects stale and malformed location security events", () => {
+    const store = new DeviceStore();
+    observeLocationSnapshot(store, {
+      locationId: "loc_001",
+      name: "Home",
+      armState: "AWAY",
+      updatedAt: "2026-08-24T21:02:00.000Z"
+    });
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    store.observe(
+      receivedFrame(
+        `42${JSON.stringify([
+          "api/subscription SECURITY_ARM_STATE_EVENT",
+          {
+            data: {
+              location_id: "loc_001",
+              arm_state: "DISARMED",
+              event_time: "2026-08-24T21:01:59.000Z"
+            }
+          }
+        ])}`
+      )
+    );
+    store.observe(
+      receivedFrame(
+        `42${JSON.stringify([
+          "api/subscription SECURITY_ARM_STATE_EVENT",
+          {
+            data: {
+              location_id: "loc_001",
+              arm_state: "STAY",
+              event_time: "not-a-time"
+            }
+          }
+        ])}`
+      )
+    );
+    store.observe(
+      receivedFrame(
+        `42${JSON.stringify([
+          "api/subscription SECURITY_ARM_STATE_EVENT",
+          {
+            data: {
+              location_id: "loc_001",
+              arm_state: "DISARMED",
+              event_time: "2026-08-24T21:03:00"
+            }
+          }
+        ])}`
+      )
+    );
+
+    expect(store.snapshot().locations[0]).toMatchObject({
+      armState: "AWAY",
+      updatedAt: "2026-08-24T21:02:00.000Z"
+    });
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  test("persists scenes and location arm state across restart", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-scenes-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const first = new DeviceStore({ sqlitePath });
+      observeLocationSnapshot(first, {
+        locationId: "loc_001",
+        name: "Home",
+        armState: "STAY",
+        updatedAt: "2026-08-24T21:00:00.000Z"
+      });
+      observeSceneSnapshot(first, {
+        sceneId: "identifier_scenegoodnight",
+        locationId: "loc_001",
+        name: "Good night",
+        updatedAt: "2026-08-24T21:01:00.000Z"
+      });
+      const beforeRestart = first.snapshot();
+      first.close();
+
+      const restored = new DeviceStore({ sqlitePath });
+
+      expect(restored.snapshot()).toEqual(beforeRestart);
+      restored.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
+  test("publishes an inventory marker for scene lifecycle events without leaking payload", () => {
+    const store = new DeviceStore();
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    store.observe(
+      receivedFrame(
+        `42${JSON.stringify([
+          "api/subscription SCENE_LIFECYCLE_EVENT",
+          {
+            data: {
+              opaque: "raw-value-that-must-not-be-copied"
+            }
+          }
+        ])}`
+      )
+    );
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      sequence: 1,
+      type: "inventory"
+    });
+    expect(JSON.stringify(store.snapshot())).not.toContain("raw-value-that-must-not-be-copied");
+  });
+
+  test("captures safe device detail swatch controls", () => {
+    const store = new DeviceStore();
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    observeDeviceDetails(store, [
+      detailSwatch("TOGGLE", "toggle", {
+        swatchId: "identifier_toggle001",
+        label: "Power",
+        onState: { command: "on" },
+        offState: { command: "off" }
+      }),
+      detailSwatch("BUTTON", "button", {
+        swatchId: "identifier_button001",
+        label: "Refresh",
+        command: "refresh"
+      }),
+      detailSwatch("SLIDER", "slider", {
+        swatchId: "identifier_slider001",
+        label: "Detection Frequency",
+        min: 5,
+        max: 120,
+        step: 5,
+        command: "setDetectionFrequency"
+      }),
+      detailSwatch("ENUMERATED", "enumerated", {
+        swatchId: "identifier_enum001",
+        label: "Fan Mode",
+        options: ["auto", "중간 풍량", { label: "강" }, "[REDACTED]", "https://example.test/raw"]
+      })
+    ]);
+
+    expect(store.snapshot().devices[0]?.controls).toEqual([
+      expect.objectContaining({
+        kind: "button",
+        label: "Refresh",
+        command: "refresh"
+      }),
+      expect.objectContaining({
+        kind: "enumerated",
+        options: ["auto", "중간 풍량", "강"]
+      }),
+      expect.objectContaining({
+        kind: "slider",
+        min: 5,
+        max: 120,
+        step: 5,
+        command: "setDetectionFrequency"
+      }),
+      expect.objectContaining({
+        kind: "toggle",
+        label: "Power",
+        commands: ["on", "off"]
+      })
+    ]);
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "inventory", sequence: 1 })
+    );
+  });
+
+  test("rejects malformed device detail swatches", () => {
+    const store = new DeviceStore();
+    observeDeviceDetails(store, [
+      detailSwatch("SLIDER", "slider", {
+        deviceId: "raw-device-id",
+        swatchId: "identifier_bad001",
+        label: "Bad"
+      }),
+      detailSwatch("BUTTON", "button", {
+        swatchId: "identifier_bad002",
+        label: "[REDACTED]"
+      }),
+      { type: "UNKNOWN", unknown: {} }
+    ]);
+
+    expect(store.snapshot().devices).toHaveLength(0);
+  });
+
+  test("restores old schemaVersion 1 inventory without scenes or controls", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-old-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const seeded = new DeviceStore({ sqlitePath });
+      seeded.close();
+      const db = new DatabaseSync(sqlitePath);
+      db.prepare(
+        "INSERT INTO normalized_inventory (schema_version, inventory_json, persisted_at) VALUES (1, ?, ?)"
+      ).run(
+        JSON.stringify({
+          schemaVersion: 1,
+          sequence: 7,
+          locations: [{ id: "loc_001", name: "Home" }],
+          rooms: [],
+          devices: [
+            {
+              id: "dev_001",
+              locationId: "loc_001",
+              roomId: null,
+              name: "Old sensor",
+              type: null,
+              online: true,
+              states: []
+            }
+          ]
+        }),
+        "2026-08-24T21:00:00.000Z"
+      );
+      db.close();
+
+      const restored = new DeviceStore({ sqlitePath });
+
+      expect(restored.snapshot()).toMatchObject({ sequence: 7, scenes: [] });
+      expect(restored.snapshot().devices[0]?.controls).toBeUndefined();
+      restored.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
     }
   });
 });
@@ -233,6 +616,46 @@ function observeSnapshotState(
       ])}`
     )
   );
+}
+
+function observeLocationSnapshot(
+  store: DeviceStore,
+  location: Record<string, unknown>
+): void {
+  store.observe(sentFrame('421["find","api/location",{}]'));
+  store.observe(receivedFrame(`431${JSON.stringify([null, [location]])}`));
+}
+
+function observeSceneSnapshot(
+  store: DeviceStore,
+  scene: Record<string, unknown>
+): void {
+  store.observe(sentFrame('422["find","api/scene",{}]'));
+  store.observe(receivedFrame(`432${JSON.stringify([null, [scene]])}`));
+}
+
+function observeDeviceDetails(store: DeviceStore, rows: Record<string, unknown>[]): void {
+  store.observe(sentFrame('423["get","api/device","identifier_rawdevice",{}]'));
+  store.observe(receivedFrame(`433${JSON.stringify([null, { data: rows }])}`));
+}
+
+function detailSwatch(
+  type: string,
+  key: string,
+  overrides: Record<string, unknown>
+): Record<string, unknown> {
+  return {
+    type,
+    [key]: {
+      deviceId: "dev_001",
+      locationId: "loc_001",
+      componentId: "identifier_component_main",
+      capabilityId: "identifier_capability_switch",
+      attributeName: key === "slider" ? "detectionFrequency" : "switch",
+      label: "Control",
+      ...overrides
+    }
+  };
 }
 
 function liveStateEvent(overrides: Record<string, unknown>): SanitizedCaptureRecord {
