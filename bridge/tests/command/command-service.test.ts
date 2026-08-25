@@ -35,7 +35,8 @@ describe("SafeCommandService", () => {
     expect(result.sequence).toBeGreaterThan(2);
     expect(executor.executeSwitch).toHaveBeenCalledWith({
       deviceName: "Safe plug",
-      locationId: "loc_001"
+      locationId: "loc_001",
+      locationNames: {}
     });
   });
 

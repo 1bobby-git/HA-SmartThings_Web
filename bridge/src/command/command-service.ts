@@ -26,7 +26,11 @@ export interface SafeCommandResult {
 }
 
 export interface SafeCommandExecutor {
-  executeSwitch(input: { deviceName: string; locationId: string }): Promise<void>;
+  executeSwitch(input: {
+    deviceName: string;
+    locationId: string;
+    locationNames: Readonly<Record<string, string>>;
+  }): Promise<void>;
 }
 
 export type SafeCommandErrorCode =
@@ -168,7 +172,10 @@ export class SafeCommandService {
     try {
       await this.options.executor.executeSwitch({
         deviceName: device.name,
-        locationId: device.locationId
+        locationId: device.locationId,
+        locationNames: Object.fromEntries(
+          snapshot.locations.map((location) => [location.id, location.name])
+        )
       });
     } catch (error) {
       confirmation.cancel();

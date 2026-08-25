@@ -22,7 +22,11 @@ export class SmartThingsWebUiCommandExecutor {
     private readonly normalizeLocationId?: (rawLocationId: string) => string
   ) {}
 
-  async executeSwitch(input: { deviceName: string; locationId: string }): Promise<void> {
+  async executeSwitch(input: {
+    deviceName: string;
+    locationId: string;
+    locationNames?: Readonly<Record<string, string>>;
+  }): Promise<void> {
     const manager = this.getManager();
     if (!manager) {
       throw new Error("command_browser_unavailable");
@@ -32,14 +36,7 @@ export class SmartThingsWebUiCommandExecutor {
       if (!isSmartThingsLocation(page.url())) {
         throw new Error("command_login_required");
       }
-      const routeLocation = locationIdFromUrl(page.url());
-      if (
-        routeLocation &&
-        this.normalizeLocationId &&
-        this.normalizeLocationId(routeLocation) !== input.locationId
-      ) {
-        throw new Error("command_location_mismatch");
-      }
+      await this.ensureLocation(page, input.locationId, input.locationNames);
 
       let device = deviceLocator(page, input.deviceName);
       try {
@@ -69,6 +66,40 @@ export class SmartThingsWebUiCommandExecutor {
       await toggle.click({ timeout: 15_000 });
     } finally {
       await page.close().catch(() => undefined);
+    }
+  }
+
+  private async ensureLocation(
+    page: CommandPageLike,
+    targetLocationId: string,
+    locationNames: Readonly<Record<string, string>> | undefined
+  ): Promise<void> {
+    const routeLocation = locationIdFromUrl(page.url());
+    if (!routeLocation || !this.normalizeLocationId) return;
+    const currentLocationId = this.normalizeLocationId(routeLocation);
+    if (currentLocationId === targetLocationId) return;
+    const currentName = locationNames?.[currentLocationId];
+    const targetName = locationNames?.[targetLocationId];
+    if (!currentName || !targetName) throw new Error("command_location_mismatch");
+
+    const picker = page.getByRole("button", { name: exactName(currentName) });
+    if ((await picker.count()) !== 1) throw new Error("command_location_mismatch");
+    await picker.click({ timeout: 15_000 });
+    const target = page.getByRole("link", { name: exactName(targetName) });
+    try {
+      await target.first().waitFor({ state: "visible", timeout: 15_000 });
+    } catch {
+      throw new Error("command_location_mismatch");
+    }
+    if ((await target.count()) !== 1) throw new Error("command_location_mismatch");
+    await target.click({ timeout: 15_000 });
+
+    const changedRoute = locationIdFromUrl(page.url());
+    if (
+      !changedRoute ||
+      this.normalizeLocationId(changedRoute) !== targetLocationId
+    ) {
+      throw new Error("command_location_mismatch");
     }
   }
 }
@@ -106,6 +137,10 @@ function exactTextCardLocator(page: CommandPageLike, deviceName: string): Comman
   return page.getByRole("button").filter({
     has: page.getByText(deviceName, { exact: true })
   });
+}
+
+function exactName(value: string): RegExp {
+  return new RegExp(`^\\s*${escapeRegExp(value)}\\s*$`, "u");
 }
 
 function isSmartThingsLocation(value: string): boolean {

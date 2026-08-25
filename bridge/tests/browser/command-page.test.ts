@@ -183,4 +183,36 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     ).rejects.toThrow("command_location_mismatch");
     expect(page.card.click).not.toHaveBeenCalled();
   });
+
+  test("changes location through the accessible picker before targeting the device", async () => {
+    const page = new FakeCommandPage();
+    page.currentUrl = "https://my.smartthings.com/location/raw-current";
+    const picker = new FakeLocator(1);
+    const target = new FakeLocator(1);
+    target.click.mockImplementation(async () => {
+      page.currentUrl = "https://my.smartthings.com/location/raw-target";
+    });
+    const originalGetByRole = page.getByRole.bind(page);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Other home")) {
+        return picker;
+      }
+      if (role === "link") return target;
+      return originalGetByRole(role, options);
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => ({ openCommandPage: vi.fn(async () => page) }),
+      (raw) => (raw === "raw-current" ? "loc_999" : "loc_001")
+    );
+
+    await executor.executeSwitch({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      locationNames: { loc_001: "Target home", loc_999: "Other home" }
+    });
+
+    expect(picker.click).toHaveBeenCalledTimes(1);
+    expect(target.click).toHaveBeenCalledTimes(1);
+    expect(page.card.click).toHaveBeenCalledTimes(1);
+  });
 });
