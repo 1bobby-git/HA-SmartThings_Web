@@ -1,4 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { SanitizedCaptureRecord } from "../../src/state/capture-store.js";
 import { DeviceStore } from "../../src/state/device-store.js";
@@ -166,6 +169,41 @@ describe("DeviceStore", () => {
       devices: [{ states: [expect.objectContaining({ value: 10, updatedAt: null })] }]
     });
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  test("restores the normalized inventory and sequence after a Bridge restart", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const first = new DeviceStore({ sqlitePath });
+      observeSnapshotState(first, {
+        componentId: "identifier_component_main",
+        capabilityId: "identifier_capability_contact",
+        attributeName: "contact",
+        value: "closed",
+        timestamp: "2026-08-24T21:00:00.000Z"
+      });
+      const beforeRestart = first.snapshot();
+      first.close();
+
+      const restored = new DeviceStore({ sqlitePath });
+      expect(restored.snapshot()).toEqual(beforeRestart);
+      restored.reset();
+      expect(restored.snapshot()).toEqual(beforeRestart);
+
+      restored.observe(
+        liveStateEvent({
+          capability: "identifier_capability_contact",
+          attribute: "contact",
+          value: "open",
+          event_time: Date.parse("2026-08-24T20:59:59.000Z")
+        })
+      );
+      expect(restored.snapshot()).toEqual(beforeRestart);
+      restored.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

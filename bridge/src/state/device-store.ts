@@ -1,5 +1,8 @@
 import type { SanitizedCaptureRecord } from "./capture-store.js";
 import { decodeSocketIoTextFrame } from "../inspector/socketio-decoder.js";
+import { dirname } from "node:path";
+import { mkdirSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 
 export type BridgeJsonValue = null | boolean | number | string | BridgeJsonValue[] | {
   [key: string]: BridgeJsonValue;
@@ -93,10 +96,27 @@ export class DeviceStore {
   readonly #pending = new Map<number, PendingSnapshot>();
   readonly #listeners = new Set<Listener>();
   readonly #normalizeStateToken: StateTokenNormalizer;
+  readonly #db: DatabaseSync | undefined;
   #sequence = 0;
 
-  constructor(options: { normalizeStateToken?: StateTokenNormalizer } = {}) {
+  constructor(options: {
+    normalizeStateToken?: StateTokenNormalizer;
+    sqlitePath?: string;
+  } = {}) {
     this.#normalizeStateToken = options.normalizeStateToken ?? ((value) => value);
+    if (options.sqlitePath) {
+      mkdirSync(dirname(options.sqlitePath), { recursive: true, mode: 0o700 });
+      this.#db = new DatabaseSync(options.sqlitePath);
+      this.#db.exec(`
+        CREATE TABLE IF NOT EXISTS normalized_inventory (
+          schema_version INTEGER PRIMARY KEY,
+          inventory_json TEXT NOT NULL,
+          persisted_at TEXT NOT NULL
+        )
+      `);
+      const restored = this.#loadPersistedInventory();
+      if (restored) this.#restore(restored);
+    }
   }
 
   observe(record: SanitizedCaptureRecord): void {
@@ -127,7 +147,9 @@ export class DeviceStore {
       }
       this.#pending.delete(decoded.ackId);
       if (this.#applySnapshot(pending.query, snapshotBody(decoded.args))) {
-        this.#publish({ schemaVersion: 1, sequence: this.#nextSequence(), type: "inventory" });
+        const sequence = this.#nextSequence();
+        this.#persist();
+        this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
       }
       return;
     }
@@ -161,6 +183,10 @@ export class DeviceStore {
 
   reset(): void {
     this.#pending.clear();
+  }
+
+  close(): void {
+    this.#db?.close();
   }
 
   #applySnapshot(query: SnapshotQuery, body: unknown): boolean {
@@ -251,9 +277,11 @@ export class DeviceStore {
     if (!this.#setState(device, state)) {
       return;
     }
+    const sequence = this.#nextSequence();
+    this.#persist();
     this.#publish({
       schemaVersion: 1,
-      sequence: this.#nextSequence(),
+      sequence,
       type: "state",
       deviceId,
       state: cloneState(state)
@@ -306,6 +334,114 @@ export class DeviceStore {
       }
     }
   }
+
+  #loadPersistedInventory(): BridgeInventory | undefined {
+    const row = this.#db
+      ?.prepare("SELECT inventory_json AS inventoryJson FROM normalized_inventory WHERE schema_version = 1")
+      .get() as { inventoryJson?: unknown } | undefined;
+    if (typeof row?.inventoryJson !== "string") return undefined;
+    try {
+      return parsePersistedInventory(JSON.parse(row.inventoryJson));
+    } catch {
+      return undefined;
+    }
+  }
+
+  #restore(inventory: BridgeInventory): void {
+    this.#sequence = inventory.sequence;
+    for (const location of inventory.locations) this.#locations.set(location.id, { ...location });
+    for (const room of inventory.rooms) this.#rooms.set(room.id, { ...room });
+    for (const device of inventory.devices) {
+      this.#devices.set(device.id, {
+        id: device.id,
+        locationId: device.locationId,
+        roomId: device.roomId,
+        name: device.name,
+        type: device.type,
+        online: device.online,
+        states: new Map(device.states.map((state) => [stateKey(state), cloneState(state)]))
+      });
+    }
+  }
+
+  #persist(): void {
+    if (!this.#db) return;
+    this.#db
+      .prepare(`
+        INSERT INTO normalized_inventory (schema_version, inventory_json, persisted_at)
+        VALUES (1, ?, ?)
+        ON CONFLICT(schema_version) DO UPDATE SET
+          inventory_json = excluded.inventory_json,
+          persisted_at = excluded.persisted_at
+      `)
+      .run(JSON.stringify(this.snapshot()), new Date().toISOString());
+  }
+}
+
+function parsePersistedInventory(value: unknown): BridgeInventory | undefined {
+  const root = asRecord(value);
+  if (
+    root?.schemaVersion !== 1 ||
+    !Number.isInteger(root.sequence) ||
+    (root.sequence as number) < 0 ||
+    !Array.isArray(root.locations) ||
+    !Array.isArray(root.rooms) ||
+    !Array.isArray(root.devices)
+  ) {
+    return undefined;
+  }
+  const locations: BridgeLocation[] = [];
+  for (const raw of root.locations) {
+    const item = asRecord(raw);
+    const id = safeId(item?.id, "loc");
+    const name = safeName(item?.name);
+    if (!id || !name) return undefined;
+    locations.push({ id, name });
+  }
+  const rooms: BridgeRoom[] = [];
+  for (const raw of root.rooms) {
+    const item = asRecord(raw);
+    const id = safeId(item?.id, "identifier");
+    const locationId = safeId(item?.locationId, "loc");
+    const name = safeName(item?.name);
+    if (!id || !locationId || !name) return undefined;
+    rooms.push({ id, locationId, name });
+  }
+  const devices: BridgeDevice[] = [];
+  for (const raw of root.devices) {
+    const item = asRecord(raw);
+    const id = safeId(item?.id, "dev");
+    const locationId = safeId(item?.locationId, "loc");
+    const roomId = item?.roomId === null ? null : safeId(item?.roomId, "identifier");
+    const name = safeName(item?.name);
+    const type = item?.type === null ? null : safeName(item?.type);
+    if (
+      !id ||
+      !locationId ||
+      roomId === undefined ||
+      !name ||
+      type === undefined ||
+      typeof item?.online !== "boolean" ||
+      !Array.isArray(item.states)
+    ) {
+      return undefined;
+    }
+    const states: BridgeDeviceState[] = [];
+    for (const rawState of item.states) {
+      const state = asRecord(rawState);
+      const parsed = state ? stateFromParts(state) : null;
+      if (!parsed) return undefined;
+      states.push(parsed);
+    }
+    devices.push({ id, locationId, roomId, name, type, online: item.online, states });
+  }
+  return {
+    schemaVersion: 1,
+    sequence: root.sequence as number,
+    locations,
+    rooms,
+    devices
+  };
 }
 
 function snapshotBody(args: unknown[]): unknown {

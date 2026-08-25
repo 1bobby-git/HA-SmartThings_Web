@@ -107,6 +107,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   log.info("bridge_init:capture_store");
   const captures = new CaptureStore(paths.sqlitePath);
   const devices = new DeviceStore({
+    sqlitePath: paths.sqlitePath,
     normalizeStateToken: (value) =>
       aliases.alias("identifier", aliases.alias("identifier", value))
   });
@@ -197,6 +198,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           server,
           aliases,
           captures,
+          devices,
           setStopped: () => {
             stopped = true;
           }
@@ -328,6 +330,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         server,
         aliases,
         captures,
+        devices,
         setStopped: () => {
           stopped = true;
         }
@@ -671,6 +674,7 @@ async function stopRuntime(options: {
   server: BridgeHttpServer;
   aliases: SqliteAliasStore;
   captures: CaptureStore;
+  devices: DeviceStore;
   setStopped: () => void;
 }): Promise<void> {
   options.setStopped();
@@ -681,7 +685,8 @@ async function stopRuntime(options: {
     context?.close?.(),
     options.server.close(),
     Promise.resolve().then(() => options.aliases.close()),
-    Promise.resolve().then(() => options.captures.close())
+    Promise.resolve().then(() => options.captures.close()),
+    Promise.resolve().then(() => options.devices.close())
   ]);
 }
 
