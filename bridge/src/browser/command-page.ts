@@ -82,7 +82,12 @@ export class SmartThingsWebUiCommandExecutor {
     const targetName = locationNames?.[targetLocationId];
     if (!currentName || !targetName) throw new Error("command_location_mismatch");
 
-    const picker = page.getByRole("button", { name: exactName(currentName) });
+    let picker = page.getByRole("button", { name: new RegExp(escapeRegExp(currentName), "u") });
+    if ((await picker.count()) !== 1) {
+      picker = page.getByRole("button").filter({
+        has: page.getByText(currentName, { exact: true })
+      });
+    }
     if ((await picker.count()) !== 1) throw new Error("command_location_mismatch");
     await picker.click({ timeout: 15_000 });
     const target = page.getByRole("link", { name: exactName(targetName) });
