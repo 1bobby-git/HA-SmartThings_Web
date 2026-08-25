@@ -157,6 +157,7 @@ function commandErrorStatus(code: SafeCommandError["code"]): number {
   if (code === "client_request_conflict" || code === "device_offline") return 409;
   if (
     code === "command_target_not_found" ||
+    code === "command_location_mismatch" ||
     code === "command_target_ambiguous" ||
     code === "command_search_not_found" ||
     code === "command_search_ambiguous" ||

@@ -33,7 +33,10 @@ describe("SafeCommandService", () => {
       transport: "smartthings_web_ui"
     });
     expect(result.sequence).toBeGreaterThan(2);
-    expect(executor.executeSwitch).toHaveBeenCalledWith({ deviceName: "Safe plug" });
+    expect(executor.executeSwitch).toHaveBeenCalledWith({
+      deviceName: "Safe plug",
+      locationId: "loc_001"
+    });
   });
 
   test("deduplicates identical client request ids and rejects conflicting reuse", async () => {

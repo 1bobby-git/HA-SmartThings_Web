@@ -64,7 +64,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     const manager = { openCommandPage: vi.fn(async () => page) };
     const executor = new SmartThingsWebUiCommandExecutor(() => manager);
 
-    await executor.executeSwitch({ deviceName: "Safe plug" });
+    await executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" });
 
     expect(manager.openCommandPage).toHaveBeenCalledTimes(1);
     expect(page.card.click).toHaveBeenCalledTimes(1);
@@ -80,7 +80,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       openCommandPage: vi.fn(async () => page)
     }));
 
-    await expect(executor.executeSwitch({ deviceName: "Safe plug" })).rejects.toThrow(
+    await expect(executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" })).rejects.toThrow(
       "command_target_ambiguous"
     );
     expect(page.toggle.click).not.toHaveBeenCalled();
@@ -94,7 +94,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       openCommandPage: vi.fn(async () => page)
     }));
 
-    await expect(executor.executeSwitch({ deviceName: "Safe plug" })).rejects.toThrow(
+    await expect(executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" })).rejects.toThrow(
       "command_login_required"
     );
     expect(page.card.click).not.toHaveBeenCalled();
@@ -122,7 +122,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       openCommandPage: vi.fn(async () => page)
     }));
 
-    await executor.executeSwitch({ deviceName: "Safe plug" });
+    await executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" });
 
     expect(search.fill).toHaveBeenCalledWith("Safe plug", { timeout: 15_000 });
     expect(visibleCard.click).toHaveBeenCalledTimes(1);
@@ -141,7 +141,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       openCommandPage: vi.fn(async () => page)
     }));
 
-    await expect(executor.executeSwitch({ deviceName: "Safe plug" })).rejects.toThrow(
+    await expect(executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" })).rejects.toThrow(
       "command_search_not_found"
     );
     expect(page.toggle.click).not.toHaveBeenCalled();
@@ -163,11 +163,24 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       openCommandPage: vi.fn(async () => page)
     }));
 
-    await executor.executeSwitch({ deviceName: "Safe plug" });
+    await executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" });
 
     expect(page.getByText).toHaveBeenCalledWith("Safe plug", { exact: true });
     expect(visibleCard.filter).toHaveBeenCalledWith({ has: deviceText });
     expect(visibleCard.click).toHaveBeenCalledTimes(1);
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
+  });
+
+  test("fails closed when the command page is on a different location", async () => {
+    const page = new FakeCommandPage();
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => ({ openCommandPage: vi.fn(async () => page) }),
+      () => "loc_999"
+    );
+
+    await expect(
+      executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" })
+    ).rejects.toThrow("command_location_mismatch");
+    expect(page.card.click).not.toHaveBeenCalled();
   });
 });

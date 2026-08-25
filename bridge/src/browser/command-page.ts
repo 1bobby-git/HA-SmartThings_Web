@@ -17,9 +17,12 @@ interface CommandPageLike extends BrowserPageLike {
 type CommandPageManagerLike = Pick<KeeperPageManager, "openCommandPage">;
 
 export class SmartThingsWebUiCommandExecutor {
-  constructor(private readonly getManager: () => CommandPageManagerLike | undefined) {}
+  constructor(
+    private readonly getManager: () => CommandPageManagerLike | undefined,
+    private readonly normalizeLocationId?: (rawLocationId: string) => string
+  ) {}
 
-  async executeSwitch(input: { deviceName: string }): Promise<void> {
+  async executeSwitch(input: { deviceName: string; locationId: string }): Promise<void> {
     const manager = this.getManager();
     if (!manager) {
       throw new Error("command_browser_unavailable");
@@ -28,6 +31,14 @@ export class SmartThingsWebUiCommandExecutor {
     try {
       if (!isSmartThingsLocation(page.url())) {
         throw new Error("command_login_required");
+      }
+      const routeLocation = locationIdFromUrl(page.url());
+      if (
+        routeLocation &&
+        this.normalizeLocationId &&
+        this.normalizeLocationId(routeLocation) !== input.locationId
+      ) {
+        throw new Error("command_location_mismatch");
       }
 
       let device = deviceLocator(page, input.deviceName);
@@ -106,6 +117,15 @@ function isSmartThingsLocation(value: string): boolean {
     );
   } catch {
     return false;
+  }
+}
+
+function locationIdFromUrl(value: string): string | undefined {
+  try {
+    const match = new URL(value).pathname.match(/^\/location\/([^/]+)\/?$/u);
+    return match?.[1] ? decodeURIComponent(match[1]) : undefined;
+  } catch {
+    return undefined;
   }
 }
 

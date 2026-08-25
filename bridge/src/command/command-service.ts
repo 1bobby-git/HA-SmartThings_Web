@@ -26,7 +26,7 @@ export interface SafeCommandResult {
 }
 
 export interface SafeCommandExecutor {
-  executeSwitch(input: { deviceName: string }): Promise<void>;
+  executeSwitch(input: { deviceName: string; locationId: string }): Promise<void>;
 }
 
 export type SafeCommandErrorCode =
@@ -45,6 +45,7 @@ export type SafeCommandErrorCode =
   | "client_request_conflict"
   | "command_browser_unavailable"
   | "command_login_required"
+  | "command_location_mismatch"
   | "command_target_not_found"
   | "command_target_ambiguous"
   | "command_search_not_found"
@@ -165,7 +166,10 @@ export class SafeCommandService {
       resync: this.options.resync
     });
     try {
-      await this.options.executor.executeSwitch({ deviceName: device.name });
+      await this.options.executor.executeSwitch({
+        deviceName: device.name,
+        locationId: device.locationId
+      });
     } catch (error) {
       confirmation.cancel();
       const code = error instanceof Error ? error.message : "";
@@ -292,6 +296,7 @@ function isExecutorErrorCode(value: string): value is SafeCommandErrorCode {
   return [
     "command_browser_unavailable",
     "command_login_required",
+    "command_location_mismatch",
     "command_target_not_found",
     "command_target_ambiguous",
     "command_search_not_found",

@@ -113,7 +113,10 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   const physicalActionProbe = new PhysicalActionCorrelationProbe();
   let currentContext: ObservableContext | undefined;
   let currentKeeperManager: KeeperPageManager | undefined;
-  const commandExecutor = new SmartThingsWebUiCommandExecutor(() => currentKeeperManager);
+  const commandExecutor = new SmartThingsWebUiCommandExecutor(
+    () => currentKeeperManager,
+    (rawLocationId) => aliases.alias("location", rawLocationId)
+  );
   const commands = new SafeCommandService({
     devices,
     status,
