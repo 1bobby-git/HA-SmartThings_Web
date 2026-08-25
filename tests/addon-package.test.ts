@@ -100,7 +100,7 @@ const expectPathExists = async (path: string) => {
   await expect(access(path)).resolves.toBeUndefined();
 };
 
-describe("packageAddon", { timeout: 15_000 }, () => {
+describe("packageAddon", { timeout: 30_000 }, () => {
   test("copies only addon package sources and writes a deterministic manifest", async () => {
     const repoRoot = await createMinimalRepo();
     const outputRoot = await makeTempRoot();

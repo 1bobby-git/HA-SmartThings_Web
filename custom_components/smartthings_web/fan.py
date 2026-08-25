@@ -41,8 +41,6 @@ async def async_setup_entry(
 class SmartThingsWebFan(SmartThingsWebDeviceEntity, FanEntity):
     """One fan-like SmartThings device."""
 
-    _attr_supported_features = FanEntityFeature.SET_SPEED | FanEntityFeature.PRESET_MODE
-
     def __init__(self, runtime: SmartThingsWebRuntime, device: BridgeDevice) -> None:
         super().__init__(runtime, device, "fan", None)
 
@@ -57,6 +55,16 @@ class SmartThingsWebFan(SmartThingsWebDeviceEntity, FanEntity):
             if isinstance(state, (int, float)) and not isinstance(state, bool):
                 return max(0, min(100, int(state)))
         return None
+
+    @property
+    def supported_features(self) -> FanEntityFeature:
+        """Expose only fan controls backed by pushed state or detail metadata."""
+        features = FanEntityFeature(0)
+        if self.percentage is not None:
+            features |= FanEntityFeature.SET_SPEED
+        if self.preset_modes:
+            features |= FanEntityFeature.PRESET_MODE
+        return features
 
     @property
     def is_on(self) -> bool | None:

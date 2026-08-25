@@ -24,7 +24,7 @@ BINARY_STATES = {
     "acceleration": BinaryDescription(
         "Acceleration", "active", BinarySensorDeviceClass.MOVING
     ),
-    "contact": BinaryDescription("Contact", "open", BinarySensorDeviceClass.DOOR),
+    "contact": BinaryDescription("Contact", "open", BinarySensorDeviceClass.OPENING),
     "doorState": BinaryDescription("Door", "open", BinarySensorDeviceClass.OPENING),
     "filterStatus": BinaryDescription(
         "Filter status", "replace", BinarySensorDeviceClass.PROBLEM
@@ -83,7 +83,7 @@ class SmartThingsWebBinarySensor(SmartThingsWebEntity, BinarySensorEntity):
     ) -> None:
         super().__init__(runtime, device, state, description.name)
         self.description = description
-        self._attr_device_class = description.device_class
+        self._attr_device_class = _device_class(device, state, description)
 
     @property
     def is_on(self) -> bool | None:
@@ -92,3 +92,16 @@ class SmartThingsWebBinarySensor(SmartThingsWebEntity, BinarySensorEntity):
         if state is None:
             return None
         return str(state.value).lower() == self.description.on_value.lower()
+
+
+def _device_class(
+    device: BridgeDevice, state: BridgeState, description: BinaryDescription
+) -> BinarySensorDeviceClass | None:
+    if state.attribute != "contact":
+        return description.device_class
+    identity = f"{device.name} {device.device_type or ''}".lower()
+    if "window" in identity or "창문" in identity or "창호" in identity:
+        return BinarySensorDeviceClass.WINDOW
+    if "door" in identity or "문센서" in identity or "출입문" in identity:
+        return BinarySensorDeviceClass.DOOR
+    return BinarySensorDeviceClass.OPENING

@@ -11,7 +11,13 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import SmartThingsWebConfigEntry
 from .bridge_client import BridgeClientError
 from .entity import SmartThingsWebDeviceEntity
-from .models import BridgeControl, BridgeDevice, SmartThingsWebRuntime, is_media_device
+from .models import (
+    BridgeControl,
+    BridgeDevice,
+    SmartThingsWebRuntime,
+    control_supports_command,
+    is_media_device,
+)
 
 
 async def async_setup_entry(
@@ -83,9 +89,7 @@ class SmartThingsWebMediaPlayer(SmartThingsWebDeviceEntity, MediaPlayerEntity):
         if _raw_state(device, "mute") is not None:
             features |= MediaPlayerEntityFeature.VOLUME_MUTE
         if device and any(
-            "playtrackandresume" in " ".join(
-                (control.label or "", control.attribute or "", *control.commands)
-            ).lower()
+            control_supports_command(control, "playTrackAndResume")
             for control in device.controls.values()
         ):
             features |= MediaPlayerEntityFeature.PLAY_MEDIA
@@ -216,16 +220,9 @@ def _state_for_command(device: BridgeDevice | None, command: str):
 def _control_for(device: BridgeDevice | None, command: str) -> BridgeControl | None:
     if device is None:
         return None
-    command_lower = command.lower()
-    aliases = {
-        "setvolume": {"setvolume", "volume"},
-        "unmute": {"unmute", "mute"},
-        "playtrackandresume": {"playtrackandresume", "track", "play"},
-    }.get(command_lower, {command_lower})
     for control in device.controls.values():
         if control.kind == "value":
             continue
-        values = [control.control_id, control.label or "", control.attribute or "", *control.commands]
-        if any(alias in value.lower() for alias in aliases for value in values):
+        if control_supports_command(control, command):
             return control
     return None

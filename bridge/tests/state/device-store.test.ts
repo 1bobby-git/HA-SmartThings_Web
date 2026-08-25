@@ -526,6 +526,31 @@ describe("DeviceStore", () => {
     );
   });
 
+  test("promotes VALUE detail swatches into normalized device states", () => {
+    const store = new DeviceStore();
+
+    observeDeviceDetails(store, [
+      detailSwatch("VALUE", "value", {
+        capabilityId: "identifier_capability_signal",
+        attributeName: "signalMetrics",
+        value: { rssi: -61, lqi: 99 },
+        unit: "dBm",
+        timestamp: "2026-08-25T00:00:00Z"
+      })
+    ]);
+
+    expect(store.snapshot().devices[0]?.states).toEqual([
+      {
+        component: "identifier_component_main",
+        capability: "identifier_capability_signal",
+        attribute: "signalMetrics",
+        value: { rssi: -61, lqi: 99 },
+        unit: "dBm",
+        updatedAt: "2026-08-25T00:00:00Z"
+      }
+    ]);
+  });
+
   test("rejects malformed device detail swatches", () => {
     const store = new DeviceStore();
     observeDeviceDetails(store, [

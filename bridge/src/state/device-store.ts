@@ -321,6 +321,17 @@ export class DeviceStore {
         if (!deviceId || !locationId) continue;
         const device = this.#ensureDevice(deviceId, locationId);
         changed = setIfChanged(device.controls, control.id, control) || changed;
+        if (control.kind === "value") {
+          const detailState = stateFromParts({
+            component: control.component,
+            capability: control.capability,
+            attribute: control.attribute,
+            value: nested?.value ?? nested?.currentValue ?? nested?.displayValue,
+            unit: nested?.unit,
+            updatedAt: nested?.updatedAt ?? nested?.timestamp
+          });
+          if (detailState) changed = this.#setState(device, detailState) || changed;
+        }
       }
       return changed;
     }
@@ -827,7 +838,7 @@ function displayStringList(value: unknown): string[] {
     const text =
       typeof item === "string"
         ? item
-        : readString(record?.label ?? record?.name ?? record?.value ?? record?.id);
+        : readString(record?.value ?? record?.id ?? record?.label ?? record?.name);
     const display = safeDisplayString(text);
     if (display && !result.includes(display)) result.push(display);
   }

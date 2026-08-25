@@ -18,6 +18,7 @@ from models import (  # noqa: E402
     BridgeState,
     SmartThingsWebRuntime,
     control_kind,
+    control_supports_command,
     entity_unique_id,
     is_fan_device,
     is_image_device,
@@ -212,6 +213,15 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         structured = {"rssi": -61, "lqi": 99}
         self.assertEqual(sensor_native_value(structured), "data")
         self.assertEqual(sensor_extra_attributes(structured), {"value": structured})
+
+    def test_play_track_control_label_does_not_match_plain_play(self) -> None:
+        play = BridgeControl("play", "button", "Play", commands=("play",))
+        play_track = BridgeControl(
+            "track", "button", "Play track and resume", commands=()
+        )
+
+        self.assertFalse(control_supports_command(play, "playTrackAndResume"))
+        self.assertTrue(control_supports_command(play_track, "playTrackAndResume"))
 
     def test_locations_and_scenes_merge_without_stale_metadata_overwrite(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")

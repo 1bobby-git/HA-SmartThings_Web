@@ -392,6 +392,28 @@ def control_label(control: BridgeControl, fallback: str) -> str:
     return control.label or fallback
 
 
+def control_supports_command(control: BridgeControl, command: str) -> bool:
+    """Match a web control command without confusing Play with Play Track."""
+    command_lower = command.lower()
+    aliases = {
+        "setvolume": {"setvolume", "volume"},
+        "unmute": {"unmute", "mute"},
+        "playtrackandresume": {"playtrackandresume", "play track and resume"},
+    }.get(command_lower, {command_lower})
+    values = [
+        control.control_id,
+        control.label or "",
+        control.attribute or "",
+        *control.commands,
+    ]
+    normalized = {
+        " ".join(value.lower().replace("_", " ").replace("-", " ").split())
+        for value in values
+    }
+    compact = {value.replace(" ", "") for value in normalized}
+    return any(alias in normalized or alias.replace(" ", "") in compact for alias in aliases)
+
+
 def numeric_range_for(device: BridgeDevice, state: BridgeState) -> tuple[float, float, float]:
     """Infer a HA number range from sibling range metadata or conservative defaults."""
     for sibling in device.states.values():

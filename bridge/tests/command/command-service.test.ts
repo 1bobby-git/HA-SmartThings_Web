@@ -303,6 +303,8 @@ describe("SafeCommandService", () => {
 
     await expect(service.execute({ ...command("on", "request_015"), secret: "x" })).rejects.toMatchObject({ code: "unknown_key" });
     await expect(service.execute(deviceCommand("setNumber", "request_016", { attribute: "detectionFrequency", arguments: ["42"] }))).rejects.toMatchObject({ code: "invalid_arguments" });
+    await expect(service.execute(deviceCommand("setNumber", "request_019", { attribute: "switch", arguments: [42] }))).rejects.toMatchObject({ code: "unsupported_command" });
+    await expect(service.execute(deviceCommand("setFanMode", "request_020", { attribute: "temperature", arguments: ["auto"] }))).rejects.toMatchObject({ code: "unsupported_command" });
     await expect(service.execute({ targetType: "scene", targetId: "dev_001", command: "on", arguments: [], clientRequestId: "request_017" })).rejects.toMatchObject({ code: "unsupported_command" });
   });
 });

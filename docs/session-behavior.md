@@ -12,6 +12,8 @@ Manual testing must continue to record logout, later-release restart, and host r
 
 The SmartThings Web setting text says login is maintained while the web page remains open and may end when the browser closes. Phase 1 therefore treats the live Chromium process and keeper tab as runtime requirements rather than assuming persisted cookies are sufficient.
 
+The reviewed SmartThings Web `cake-2.57.0` source bundle confirms the same architecture: its Feathers client creates a websocket-only Socket.IO connection using the page's in-memory CSRF context, authenticates and reauthenticates through the web session, and subscribes to device, health, location, scene, and security-arm events. The Bridge therefore keeps the browser profile and web app connection intact; it does not extract, duplicate, or configure the pasted page CSRF token, user ID, `cake_session`, or cookies.
+
 If a known incompatible ACK/event shape or corrupt protocol store is detected, the runtime reports PROTOCOL_CHANGED. In that state parser health and readiness remain false, while liveness and Ingress stay available so the operator can observe the red warning and collect sanitized evidence. This is a mismatch state, not a login-recovery or browser-restart success signal.
 
 Short-window background delivery and two add-on/browser restart restores are verified. Host reboot restore, long idle behavior, and long-idle background delivery remain unverified.

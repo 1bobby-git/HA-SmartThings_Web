@@ -201,6 +201,7 @@ export class SafeCommandService {
     const effective = resolveDeviceRequest(device, request);
     if (!effective.component || !effective.capability) throw new SafeCommandError("capability_not_found");
     const attribute = effective.attribute ?? "switch";
+    validateCommandAttribute(effective.command, attribute);
     const state = findState(device, effective.component, effective.capability, attribute);
     if (!state && effective.command !== "press") throw new SafeCommandError("capability_not_found");
     if (!isSupportedDeviceCommand(effective.command)) throw new SafeCommandError("unsupported_command");
@@ -474,6 +475,29 @@ function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest)
     controlLabel: control.label
   };
 }
+
+function validateCommandAttribute(command: string, attribute: string): void {
+  if (command === "setNumber" && !NUMBER_ATTRIBUTES.has(attribute)) {
+    throw new SafeCommandError("unsupported_command");
+  }
+  if (command === "setVolume" && attribute !== "volume") {
+    throw new SafeCommandError("unsupported_command");
+  }
+  if (command === "setFanMode" && attribute !== "fanMode" && attribute !== "airPurifierMode") {
+    throw new SafeCommandError("unsupported_command");
+  }
+}
+
+const NUMBER_ATTRIBUTES = new Set([
+  "colorTemperature",
+  "coolingSetpoint",
+  "detectionFrequency",
+  "fanSpeed",
+  "heatingSetpoint",
+  "level",
+  "setpoint",
+  "targetTemperature"
+]);
 
 function safeControlLabel(value: unknown): value is string {
   return typeof value === "string" && value.length >= 1 && value.length <= 128 && !/[\u0000-\u001f\u007f]/u.test(value) && !/\b(token|secret|cookie|session|csrf)\b/iu.test(value);

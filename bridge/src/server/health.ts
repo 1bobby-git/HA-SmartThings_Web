@@ -16,6 +16,7 @@ export interface HealthDetails {
   duplicateEventCount: number;
   dedupeJournalSize: number;
   protocolInvalidFrameCount: number;
+  detailDiscoveryFailureCount: number;
   protocolChangeCount: number;
   protocolMismatchSurface?: RuntimeStatusSnapshot["protocolMismatchSurface"];
   restartCount: number;
@@ -107,6 +108,7 @@ export function createHealthReport(
       duplicateEventCount: snapshot.duplicateEventCount,
       dedupeJournalSize: snapshot.dedupeJournalSize,
       protocolInvalidFrameCount: snapshot.protocolInvalidFrameCount,
+      detailDiscoveryFailureCount: snapshot.detailDiscoveryFailureCount,
       protocolChangeCount: snapshot.protocolChangeCount,
       protocolMismatchSurface: snapshot.protocolMismatchSurface,
       restartCount: snapshot.restartCount,

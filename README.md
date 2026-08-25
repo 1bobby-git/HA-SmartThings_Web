@@ -5,17 +5,19 @@ Limited-alpha Home Assistant SmartThings Web Bridge and `smartthings_web` custom
 ## Scope
 
 - Bridge add-on skeleton with Xvfb, Openbox, x11vnc, noVNC, nginx Ingress, and s6 supervision.
-- TypeScript bridge runtime with Playwright persistent context, keeper tab, browser/session health, read-only CDP/WebSocket/SSE/XHR observation, and redaction boundaries.
+- TypeScript bridge runtime with a dedicated Playwright persistent profile, observation-only keeper tab, separate command page, browser/session health, CDP/WebSocket/SSE/XHR observation, and redaction boundaries.
 - Sanitized Engine.IO/Socket.IO text decoding and bounded event-ID/fingerprint deduplication replay.
 - Runtime diagnostics for decoded DEVICE_EVENT, unique logical event, duplicate delivery, dedupe journal, and invalid-frame counts.
 - Bounded in-memory physical-action correlation controls that use only sanitized, deduplicated events and require one isolated `/location` keeper page.
 - Snapshot ACK correlation across locations, rooms, device cards, device states, device health, and scenes before readiness, including valid empty categories and fail-closed shape checks.
 - Static gates for direct SmartThings API usage and production secret material.
 - Privacy-safe external HAOS soak sampling with automatic readiness, counter, protocol, restart, gap, and memory verdicts.
-- Authenticated local inventory and SSE push endpoints plus a read-only Home Assistant device, sensor, and binary-sensor integration.
+- Authenticated local inventory, SSE push, push-confirmed command, and cached camera-image endpoints.
+- Home Assistant platforms for sensor, binary sensor, switch, light, button, number, fan, media player, scene, SmartThings Home Monitor alarm panel, and refreshed camera still images.
+- Bounded one-time device-detail discovery on a separate page so every available web swatch can enter normalized inventory; repeated SmartThings state polling is not used.
 - Phase 1 documentation and manual evidence checklist.
 
-Not included in the limited alpha: control commands, DOM-derived device state, persistent event journals, entity migration, stable release tagging, or any direct SmartThings API/PAT/OAuth/SmartApp/webhook path.
+Not included in the limited alpha: DOM- or pixel-derived device state, SmartThings state polling, persistent event journals, live camera streaming, stable release tagging, or any direct SmartThings API/PAT/OAuth/SmartApp/webhook path. Browser commands are restricted to controls discovered from SmartThings Web and succeed only after a newer authoritative push confirms the result.
 
 ## Install
 
@@ -28,6 +30,8 @@ This GitHub repository is private, so install it as a local Home Assistant app:
 3. In Home Assistant, open **Settings → Apps → Install app**. From the top-right menu, choose **Check for updates**.
 4. Under **Local apps**, open **SmartThings Web Bridge**, install it, and start it.
 5. Open its Web UI, use the noVNC Chromium view, and sign in to Samsung only in that browser.
+
+The login remains in the dedicated `/data/chromium-profile` browser profile across add-on restarts. Do not copy cookies, CSRF values, user IDs, or other session material into configuration or source. The Bridge observes the web app's own authenticated Socket.IO session and lets the web app reauthenticate it.
 
 The folder path and add-on slug are different: `/addons/smartthings_web_bridge` is the local source folder and `smartthings_web_bridge` is the configured slug. Supervisor prefixes local apps, so the installed runtime slug is `local_smartthings_web_bridge`. Home Assistant Supervisor builds and manages the add-on container, so you do not install or manage Docker yourself.
 

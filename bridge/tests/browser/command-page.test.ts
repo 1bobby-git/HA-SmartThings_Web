@@ -85,6 +85,21 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(page.close).toHaveBeenCalledTimes(1);
   });
 
+  test("opens a device detail only to trigger the web app detail snapshot", async () => {
+    const page = new FakeCommandPage();
+    const manager = { openCommandPage: vi.fn(async () => page) };
+    const executor = new SmartThingsWebUiCommandExecutor(() => manager);
+
+    await executor.inspectDeviceDetails({
+      deviceName: "Safe plug",
+      locationId: "loc_001"
+    });
+
+    expect(page.card.click).toHaveBeenCalledTimes(1);
+    expect(page.toggle.click).not.toHaveBeenCalled();
+    expect(page.close).toHaveBeenCalledTimes(1);
+  });
+
   test("fails closed when the accessible device target is ambiguous", async () => {
     const page = new FakeCommandPage();
     page.card = new FakeLocator(2);

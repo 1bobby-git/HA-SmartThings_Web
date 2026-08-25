@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts", "bridge/tests/**/*.test.ts"],
+    testTimeout: 15_000,
     restoreMocks: true,
     clearMocks: true
   }

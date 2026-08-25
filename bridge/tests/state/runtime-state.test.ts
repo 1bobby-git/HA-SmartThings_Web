@@ -54,6 +54,7 @@ describe("RuntimeStatusStore", () => {
       duplicateEventCount: 0,
       dedupeJournalSize: 0,
       protocolInvalidFrameCount: 0,
+      detailDiscoveryFailureCount: 0,
       protocolChangeCount: 0,
       protocolMismatchSurface: undefined,
       restartCount: 0,

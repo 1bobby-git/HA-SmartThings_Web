@@ -4,6 +4,7 @@
 
 - Resynchronize inventory markers and expose normalized scenes, swatch controls, SmartThings Home Monitor, media, fan, number, button, and camera image surfaces.
 - Confirm generic commands only from newer SmartThings push state, scene-location events, or Home Monitor arm-state inventory.
+- Visit device details once on a separate bounded discovery page so the web app exposes every available swatch without using DOM content as device state.
 
 ## 0.1.29
 

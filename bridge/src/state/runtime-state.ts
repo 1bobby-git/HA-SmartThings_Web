@@ -50,6 +50,7 @@ export interface RuntimeStatusSnapshot {
   duplicateEventCount: number;
   dedupeJournalSize: number;
   protocolInvalidFrameCount: number;
+  detailDiscoveryFailureCount: number;
   protocolChangeCount: number;
   protocolMismatchSurface: ProtocolMismatchSurface | undefined;
   restartCount: number;
@@ -98,6 +99,7 @@ const snapshotKeys = new Set<keyof RuntimeStatusSnapshot>([
   "duplicateEventCount",
   "dedupeJournalSize",
   "protocolInvalidFrameCount",
+  "detailDiscoveryFailureCount",
   "protocolChangeCount",
   "protocolMismatchSurface",
   "restartCount",
@@ -124,6 +126,7 @@ const counterKeys = new Set<keyof RuntimeStatusSnapshot>([
   "duplicateEventCount",
   "dedupeJournalSize",
   "protocolInvalidFrameCount",
+  "detailDiscoveryFailureCount",
   "protocolChangeCount",
   "restartCount"
 ]);
@@ -196,6 +199,7 @@ export class RuntimeStatusStore {
       duplicateEventCount: 0,
       dedupeJournalSize: 0,
       protocolInvalidFrameCount: 0,
+      detailDiscoveryFailureCount: 0,
       protocolChangeCount: 0,
       protocolMismatchSurface: undefined,
       restartCount: 0,

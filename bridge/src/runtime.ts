@@ -4,6 +4,7 @@ import type { BrowserContextLike, BrowserPageLike } from "./browser/keeper-page.
 import { KeeperPageManager } from "./browser/keeper-page.js";
 import { BrowserSupervisor } from "./browser/browser-supervisor.js";
 import { SmartThingsWebUiCommandExecutor } from "./browser/command-page.js";
+import { DeviceDetailDiscovery } from "./browser/device-detail-discovery.js";
 import { SafeCommandService } from "./command/command-service.js";
 import {
   launchSmartThingsPersistentContext,
@@ -140,6 +141,19 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       createHealthReport(status.getSnapshot()),
       isProbeBrowserIsolated(currentContext, currentKeeperManager)
     );
+  const detailDiscovery = new DeviceDetailDiscovery({
+    inventory: () => devices.snapshot(),
+    inspector: commandExecutor,
+    canInspect: () => {
+      const report = createHealthReport(status.getSnapshot());
+      return (
+        report.ready &&
+        report.details.state === "CONNECTED" &&
+        isProbeBrowserIsolated(currentContext, currentKeeperManager) &&
+        physicalActionProbe.snapshot(getProbeEvidence()).state !== "armed"
+      );
+    }
+  });
   log.info("bridge_init:http_server");
   const server = await createBridgeHttpServer({
     store: status,
@@ -181,6 +195,16 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   const keeperInterval = setInterval(() => {
     void reconcileActiveKeeper();
   }, deps.config.heartbeatIntervalMs);
+  const detailDiscoveryInterval = setInterval(() => {
+    void detailDiscovery.runOne().then((result) => {
+      if (result !== "failed") return;
+      const current = status.getSnapshot();
+      status.update({
+        detailDiscoveryFailureCount: current.detailDiscoveryFailureCount + 1
+      });
+      log.warn("detail_discovery_failed");
+    });
+  }, 1_000);
   heartbeat();
 
   if (protocolIntegrityLoadFailed) {
@@ -202,6 +226,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           getContext: () => undefined,
           heartbeatInterval,
           keeperInterval,
+          detailDiscoveryInterval,
           server,
           aliases,
           captures,
@@ -235,6 +260,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         });
         currentContext = context;
         currentKeeperManager = keeperManager;
+        detailDiscovery.reset();
         assigned = true;
         return context;
       } finally {
@@ -334,6 +360,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         getContext: () => currentContext,
         heartbeatInterval,
         keeperInterval,
+        detailDiscoveryInterval,
         server,
         aliases,
         captures,
@@ -684,6 +711,7 @@ async function stopRuntime(options: {
   getContext: () => ObservableContext | undefined;
   heartbeatInterval: NodeJS.Timeout;
   keeperInterval: NodeJS.Timeout;
+  detailDiscoveryInterval: NodeJS.Timeout;
   server: BridgeHttpServer;
   aliases: SqliteAliasStore;
   captures: CaptureStore;
@@ -693,6 +721,7 @@ async function stopRuntime(options: {
   options.setStopped();
   clearInterval(options.heartbeatInterval);
   clearInterval(options.keeperInterval);
+  clearInterval(options.detailDiscoveryInterval);
   const context = options.getContext();
   await Promise.allSettled([
     context?.close?.(),

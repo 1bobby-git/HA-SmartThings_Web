@@ -85,43 +85,24 @@ export class SmartThingsWebUiCommandExecutor {
         throw new Error("command_login_required");
       }
       await this.ensureLocation(page, input.locationId, input.locationNames);
-
-      let device = deviceLocator(page, input.deviceName);
-      try {
-        await device.first().waitFor({ state: "visible", timeout: 15_000 });
-      } catch {
-        device = exactTextCardLocator(page, input.deviceName);
-        try {
-          await device.first().waitFor({ state: "visible", timeout: 5_000 });
-        } catch {
-          const scrolled = await scrollForDevice(page, input.deviceName);
-          if (scrolled) {
-            device = scrolled;
-          } else {
-            const roomDevice = await findDeviceInRooms(
-              page,
-              input.deviceName,
-              input.roomName
-            ).catch(
-              () => undefined
-            );
-            device = roomDevice ?? await searchForDevice(page, input.deviceName);
-          }
-        }
-      }
-      if ((await device.count()) !== 1) {
-        device = await findDeviceInRooms(
-          page,
-          input.deviceName,
-          input.roomName
-        ).catch(() => device);
-      }
-      if ((await device.count()) !== 1) {
-        throw new Error("command_target_ambiguous");
-      }
-      await device.click({ timeout: 15_000 });
-
+      await openDeviceDetail(page, input.deviceName, input.roomName);
       await executeDeviceControl(page, input);
+    } finally {
+      await page.close().catch(() => undefined);
+    }
+  }
+
+  async inspectDeviceDetails(input: {
+    deviceName: string;
+    locationId: string;
+    locationNames?: Readonly<Record<string, string>>;
+    roomName?: string;
+  }): Promise<void> {
+    // Navigation only: device state and controls still come from observed Socket.IO data.
+    const page = await this.openLocationPage(input.locationId, input.locationNames);
+    try {
+      await openDeviceDetail(page, input.deviceName, input.roomName);
+      await page.waitForTimeout?.(1_500);
     } finally {
       await page.close().catch(() => undefined);
     }
@@ -228,6 +209,37 @@ export class SmartThingsWebUiCommandExecutor {
       throw new Error("command_location_change_failed");
     }
   }
+}
+
+async function openDeviceDetail(
+  page: CommandPageLike,
+  deviceName: string,
+  roomName: string | undefined
+): Promise<void> {
+  let device = deviceLocator(page, deviceName);
+  try {
+    await device.first().waitFor({ state: "visible", timeout: 15_000 });
+  } catch {
+    device = exactTextCardLocator(page, deviceName);
+    try {
+      await device.first().waitFor({ state: "visible", timeout: 5_000 });
+    } catch {
+      const scrolled = await scrollForDevice(page, deviceName);
+      if (scrolled) {
+        device = scrolled;
+      } else {
+        const roomDevice = await findDeviceInRooms(page, deviceName, roomName).catch(
+          () => undefined
+        );
+        device = roomDevice ?? (await searchForDevice(page, deviceName));
+      }
+    }
+  }
+  if ((await device.count()) !== 1) {
+    device = await findDeviceInRooms(page, deviceName, roomName).catch(() => device);
+  }
+  if ((await device.count()) !== 1) throw new Error("command_target_ambiguous");
+  await device.click({ timeout: 15_000 });
 }
 
 async function executeDeviceControl(
