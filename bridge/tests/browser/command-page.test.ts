@@ -4,9 +4,14 @@ import { SmartThingsWebUiCommandExecutor } from "../../src/browser/command-page.
 
 class FakeLocator {
   readonly click = vi.fn(async () => undefined);
-  readonly waitFor = vi.fn(async () => undefined);
+  readonly fill = vi.fn(async () => undefined);
+  readonly waitFor: ReturnType<typeof vi.fn>;
 
-  constructor(private readonly matches: number) {}
+  constructor(private readonly matches: number, waitFails = false) {
+    this.waitFor = vi.fn(async () => {
+      if (waitFails) throw new Error("not_visible");
+    });
+  }
 
   async count(): Promise<number> {
     return this.matches;
@@ -86,5 +91,32 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     );
     expect(page.card.click).not.toHaveBeenCalled();
     expect(page.close).toHaveBeenCalledTimes(1);
+  });
+
+  test("uses the accessible search box when the target card is not initially rendered", async () => {
+    const page = new FakeCommandPage();
+    const hiddenCard = new FakeLocator(1, true);
+    const visibleCard = new FakeLocator(1);
+    const search = new FakeLocator(1);
+    let searched = false;
+    search.fill.mockImplementation(async () => {
+      searched = true;
+    });
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "textbox") return search;
+      if (role === "button" && options?.name instanceof RegExp) {
+        return searched ? visibleCard : hiddenCard;
+      }
+      return page.toggle;
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeSwitch({ deviceName: "Safe plug" });
+
+    expect(search.fill).toHaveBeenCalledWith("Safe plug", { timeout: 15_000 });
+    expect(visibleCard.click).toHaveBeenCalledTimes(1);
+    expect(page.toggle.click).toHaveBeenCalledTimes(1);
   });
 });

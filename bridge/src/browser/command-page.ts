@@ -3,6 +3,7 @@ import type { BrowserPageLike, KeeperPageManager } from "./keeper-page.js";
 interface CommandLocatorLike {
   click(options?: { timeout?: number }): Promise<unknown>;
   count(): Promise<number>;
+  fill(value: string, options?: { timeout?: number }): Promise<unknown>;
   first(): CommandLocatorLike;
   waitFor(options: { state: "visible"; timeout: number }): Promise<unknown>;
 }
@@ -27,13 +28,21 @@ export class SmartThingsWebUiCommandExecutor {
         throw new Error("command_login_required");
       }
 
-      const device = page.getByRole("button", {
-        name: new RegExp(escapeRegExp(input.deviceName), "u")
-      });
+      let device = deviceLocator(page, input.deviceName);
       try {
         await device.first().waitFor({ state: "visible", timeout: 15_000 });
       } catch {
-        throw new Error("command_target_not_found");
+        const search = page.getByRole("textbox");
+        if ((await search.count()) !== 1) {
+          throw new Error("command_target_not_found");
+        }
+        try {
+          await search.fill(input.deviceName, { timeout: 15_000 });
+          device = deviceLocator(page, input.deviceName);
+          await device.first().waitFor({ state: "visible", timeout: 15_000 });
+        } catch {
+          throw new Error("command_target_not_found");
+        }
       }
       if ((await device.count()) !== 1) {
         throw new Error("command_target_ambiguous");
@@ -54,6 +63,12 @@ export class SmartThingsWebUiCommandExecutor {
       await page.close().catch(() => undefined);
     }
   }
+}
+
+function deviceLocator(page: CommandPageLike, deviceName: string): CommandLocatorLike {
+  return page.getByRole("button", {
+    name: new RegExp(escapeRegExp(deviceName), "u")
+  });
 }
 
 function isSmartThingsLocation(value: string): boolean {
