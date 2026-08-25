@@ -165,7 +165,7 @@ npm run deploy:haos:candidate
 
 ## 현재 검증 결과
 
-- SmartThings Web Bridge 앱과 Home Assistant 통합 `0.1.38`이 Home Assistant Core 2026.8.3에 설치되었습니다.
+- SmartThings Web Bridge 앱과 Home Assistant 통합 `0.1.39`가 Home Assistant Core 2026.8.3에 설치되었으며, 애드온과 통합 구성요소 모두 SmartThings 아이콘을 사용합니다.
 - 수동 브라우저 재인증 뒤 반복 재빌드에서도 전용 Chromium 로그인이 유지됐고, Bridge는 `live=true`, `ready=true`, `CONNECTED`, 213개 관측 기기, 프로토콜 v2, 잘못된 프레임 0으로 복구됐습니다.
 - Home Assistant에는 215개 기기와 1,724개 활성 엔티티가 로드됐습니다. 14개 플랫폼에는 16개 `media_player`, 66개 `number`, 6개 `select`, 4개 `scene`, 1개 Home Monitor `alarm_control_panel`, 2개 `image`가 포함됩니다.
 - 안전한 무드등 연속 제어와 후속 실제 상태 변화에서 Bridge `updatedAt` 이후 Home Assistant `last_updated`가 스위치는 0.327초, 전력 0 W는 1.12초 뒤 갱신됐습니다. SmartThings 상태 폴링이나 낙관적 상태 변경은 사용하지 않았습니다.

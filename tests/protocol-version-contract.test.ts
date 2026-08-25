@@ -12,8 +12,8 @@ import {
 import { bootstrapDataPaths } from "../bridge/src/security/data-paths.js";
 
 describe("protocol version contract", () => {
-  test("keeps every Bridge release surface on the packaged 0.1.38 candidate", () => {
-    const expectedBridgeVersion = "0.1.38";
+  test("keeps every Bridge and integration release surface on the packaged 0.1.39 candidate", () => {
+    const expectedBridgeVersion = "0.1.39";
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as { version?: string };
     const packageLock = JSON.parse(readFileSync("package-lock.json", "utf8")) as {
       version?: string;
@@ -22,6 +22,9 @@ describe("protocol version contract", () => {
     const addonConfig = YAML.parse(
       readFileSync("addon/smartthings_web_bridge/config.yaml", "utf8")
     ) as { version?: string };
+    const integrationManifest = JSON.parse(
+      readFileSync("custom_components/smartthings_web/manifest.json", "utf8")
+    ) as { version?: string };
     const runtimeSource = readFileSync("bridge/src/runtime.ts", "utf8");
 
     expect(packageJson.version).toBe(expectedBridgeVersion);
@@ -29,6 +32,7 @@ describe("protocol version contract", () => {
     expect(packageLock.packages?.[""]?.version).toBe(expectedBridgeVersion);
     expect(protocolVersion.bridge_version).toBe(expectedBridgeVersion);
     expect(addonConfig.version).toBe(expectedBridgeVersion);
+    expect(integrationManifest.version).toBe(expectedBridgeVersion);
     expect(runtimeSource).toContain(`const bridgeVersion = "${expectedBridgeVersion}";`);
     expect(protocolVersion.protocol_version).toBe(2);
   });

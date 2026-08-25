@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.39
+
+- Add the official SmartThings icon to the Home Assistant add-on and local custom-integration brand assets, including the high-density integration variant.
+
 ## 0.1.38
 
 - Foreground the isolated command page, activate the exact observed room before querying its lazily rendered device cards, and select the unique exact-name opener inside a multi-button card so commands follow the real SmartThings room UI without falling back to a same-named device or secondary card action.
