@@ -256,7 +256,7 @@ describe("HAOS deployment postflight", () => {
     );
 
     for (const changed of [
-      { version: "0.1.25" },
+      { version: "0.1.29" },
       { state: "stopped" },
       { boot: "manual" },
       { repository: "official" },
@@ -295,14 +295,14 @@ function passingPreflight(): HaosCandidatePreflightResult {
       commitSha: CANDIDATE_COMMIT
     },
     candidate: {
-      version: "0.1.26",
+      version: "0.1.30",
       fileCount: 71,
       manifestSha256: CANDIDATE_MANIFEST
     },
     installed: {
       slug: "local_smartthings_web_bridge",
-      version: "0.1.25",
-      versionLatest: "0.1.25",
+      version: "0.1.29",
+      versionLatest: "0.1.29",
       state: "started",
       boot: "auto",
       localBuild: true,
