@@ -72,6 +72,7 @@ class SmartThingsWebBridgeClient:
                 "arguments": [],
                 "clientRequestId": client_request_id,
             },
+            timeout_seconds=90,
         )
         result = parse_command_result(raw, client_request_id)
         if result is None:
@@ -109,6 +110,7 @@ class SmartThingsWebBridgeClient:
         *,
         auth: bool = False,
         json_body: dict[str, Any] | None = None,
+        timeout_seconds: int = 20,
     ) -> dict[str, Any]:
         headers: dict[str, str] = {}
         if auth:
@@ -121,7 +123,7 @@ class SmartThingsWebBridgeClient:
                 f"{self._base_url}{path}",
                 headers=headers,
                 json=json_body,
-                timeout=ClientTimeout(total=20),
+                timeout=ClientTimeout(total=timeout_seconds),
             ) as response:
                 if response.status in {401, 403}:
                     raise BridgeAuthError("bridge_auth_failed")
