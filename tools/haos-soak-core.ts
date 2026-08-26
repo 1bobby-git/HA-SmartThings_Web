@@ -334,6 +334,8 @@ export function evaluateSoak(
 
   let previousSample: SoakSample | undefined;
   const invalidFrameBaseline = successful[0]?.health.protocolInvalidFrameCount;
+  const protocolChangeBaseline = successful[0]?.health.protocolChangeCount;
+  const restartBaseline = successful[0]?.health.restartCount;
   for (const sample of successful) {
     if (!sample.health.live) {
       failures.add("not_live");
@@ -344,10 +346,13 @@ export function evaluateSoak(
     if (sample.health.state !== "CONNECTED") {
       failures.add("state_not_connected");
     }
-    if (sample.health.protocolChangeCount > 0) {
+    if (
+      protocolChangeBaseline !== undefined &&
+      sample.health.protocolChangeCount > protocolChangeBaseline
+    ) {
       failures.add("protocol_changed");
     }
-    if (sample.health.restartCount > 0) {
+    if (restartBaseline !== undefined && sample.health.restartCount > restartBaseline) {
       failures.add("runtime_restarted");
     }
     if (

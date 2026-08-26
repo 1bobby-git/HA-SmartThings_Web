@@ -45,7 +45,7 @@ npm run soak:haos -- --resume --duration-hours 72 --interval-seconds 300 --outpu
 The run fails if any sample:
 
 - is not live, ready, and `CONNECTED`;
-- contains a protocol change, a nonzero restart count, or a browser-uptime rollback that proves a successful browser/context restart;
+- increases the protocol-change or restart counter above the first sample, or rolls browser uptime backward and thereby proves a browser/context restart during this run;
 - raises the invalid-frame count above the first sample;
 - regresses decoded, unique, or duplicate event counters;
 - is missing for more than twice the configured interval;

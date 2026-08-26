@@ -164,6 +164,32 @@ describe("HAOS soak evaluation", () => {
     expect(verdict.memoryGrowthBytes).toBe(30);
   });
 
+  it("accepts unchanged protocol and restart counters inherited before the run", () => {
+    const samples = [
+      createSample("2026-08-24T00:00:00.000Z", {
+        decoded: 100,
+        unique: 50,
+        protocolChanges: 7,
+        restarts: 3
+      }),
+      createSample("2026-08-24T00:05:00.000Z", {
+        decoded: 102,
+        unique: 51,
+        protocolChanges: 7,
+        restarts: 3
+      })
+    ];
+
+    const verdict = evaluateSoak(samples, {
+      runStartedAtMs: Date.parse("2026-08-24T00:00:00.000Z"),
+      expectedDurationMs: 5 * 60_000,
+      expectedIntervalMs: 5 * 60_000
+    });
+
+    expect(verdict.status).toBe("pass");
+    expect(verdict.failures).toEqual([]);
+  });
+
   it.each([
     ["not_ready", { ready: false }],
     ["not_live", { live: false }],
