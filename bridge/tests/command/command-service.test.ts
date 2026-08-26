@@ -540,6 +540,63 @@ describe("SafeCommandService", () => {
     }))).rejects.toMatchObject({ code: "invalid_control_id" });
   });
 
+  test("never substitutes inverse observed commands on the native path", async () => {
+    const store = readyDeviceStore();
+    observeDeviceDetails(store, [
+      detailSwatch("TOGGLE", "toggle", {
+        swatchId: "identifier_unmute_exact",
+        label: "Mute",
+        attributeName: "mute",
+        commands: ["mute", "unmute"]
+      }),
+      detailSwatch("BUTTON", "button", {
+        swatchId: "identifier_stop_exact",
+        label: "Stop",
+        capabilityId: "identifier_mediaPlayback",
+        attributeName: "playbackStatus",
+        commands: ["pause", "stop"]
+      })
+    ]);
+    store.observe(received(deviceEventFrame("muted", "2026-08-25T00:00:00.500Z", "mute")));
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async (input) => {
+        if (input.command === "unmute") {
+          expect(input.nativeCommand).toBe("unmute");
+          store.observe(received(deviceEventFrame("unmuted", "2026-08-25T00:00:01Z", "mute")));
+        }
+        if (input.command === "stop") {
+          expect(input.nativeCommand).toBe("stop");
+          store.observe(received(deviceEventFrame(
+            "stopped",
+            "2026-08-25T00:00:02Z",
+            "playbackStatus",
+            "dev_001",
+            "identifier_mediaPlayback"
+          )));
+        }
+      })
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 1_000,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute(deviceCommand("unmute", "request_unmute_exact", {
+      attribute: "mute",
+      arguments: [],
+      controlId: "identifier_unmute_exact"
+    }))).resolves.toMatchObject({ status: "confirmed" });
+    await expect(service.execute(deviceCommand("stop", "request_stop_exact", {
+      attribute: "playbackStatus",
+      arguments: [],
+      capability: "identifier_mediaPlayback",
+      controlId: "identifier_stop_exact"
+    }))).resolves.toMatchObject({ status: "confirmed" });
+  });
+
   test("requires observed enumerated controls and exact option pushes for setOption", async () => {
     const store = readyDeviceStore();
     observeDeviceDetails(store, [

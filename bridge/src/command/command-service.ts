@@ -932,7 +932,10 @@ function controlSupportsCommand(
     ...(control.commands ?? []),
     ...Object.values(control.optionCommands ?? {})
   ].filter((value): value is string => typeof value === "string");
-  if (explicitValues.length > 0) return observedCommandFor(control, command) !== undefined;
+  if (explicitValues.length > 0) {
+    const expected = commandAliases(command);
+    return explicitValues.some((value) => expected.includes(normalizeCommandToken(value)));
+  }
   if (requireExplicit) return false;
   const expected = commandAliases(command);
   const normalized = [control.id, control.label, control.attribute].map((value) =>
@@ -945,14 +948,26 @@ function observedCommandFor(
   control: NonNullable<BridgeDevice["controls"]>[number],
   requested: string
 ): string | undefined {
-  const expected = commandAliases(requested);
-  return [
+  const explicit = [
     control.command,
     ...(control.commands ?? []),
     ...Object.values(control.optionCommands ?? {})
-  ]
-    .filter((value): value is string => typeof value === "string")
-    .find((value) => expected.includes(normalizeCommandToken(value)));
+  ].filter((value): value is string => typeof value === "string");
+  const exact = normalizeCommandToken(requested);
+  return explicit.find((value) => normalizeCommandToken(value) === exact) ??
+    explicit.find((value) => nativeCommandAliases(requested).includes(normalizeCommandToken(value)));
+}
+
+function nativeCommandAliases(command: string): string[] {
+  const aliases: Record<string, string[]> = {
+    on: ["switchon", "enable", "enabled"],
+    off: ["switchoff", "disable", "disabled"],
+    open: ["openshade"],
+    openShade: ["open"],
+    close: ["closeshade"],
+    closeShade: ["close"]
+  };
+  return aliases[command] ?? [];
 }
 
 function commandAliases(command: string): string[] {
