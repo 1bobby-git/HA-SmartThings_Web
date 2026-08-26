@@ -165,7 +165,7 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(unrelated.write_count, 0)
         self.assertEqual(device_entity.write_count, 2)
 
-    def test_device_info_entities_use_safe_online_icon_when_present(self) -> None:
+    def test_device_picture_stays_off_state_entities_and_preserves_translation_name(self) -> None:
         state = BridgeState(
             "main",
             "temperatureMeasurement",
@@ -199,10 +199,36 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             entity._attr_entity_picture, "https://client.smartthings.com/icons/oneui/contact/on"
         )
-        self.assertEqual(
-            state_entity._attr_entity_picture,
-            "https://client.smartthings.com/icons/oneui/contact/on",
+        self.assertNotIn("_attr_entity_picture", state_entity.__dict__)
+        self.assertNotIn("_attr_name", state_entity.__dict__)
+
+    def test_explicit_state_entity_name_is_preserved(self) -> None:
+        state = BridgeState(
+            "main",
+            "customCapability",
+            "temperatureRange",
+            "20-30",
+            None,
+            "2026-08-26T06:00:00.000Z",
         )
+        device = BridgeDevice(
+            "dev_001",
+            "loc_001",
+            None,
+            "Humidity sensor",
+            "multi_sensor",
+            True,
+            states={state.key: state},
+        )
+        runtime = SmartThingsWebRuntime(
+            object(), "loc_001", BridgeInventory(1, True, "0.1.92", "4", {}, {}, {device.device_id: device})
+        )
+
+        state_entity = SmartThingsWebEntity(
+            runtime, device, state, "Temperature Range"
+        )
+
+        self.assertEqual(state_entity._attr_name, "Temperature Range")
 
     def test_device_entity_picture_falls_back_to_inactive_icon_when_offline(self) -> None:
         state = BridgeState(

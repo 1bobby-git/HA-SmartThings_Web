@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.93
+
+- Keep SmartThings presentation artwork off state-backed sensor rows so Home Assistant can show distinct temperature, humidity, battery, and other device-class icons.
+- Preserve translated entity names by leaving an unset entity name truly unset instead of shadowing the translation key with `None`.
+
 ## 0.1.92
 
 - Capture the authenticated Cake client when the SmartThings app naturally invokes its private webpack module factory, then reuse only that volatile reference.

@@ -1,14 +1,14 @@
 import type { HaosAppInfo, HaosCandidatePreflightResult } from "./haos-candidate-preflight-core.js";
 import { parseGuestExecText } from "./haos-runtime-api-audit-core.js";
 
-export const HAOS_ROLLBACK_COMMIT_SHA = "acd14a4c4bb64a0a7f4f4a8552a88f37a45602e1";
-export const HAOS_ROLLBACK_VERSION = "0.1.91";
+export const HAOS_ROLLBACK_COMMIT_SHA = "11b6417861a63c5aa942be816232a13d7f4d16ee";
+export const HAOS_ROLLBACK_VERSION = "0.1.92";
 export const HAOS_ROLLBACK_MANIFEST_SHA256 =
-  "70af9eace319c8b7b267d8dbf4ebc9f00b0b8479e09f51c29ad27e0124bc488a";
+  "18f4b41d573bfa2bae1beb13ea6ae710f7a43c2c9f1f3baa5cd38341088f5f89";
 export const HAOS_ROLLBACK_RUNTIME_PATH =
   "/app/dist/bridge/src/browser/command-page.js";
 export const HAOS_ROLLBACK_RUNTIME_SHA256 =
-  "54142e6ef39985693757fabec387842610cf9b22c00915245b62748f80033da4";
+  "a297edc3e277d87b2e01c1d4722c4b85f269bfe6d363a77a48b0d06fa37c554f";
 export const HAOS_CANDIDATE_MANIFEST_RUNTIME_PATH = "/app/addon-package-manifest.json";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;

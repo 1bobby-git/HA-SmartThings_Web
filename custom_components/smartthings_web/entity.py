@@ -66,10 +66,10 @@ class SmartThingsWebEntity(Entity):
         self.runtime = runtime
         self.device_id = device.device_id
         self.state_key = state.key
-        self._attr_name = name
+        if name is not None:
+            self._attr_name = name
         self._attr_unique_id = entity_unique_id(device.device_id, state)
         self._attr_device_info = device_info_for(device)
-        self._attr_entity_picture = _entity_picture_for(device)
 
     @property
     def available(self) -> bool:
@@ -112,7 +112,8 @@ class SmartThingsWebDeviceEntity(Entity):
     ) -> None:
         self.runtime = runtime
         self.device_id = device.device_id
-        self._attr_name = name
+        if name is not None:
+            self._attr_name = name
         self._attr_unique_id = f"{device.device_id}_{suffix}"
         self._attr_device_info = device_info_for(device)
         self._attr_entity_picture = _entity_picture_for(device)
