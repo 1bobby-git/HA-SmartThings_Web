@@ -74,6 +74,20 @@ describe("HAOS soak deployment gate", () => {
     });
   });
 
+  test("accepts a stable compatible historical protocol change count", () => {
+    const summary = validSummary();
+    summary.baseline!.protocolChangeCount = 7;
+    summary.final!.protocolChangeCount = 7;
+
+    const result = evaluateSoakDeploymentGate(validMetadata(), summary, {
+      summarySha256: "a".repeat(64),
+      summaryHashMatches: true
+    });
+
+    expect(result.deploymentEligible).toBe(true);
+    expect(result.reasons).toEqual([]);
+  });
+
   test("fails closed on hash, duration, interval, sample, error, and failure defects", () => {
     const metadata = {
       ...validMetadata(),

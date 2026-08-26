@@ -246,7 +246,7 @@ export function evaluateHaosCoreRestartPreflight(input: {
     "snapshot_missing"
   );
   addReason(reasons, input.health.browserUptimeMs !== undefined, "browser_uptime_missing");
-  addReason(reasons, input.health.protocolChangeCount === 0, "protocol_changed");
+  addReason(reasons, input.health.state !== "PROTOCOL_CHANGED", "protocol_changed");
   addReason(reasons, input.health.restartCount === 0, "runtime_restarted");
   return {
     schemaVersion: 1,
@@ -320,7 +320,7 @@ export function evaluateHaosCoreRestartContinuity(input: {
   const runtimeRestartCountPreserved =
     input.baselineHealth.restartCount === 0 && input.postHealth.restartCount === 0;
   const protocolChangeCountPreserved =
-    input.baselineHealth.protocolChangeCount === 0 && input.postHealth.protocolChangeCount === 0;
+    input.postHealth.protocolChangeCount === input.baselineHealth.protocolChangeCount;
   const invalidFrameCountPreserved =
     input.postHealth.protocolInvalidFrameCount === input.baselineHealth.protocolInvalidFrameCount;
   const deviceInventoryPreserved =
@@ -397,7 +397,6 @@ export function healthIsUsable(health: SoakHealthObservation): boolean {
     health.observedDeviceCount > 0 &&
     health.initialSnapshotAgeMs !== undefined &&
     health.browserUptimeMs !== undefined &&
-    health.protocolChangeCount === 0 &&
     health.restartCount === 0
   );
 }

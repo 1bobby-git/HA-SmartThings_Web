@@ -499,8 +499,7 @@ function counterEvidenceIsValid(
   return (
     baseline.observedDeviceCount > 0 &&
     final.observedDeviceCount > 0 &&
-    baseline.protocolChangeCount === 0 &&
-    final.protocolChangeCount === 0 &&
+    final.protocolChangeCount === baseline.protocolChangeCount &&
     baseline.restartCount === 0 &&
     final.restartCount === 0 &&
     final.protocolInvalidFrameCount === baseline.protocolInvalidFrameCount &&

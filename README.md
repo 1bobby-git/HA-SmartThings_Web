@@ -165,6 +165,7 @@ npm run deploy:haos:candidate
 
 ## 현재 검증 결과
 
+- `0.1.88`은 현재 fingerprint가 호환되고 Bridge가 `ready+CONNECTED`라면 과거 protocol change 횟수를 현재 오류로 오판하지 않습니다. 물리 probe·Core continuity·72시간 소크는 시작 baseline보다 횟수가 증가할 때만 즉시 실패하므로 실제 규격 변경 보호는 유지됩니다.
 - `0.1.87`은 HAOS Chromium 실행 인자에서 Playwright가 이미 백그라운드 타이머·occlusion·renderer throttling을 모두 해제하고 있음을 확인해 중복 사용자 인자를 제거합니다. 0.1.86의 로컬 SSE Nagle 지연 제거와 50ms 첫 재연결은 그대로 유지합니다.
 - `0.1.86`은 로컬 SSE의 Nagle 지연을 끄고, 일시적인 Bridge 스트림 장애의 첫 재연결을 1초에서 50ms로 단축합니다. 반복 장애만 최대 1초까지 완만하게 backoff하고 SmartThings 상태 polling은 추가하지 않습니다.
 - `0.1.85`는 실제 Cake 캡처에서 확인된 토글 명령 규격에 따라, 안전한 toggle swatch가 명령 메타데이터를 생략해도 표준 `on`/`off`를 인증된 웹 직접 명령으로 전송해 상세 화면 탐색을 건너뜁니다.

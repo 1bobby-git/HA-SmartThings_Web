@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.88
+
+- Treat a compatible historical protocol change count as durable history rather than a current mismatch in the physical-action probe, Core restart continuity operator, and sealed soak deployment gate.
+- Continue to fail closed when the runtime is not ready/connected or when the protocol change count increases after the scenario baseline.
+
 ## 0.1.87
 
 - Remove duplicate custom Chromium background flags after live HAOS process inspection confirmed that Playwright already supplies all three; retain the SSE and reconnect latency improvements without redundant launch arguments.

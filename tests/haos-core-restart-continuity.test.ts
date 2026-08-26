@@ -109,6 +109,20 @@ describe("HAOS Core restart preflight", () => {
     expect(JSON.stringify(preflight)).not.toContain("a".repeat(64));
   });
 
+  it("accepts a ready compatible runtime with historical protocol changes", () => {
+    const preflight = evaluateHaosCoreRestartPreflight({
+      soakGate: eligibleSoakGate(),
+      coreInfo: coreInfo(),
+      coreContainer: coreContainer(),
+      health: health({ protocolChangeCount: 7 }),
+      expectedCoreVersion: "2026.8.3",
+      expectedBridgeVersion: "0.1.25"
+    });
+
+    expect(preflight.executionEligible).toBe(true);
+    expect(preflight.reasons).toEqual([]);
+  });
+
   it("fails closed on the active soak without weakening other checks", () => {
     const preflight = evaluateHaosCoreRestartPreflight({
       soakGate: { ...eligibleSoakGate(), deploymentEligible: false, evidenceState: "pending" },
@@ -128,7 +142,7 @@ describe("HAOS Core restart preflight", () => {
       ...health(),
       live: false,
       ready: false,
-      state: "STALE",
+      state: "PROTOCOL_CHANGED",
       urlCategory: "smartthings_advanced",
       observedDeviceCount: 0,
       bridgeVersion: "0.1.24",
@@ -181,6 +195,18 @@ describe("HAOS Core restart continuity verdict", () => {
     });
     expect(summary.core.containerIdentityChanged).toBe(false);
     expect(JSON.stringify(summary)).not.toContain("a".repeat(64));
+  });
+
+  it("preserves a stable compatible historical protocol change count", () => {
+    const input = continuityInput();
+    input.baselineHealth.protocolChangeCount = 7;
+    input.postHealth.protocolChangeCount = 7;
+
+    const summary = evaluateHaosCoreRestartContinuity(input);
+
+    expect(summary.status).toBe("pass");
+    expect(summary.checks.protocolChangeCountPreserved).toBe(true);
+    expect(summary.failures).not.toContain("protocol_change_count_changed");
   });
 
   it("fails when Core restart is not observed or Bridge monitoring has a gap", () => {

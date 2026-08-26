@@ -422,7 +422,6 @@ function armReadinessError(evidence: ProbeRuntimeEvidence): ProbeArmError | null
     !evidence.ready ||
     evidence.state !== CONNECTED_STATE ||
     evidence.observedDeviceCount <= 0 ||
-    evidence.protocolChangeCount !== 0 ||
     evidence.restartCount !== 0
   ) {
     return "not_ready";
@@ -443,7 +442,7 @@ function failClosedReason(
   if (!baseline) {
     return "internal_failure";
   }
-  if (evidence.protocolChangeCount !== 0 || evidence.protocolChangeCount > baseline.protocolChangeCount) {
+  if (evidence.protocolChangeCount > baseline.protocolChangeCount) {
     return "protocol_changed";
   }
   if (evidence.restartCount !== 0 || evidence.restartCount > baseline.restartCount) {

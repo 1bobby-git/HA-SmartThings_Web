@@ -136,6 +136,14 @@ describe("PhysicalActionCorrelationProbe", () => {
     });
   });
 
+  test("accepts a stable compatible historical protocol change count", () => {
+    const probe = createProbe(createClock());
+    const evidence = healthyEvidence({ protocolChangeCount: 7 });
+
+    expect(probe.arm({ actionType: "contact_open" }, evidence).ok).toBe(true);
+    expect(probe.snapshot(evidence)).toMatchObject({ state: "armed", reasons: [] });
+  });
+
   test.each([
     ["live loss", { live: false }, "runtime_not_ready"],
     ["readiness loss", { ready: false }, "runtime_not_ready"],
