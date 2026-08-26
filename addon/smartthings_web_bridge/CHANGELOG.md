@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.71
+
+- Dispatch one exact click event to the already visible, unique navigation-only room target instead of waiting for Cake's slow navigation completion inside `Locator.click()`.
+- Skip a known-invalid direct detail route after same-page warm recovery fails, then rebuild the exact room, device, and dialog context on one fresh page.
+
 ## 0.1.70
 
 - Preempt background detail discovery as soon as a foreground command arrives, so inventory enrichment cannot hold the command queue.

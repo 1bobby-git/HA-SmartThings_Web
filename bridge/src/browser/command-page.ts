@@ -1,8 +1,9 @@
 import type { BrowserPageLike, KeeperPageManager } from "./keeper-page.js";
 
 interface CommandLocatorLike {
-  click(options?: { timeout?: number; force?: boolean }): Promise<unknown>;
+  click(options?: { timeout?: number }): Promise<unknown>;
   count(): Promise<number>;
+  dispatchEvent(type: string): Promise<unknown>;
   fill(value: string, options?: { timeout?: number }): Promise<unknown>;
   filter(options: { has: CommandLocatorLike }): CommandLocatorLike;
   first(): CommandLocatorLike;
@@ -598,6 +599,7 @@ export class SmartThingsWebUiCommandExecutor {
       return cached.page;
     } catch {
       this.#diagnostic("warm_recovery_failed");
+      this.#verifiedDetailRoutes.delete(deviceRouteKey(input));
       await this.#invalidateWarmPage();
       return undefined;
     }
@@ -1330,7 +1332,7 @@ async function findDeviceInRooms(
     } catch {
       throw new Error("command_room_not_found");
     }
-    await room.click({ timeout: ROOM_SELECTION_TIMEOUT_MS, force: true });
+    await room.dispatchEvent("click");
     diagnostic("fresh_room_selected");
   }
   let device = await visibleExactTextCard(page, deviceName, ROOM_DEVICE_CARD_TIMEOUT_MS);

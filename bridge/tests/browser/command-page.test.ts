@@ -4,6 +4,7 @@ import { SmartThingsWebUiCommandExecutor } from "../../src/browser/command-page.
 
 class FakeLocator {
   readonly click = vi.fn(async () => undefined);
+  readonly dispatchEvent = vi.fn(async () => undefined);
   readonly fill = vi.fn(async () => undefined);
   readonly waitFor: ReturnType<typeof vi.fn>;
 
@@ -460,7 +461,8 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       { waitUntil: "domcontentloaded" }
     );
     expect(page.card.click).toHaveBeenCalledTimes(2);
-    expect(room.click).toHaveBeenCalledWith({ timeout: 1_500, force: true });
+    expect(room.dispatchEvent).toHaveBeenCalledWith("click");
+    expect(room.click).not.toHaveBeenCalled();
     expect(page.toggle.click).toHaveBeenCalledTimes(2);
     expect(page.close).not.toHaveBeenCalled();
     expect(diagnostics).toContain("warm_dialog_missing");
@@ -497,6 +499,72 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(stalePage.toggle.click).toHaveBeenCalledTimes(1);
     expect(freshPage.card.click).toHaveBeenCalledTimes(1);
     expect(freshPage.toggle.click).toHaveBeenCalledTimes(1);
+  });
+
+  test("skips a known-invalid verified route after warm recovery fails", async () => {
+    const warmPage = new FakeCommandPage();
+    const freshPage = new FakeCommandPage();
+    const room = new FakeLocator(1);
+    const detailUrl =
+      "https://my.smartthings.com/location/loc_001/rooms/device/device_raw_001";
+    warmPage.card.click.mockImplementation(async () => {
+      warmPage.currentUrl = detailUrl;
+    });
+    warmPage.goto = vi.fn(async (url: string) => {
+      warmPage.currentUrl = url;
+    });
+    const warmGetByRole = warmPage.getByRole.bind(warmPage);
+    warmPage.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) =>
+      role === "button" && !options?.name ? room : warmGetByRole(role, options)
+    );
+    freshPage.card.click.mockImplementation(async () => {
+      freshPage.currentUrl = detailUrl;
+    });
+    freshPage.goto = vi.fn(async () => undefined);
+    const pages = [warmPage, freshPage];
+    const manager = {
+      openCommandPage: vi.fn(async () => {
+        const page = pages.shift();
+        if (!page) throw new Error("unexpected_new_page");
+        return page;
+      })
+    };
+    const diagnostics: string[] = [];
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => manager,
+      undefined,
+      {
+        warmPageTtlMs: 30_000,
+        onDiagnostic: (stage) => diagnostics.push(stage)
+      }
+    );
+
+    await executor.executeSwitch({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      roomName: "Entry"
+    });
+    warmPage.detailDialog = new FakeLocator(0, true);
+
+    await executor.executeDeviceAction({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      roomName: "Entry",
+      command: "off",
+      action: "off",
+      component: "main",
+      capability: "switch",
+      attribute: "switch",
+      arguments: []
+    });
+
+    expect(manager.openCommandPage).toHaveBeenCalledTimes(2);
+    expect(warmPage.close).toHaveBeenCalledTimes(1);
+    expect(freshPage.goto).not.toHaveBeenCalled();
+    expect(freshPage.toggle.click).toHaveBeenCalledTimes(1);
+    expect(diagnostics.indexOf("warm_recovery_failed")).toBeLessThan(
+      diagnostics.lastIndexOf("verified_route_missing")
+    );
   });
 
   test("closes an expired warm command page before background discovery resumes", async () => {
@@ -775,7 +843,8 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       waitUntil: "domcontentloaded"
     });
     expect(overviewCard.waitFor).not.toHaveBeenCalled();
-    expect(roomButton.click).toHaveBeenCalledTimes(1);
+    expect(roomButton.dispatchEvent).toHaveBeenCalledWith("click");
+    expect(roomButton.click).not.toHaveBeenCalled();
     expect(roomDeviceWrapper.waitFor).toHaveBeenCalledWith({
       state: "visible",
       timeout: 3_000
@@ -796,7 +865,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     const roomButton = new FakeLocator(1);
     const deviceCards = new FakeLocator(0, true);
     let roomActive = false;
-    roomButton.click.mockImplementation(async () => {
+    roomButton.dispatchEvent.mockImplementation(async () => {
       roomActive = true;
     });
     roomButtons.filter = vi.fn(() => roomButton);
@@ -831,7 +900,8 @@ describe("SmartThingsWebUiCommandExecutor", () => {
 
     expect(roomButtons.filter).toHaveBeenCalledWith({ has: roomText });
     expect(roomButton.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 1_500 });
-    expect(roomButton.click).toHaveBeenCalledWith({ timeout: 1_500, force: true });
+    expect(roomButton.dispatchEvent).toHaveBeenCalledWith("click");
+    expect(roomButton.click).not.toHaveBeenCalled();
     expect(visibleDevice.click).toHaveBeenCalledTimes(1);
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
     expect(diagnostics).toEqual([
@@ -894,7 +964,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     const visibleDevice = new FakeLocator(1);
     const deviceCards = new FakeLocator(1);
     let roomActive = false;
-    roomSurface.click.mockImplementation(async () => {
+    roomSurface.dispatchEvent.mockImplementation(async () => {
       roomActive = true;
     });
     heading.locator = vi.fn(() => roomSurface);
@@ -924,7 +994,8 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
 
     expect(heading.locator).toHaveBeenCalledWith("..");
-    expect(roomSurface.click).toHaveBeenCalledTimes(1);
+    expect(roomSurface.dispatchEvent).toHaveBeenCalledWith("click");
+    expect(roomSurface.click).not.toHaveBeenCalled();
     expect(visibleDevice.click).toHaveBeenCalledTimes(1);
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
   });
@@ -1462,7 +1533,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     const roomText = new FakeLocator(1);
     roomButtons.filter = vi.fn(() => exactRoomButton);
     let roomActive = false;
-    exactRoomButton.click.mockImplementation(async () => {
+    exactRoomButton.dispatchEvent.mockImplementation(async () => {
       roomActive = true;
     });
     deviceScope.filter = vi.fn(() => (roomActive ? exactDeviceWrapper : missingOverviewWrapper));
@@ -1487,7 +1558,8 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       roomName: "Kitchen"
     });
 
-    expect(exactRoomButton.click).toHaveBeenCalledTimes(1);
+    expect(exactRoomButton.dispatchEvent).toHaveBeenCalledWith("click");
+    expect(exactRoomButton.click).not.toHaveBeenCalled();
     expect(exactDeviceWrapper.click).toHaveBeenCalledTimes(1);
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
   });
