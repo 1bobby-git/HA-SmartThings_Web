@@ -6,6 +6,7 @@ class FakeLocator {
   readonly click = vi.fn(async () => undefined);
   readonly dispatchEvent = vi.fn(async () => undefined);
   readonly fill = vi.fn(async () => undefined);
+  readonly isVisible: ReturnType<typeof vi.fn>;
   readonly waitFor: ReturnType<typeof vi.fn>;
 
   private waited = false;
@@ -15,6 +16,7 @@ class FakeLocator {
     waitFails = false,
     private readonly matchesAfterWait?: number
   ) {
+    this.isVisible = vi.fn(async () => !waitFails && matches > 0);
     this.waitFor = vi.fn(async () => {
       if (waitFails) throw new Error("not_visible");
       this.waited = true;
@@ -899,7 +901,8 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
 
     expect(roomButtons.filter).toHaveBeenCalledWith({ has: roomText });
-    expect(roomButton.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 1_500 });
+    expect(roomButton.isVisible).toHaveBeenCalledTimes(1);
+    expect(roomButton.waitFor).not.toHaveBeenCalled();
     expect(roomButton.dispatchEvent).toHaveBeenCalledWith("click");
     expect(roomButton.click).not.toHaveBeenCalled();
     expect(visibleDevice.click).toHaveBeenCalledTimes(1);

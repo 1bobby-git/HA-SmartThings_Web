@@ -9,6 +9,7 @@ interface CommandLocatorLike {
   first(): CommandLocatorLike;
   getByRole(role: string, options?: { name?: string | RegExp }): CommandLocatorLike;
   getByText(text: string, options?: { exact?: boolean }): CommandLocatorLike;
+  isVisible(): Promise<boolean>;
   locator(selector: string): CommandLocatorLike;
   waitFor(options: { state: "visible"; timeout: number }): Promise<unknown>;
 }
@@ -99,7 +100,6 @@ const WARM_CONTROL_PROBE_TIMEOUT_MS = 1_500;
 const FRESH_CONTROL_PROBE_TIMEOUT_MS = 5_000;
 const FRESH_OBSERVED_TOGGLE_PROBE_TIMEOUT_MS = 15_000;
 const ROOM_DEVICE_CARD_TIMEOUT_MS = 3_000;
-const ROOM_SELECTION_TIMEOUT_MS = 1_500;
 const LABELED_SCOPE_POLL_MS = 100;
 const LABELED_SCOPE_VISIBLE_PROBE_MS = 25;
 const LOCATION_ROUTE_POLL_MS = 100;
@@ -1328,7 +1328,7 @@ async function findDeviceInRooms(
       }
     }
     try {
-      await room.waitFor({ state: "visible", timeout: ROOM_SELECTION_TIMEOUT_MS });
+      if (!(await room.isVisible())) throw new Error("room_not_visible");
     } catch {
       throw new Error("command_room_not_found");
     }

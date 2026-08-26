@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.72
+
+- Replace the room target's retrying visibility wait with Playwright's non-waiting visibility check before dispatching its navigation-only click event.
+- Preserve exact unique room, device card, device-detail URL, dialog identity, dialog-scoped control, and post-command push verification.
+
 ## 0.1.71
 
 - Dispatch one exact click event to the already visible, unique navigation-only room target instead of waiting for Cake's slow navigation completion inside `Locator.click()`.
