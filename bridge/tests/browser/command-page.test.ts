@@ -110,6 +110,65 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(page.close).toHaveBeenCalledTimes(1);
   });
 
+  test("waits for the SmartThings detail route before probing its controls", async () => {
+    const page = new FakeCommandPage();
+    const events: string[] = [];
+    page.card.click.mockImplementation(async () => {
+      events.push("card");
+    });
+    page.waitForTimeout = vi.fn(async () => {
+      events.push("wait");
+      page.currentUrl = "https://my.smartthings.com/location/loc_001/device/device_raw_001";
+    });
+    page.toggle.click.mockImplementation(async () => {
+      events.push("toggle");
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" });
+
+    expect(events).toEqual(["card", "wait", "toggle"]);
+  });
+
+  test("fails closed without probing controls when a clicked card never opens its detail", async () => {
+    const page = new FakeCommandPage();
+    page.waitForTimeout = vi.fn(async () => undefined);
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await expect(
+      executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" })
+    ).rejects.toThrow("command_target_not_found");
+
+    expect(page.card.click).toHaveBeenCalledTimes(1);
+    expect(page.toggle.click).not.toHaveBeenCalled();
+  });
+
+  test("reports only fixed command stages while navigating to a fresh detail", async () => {
+    const page = new FakeCommandPage();
+    page.card.click.mockImplementation(async () => {
+      page.currentUrl = "https://my.smartthings.com/location/loc_001/device/device_raw_001";
+    });
+    const diagnostics: string[] = [];
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => ({ openCommandPage: vi.fn(async () => page) }),
+      undefined,
+      { onDiagnostic: (stage) => diagnostics.push(stage) }
+    );
+
+    await executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" });
+
+    expect(diagnostics).toEqual([
+      "fresh_navigation",
+      "fresh_detail_ready",
+      "fresh_control_probe"
+    ]);
+    expect(JSON.stringify(diagnostics)).not.toMatch(/Safe plug|loc_001|device_raw_001|https?:/u);
+  });
+
   test("reuses one verified detail page for consecutive commands on the same device", async () => {
     const page = new FakeCommandPage();
     page.card.click.mockImplementation(async () => {
@@ -1024,7 +1083,9 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     const target = new FakeLocator(1);
     target.click.mockImplementation(async () => undefined);
     page.waitForTimeout = vi.fn(async () => {
-      page.currentUrl = "https://my.smartthings.com/location/raw-target";
+      page.currentUrl = page.card.click.mock.calls.length > 0
+        ? "https://my.smartthings.com/location/raw-target/device/device_raw_001"
+        : "https://my.smartthings.com/location/raw-target";
     });
     const originalGetByRole = page.getByRole.bind(page);
     page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
@@ -1057,6 +1118,9 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     let scrolls = 0;
     const hidden = new FakeLocator(0, true);
     const visible = new FakeLocator(1);
+    visible.click.mockImplementation(async () => {
+      page.currentUrl = "https://my.smartthings.com/location/loc_001/device/device_raw_001";
+    });
     const container = new FakeLocator(1);
     container.filter = vi.fn(() => (scrolls >= 2 ? visible : hidden));
     page.locator = vi.fn(() => container);
@@ -1276,6 +1340,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     const page = new FakeCommandPage();
     const card = new FakeLocator(1);
     const missingNamedSlider = new FakeLocator(0, true);
+    const detailIdentity = new FakeLocator(1);
     let labelVisible = false;
     const lateLabel = new FakeLocator(0);
     lateLabel.count = vi.fn(async () => (labelVisible ? 1 : 0));
@@ -1293,11 +1358,14 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       if (role === "slider") return missingNamedSlider;
       return new FakeLocator(0, true);
     });
-    page.getByText = vi.fn((text?: string) =>
-      text === "팬 속도" ? lateLabel : new FakeLocator(0, true)
-    );
+    page.getByText = vi.fn((text?: string) => {
+      if (text === "팬 속도") return lateLabel;
+      if (text === "Air purifier") return detailIdentity;
+      return new FakeLocator(0, true);
+    });
     page.waitForTimeout = vi.fn(async () => {
       labelVisible = true;
+      page.currentUrl = "https://my.smartthings.com/location/loc_001/device/device_raw_001";
     });
     const executor = new SmartThingsWebUiCommandExecutor(() => ({
       openCommandPage: vi.fn(async () => page)

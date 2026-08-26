@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.59
+
+- Wait for the exact SmartThings device-detail route and visible identity before probing any control after a card click.
+- Fail closed without clicking controls when Cake never completes the detail transition.
+- Emit only fixed, identifier-free command navigation stages for live failure diagnosis.
+
 ## 0.1.58
 
 - Accept a single button-rendered toggle only inside the exact observed Power swatch, while preserving switch/checkbox priority and ambiguity rejection.

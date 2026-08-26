@@ -61,7 +61,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.58";
+const bridgeVersion = "0.1.59";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -124,7 +124,10 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     () => currentKeeperManager,
     (rawLocationId) =>
       aliases.alias("location", aliases.alias("location", rawLocationId)),
-    { warmPageTtlMs: 300_000 }
+    {
+      warmPageTtlMs: 300_000,
+      onDiagnostic: (stage) => log.info(`command_diag:${stage}`)
+    }
   );
   const commands = new SafeCommandService({
     devices,

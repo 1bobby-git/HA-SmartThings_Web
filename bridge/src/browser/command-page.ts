@@ -25,8 +25,14 @@ interface CommandPageLike extends BrowserPageLike {
 
 type CommandPageManagerLike = Pick<KeeperPageManager, "openCommandPage">;
 
-interface WarmPageOptions {
+type CommandDiagnosticStage =
+  | "fresh_navigation"
+  | "fresh_detail_ready"
+  | "fresh_control_probe";
+
+interface CommandExecutorOptions {
   warmPageTtlMs?: number;
+  onDiagnostic?: (stage: CommandDiagnosticStage) => void;
 }
 
 interface WarmDevicePage {
@@ -50,6 +56,9 @@ const LABELED_SCOPE_POLL_MS = 100;
 const LABELED_SCOPE_VISIBLE_PROBE_MS = 25;
 const LOCATION_ROUTE_POLL_MS = 100;
 const LOCATION_ROUTE_POLL_ATTEMPTS = 30;
+const DETAIL_ROUTE_POLL_MS = 100;
+const DETAIL_ROUTE_POLL_ATTEMPTS = 50;
+const DETAIL_IDENTITY_PROBE_MS = 50;
 
 export class SmartThingsWebUiCommandExecutor {
   #uiQueue: Promise<void> = Promise.resolve();
@@ -58,14 +67,16 @@ export class SmartThingsWebUiCommandExecutor {
   #foregroundOperationCount = 0;
   readonly #verifiedDetailRoutes = new Map<string, { detailUrl: string; verifiedAt: number }>();
   readonly #warmPageTtlMs: number;
+  readonly #onDiagnostic: ((stage: CommandDiagnosticStage) => void) | undefined;
 
   constructor(
     private readonly getManager: () => CommandPageManagerLike | undefined,
     private readonly normalizeLocationId?: (rawLocationId: string) => string,
-    options?: WarmPageOptions
+    options?: CommandExecutorOptions
   ) {
     const ttl = options?.warmPageTtlMs ?? 0;
     this.#warmPageTtlMs = Number.isFinite(ttl) ? Math.max(0, Math.min(300_000, ttl)) : 0;
+    this.#onDiagnostic = options?.onDiagnostic;
   }
 
   hasWarmCommandPage(): boolean {
@@ -218,9 +229,13 @@ export class SmartThingsWebUiCommandExecutor {
         throw new Error("command_login_required");
       }
       await this.ensureLocation(page, input.locationId, input.locationNames);
+      this.#diagnostic("fresh_navigation");
       await openDeviceDetail(page, input.deviceName, input.roomName, {
         preferRooms: Boolean(input.roomName)
       });
+      await waitForOpenedDeviceDetail(page, input.deviceName);
+      this.#diagnostic("fresh_detail_ready");
+      this.#diagnostic("fresh_control_probe");
       await executeDeviceControl(page, input, FRESH_CONTROL_PROBE_TIMEOUT_MS);
       this.#rememberSuccessfulDevicePage(page, manager, input);
       keepWarm = this.#warmPageTtlMs > 0;
@@ -509,6 +524,14 @@ export class SmartThingsWebUiCommandExecutor {
       await cached.page.close().catch(() => undefined);
     }
   }
+
+  #diagnostic(stage: CommandDiagnosticStage): void {
+    try {
+      this.#onDiagnostic?.(stage);
+    } catch {
+      // Diagnostics must never change command behavior.
+    }
+  }
 }
 
 function deviceRouteKey(input: {
@@ -597,6 +620,27 @@ async function openDeviceDetail(
   if (!device) throw new Error("command_target_not_found");
   if ((await device.count()) !== 1) throw new Error("command_target_ambiguous");
   await device.click({ timeout: 15_000 });
+}
+
+async function waitForOpenedDeviceDetail(
+  page: CommandPageLike,
+  deviceName: string
+): Promise<void> {
+  // Production Playwright pages always provide waitForTimeout. Keeping the
+  // single-pass fallback preserves compatibility with minimal page adapters.
+  if (!page.waitForTimeout) return;
+
+  for (let attempt = 0; attempt <= DETAIL_ROUTE_POLL_ATTEMPTS; attempt += 1) {
+    if (
+      isSmartThingsDeviceDetail(page.url()) &&
+      (await hasExactVisibleDeviceIdentity(page, deviceName, DETAIL_IDENTITY_PROBE_MS))
+    ) {
+      return;
+    }
+    if (attempt === DETAIL_ROUTE_POLL_ATTEMPTS) break;
+    await page.waitForTimeout(DETAIL_ROUTE_POLL_MS);
+  }
+  throw new Error("command_target_not_found");
 }
 
 async function executeDeviceControl(
