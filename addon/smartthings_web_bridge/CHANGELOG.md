@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.85
+
+- Send the canonical `on`/`off` command used by captured Cake toggle exchanges when an observed safe toggle omits its optional command metadata, avoiding the slow detail-page fallback.
+
 ## 0.1.84
 
 - Reverse the second sanitized device-alias generation as well as every component/capability generation used by DeviceStore, allowing the authenticated native command path to start from the public inventory alias.

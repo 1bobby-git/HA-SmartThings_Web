@@ -205,7 +205,7 @@ describe("SafeCommandService", () => {
     expect(executor.executeDeviceAction).not.toHaveBeenCalled();
   });
 
-  test("keeps a metadata-free observed toggle on the exact UI path", async () => {
+  test("uses Cake's canonical native token for a metadata-free observed toggle", async () => {
     const store = readyDeviceStore(false);
     observeDeviceDetails(store, [
       detailSwatch("TOGGLE", "toggle", {
@@ -215,7 +215,7 @@ describe("SafeCommandService", () => {
     ]);
     const executor: SafeCommandExecutor = {
       executeDeviceAction: vi.fn(async (input) => {
-        expect(input.nativeCommand).toBeUndefined();
+        expect(input.nativeCommand).toBe("on");
         expect(input.controlId).toBe("identifier_toggle_ui_only");
         store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:01Z")));
       })

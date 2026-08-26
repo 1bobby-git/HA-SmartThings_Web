@@ -680,7 +680,10 @@ function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest)
       if (hasExplicitCommand && !controlSupportsCommand(control, request.command, false)) {
         throw new SafeCommandError("unsupported_command");
       }
-      const nativeCommand = observedCommandFor(control, request.command);
+      // Cake's captured toggle command exchanges use the canonical on/off token
+      // even when the detail swatch omits a commands array. The observed toggle
+      // identity still gates this path, so no unobserved writable control opens.
+      const nativeCommand = observedCommandFor(control, request.command) ?? request.command;
       return {
         ...request,
         attribute,
