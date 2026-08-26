@@ -61,7 +61,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.77";
+const bridgeVersion = "0.1.78";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -113,6 +113,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     normalizeStateToken: (value) =>
       aliases.alias("identifier", aliases.alias("identifier", value))
   });
+  status.update({ observedDeviceCount: devices.snapshot().devices.length });
   const cameraImages = new CameraImageStore({
     dataDir: paths.dataDir,
     aliasDeviceId: (rawDeviceId) => aliases.alias("device", rawDeviceId)
@@ -305,7 +306,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
             pushConnected: false,
             parserHealthy: false,
             initialSnapshotComplete: false,
-            observedDeviceCount: 0,
+            observedDeviceCount: devices.snapshot().devices.length,
             decodedDeviceEventCount: 0,
             uniqueLogicalEventCount: 0,
             duplicateEventCount: 0,

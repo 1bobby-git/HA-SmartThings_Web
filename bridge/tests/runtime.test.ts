@@ -14,6 +14,7 @@ import {
   PROTOCOL_CONTRACT_VERSION
 } from "../src/inspector/protocol-contract.js";
 import { ProtocolIntegrityStore } from "../src/state/protocol-integrity-store.js";
+import { DeviceStore } from "../src/state/device-store.js";
 import type { RuntimeStatusPatch } from "../src/state/runtime-state.js";
 import { createHealthReport } from "../src/server/health.js";
 
@@ -1033,6 +1034,73 @@ describe("createBridgeRuntime", () => {
       protocolVersion: `${PROTOCOL_CONTRACT_VERSION}:${PROTOCOL_CONTRACT_FINGERPRINT.slice(0, 16)}`
     });
     expect(createHealthReport(secondRuntime.status.getSnapshot()).ready).toBe(true);
+  });
+
+  test("reports restored cached inventory while login is required without claiming readiness", async () => {
+    const root = createTempRoot();
+    const persisted = new DeviceStore({
+      sqlitePath: join(root, "bridge.sqlite"),
+      normalizeStateToken: (value) => value
+    });
+    persisted.observe({
+      __sanitized: true,
+      source: "playwright-websocket-frame",
+      receivedAt: "2026-08-26T07:00:00.000Z",
+      payload: {
+        direction: "sent",
+        frame: { payload: '421["find","api/device/status",{}]', truncated: false }
+      },
+      payloadHash: "fixture"
+    });
+    persisted.observe({
+      __sanitized: true,
+      source: "playwright-websocket-frame",
+      receivedAt: "2026-08-26T07:00:00.100Z",
+      payload: {
+        direction: "received",
+        frame: {
+          payload: `431${JSON.stringify([
+            null,
+            [
+              {
+                deviceId: "dev_001",
+                locationId: "loc_001",
+                componentId: "identifier_component_main",
+                capabilityId: "identifier_capability_humidity",
+                attributeName: "humidity",
+                value: 62.8,
+                unit: "%",
+                timestamp: "2026-08-26T07:00:00.000Z"
+              }
+            ]
+          ])}`,
+          truncated: false
+        }
+      },
+      payloadHash: "fixture"
+    });
+    const restoredDeviceCount = persisted.snapshot().devices.length;
+    persisted.close();
+    expect(restoredDeviceCount).toBeGreaterThan(0);
+
+    const login = new FakeContext([
+      new FakePage("https://account.samsung.com/accounts/v1/ST/signInGate")
+    ]);
+    const secondRuntime = await createBridgeRuntime(
+      createDeps(root, {
+        chromium: { launchPersistentContext: vi.fn(async () => login) }
+      })
+    );
+    runtimes.push(secondRuntime);
+    await secondRuntime.browserStartup;
+
+    expect(secondRuntime.status.getSnapshot()).toMatchObject({
+      state: "LOGIN_REQUIRED",
+      observedDeviceCount: restoredDeviceCount,
+      initialSnapshotComplete: false,
+      pushConnected: false
+    });
+    expect(createHealthReport(secondRuntime.status.getSnapshot()).ready).toBe(false);
   });
 
   test("keeps HTTP live and skips chromium when the protocol store is corrupt", async () => {

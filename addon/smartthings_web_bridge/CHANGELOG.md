@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.78
+
+- Report the restored cached inventory count immediately after Bridge startup and browser reconnects, while keeping login-required sessions unready until fresh push proof returns.
+
 ## 0.1.77
 
 - Wait for the exact visible Cake room-card heading to hydrate before considering slower page-wide accessibility fallbacks.
