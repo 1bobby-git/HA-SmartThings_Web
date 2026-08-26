@@ -28,7 +28,12 @@ type CommandPageManagerLike = Pick<KeeperPageManager, "openCommandPage">;
 type CommandDiagnosticStage =
   | "fresh_navigation"
   | "fresh_detail_ready"
-  | "fresh_control_probe";
+  | "fresh_control_probe"
+  | "toggle_named_control_found"
+  | "toggle_named_control_missing"
+  | "toggle_labeled_scope_found"
+  | "toggle_labeled_scope_missing"
+  | `toggle_scoped_${"switch" | "checkbox" | "button"}_${"0" | "1" | "many"}`;
 
 interface CommandExecutorOptions {
   warmPageTtlMs?: number;
@@ -195,7 +200,12 @@ export class SmartThingsWebUiCommandExecutor {
     const warmPage = await this.#warmPageFor(manager, input);
     if (warmPage) {
       try {
-        await executeDeviceControl(warmPage, input, WARM_CONTROL_PROBE_TIMEOUT_MS);
+        await executeDeviceControl(
+          warmPage,
+          input,
+          WARM_CONTROL_PROBE_TIMEOUT_MS,
+          (stage) => this.#diagnostic(stage)
+        );
         if (this.#warmDevicePage) this.#warmDevicePage.lastUsedAt = Date.now();
         return;
       } catch (error) {
@@ -209,7 +219,12 @@ export class SmartThingsWebUiCommandExecutor {
     if (routedPage) {
       let keepWarm = false;
       try {
-        await executeDeviceControl(routedPage, input, FRESH_CONTROL_PROBE_TIMEOUT_MS);
+        await executeDeviceControl(
+          routedPage,
+          input,
+          FRESH_CONTROL_PROBE_TIMEOUT_MS,
+          (stage) => this.#diagnostic(stage)
+        );
         this.#rememberSuccessfulDevicePage(routedPage, manager, input);
         keepWarm = this.#warmPageTtlMs > 0;
         return;
@@ -236,7 +251,12 @@ export class SmartThingsWebUiCommandExecutor {
       await waitForOpenedDeviceDetail(page, input.deviceName);
       this.#diagnostic("fresh_detail_ready");
       this.#diagnostic("fresh_control_probe");
-      await executeDeviceControl(page, input, FRESH_CONTROL_PROBE_TIMEOUT_MS);
+      await executeDeviceControl(
+        page,
+        input,
+        FRESH_CONTROL_PROBE_TIMEOUT_MS,
+        (stage) => this.#diagnostic(stage)
+      );
       this.#rememberSuccessfulDevicePage(page, manager, input);
       keepWarm = this.#warmPageTtlMs > 0;
     } finally {
@@ -653,11 +673,12 @@ async function executeDeviceControl(
     optionLabel?: string;
     optionCommand?: string;
   },
-  probeTimeoutMs: number
+  probeTimeoutMs: number,
+  diagnostic: (stage: CommandDiagnosticStage) => void = () => undefined
 ): Promise<void> {
   if (input.command === "on" || input.command === "off") {
     if (input.controlLabel) {
-      await clickObservedToggleControl(page, input.controlLabel, probeTimeoutMs);
+      await clickObservedToggleControl(page, input.controlLabel, probeTimeoutMs, diagnostic);
       return;
     }
     const label = controlLabelFor(input.attribute);
@@ -764,21 +785,35 @@ async function executeDeviceControl(
 async function clickObservedToggleControl(
   page: CommandPageLike,
   label: string,
-  probeTimeoutMs: number
+  probeTimeoutMs: number,
+  diagnostic: (stage: CommandDiagnosticStage) => void
 ): Promise<void> {
   const preferredName = exactOrLocalized(label);
   const named = await uniqueRoleCandidate(page, ["switch", "checkbox"], preferredName);
   if (named) {
+    diagnostic("toggle_named_control_found");
     await named.waitFor({ state: "visible", timeout: probeTimeoutMs });
     await named.click({ timeout: 15_000 });
     return;
   }
+  diagnostic("toggle_named_control_missing");
 
   const deadline = Date.now() + probeTimeoutMs;
   const scope = await labeledSwatchScope(page, labelVariants(label), probeTimeoutMs);
+  diagnostic(scope ? "toggle_labeled_scope_found" : "toggle_labeled_scope_missing");
   if (!scope) throw new Error("command_control_not_found");
   const remainingMs = Math.max(1, deadline - Date.now());
-  const scoped = await uniqueRoleCandidate(scope, ["switch", "checkbox", "button"]);
+  let scoped: CommandLocatorLike | undefined;
+  for (const role of ["switch", "checkbox", "button"] as const) {
+    const candidate = scope.getByRole(role);
+    const count = await candidate.count();
+    diagnostic(`toggle_scoped_${role}_${countBucket(count)}`);
+    if (count > 1) throw new Error("command_control_ambiguous");
+    if (count === 1) {
+      scoped = candidate;
+      break;
+    }
+  }
   if (!scoped) throw new Error("command_control_not_found");
   try {
     await scoped.waitFor({ state: "visible", timeout: remainingMs });
@@ -786,6 +821,12 @@ async function clickObservedToggleControl(
     throw new Error("command_control_not_found");
   }
   await scoped.click({ timeout: 15_000 });
+}
+
+function countBucket(count: number): "0" | "1" | "many" {
+  if (count === 0) return "0";
+  if (count === 1) return "1";
+  return "many";
 }
 
 async function uniqueRoleCandidate(

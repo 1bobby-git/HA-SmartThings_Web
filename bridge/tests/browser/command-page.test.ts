@@ -1483,9 +1483,12 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       return missingToggle;
     });
     page.getByText = vi.fn((text: string) => (text === "Power" ? label : missingToggle));
-    const executor = new SmartThingsWebUiCommandExecutor(() => ({
-      openCommandPage: vi.fn(async () => page)
-    }));
+    const diagnostics: string[] = [];
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => ({ openCommandPage: vi.fn(async () => page) }),
+      undefined,
+      { onDiagnostic: (stage) => diagnostics.push(stage) }
+    );
 
     await executor.executeDeviceAction({
       deviceName: "Safe plug",
@@ -1503,6 +1506,16 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(button.click).toHaveBeenCalledWith({ timeout: 15_000 });
     expect(page.card.click).toHaveBeenCalledTimes(1);
     expect(card.click).not.toHaveBeenCalled();
+    expect(diagnostics).toEqual([
+      "fresh_navigation",
+      "fresh_detail_ready",
+      "fresh_control_probe",
+      "toggle_named_control_missing",
+      "toggle_labeled_scope_found",
+      "toggle_scoped_switch_0",
+      "toggle_scoped_checkbox_0",
+      "toggle_scoped_button_1"
+    ]);
   });
 
   test("prefers one accessible switch when the same observed toggle also exposes a checkbox", async () => {

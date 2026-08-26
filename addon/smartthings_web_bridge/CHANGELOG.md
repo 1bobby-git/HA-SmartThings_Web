@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.60
+
+- Add fixed, identifier-free toggle discovery stages that distinguish missing names, exact swatch scope, and scoped accessibility-role counts.
+- Keep the added live diagnostics observational only; target selection and push confirmation behavior are unchanged.
+
 ## 0.1.59
 
 - Wait for the exact SmartThings device-detail route and visible identity before probing any control after a card click.
