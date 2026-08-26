@@ -196,7 +196,14 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
                         "id": "dev_001",
                         "locationId": "loc_001",
                         "name": "Speaker",
+                        "type": "ai_speaker_lux_one",
                         "online": True,
+                        "presentation": {
+                            "assetType": "ai_speaker_lux_one",
+                            "iconUrl": "https://client.smartthings.com/icons/preload/lux-one/on",
+                            "inactiveIconUrl": "https://client.smartthings.com/icons/preload/lux-one/off",
+                            "animationUrl": "https://app-asset.samsungiotcloud.com/assets/icons/published/ai_speaker_lux_one/ai_speaker_lux_one.json",
+                        },
                         "states": [],
                         "controls": [
                             {
@@ -220,6 +227,11 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
         self.assertEqual(parsed.scenes["scene_001"].name, "Movie")
         self.assertEqual(parsed.devices["dev_001"].controls["volume_slider"].maximum, 100.0)
         self.assertNotIn("now_playing", parsed.devices["dev_001"].controls)
+        self.assertEqual(parsed.devices["dev_001"].presentation.asset_type, "ai_speaker_lux_one")
+        self.assertEqual(
+            parsed.devices["dev_001"].presentation.animation_url,
+            "https://app-asset.samsungiotcloud.com/assets/icons/published/ai_speaker_lux_one/ai_speaker_lux_one.json",
+        )
 
 
 class _FakeResponse:

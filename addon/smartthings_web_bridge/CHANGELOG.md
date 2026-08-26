@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.56
+
+- Open device details only by clicking the unique visible `data-testid="device"` wrapper; never click a page-wide named button, an exact text label, or a descendant inline action as a fallback.
+- Delay command success until browser interaction has completed and the requested newer push value remains stable for 500 ms, rejecting transient values that immediately reverse.
+- Preserve only allowlisted SmartThings active, inactive, and Lottie asset URLs, and use the published asset type when Cake reports the device type as `NONE`.
+- Keep public presentation metadata separate from authoritative push/snapshot state; no SmartThings polling or asset-based state inference is added.
+
 ## 0.1.55
 
 - Give foreground device, scene, and Home Monitor commands priority over optional background detail discovery.

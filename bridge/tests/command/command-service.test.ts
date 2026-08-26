@@ -46,6 +46,65 @@ describe("SafeCommandService", () => {
     });
   });
 
+  test("does not confirm a transient state that reverses before browser interaction completes", async () => {
+    const store = readyDeviceStore();
+    const resync = vi.fn(async () => undefined);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => {
+        store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:01Z")));
+        store.observe(received(deviceEventFrame("off", "2026-08-25T00:00:02Z")));
+      })
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 10,
+      resync
+    });
+
+    await expect(service.execute(command("on", "request_030"))).rejects.toMatchObject({
+      code: "command_confirmation_timeout"
+    });
+    expect(resync).toHaveBeenCalledTimes(1);
+    expect(
+      store.snapshot().devices[0]?.states.find((state) => state.attribute === "switch")?.value
+    ).toBe("off");
+  });
+
+  test("requires the requested push state to remain stable after browser interaction", async () => {
+    vi.useFakeTimers();
+    const store = readyDeviceStore();
+    const resync = vi.fn(async () => undefined);
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: {
+        executeDeviceAction: vi.fn(async () => {
+          store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:01Z")));
+        })
+      },
+      timeoutMs: 1_000,
+      confirmationStabilityMs: 500,
+      resync
+    });
+
+    try {
+      const result = service.execute(command("on", "request_031"));
+      const rejected = expect(result).rejects.toMatchObject({
+        code: "command_confirmation_timeout"
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      store.observe(received(deviceEventFrame("off", "2026-08-25T00:00:02Z")));
+      await vi.advanceTimersByTimeAsync(901);
+
+      await rejected;
+      expect(resync).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("binds switch commands to the matching observed toggle control", async () => {
     const store = readyDeviceStore();
     observeDeviceDetails(store, [

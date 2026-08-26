@@ -47,6 +47,13 @@ export interface BridgeDeviceControl {
   step?: number;
 }
 
+export interface BridgeDevicePresentation {
+  assetType?: string;
+  iconUrl?: string;
+  inactiveIconUrl?: string;
+  animationUrl?: string;
+}
+
 export interface BridgeDevice {
   id: string;
   locationId: string;
@@ -54,6 +61,7 @@ export interface BridgeDevice {
   name: string;
   type: string | null;
   online: boolean;
+  presentation?: BridgeDevicePresentation;
   states: BridgeDeviceState[];
   controls?: BridgeDeviceControl[];
 }
@@ -106,6 +114,7 @@ interface MutableDevice {
   name: string;
   type: string | null;
   online: boolean;
+  presentation?: BridgeDevicePresentation;
   states: Map<string, BridgeDeviceState>;
   controls: Map<string, BridgeDeviceControl>;
 }
@@ -219,6 +228,7 @@ export class DeviceStore {
         name: device.name,
         type: device.type,
         online: device.online,
+        ...(device.presentation ? { presentation: { ...device.presentation } } : {}),
         states: [...device.states.values()].sort(byState).map(cloneState),
         ...(device.controls.size > 0
           ? { controls: [...device.controls.values()].sort(byId).map(cloneControl) }
@@ -304,11 +314,26 @@ export class DeviceStore {
         const nextName = safeName(source.deviceName) ?? device.name;
         const nextRoomId = safeId(source.roomId, "identifier");
         const typeData = asRecord(source.deviceTypeData);
-        const nextType = safeName(typeData?.type);
-        if (device.name !== nextName || device.roomId !== nextRoomId || device.type !== nextType) {
+        const presentation = devicePresentation(source);
+        const rawType = safeName(typeData?.type);
+        const nextType =
+          rawType?.toUpperCase() === "NONE" && presentation?.assetType
+            ? presentation.assetType
+            : rawType;
+        if (
+          device.name !== nextName ||
+          device.roomId !== nextRoomId ||
+          device.type !== nextType ||
+          JSON.stringify(device.presentation) !== JSON.stringify(presentation)
+        ) {
           device.name = nextName;
           device.roomId = nextRoomId;
           device.type = nextType;
+          if (presentation) {
+            device.presentation = presentation;
+          } else {
+            delete device.presentation;
+          }
           changed = true;
         }
       }
@@ -498,6 +523,7 @@ export class DeviceStore {
         name: device.name,
         type: device.type,
         online: device.online,
+        ...(device.presentation ? { presentation: { ...device.presentation } } : {}),
         states: new Map(device.states.map((state) => [stateKey(state), cloneState(state)])),
         controls: new Map((device.controls ?? []).map((control) => [control.id, cloneControl(control)]))
       });
@@ -576,6 +602,7 @@ function parsePersistedInventory(value: unknown): BridgeInventory | undefined {
     const roomId = item?.roomId === null ? null : safeId(item?.roomId, "identifier");
     const name = safeName(item?.name);
     const type = item?.type === null ? null : safeName(item?.type);
+    const presentation = devicePresentation(asRecord(item?.presentation));
     if (
       !id ||
       !locationId ||
@@ -610,6 +637,7 @@ function parsePersistedInventory(value: unknown): BridgeInventory | undefined {
       name,
       type,
       online: item.online,
+      ...(presentation ? { presentation } : {}),
       states,
       ...(controls.length > 0 ? { controls } : {})
     });
@@ -968,6 +996,68 @@ function safeId(value: unknown, prefix: "loc" | "dev" | "identifier"): string | 
 function safeName(value: unknown): string | null {
   const text = readString(value)?.trim();
   return text && text.length <= 255 && !text.includes("[REDACTED]") ? text : null;
+}
+
+function devicePresentation(source: Record<string, unknown> | undefined): BridgeDevicePresentation | undefined {
+  if (!source) return undefined;
+  const lottie = asRecord(source.lottieData);
+  const iconUrl = safeDeviceAssetUrl(source.icon ?? source.iconUrl, "icon");
+  const inactiveIconUrl = safeDeviceAssetUrl(
+    source.inactiveIcon ?? source.inactiveIconUrl,
+    "icon"
+  );
+  const animationUrl = safeDeviceAssetUrl(
+    lottie?.icon ?? source.animationUrl,
+    "animation"
+  );
+  const assetType = animationUrl
+    ? animationUrl.match(
+        /^https:\/\/app-asset\.samsungiotcloud\.com\/assets\/icons\/published\/([a-z0-9_-]{1,80})\/[a-z0-9_-]{1,80}\.json$/u
+      )?.[1]
+    : safeAssetType(source.assetType);
+  if (!iconUrl && !inactiveIconUrl && !animationUrl && !assetType) return undefined;
+  return {
+    ...(assetType ? { assetType } : {}),
+    ...(iconUrl ? { iconUrl } : {}),
+    ...(inactiveIconUrl ? { inactiveIconUrl } : {}),
+    ...(animationUrl ? { animationUrl } : {})
+  };
+}
+
+function safeDeviceAssetUrl(value: unknown, kind: "icon" | "animation"): string | undefined {
+  const text = readString(value);
+  if (!text || text.length > 512) return undefined;
+  try {
+    const url = new URL(text);
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.port ||
+      url.search ||
+      url.hash
+    ) {
+      return undefined;
+    }
+    if (kind === "icon") {
+      return url.hostname === "client.smartthings.com" && url.pathname.startsWith("/icons/")
+        ? url.href
+        : undefined;
+    }
+    return url.hostname === "app-asset.samsungiotcloud.com" &&
+      /^\/assets\/icons\/published\/[a-z0-9_-]{1,80}\/[a-z0-9_-]{1,80}\.json$/u.test(
+        url.pathname
+      )
+      ? url.href
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeAssetType(value: unknown): string | undefined {
+  const text = readString(value);
+  return text && /^[a-z0-9_-]{1,80}$/u.test(text) ? text : undefined;
 }
 
 function safeDisplayString(value: string | null): string | null {

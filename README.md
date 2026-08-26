@@ -165,7 +165,7 @@ npm run deploy:haos:candidate
 
 ## 현재 검증 결과
 
-- SmartThings Web Bridge 앱과 Home Assistant 통합 `0.1.55`는 일시적 SmartThings 500 snapshot 오류를 프로토콜 변경으로 오판하지 않고, 현재 위치 화면의 정확한 `data-testid="device"` 카드 상세 열기 버튼을 먼저 사용한 뒤 필요할 때만 방 화면으로 이동합니다. 동일한 실제 토글이 접근성 `switch`와 내부 `checkbox`로 함께 노출되면 `switch`를 우선합니다. 실제 Cake의 두 상세 경로를 정확히 검증해 메모리에서 재사용하며, 사용자 제어가 들어오면 백그라운드 상세 탐색을 즉시 선점해 제어 큐 지연을 제거합니다. 애드온과 통합 구성요소 모두 SmartThings 아이콘을 사용합니다.
+- SmartThings Web Bridge 앱과 Home Assistant 통합 `0.1.56`은 일시적 SmartThings 500 snapshot 오류를 프로토콜 변경으로 오판하지 않고, 정확히 하나의 보이는 `data-testid="device"` 카드 래퍼만 눌러 상세 화면을 엽니다. 카드 내부의 인라인 전원 버튼, 페이지 전체의 이름 기반 버튼, 단순 텍스트는 장치 상세 열기 대체 경로로 절대 누르지 않습니다. 동일한 실제 토글이 접근성 `switch`와 내부 `checkbox`로 함께 노출되면 `switch`를 우선하고, 제어 성공은 브라우저 동작이 끝난 뒤 요청한 push 값이 500 ms 동안 유지되어야 확정됩니다. 허용된 SmartThings 아이콘/Lottie 메타데이터는 상태와 분리해 보존하며 Cake가 타입을 `NONE`으로 보낼 때 기기 모델 분류에 사용합니다. 애드온과 통합 구성요소 모두 SmartThings 브랜드 아이콘을 사용합니다.
 - Bridge 재시작 뒤 SmartThings Web 재로그인이 필요한 상태에서도 저장된 213개 inventory와 sequence 47을 즉시 복원했습니다. 실제 push/제어 재검증은 전용 Chromium 재인증 뒤 `ready=true`, `CONNECTED`로 돌아온 후 진행해야 합니다.
 - Home Assistant에는 215개 기기와 1,724개 활성 엔티티가 로드됐습니다. 14개 플랫폼에는 16개 `media_player`, 66개 `number`, 6개 `select`, 4개 `scene`, 1개 Home Monitor `alarm_control_panel`, 2개 `image`가 포함됩니다.
 - 안전한 무드등 연속 제어와 후속 실제 상태 변화에서 Bridge `updatedAt` 이후 Home Assistant `last_updated`가 스위치는 0.327초, 전력 0 W는 1.12초 뒤 갱신됐습니다. SmartThings 상태 폴링이나 낙관적 상태 변경은 사용하지 않았습니다.

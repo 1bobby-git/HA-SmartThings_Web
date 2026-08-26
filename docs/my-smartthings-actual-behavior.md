@@ -76,18 +76,28 @@ selection to real device wrappers, scope sliders/buttons to their observed
 swatch label, and retain an atomic `status` to `label` to `command` mapping
 from `possibleStates`.
 
-Version 0.1.38 adds fresh live Cake evidence for command targeting. One exact
-visible room device wrapper contained two descendant buttons while Cake also
-kept hidden duplicate markup, so unfiltered wrapper or descendant-button counts
-could report a false device ambiguity. The detail opener was the sole visible
-button containing the exact device name. Once opened, the power control exposed one
-accessible `switch`, one underlying `checkbox`, visible `Power` text, but no
-switch whose accessible name was exactly `Power`. The Bridge now validates one
-exact visible wrapper and one exact-name opener, then uses the only visible switch only
-when that fallback is unambiguous. A controlled `off → on → off` cycle was
+Version 0.1.56 adds fresh live Cake evidence for command targeting. One exact
+visible room device wrapper contained multiple descendant buttons, including an
+inline power action, while Cake also kept hidden duplicate markup. Clicking the
+card body opens details; clicking a descendant action changes device state.
+The Bridge therefore clicks only the unique visible `data-testid="device"`
+wrapper and never falls through to a page-wide named button, exact text label,
+or descendant control. Once opened, the power control exposed one accessible
+`switch`, one underlying `checkbox`, visible `Power` text, but no switch whose
+accessible name was exactly `Power`. The Bridge uses the only visible switch
+only when that fallback is unambiguous. A controlled `off → on → off` cycle was
 confirmed only by newer push events and produced ordered companion power
 changes of `0 W → 16 W → 0 W` in Home Assistant within about two seconds of
 their Bridge timestamps.
+
+The device-card snapshot also carries public `icon`, `inactiveIcon`, and
+`lottieData.icon` metadata. The Lottie JSON is presentation data, not device
+state. Version 0.1.56 preserves only allowlisted SmartThings/Samsung asset URLs
+and derives a bounded asset type such as `hub` or `contact_sensor` when Cake's
+device type is `NONE`; it never polls those assets or infers state from their
+animation frames. Home Assistant's integration device-list row currently
+hard-codes `mdiDevices`, so a custom integration cannot replace that exact row
+with remote per-device images without modifying Home Assistant Frontend.
 
 A later live room-card inspection confirmed that Cake opens room-originated
 details at `/location/<id>/rooms/device/<id>`, while dashboard-originated

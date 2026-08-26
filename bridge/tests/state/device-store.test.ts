@@ -237,6 +237,63 @@ describe("DeviceStore", () => {
     }
   });
 
+  test("preserves allowlisted SmartThings presentation metadata across restart", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-presentation-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const first = new DeviceStore({ sqlitePath });
+      observeDeviceSnapshot(first, {
+        deviceId: "dev_001",
+        locationId: "loc_001",
+        deviceName: "Hub",
+        deviceTypeData: { type: "NONE" },
+        icon: "https://client.smartthings.com/icons/oneui/hub/on",
+        inactiveIcon: "https://client.smartthings.com/icons/oneui/hub/off",
+        lottieData: {
+          icon: "https://app-asset.samsungiotcloud.com/assets/icons/published/hub/hub.json"
+        }
+      });
+
+      expect(first.snapshot().devices[0]).toMatchObject({
+        type: "hub",
+        presentation: {
+          assetType: "hub",
+          iconUrl: "https://client.smartthings.com/icons/oneui/hub/on",
+          inactiveIconUrl: "https://client.smartthings.com/icons/oneui/hub/off",
+          animationUrl: "https://app-asset.samsungiotcloud.com/assets/icons/published/hub/hub.json"
+        }
+      });
+      const beforeRestart = first.snapshot();
+      first.close();
+
+      const restored = new DeviceStore({ sqlitePath });
+      expect(restored.snapshot()).toEqual(beforeRestart);
+      restored.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
+  test("drops untrusted device presentation URLs instead of persisting them", () => {
+    const store = new DeviceStore();
+    observeDeviceSnapshot(store, {
+      deviceId: "dev_001",
+      locationId: "loc_001",
+      deviceName: "Untrusted",
+      deviceTypeData: { type: "NONE" },
+      icon: "https://example.com/device/on",
+      inactiveIcon: "data:image/svg+xml,private",
+      lottieData: { icon: "https://example.com/device.json" }
+    });
+
+    expect(store.snapshot().devices[0]).toMatchObject({ type: "NONE" });
+    expect(store.snapshot().devices[0]).not.toHaveProperty("presentation");
+  });
+
   test("captures scenes and location arm state from snapshots", () => {
     const store = new DeviceStore();
     const listener = vi.fn();
@@ -786,6 +843,11 @@ function observeSceneSnapshot(
 ): void {
   store.observe(sentFrame('422["find","api/scene",{}]'));
   store.observe(receivedFrame(`432${JSON.stringify([null, [scene]])}`));
+}
+
+function observeDeviceSnapshot(store: DeviceStore, device: Record<string, unknown>): void {
+  store.observe(sentFrame('424["find","api/device",{}]'));
+  store.observe(receivedFrame(`434${JSON.stringify([null, [{ basic: device }]])}`));
 }
 
 function observeDeviceDetails(store: DeviceStore, rows: Record<string, unknown>[]): void {

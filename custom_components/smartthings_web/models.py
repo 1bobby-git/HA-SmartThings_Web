@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import re
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 
 @dataclass
@@ -28,6 +29,16 @@ class BridgeState:
 
 
 @dataclass
+class BridgeDevicePresentation:
+    """Allowlisted SmartThings presentation metadata from the device snapshot."""
+
+    asset_type: str | None = None
+    icon_url: str | None = None
+    inactive_icon_url: str | None = None
+    animation_url: str | None = None
+
+
+@dataclass
 class BridgeDevice:
     """One Bridge device."""
 
@@ -37,6 +48,7 @@ class BridgeDevice:
     name: str
     device_type: str | None
     online: bool
+    presentation: BridgeDevicePresentation | None = None
     states: dict[tuple[str, str, str], BridgeState] = field(default_factory=dict)
     controls: dict[str, "BridgeControl"] = field(default_factory=dict)
 
@@ -161,6 +173,7 @@ class SmartThingsWebRuntime:
                 name=latest_device.name,
                 device_type=latest_device.device_type,
                 online=latest_device.online,
+                presentation=latest_device.presentation or existing.presentation,
                 states=states,
                 controls={**existing.controls, **latest_device.controls},
             )
@@ -690,6 +703,61 @@ def parse_scene(raw: Any) -> BridgeScene | None:
         name=name,
         updated_at=updated_at,
     )
+
+
+def parse_device_presentation(raw: Any) -> BridgeDevicePresentation | None:
+    """Parse only public SmartThings icon and animation asset metadata."""
+    if not isinstance(raw, dict):
+        return None
+    asset_type_raw = raw.get("assetType")
+    asset_type = (
+        asset_type_raw
+        if isinstance(asset_type_raw, str)
+        and re.fullmatch(r"[a-z0-9_-]{1,80}", asset_type_raw)
+        else None
+    )
+    icon_url = _safe_device_asset_url(raw.get("iconUrl"), animation=False)
+    inactive_icon_url = _safe_device_asset_url(
+        raw.get("inactiveIconUrl"), animation=False
+    )
+    animation_url = _safe_device_asset_url(raw.get("animationUrl"), animation=True)
+    if not any((asset_type, icon_url, inactive_icon_url, animation_url)):
+        return None
+    return BridgeDevicePresentation(
+        asset_type=asset_type,
+        icon_url=icon_url,
+        inactive_icon_url=inactive_icon_url,
+        animation_url=animation_url,
+    )
+
+
+def _safe_device_asset_url(value: Any, *, animation: bool) -> str | None:
+    if not isinstance(value, str) or len(value) > 512:
+        return None
+    try:
+        parsed = urlparse(value)
+        if (
+            parsed.scheme != "https"
+            or parsed.username
+            or parsed.password
+            or parsed.port
+            or parsed.query
+            or parsed.fragment
+        ):
+            return None
+    except ValueError:
+        return None
+    if animation:
+        if parsed.hostname != "app-asset.samsungiotcloud.com" or not re.fullmatch(
+            r"/assets/icons/published/[a-z0-9_-]{1,80}/[a-z0-9_-]{1,80}\.json",
+            parsed.path,
+        ):
+            return None
+    elif parsed.hostname != "client.smartthings.com" or not parsed.path.startswith(
+        "/icons/"
+    ):
+        return None
+    return value
 
 
 def parse_control(raw: Any) -> BridgeControl | None:

@@ -132,6 +132,7 @@ interface SafeCommandServiceOptions {
   status: RuntimeStatusStore;
   executor: SafeCommandExecutor;
   timeoutMs: number;
+  confirmationStabilityMs?: number;
   resync: () => Promise<unknown>;
 }
 
@@ -230,6 +231,7 @@ export class SafeCommandService {
       attribute,
       desired,
       afterSequence: snapshot.sequence,
+      stabilityMs: this.options.confirmationStabilityMs ?? 0,
       resync: this.options.resync
     });
     const roomName = device.roomId ? snapshot.rooms.find((room) => room.id === device.roomId)?.name : undefined;
@@ -379,7 +381,7 @@ function findState(device: BridgeDevice, component: string, capability: string, 
   return device.states.find((state) => state.component === component && state.capability === capability && state.attribute === attribute);
 }
 
-function waitForState(options: { devices: DeviceStore; request: SafeCommandRequest; attribute: string; desired: BridgeJsonValue | undefined; afterSequence: number; resync: () => Promise<unknown> }): ConfirmationWait {
+function waitForState(options: { devices: DeviceStore; request: SafeCommandRequest; attribute: string; desired: BridgeJsonValue | undefined; afterSequence: number; stabilityMs: number; resync: () => Promise<unknown> }): ConfirmationWait {
   const snapshotMatches = () => {
     if (options.desired === undefined) return false;
     const device = options.devices
@@ -396,6 +398,7 @@ function waitForState(options: { devices: DeviceStore; request: SafeCommandReque
   return waitForPredicate({
     devices: options.devices,
     afterSequence: options.afterSequence,
+    stabilityMs: options.stabilityMs,
     resync: options.resync,
     matches: (event) =>
       (event.type === "state" &&
@@ -406,6 +409,15 @@ function waitForState(options: { devices: DeviceStore; request: SafeCommandReque
         (options.desired === undefined ||
           JSON.stringify(event.state.value) === JSON.stringify(options.desired))) ||
       (event.type === "inventory" && snapshotMatches()),
+    invalidates: (event) =>
+      options.desired !== undefined &&
+      ((event.type === "state" &&
+        event.deviceId === options.request.targetId &&
+        event.state.component === options.request.component &&
+        event.state.capability === options.request.capability &&
+        event.state.attribute === options.attribute &&
+        JSON.stringify(event.state.value) !== JSON.stringify(options.desired)) ||
+        (event.type === "inventory" && !snapshotMatches())),
     matchesSnapshot: snapshotMatches
   });
 }
@@ -443,34 +455,67 @@ interface ConfirmationEvidence {
   source: "event" | "inventory_snapshot";
 }
 
-function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: () => Promise<unknown>; matches: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean }): ConfirmationWait {
+function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: () => Promise<unknown>; matches: (event: BridgeDeviceStoreEvent) => boolean; invalidates?: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean; stabilityMs?: number }): ConfirmationWait {
   let settled = false;
+  let interactionComplete = false;
   let unsubscribe: () => void = () => undefined;
   let timer: NodeJS.Timeout | undefined;
+  let stabilityTimer: NodeJS.Timeout | undefined;
+  let pendingEvidence: ConfirmationEvidence | undefined;
   let rejectResult: (error: SafeCommandError) => void = () => undefined;
   let resolveResult: (evidence: ConfirmationEvidence) => void = () => undefined;
   const cleanup = () => {
     if (settled) return;
     settled = true;
     if (timer) clearTimeout(timer);
+    if (stabilityTimer) clearTimeout(stabilityTimer);
     unsubscribe();
+  };
+  const resolvePending = () => {
+    if (settled || !interactionComplete || !pendingEvidence) return;
+    if ((options.stabilityMs ?? 0) > 0) {
+      if (stabilityTimer) clearTimeout(stabilityTimer);
+      stabilityTimer = setTimeout(() => {
+        stabilityTimer = undefined;
+        if (settled || !pendingEvidence) return;
+        const evidence = pendingEvidence;
+        cleanup();
+        resolveResult(evidence);
+      }, options.stabilityMs);
+      return;
+    }
+    const evidence = pendingEvidence;
+    cleanup();
+    resolveResult(evidence);
   };
   const result = new Promise<ConfirmationEvidence>((resolve, reject) => {
     resolveResult = resolve;
     rejectResult = reject;
     unsubscribe = options.devices.subscribe((event) => {
-      if (event.sequence <= options.afterSequence || !options.matches(event)) return;
-      cleanup();
-      resolve({
+      if (event.sequence <= options.afterSequence) return;
+      if (options.invalidates?.(event)) {
+        pendingEvidence = undefined;
+        if (stabilityTimer) {
+          clearTimeout(stabilityTimer);
+          stabilityTimer = undefined;
+        }
+        return;
+      }
+      if (!options.matches(event)) return;
+      pendingEvidence = {
         sequence: event.sequence,
         source: event.type === "inventory" ? "inventory_snapshot" : "event"
-      });
+      };
+      resolvePending();
     });
   });
   return {
     result,
     startTimeout: (timeoutMs) => {
       if (settled || timer) return;
+      interactionComplete = true;
+      resolvePending();
+      if (settled) return;
       timer = setTimeout(() => {
         timer = undefined;
         void options

@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from models import (  # noqa: E402
     BridgeControl,
     BridgeDevice,
+    BridgeDevicePresentation,
     BridgeInventory,
     BridgeLocation,
     BridgeScene,
@@ -73,6 +74,28 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertEqual(runtime.inventory.sequence, 11)
         self.assertEqual(sensor_value(runtime), 21)
         self.assertEqual(observations, [21])
+
+    def test_inventory_merge_updates_device_presentation_atomically(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:00:00Z")
+        latest = inventory(11, 21, "2026-08-24T21:01:00Z")
+        current.devices["dev_001"].presentation = BridgeDevicePresentation(
+            asset_type="contact_sensor",
+            icon_url="https://client.smartthings.com/icons/oneui/contact/off",
+        )
+        latest.devices["dev_001"].presentation = BridgeDevicePresentation(
+            asset_type="contact_sensor",
+            icon_url="https://client.smartthings.com/icons/oneui/contact/on",
+            animation_url="https://app-asset.samsungiotcloud.com/assets/icons/published/contact_sensor/contact_sensor.json",
+        )
+        runtime = SmartThingsWebRuntime(FakeClient(latest), "loc_001", current)
+
+        changed = asyncio.run(runtime.handle_event({"type": "inventory", "sequence": 11}))
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            runtime.inventory.devices["dev_001"].presentation,
+            latest.devices["dev_001"].presentation,
+        )
 
     def test_inventory_merge_does_not_lose_devices_from_an_incomplete_restart_snapshot(self) -> None:
         current = inventory(50, 20, "2026-08-24T21:00:00Z")

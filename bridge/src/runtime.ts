@@ -61,7 +61,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.55";
+const bridgeVersion = "0.1.56";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -131,6 +131,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     status,
     executor: commandExecutor,
     timeoutMs: 15_000,
+    confirmationStabilityMs: 500,
     resync: async () => {
       const keeperManager = currentKeeperManager;
       if (!keeperManager) throw new Error("command_browser_unavailable");

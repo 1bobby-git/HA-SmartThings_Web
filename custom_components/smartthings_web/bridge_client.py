@@ -17,6 +17,7 @@ from .models import (
     BridgeDevice,
     BridgeInventory,
     parse_control,
+    parse_device_presentation,
     parse_location,
     parse_command_result,
     parse_scene,
@@ -391,6 +392,7 @@ def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:
                 controls[control.control_id] = control
         room_id = item.get("roomId")
         device_type = item.get("type")
+        presentation = parse_device_presentation(item.get("presentation"))
         devices[device_id] = BridgeDevice(
             device_id=device_id,
             location_id=location_id,
@@ -398,6 +400,7 @@ def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:
             name=name,
             device_type=device_type if isinstance(device_type, str) else None,
             online=item.get("online") is True,
+            presentation=presentation,
             states=states,
             controls=controls,
         )
