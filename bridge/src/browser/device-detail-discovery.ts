@@ -60,7 +60,13 @@ export class DeviceDetailDiscovery {
         ...(isCameraImageDevice(device) ? { detailSettleMs: 5_000 } : {})
       });
       return "inspected";
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.message === "detail_discovery_preempted") {
+        const attempts = (this.#attempts.get(device.id) ?? 1) - 1;
+        if (attempts > 0) this.#attempts.set(device.id, attempts);
+        else this.#attempts.delete(device.id);
+        return "blocked";
+      }
       return "failed";
     } finally {
       this.#running = false;

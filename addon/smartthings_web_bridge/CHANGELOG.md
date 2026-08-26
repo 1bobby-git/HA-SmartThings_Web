@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.55
+
+- Give foreground device, scene, and Home Monitor commands priority over optional background detail discovery.
+- Close only the isolated background inspection page when a command arrives so it cannot block the UI queue for tens of seconds.
+- Do not count command-preempted discovery as a failed or consumed inspection attempt.
+
 ## 0.1.54
 
 - Recognize the live Cake `/location/<id>/rooms/device/<id>` detail route in addition to the direct `/location/<id>/device/<id>` route.

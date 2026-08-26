@@ -51,6 +51,22 @@ describe("DeviceDetailDiscovery", () => {
     expect(await discovery.runOne()).toBe("failed");
   });
 
+  test("does not consume a discovery attempt when foreground control preempts it", async () => {
+    const inspectDeviceDetails = vi.fn(async () => {
+      throw new Error("detail_discovery_preempted");
+    });
+    const discovery = new DeviceDetailDiscovery({
+      inventory: () => inventory(),
+      inspector: { inspectDeviceDetails },
+      canInspect: () => true,
+      maxAttempts: 1
+    });
+
+    expect(await discovery.runOne()).toBe("blocked");
+    expect(await discovery.runOne()).toBe("blocked");
+    expect(inspectDeviceDetails).toHaveBeenCalledTimes(2);
+  });
+
   test("requests a longer detail settle window for camera image devices", async () => {
     const inspectDeviceDetails = vi.fn(async () => undefined);
     const discovery = new DeviceDetailDiscovery({

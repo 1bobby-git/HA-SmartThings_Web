@@ -53,6 +53,8 @@ const LOCATION_ROUTE_POLL_ATTEMPTS = 30;
 export class SmartThingsWebUiCommandExecutor {
   #uiQueue: Promise<void> = Promise.resolve();
   #warmDevicePage: WarmDevicePage | undefined;
+  #backgroundInspectionPage: CommandPageLike | undefined;
+  #foregroundOperationCount = 0;
   readonly #verifiedDetailRoutes = new Map<string, { detailUrl: string; verifiedAt: number }>();
   readonly #warmPageTtlMs: number;
 
@@ -133,7 +135,7 @@ export class SmartThingsWebUiCommandExecutor {
     optionLabel?: string;
     optionCommand?: string;
   }): Promise<void> {
-    await this.#runExclusive(() => this.#executeDeviceAction(input));
+    await this.#runForeground(() => this.#executeDeviceAction(input));
   }
 
   async #executeDeviceAction(input: {
@@ -233,7 +235,16 @@ export class SmartThingsWebUiCommandExecutor {
     roomName?: string;
     detailSettleMs?: number;
   }): Promise<void> {
-    await this.#runExclusive(() => this.#inspectDeviceDetails(input));
+    if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
+    try {
+      await this.#runExclusive(async () => {
+        if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
+        await this.#inspectDeviceDetails(input);
+      });
+    } catch (error) {
+      if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
+      throw error;
+    }
   }
 
   async #inspectDeviceDetails(input: {
@@ -246,12 +257,17 @@ export class SmartThingsWebUiCommandExecutor {
     // Navigation only: device state and controls still come from observed Socket.IO data.
     await this.#invalidateWarmPage();
     const page = await this.openLocationPage(input.locationId, input.locationNames);
+    this.#backgroundInspectionPage = page;
     try {
+      if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
       await openDeviceDetail(page, input.deviceName, input.roomName, {
         preferRooms: Boolean(input.roomName)
       });
+      if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
       await page.waitForTimeout?.(input.detailSettleMs ?? 1_500);
+      if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
     } finally {
+      if (this.#backgroundInspectionPage === page) this.#backgroundInspectionPage = undefined;
       await page.close().catch(() => undefined);
     }
   }
@@ -261,7 +277,7 @@ export class SmartThingsWebUiCommandExecutor {
     locationId: string;
     locationNames?: Readonly<Record<string, string>>;
   }): Promise<void> {
-    await this.#runExclusive(() => this.#executeScene(input));
+    await this.#runForeground(() => this.#executeScene(input));
   }
 
   async #executeScene(input: {
@@ -289,7 +305,7 @@ export class SmartThingsWebUiCommandExecutor {
     locationNames?: Readonly<Record<string, string>>;
     action: "armAway" | "armStay" | "disarm";
   }): Promise<void> {
-    await this.#runExclusive(() => this.#executeLocationAction(input));
+    await this.#runForeground(() => this.#executeLocationAction(input));
   }
 
   async #executeLocationAction(input: {
@@ -384,6 +400,19 @@ export class SmartThingsWebUiCommandExecutor {
       return await work();
     } finally {
       release();
+    }
+  }
+
+  async #runForeground<T>(work: () => Promise<T>): Promise<T> {
+    this.#foregroundOperationCount += 1;
+    try {
+      const backgroundPage = this.#backgroundInspectionPage;
+      if (backgroundPage && !backgroundPage.isClosed()) {
+        await backgroundPage.close().catch(() => undefined);
+      }
+      return await this.#runExclusive(work);
+    } finally {
+      this.#foregroundOperationCount -= 1;
     }
   }
 

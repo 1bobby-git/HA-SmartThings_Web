@@ -1682,7 +1682,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(manager.openCommandPage).toHaveBeenCalledTimes(2);
   });
 
-  test("serializes detail discovery and command pages in one browser context", async () => {
+  test("preempts background detail discovery when a foreground command arrives", async () => {
     const discoveryPage = new FakeCommandPage();
     const commandPage = new FakeCommandPage();
     const settle = deferred();
@@ -1706,17 +1706,18 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       deviceName: "Safe plug",
       locationId: "loc_001"
     });
-    await Promise.resolve();
-    await Promise.resolve();
+    try {
+      await vi.waitFor(() => expect(discoveryPage.close).toHaveBeenCalledTimes(1));
+      settle.resolve();
+      await expect(discovery).rejects.toThrow("detail_discovery_preempted");
+      await command;
 
-    expect(manager.openCommandPage).toHaveBeenCalledTimes(1);
-    expect(commandPage.card.click).not.toHaveBeenCalled();
-
-    settle.resolve();
-    await Promise.all([discovery, command]);
-
-    expect(manager.openCommandPage).toHaveBeenCalledTimes(2);
-    expect(commandPage.card.click).toHaveBeenCalledTimes(1);
-    expect(commandPage.toggle.click).toHaveBeenCalledTimes(1);
+      expect(manager.openCommandPage).toHaveBeenCalledTimes(2);
+      expect(commandPage.card.click).toHaveBeenCalledTimes(1);
+      expect(commandPage.toggle.click).toHaveBeenCalledTimes(1);
+    } finally {
+      settle.resolve();
+      await Promise.allSettled([discovery, command]);
+    }
   });
 });
