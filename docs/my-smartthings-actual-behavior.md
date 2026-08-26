@@ -105,6 +105,13 @@ details can use `/location/<id>/device/<id>`. Version 0.1.54 accepts both only
 after the exact visible device identity is revalidated, allowing the verified
 detail page and its process-memory route to be reused for later controls.
 
+A fresh live comparison found that the routed page can still show the exact
+device card behind the modal before the detail content is ready. Cake exposes
+the actual detail surface as one visible `role="dialog"` whose descendants
+contain the device controls. Version 0.1.63 therefore requires that dialog to
+contain the exact device name before probing any control; the background room
+card alone no longer satisfies detail readiness.
+
 ## Camera behavior
 
 The supplied capture contained two thumbnail requests and no corresponding ACK

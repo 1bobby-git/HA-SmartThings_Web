@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.63
+
+- Require the visible SmartThings device-detail dialog containing the exact device name before probing any control.
+- Do not mistake the still-visible room card behind a routed modal for detail readiness.
+
 ## 0.1.62
 
 - Allow a fresh or directly reopened detail page up to fifteen seconds to render the exact observed toggle swatch.

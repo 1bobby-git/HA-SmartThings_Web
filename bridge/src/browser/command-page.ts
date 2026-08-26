@@ -470,7 +470,7 @@ export class SmartThingsWebUiCommandExecutor {
       Date.now() - cached.lastUsedAt < this.#warmPageTtlMs &&
       cached.page.url() === cached.detailUrl &&
       isSmartThingsDeviceDetail(cached.page.url()) &&
-      (await hasExactVisibleDeviceIdentity(cached.page, input.deviceName))
+      (await hasExactVisibleDeviceDialog(cached.page, input.deviceName))
     ) {
       return cached.page;
     }
@@ -495,7 +495,7 @@ export class SmartThingsWebUiCommandExecutor {
       if (
         page.url() !== cached.detailUrl ||
         !isSmartThingsDeviceDetail(page.url()) ||
-        !(await hasExactVisibleDeviceIdentity(
+        !(await hasExactVisibleDeviceDialog(
           page,
           input.deviceName,
           VERIFIED_ROUTE_IDENTITY_TIMEOUT_MS
@@ -565,37 +565,23 @@ function deviceRouteKey(input: {
   return JSON.stringify([input.locationId, input.roomName ?? "", input.deviceName]);
 }
 
-async function hasExactVisibleDeviceIdentity(
+async function hasExactVisibleDeviceDialog(
   page: CommandPageLike,
   deviceName: string,
   timeoutMs = WARM_DETAIL_IDENTITY_TIMEOUT_MS
 ): Promise<boolean> {
-  const heading = page.getByRole("heading", { name: exactName(deviceName) });
-  const headingCount = await heading.count();
-  if (headingCount > 1) return false;
-  if (headingCount === 1) {
-    try {
-      await heading.first().waitFor({
-        state: "visible",
-        timeout: timeoutMs
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  const label = page.getByText(deviceName, { exact: true });
-  if ((await label.count()) !== 1) return false;
+  const dialog = page.getByRole("dialog").filter({
+    has: page.getByText(deviceName, { exact: true })
+  });
   try {
-    await label.first().waitFor({
+    await dialog.first().waitFor({
       state: "visible",
       timeout: timeoutMs
     });
-    return true;
   } catch {
     return false;
   }
+  return (await dialog.count()) === 1;
 }
 
 async function waitForLocationRoute(
@@ -656,7 +642,7 @@ async function waitForOpenedDeviceDetail(
   for (let attempt = 0; attempt <= DETAIL_ROUTE_POLL_ATTEMPTS; attempt += 1) {
     if (
       isSmartThingsDeviceDetail(page.url()) &&
-      (await hasExactVisibleDeviceIdentity(page, deviceName, DETAIL_IDENTITY_PROBE_MS))
+      (await hasExactVisibleDeviceDialog(page, deviceName, DETAIL_IDENTITY_PROBE_MS))
     ) {
       return;
     }

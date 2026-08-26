@@ -10,20 +10,20 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("publishes fresh late-swatch recovery as version 0.1.62", () => {
+  test("publishes exact detail-dialog readiness as version 0.1.63", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.62");
-    expect(packageMetadata.version).toBe("0.1.62");
-    expect(protocolMetadata.bridge_version).toBe("0.1.62");
+    expect(config.version).toBe("0.1.63");
+    expect(packageMetadata.version).toBe("0.1.63");
+    expect(protocolMetadata.bridge_version).toBe("0.1.63");
     expect(protocolMetadata.protocol_version).toBe(4);
-    expect(runtime).toContain('const bridgeVersion = "0.1.62";');
-    expect(changelog).toContain("## 0.1.62");
-    expect(changelog).toContain("up to fifteen seconds");
+    expect(runtime).toContain('const bridgeVersion = "0.1.63";');
+    expect(changelog).toContain("## 0.1.63");
+    expect(changelog).toContain("visible SmartThings device-detail dialog");
     expect(changelog).toContain("device-detail route");
     expect(changelog).toContain("SmartThings icon");
     expect(changelog).toContain("## 0.1.38");

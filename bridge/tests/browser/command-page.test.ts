@@ -47,7 +47,7 @@ class FakeLocator {
 
 class FakeCommandPage {
   card = new FakeLocator(1);
-  detailHeading = new FakeLocator(1);
+  detailDialog = new FakeLocator(1);
   readonly toggle = new FakeLocator(1);
   readonly close = vi.fn(async () => undefined);
   waitForTimeout?: ReturnType<typeof vi.fn>;
@@ -64,7 +64,7 @@ class FakeCommandPage {
   async goto(_url: string): Promise<void> {}
 
   getByRole(role: string, options?: { name?: string | RegExp }): FakeLocator {
-    if (role === "heading") return this.detailHeading;
+    if (role === "dialog") return this.detailDialog;
     if (role === "button") {
       if (options?.name) {
         expect(options.name).toBeInstanceOf(RegExp);
@@ -147,6 +147,25 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(page.toggle.click).not.toHaveBeenCalled();
   });
 
+  test("does not mistake the background device card for an opened detail dialog", async () => {
+    const page = new FakeCommandPage();
+    page.detailDialog = new FakeLocator(0, true);
+    page.card.click.mockImplementation(async () => {
+      page.currentUrl = "https://my.smartthings.com/location/loc_001/rooms/device/device_raw_001";
+    });
+    page.waitForTimeout = vi.fn(async () => undefined);
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await expect(
+      executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" })
+    ).rejects.toThrow("command_target_not_found");
+
+    await expect(page.getByText("Safe plug", { exact: true }).count()).resolves.toBe(1);
+    expect(page.toggle.click).not.toHaveBeenCalled();
+  });
+
   test("reports only fixed command stages while navigating to a fresh detail", async () => {
     const page = new FakeCommandPage();
     page.card.click.mockImplementation(async () => {
@@ -215,7 +234,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
     expect(page.close).not.toHaveBeenCalled();
     expect(executor.hasWarmCommandPage()).toBe(true);
-    expect(page.detailHeading.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 500 });
+    expect(page.detailDialog.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 500 });
   });
 
   test("invalidates a warm page whose visible detail identity drifted", async () => {
@@ -230,7 +249,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     );
 
     await executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" });
-    stalePage.detailHeading = new FakeLocator(0, true);
+    stalePage.detailDialog = new FakeLocator(0, true);
     await executor.executeDeviceAction({
       deviceName: "Safe plug",
       locationId: "loc_001",
@@ -310,7 +329,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       expect(routedPage.goto).toHaveBeenCalledWith(detailUrl, {
         waitUntil: "domcontentloaded"
       });
-      expect(routedPage.detailHeading.waitFor).toHaveBeenCalledWith({
+      expect(routedPage.detailDialog.waitFor).toHaveBeenCalledWith({
         state: "visible",
         timeout: 1_500
       });
@@ -1302,6 +1321,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       role === "slider" ? rangeInput : new FakeLocator(0, true)
     );
     page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "dialog") return page.detailDialog;
       if (role === "button" && options?.name instanceof RegExp && options.name.test("Air purifier")) {
         return card;
       }
@@ -1351,6 +1371,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       role === "slider" ? rangeInput : new FakeLocator(0, true)
     );
     page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "dialog") return page.detailDialog;
       if (role === "button" && options?.name instanceof RegExp && options.name.test("Air purifier")) {
         return card;
       }
