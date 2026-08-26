@@ -330,7 +330,14 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     await executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" });
 
     expect(diagnostics).toEqual([
+      "warm_missing",
+      "verified_route_missing",
+      "fresh_page_opened",
+      "fresh_location_ready",
       "fresh_navigation",
+      "fresh_device_ready",
+      "fresh_device_clicked",
+      "fresh_detail_wait",
       "fresh_detail_ready",
       "fresh_control_probe"
     ]);
@@ -734,9 +741,12 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     page.goto = vi.fn(async (url: string) => {
       page.currentUrl = url;
     });
-    const executor = new SmartThingsWebUiCommandExecutor(() => ({
-      openCommandPage: vi.fn(async () => page)
-    }));
+    const diagnostics: string[] = [];
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => ({ openCommandPage: vi.fn(async () => page) }),
+      undefined,
+      { onDiagnostic: (stage) => diagnostics.push(stage) }
+    );
 
     await executor.executeSwitch({
       deviceName: "Safe plug",
@@ -748,6 +758,22 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(roomButton.click).toHaveBeenCalledTimes(1);
     expect(visibleDevice.click).toHaveBeenCalledTimes(1);
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
+    expect(diagnostics).toEqual([
+      "warm_missing",
+      "verified_route_missing",
+      "fresh_page_opened",
+      "fresh_location_ready",
+      "fresh_navigation",
+      "fresh_overview_probe",
+      "fresh_overview_missing",
+      "fresh_rooms_opened",
+      "fresh_room_selected",
+      "fresh_room_device_ready",
+      "fresh_device_clicked",
+      "fresh_detail_wait",
+      "fresh_detail_ready",
+      "fresh_control_probe"
+    ]);
   });
 
   test("retries one fresh page when cold room navigation fails before control probing", async () => {
@@ -1715,14 +1741,23 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(page.card.click).toHaveBeenCalledTimes(1);
     expect(card.click).not.toHaveBeenCalled();
     expect(diagnostics).toEqual([
+      "warm_missing",
+      "verified_route_missing",
+      "fresh_page_opened",
+      "fresh_location_ready",
       "fresh_navigation",
+      "fresh_device_ready",
+      "fresh_device_clicked",
+      "fresh_detail_wait",
       "fresh_detail_ready",
       "fresh_control_probe",
       "toggle_named_control_missing",
       "toggle_labeled_scope_found",
       "toggle_scoped_switch_0",
       "toggle_scoped_checkbox_0",
-      "toggle_scoped_button_1"
+      "toggle_scoped_button_1",
+      "toggle_click_start",
+      "toggle_click_done"
     ]);
     now.mockRestore();
   });

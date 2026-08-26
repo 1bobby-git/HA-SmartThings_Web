@@ -30,13 +30,38 @@ interface CommandPageLike extends BrowserPageLike, CommandControlSurface {
 type CommandPageManagerLike = Pick<KeeperPageManager, "openCommandPage">;
 
 type CommandDiagnosticStage =
+  | "warm_missing"
+  | "warm_context_mismatch"
+  | "warm_closed"
+  | "warm_expired"
+  | "warm_route_invalid"
+  | "warm_dialog_missing"
+  | "warm_ready"
+  | "verified_route_missing"
+  | "verified_route_expired"
+  | "verified_route_opened"
+  | "verified_route_ready"
+  | "verified_route_invalid"
+  | "fresh_page_opened"
+  | "fresh_location_ready"
   | "fresh_navigation"
+  | "fresh_overview_probe"
+  | "fresh_overview_missing"
+  | "fresh_overview_ready"
+  | "fresh_rooms_opened"
+  | "fresh_room_selected"
+  | "fresh_room_device_ready"
+  | "fresh_device_ready"
+  | "fresh_device_clicked"
+  | "fresh_detail_wait"
   | "fresh_detail_ready"
   | "fresh_control_probe"
   | "toggle_named_control_found"
   | "toggle_named_control_missing"
   | "toggle_labeled_scope_found"
   | "toggle_labeled_scope_missing"
+  | "toggle_click_start"
+  | "toggle_click_done"
   | `toggle_scoped_${"switch" | "checkbox" | "button"}_${"0" | "1" | "many"}`;
 
 interface CommandExecutorOptions {
@@ -246,15 +271,19 @@ export class SmartThingsWebUiCommandExecutor {
     let page: CommandPageLike | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const candidate = (await manager.openCommandPage()) as CommandPageLike;
+      this.#diagnostic("fresh_page_opened");
       try {
         if (!isSmartThingsLocation(candidate.url())) {
           throw new Error("command_login_required");
         }
         await this.ensureLocation(candidate, input.locationId, input.locationNames);
+        this.#diagnostic("fresh_location_ready");
         this.#diagnostic("fresh_navigation");
         await openDeviceDetail(candidate, input.deviceName, input.roomName, {
-          preferRooms: Boolean(input.roomName)
+          preferRooms: Boolean(input.roomName),
+          diagnostic: (stage) => this.#diagnostic(stage)
         });
+        this.#diagnostic("fresh_detail_wait");
         await waitForOpenedDeviceDetail(candidate, input.deviceName, input.roomName);
         page = candidate;
         break;
@@ -476,22 +505,42 @@ export class SmartThingsWebUiCommandExecutor {
     input: { deviceName: string; locationId: string; roomName?: string }
   ): Promise<CommandPageLike | undefined> {
     const cached = this.#warmDevicePage;
-    if (
-      cached &&
-      cached.manager === manager &&
-      cached.locationId === input.locationId &&
-      cached.deviceName === input.deviceName &&
-      cached.roomName === input.roomName &&
-      !cached.page.isClosed() &&
-      Date.now() - cached.lastUsedAt < this.#warmPageTtlMs &&
-      cached.page.url() === cached.detailUrl &&
-      isSmartThingsDeviceDetail(cached.page.url()) &&
-      (await hasExactVisibleDeviceDialog(cached.page, input.deviceName, input.roomName))
-    ) {
-      return cached.page;
+    if (!cached) {
+      this.#diagnostic("warm_missing");
+      return undefined;
     }
-    await this.#invalidateWarmPage();
-    return undefined;
+    if (
+      cached.manager !== manager ||
+      cached.locationId !== input.locationId ||
+      cached.deviceName !== input.deviceName ||
+      cached.roomName !== input.roomName
+    ) {
+      this.#diagnostic("warm_context_mismatch");
+      await this.#invalidateWarmPage();
+      return undefined;
+    }
+    if (cached.page.isClosed()) {
+      this.#diagnostic("warm_closed");
+      await this.#invalidateWarmPage();
+      return undefined;
+    }
+    if (Date.now() - cached.lastUsedAt >= this.#warmPageTtlMs) {
+      this.#diagnostic("warm_expired");
+      await this.#invalidateWarmPage();
+      return undefined;
+    }
+    if (cached.page.url() !== cached.detailUrl || !isSmartThingsDeviceDetail(cached.page.url())) {
+      this.#diagnostic("warm_route_invalid");
+      await this.#invalidateWarmPage();
+      return undefined;
+    }
+    if (!(await hasExactVisibleDeviceDialog(cached.page, input.deviceName, input.roomName))) {
+      this.#diagnostic("warm_dialog_missing");
+      await this.#invalidateWarmPage();
+      return undefined;
+    }
+    this.#diagnostic("warm_ready");
+    return cached.page;
   }
 
   async #openVerifiedDetailPage(
@@ -500,12 +549,17 @@ export class SmartThingsWebUiCommandExecutor {
   ): Promise<CommandPageLike | undefined> {
     const key = deviceRouteKey(input);
     const cached = this.#verifiedDetailRoutes.get(key);
-    if (!cached) return undefined;
+    if (!cached) {
+      this.#diagnostic("verified_route_missing");
+      return undefined;
+    }
     if (Date.now() - cached.verifiedAt >= VERIFIED_ROUTE_TTL_MS) {
+      this.#diagnostic("verified_route_expired");
       this.#verifiedDetailRoutes.delete(key);
       return undefined;
     }
     const page = (await manager.openCommandPage()) as CommandPageLike;
+    this.#diagnostic("verified_route_opened");
     try {
       await page.goto(cached.detailUrl, { waitUntil: "domcontentloaded" });
       if (
@@ -521,8 +575,10 @@ export class SmartThingsWebUiCommandExecutor {
         throw new Error("verified_detail_route_invalid");
       }
       cached.verifiedAt = Date.now();
+      this.#diagnostic("verified_route_ready");
       return page;
     } catch {
+      this.#diagnostic("verified_route_invalid");
       this.#verifiedDetailRoutes.delete(key);
       await page.close().catch(() => undefined);
       return undefined;
@@ -646,17 +702,26 @@ async function openDeviceDetail(
   page: CommandPageLike,
   deviceName: string,
   roomName: string | undefined,
-  options?: { preferRooms?: boolean }
+  options?: {
+    preferRooms?: boolean;
+    diagnostic?: (stage: CommandDiagnosticStage) => void;
+  }
 ): Promise<void> {
+  const diagnostic = options?.diagnostic ?? (() => undefined);
   if (options?.preferRooms && roomName) {
+    diagnostic("fresh_overview_probe");
     const overviewDevice = await visibleExactTextCard(page, deviceName, 1_000);
     if (overviewDevice) {
+      diagnostic("fresh_overview_ready");
       await overviewDevice.click({ timeout: 15_000 });
+      diagnostic("fresh_device_clicked");
       return;
     }
-    const roomDevice = await findDeviceInRooms(page, deviceName, roomName);
+    diagnostic("fresh_overview_missing");
+    const roomDevice = await findDeviceInRooms(page, deviceName, roomName, diagnostic);
     if ((await roomDevice.count()) !== 1) throw new Error("command_target_ambiguous");
     await roomDevice.click({ timeout: 15_000 });
+    diagnostic("fresh_device_clicked");
     return;
   }
 
@@ -672,7 +737,9 @@ async function openDeviceDetail(
   }
   if (!device) throw new Error("command_target_not_found");
   if ((await device.count()) !== 1) throw new Error("command_target_ambiguous");
+  diagnostic("fresh_device_ready");
   await device.click({ timeout: 15_000 });
+  diagnostic("fresh_device_clicked");
 }
 
 async function waitForOpenedDeviceDetail(
@@ -840,7 +907,9 @@ async function clickObservedToggleControl(
   if (named) {
     diagnostic("toggle_named_control_found");
     await named.waitFor({ state: "visible", timeout: probeTimeoutMs });
+    diagnostic("toggle_click_start");
     await named.click({ timeout: 15_000 });
+    diagnostic("toggle_click_done");
     return;
   }
   diagnostic("toggle_named_control_missing");
@@ -868,7 +937,9 @@ async function clickObservedToggleControl(
   } catch {
     throw new Error("command_control_not_found");
   }
+  diagnostic("toggle_click_start");
   await scoped.click({ timeout: 15_000 });
+  diagnostic("toggle_click_done");
 }
 
 function countBucket(count: number): "0" | "1" | "many" {
@@ -1151,12 +1222,14 @@ function exactOrLocalized(value: string): RegExp {
 async function findDeviceInRooms(
   page: CommandPageLike,
   deviceName: string,
-  roomName: string | undefined
+  roomName: string | undefined,
+  diagnostic: (stage: CommandDiagnosticStage) => void = () => undefined
 ): Promise<CommandLocatorLike> {
   const url = new URL(page.url());
   const route = url.pathname.match(/^(\/location\/[^/]+)(?:\/.*)?$/u)?.[1];
   if (!route) throw new Error("command_room_not_found");
   await page.goto(`${url.origin}${route}/rooms`, { waitUntil: "domcontentloaded" });
+  diagnostic("fresh_rooms_opened");
   if (roomName) {
     const roomText = page.getByText(roomName, { exact: true });
     let room = page.getByRole("button").filter({
@@ -1174,6 +1247,7 @@ async function findDeviceInRooms(
       }
     }
     await room.click({ timeout: 15_000 });
+    diagnostic("fresh_room_selected");
   }
   let device = await visibleExactTextCard(page, deviceName, ROOM_DEVICE_CARD_TIMEOUT_MS);
   if (!device) {
@@ -1181,6 +1255,7 @@ async function findDeviceInRooms(
   }
   if (!device) throw new Error("command_target_not_found");
   if ((await device.count()) !== 1) throw new Error("command_target_ambiguous");
+  diagnostic("fresh_room_device_ready");
   return device;
 }
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.69
+
+- Add fixed phase diagnostics for warm-page validation, verified-route reuse, room navigation, exact device selection, detail readiness, and toggle click completion.
+- Keep diagnostic output free of device names, identifiers, URLs, values, and credentials while exposing the precise command latency boundary.
+
 ## 0.1.68
 
 - Retry one cold room-navigation failure on a new page before any control probing, while preserving exact room, device, and detail-dialog matching.
