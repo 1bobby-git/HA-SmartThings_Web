@@ -368,16 +368,18 @@ describe("createBridgeHttpServer", () => {
   test("streams the current inventory marker and subsequent device events, then unsubscribes on close", async () => {
     const token = "e".repeat(32);
     const unsubscribe = vi.fn();
+    const store = createStore();
     let listener: ((value: unknown) => void) | undefined;
     const devices = {
       snapshot: vi.fn(() => ({ sequence: 41 })),
+      currentSequence: vi.fn(() => 41),
       subscribe: vi.fn((next: (value: unknown) => void) => {
         listener = next;
         return unsubscribe;
       })
     } as unknown as DeviceStore;
     const server = await createBridgeHttpServer({
-      store: createStore(),
+      store,
       host: "127.0.0.1",
       port: 0,
       auth: new BridgeAuth(token),
@@ -399,7 +401,10 @@ describe("createBridgeHttpServer", () => {
 
       const first = await readEventStreamMessage(reader!);
       expect(first).toBe('data: {"schemaVersion":1,"sequence":41,"type":"inventory"}\n\n');
+      expect(devices.currentSequence).toHaveBeenCalledTimes(1);
+      expect(devices.snapshot).not.toHaveBeenCalled();
       expect(devices.subscribe).toHaveBeenCalledTimes(1);
+      expect(store.getSnapshot().activeConnections).toBe(1);
 
       listener?.({
         schemaVersion: 1,
@@ -427,6 +432,7 @@ describe("createBridgeHttpServer", () => {
       controller.abort();
     }
     await vi.waitFor(() => expect(unsubscribe).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(store.getSnapshot().activeConnections).toBe(0));
   });
 
   test("requires Bridge authentication and maps command failures to fixed safe HTTP errors", async () => {

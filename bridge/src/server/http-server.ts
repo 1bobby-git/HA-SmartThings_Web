@@ -151,7 +151,7 @@ async function handleBridgeApiRequest(
     }
     if (path === "/api/v1/events") {
       if (method !== "GET") return writeError(response, 405, "method_not_allowed");
-      return openEventStream(request, response, options.devices);
+      return openEventStream(request, response, options.devices, options.store);
     }
     writeError(response, 404, "not_found");
   } catch (error) {
@@ -201,7 +201,8 @@ function commandErrorStatus(code: SafeCommandError["code"]): number {
 function openEventStream(
   request: IncomingMessage,
   response: ServerResponse,
-  devices: DeviceStore
+  devices: DeviceStore,
+  store: RuntimeStatusStore
 ): void {
   request.socket.setNoDelay(true);
   response.writeHead(200, {
@@ -214,14 +215,21 @@ function openEventStream(
   const writeEvent = (value: unknown) => {
     if (!response.destroyed) response.write(`data: ${JSON.stringify(value)}\n\n`);
   };
-  writeEvent({ schemaVersion: 1, sequence: devices.snapshot().sequence, type: "inventory" });
+  const activeConnections = store.getSnapshot().activeConnections;
+  store.update({ activeConnections: activeConnections + 1 });
+  writeEvent({ schemaVersion: 1, sequence: devices.currentSequence(), type: "inventory" });
   const unsubscribe = devices.subscribe(writeEvent);
   const keepalive = setInterval(() => {
     if (!response.destroyed) response.write(": keepalive\n\n");
   }, 15_000);
+  let closed = false;
   request.once("close", () => {
+    if (closed) return;
+    closed = true;
     clearInterval(keepalive);
     unsubscribe();
+    const currentConnections = store.getSnapshot().activeConnections;
+    store.update({ activeConnections: Math.max(0, currentConnections - 1) });
     response.end();
   });
 }

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.89
+
+- Recover the authenticated keeper immediately when the consumer-web Socket.IO transport closes, and require a fresh complete snapshot before readiness returns.
+- Treat only received WebSocket frames as push freshness so outbound traffic cannot hide a stalled subscription.
+- Eliminate duplicate reconnect inventory fetches and avoid cloning the full inventory merely to emit the SSE sequence marker.
+- Track active Home Assistant SSE connections for accurate transport diagnostics without adding polling.
+
 ## 0.1.88
 
 - Treat a compatible historical protocol change count as durable history rather than a current mismatch in the physical-action probe, Core restart continuity operator, and sealed soak deployment gate.

@@ -183,6 +183,30 @@ describe("installBrowserObserver", () => {
     expect(JSON.stringify(write.mock.calls)).not.toContain("raw-session-only");
   });
 
+  test("reports only SmartThings Socket.IO closes to the recovery observer", () => {
+    const context = new Emitter();
+    const write = vi.fn();
+    const onSmartThingsWebSocketClose = vi.fn();
+    installBrowserObserver(context, { write }, (value) => value, {
+      onSmartThingsWebSocketClose
+    });
+    const smartThings = new Emitter() as Emitter & { url: () => string };
+    smartThings.url = () => "wss://my.smartthings.com/socket.io/?EIO=4&transport=websocket";
+    const unrelated = new Emitter() as Emitter & { url: () => string };
+    unrelated.url = () => "wss://example.test/socket.io/";
+
+    context.emit("websocket", smartThings);
+    context.emit("websocket", unrelated);
+    smartThings.emit("close", undefined);
+    unrelated.emit("close", undefined);
+
+    expect(onSmartThingsWebSocketClose).toHaveBeenCalledOnce();
+    expect(onSmartThingsWebSocketClose).toHaveBeenCalledWith(
+      "wss://my.smartthings.com/socket.io/?EIO=4&transport=websocket",
+      "pw_ws_1"
+    );
+  });
+
   test("redacts Playwright websocket text before byte bounding and persistence", async () => {
     await withPersistedCaptures((store, redact) => {
       const context = new Emitter();

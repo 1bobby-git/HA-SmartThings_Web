@@ -62,7 +62,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.88";
+const bridgeVersion = "0.1.89";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -278,6 +278,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           volatileIdentifiers,
           status,
           log,
+          capturePipeline.resetSnapshotSession,
+          () => !stopped && (currentContext === undefined || context === currentContext),
           () => {
             if (context === currentContext && keeperManager === currentKeeperManager) {
               physicalActionProbe.recordBrowserIsolation(
@@ -435,6 +437,8 @@ async function attachContext(
   volatileIdentifiers: VolatileIdentifierMap,
   status: RuntimeStatusStore,
   log: BridgeRuntimeLog,
+  resetSnapshotSession: () => void,
+  canRecoverSocket: () => boolean,
   onNewPage: () => void
 ): Promise<void> {
   const observedCdpPages = new WeakSet<object>();
@@ -444,11 +448,47 @@ async function attachContext(
 
   await keeperManager.reconcileRestoredPages();
 
+  let recoveryPromise: Promise<void> | undefined;
+  let lastRecoveryStartedAtMs = 0;
+  const recoverSmartThingsWebSocket = () => {
+    const now = Date.now();
+    if (
+      !canRecoverSocket() ||
+      recoveryPromise ||
+      now - lastRecoveryStartedAtMs < 1_000
+    ) {
+      return;
+    }
+    lastRecoveryStartedAtMs = now;
+    resetSnapshotSession();
+    status.update({
+      pushConnected: false,
+      parserHealthy: false,
+      initialSnapshotComplete: false,
+      lastSnapshotAtMs: undefined,
+      lastParserSuccessAtMs: undefined,
+      state: "RECONNECTING"
+    });
+    recoveryPromise = (async () => {
+      try {
+        const keeper = await keeperManager.recoverKeeper();
+        if (canRecoverSocket()) {
+          status.update({ keeperPresent: true, ...statusForKeeperUrl(keeper.url()) });
+        }
+      } catch {
+        log.warn("smartthings_websocket_recovery_failed");
+      } finally {
+        recoveryPromise = undefined;
+      }
+    })();
+  };
+
   installBrowserObserver(context, sink, redact, {
     onRawWebSocketFrame: (direction, payload, connectionId) => {
       volatileIdentifiers.observeRawWebSocketFrame(direction, payload);
       cameraImages.observeRawWebSocketFrame(direction, payload, connectionId);
-    }
+    },
+    onSmartThingsWebSocketClose: recoverSmartThingsWebSocket
   });
   context.on?.("page", (page) => {
     void installCdpForPage(
@@ -459,7 +499,8 @@ async function attachContext(
       observedCdpPages,
       log,
       cameraImages,
-      volatileIdentifiers
+      volatileIdentifiers,
+      recoverSmartThingsWebSocket
     );
     onNewPage();
   });
@@ -470,7 +511,8 @@ async function attachContext(
     observedCdpPages,
     log,
     cameraImages,
-    volatileIdentifiers
+    volatileIdentifiers,
+    recoverSmartThingsWebSocket
   );
 
   let keeper = await keeperManager.ensureKeeper();
@@ -500,7 +542,8 @@ async function installCdpForPages(
   observedCdpPages: WeakSet<object>,
   log: BridgeRuntimeLog,
   cameraImages: CameraImageStore,
-  volatileIdentifiers: VolatileIdentifierMap
+  volatileIdentifiers: VolatileIdentifierMap,
+  onSmartThingsWebSocketClose: () => void
 ): Promise<void> {
   await Promise.all(
     context.pages().map((page) =>
@@ -512,7 +555,8 @@ async function installCdpForPages(
         observedCdpPages,
         log,
         cameraImages,
-        volatileIdentifiers
+        volatileIdentifiers,
+        onSmartThingsWebSocketClose
       )
     )
   );
@@ -526,7 +570,8 @@ async function installCdpForPage(
   observedCdpPages: WeakSet<object>,
   log: BridgeRuntimeLog,
   cameraImages: CameraImageStore,
-  volatileIdentifiers: VolatileIdentifierMap
+  volatileIdentifiers: VolatileIdentifierMap,
+  onSmartThingsWebSocketClose: () => void
 ): Promise<void> {
   if (observedCdpPages.has(page) || !context.newCDPSession) {
     return;
@@ -537,7 +582,8 @@ async function installCdpForPage(
       onRawWebSocketFrame: (direction, payload, connectionId) => {
         volatileIdentifiers.observeRawWebSocketFrame(direction, payload);
         cameraImages.observeRawWebSocketFrame(direction, payload, connectionId);
-      }
+      },
+      onSmartThingsWebSocketClose
     });
     observedCdpPages.add(page);
   } catch {
@@ -555,11 +601,16 @@ function createStatusCapturePipeline(
   devices: DeviceStore,
   cameraImages: CameraImageStore,
   volatileIdentifiers: VolatileIdentifierMap
-): { sink: CaptureSink; reset: () => void } {
+): { sink: CaptureSink; reset: () => void; resetSnapshotSession: () => void } {
   let analyzer = new ProtocolAnalyzer({ ttlMs: 300_000, maxEntries: 100_000 });
   let protocolFingerprintObserved = false;
   let protocolBlocked = initiallyProtocolBlocked;
   return {
+    resetSnapshotSession: () => {
+      physicalActionProbe.fail("runtime_restarted");
+      analyzer.resetSnapshotSession();
+      protocolFingerprintObserved = false;
+    },
     reset: () => {
       physicalActionProbe.fail("runtime_restarted");
       devices.reset();
@@ -582,7 +633,7 @@ function createStatusCapturePipeline(
           const current = status.getSnapshot();
           const basePatch: RuntimeStatusPatch = {
             lastFrameAtMs: now,
-            lastPushAtMs: now,
+            ...(webSocketFrameDirection(record) === "received" ? { lastPushAtMs: now } : {}),
             decodedDeviceEventCount: protocol.decodedDeviceEvents,
             uniqueLogicalEventCount: protocol.uniqueLogicalEvents,
             duplicateEventCount: protocol.duplicateDeliveries,
@@ -668,6 +719,14 @@ function createStatusCapturePipeline(
       }
     }
   };
+}
+
+function webSocketFrameDirection(
+  record: Parameters<CaptureSink["write"]>[0]
+): "sent" | "received" | undefined {
+  if (typeof record.payload !== "object" || record.payload === null) return undefined;
+  const direction = (record.payload as Record<string, unknown>)["direction"];
+  return direction === "sent" || direction === "received" ? direction : undefined;
 }
 
 function probeEvidenceFrom(report: HealthReport, browserIsolated: boolean): ProbeRuntimeEvidence {

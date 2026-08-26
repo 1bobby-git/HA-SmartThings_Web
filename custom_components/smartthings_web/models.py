@@ -165,6 +165,8 @@ class SmartThingsWebRuntime:
     async def handle_event(self, event: dict[str, Any]) -> bool:
         """Apply one SSE event, resynchronizing on reconnects and gaps."""
         if event.get("type") == "inventory":
+            if _event_sequence(event) == self.inventory.sequence:
+                return False
             return self.apply_inventory(await self.client.async_get_inventory())
         if event.get("type") != "state":
             return False

@@ -77,6 +77,19 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertEqual(sensor_value(runtime), 21)
         self.assertEqual(observations, [21])
 
+    def test_matching_inventory_marker_does_not_refetch_the_snapshot(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:00:00Z")
+        client = FakeClient()
+        runtime = SmartThingsWebRuntime(client, "loc_001", current)
+
+        changed = asyncio.run(
+            runtime.handle_event({"type": "inventory", "sequence": 10})
+        )
+
+        self.assertFalse(changed)
+        self.assertEqual(client.calls, 0)
+        self.assertEqual(runtime.inventory.sequence, 10)
+
     def test_inventory_merge_updates_device_presentation_atomically(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:00:00Z")
         latest = inventory(11, 21, "2026-08-24T21:01:00Z")

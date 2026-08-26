@@ -589,6 +589,67 @@ describe("createBridgeRuntime", () => {
     }
   });
 
+  test("does not let outbound websocket traffic extend received push freshness", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const root = createTempRoot();
+    const context = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        chromium: { launchPersistentContext: vi.fn(async () => context) }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    const socket = new FakeEmitter() as FakeEmitter & { url: () => string };
+    socket.url = () => "wss://my.smartthings.com/socket.io/";
+    await context.emit("websocket", socket);
+
+    await socket.emit("framereceived", { payload: "2" });
+    expect(runtime.status.getSnapshot().lastPushAtMs).toBe(10_000);
+
+    vi.setSystemTime(20_000);
+    await socket.emit("framesent", { payload: "3" });
+
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      lastFrameAtMs: 20_000,
+      lastPushAtMs: 10_000
+    });
+  });
+
+  test("immediately reloads the keeper and invalidates readiness when SmartThings Socket.IO closes", async () => {
+    const root = createTempRoot();
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    const context = new FakeContext([keeper]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        chromium: { launchPersistentContext: vi.fn(async () => context) }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    keeper.goto.mockClear();
+    runtime.status.update({
+      authenticated: true,
+      pushConnected: true,
+      parserHealthy: true,
+      initialSnapshotComplete: true,
+      state: "CONNECTED"
+    });
+    const socket = new FakeEmitter() as FakeEmitter & { url: () => string };
+    socket.url = () => "wss://my.smartthings.com/socket.io/?EIO=4&transport=websocket";
+    await context.emit("websocket", socket);
+
+    await socket.emit("close", undefined);
+
+    await vi.waitFor(() => expect(keeper.goto).toHaveBeenCalledTimes(1));
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      pushConnected: false,
+      parserHealthy: false,
+      initialSnapshotComplete: false
+    });
+  });
+
   test("marks snapshot complete only after all real ACK categories and becomes ready after push", async () => {
     vi.useFakeTimers();
     const root = createTempRoot();

@@ -149,6 +149,13 @@ export class ProtocolAnalyzer {
     this.#lastMismatchSurface = undefined;
   }
 
+  resetSnapshotSession(): void {
+    this.#snapshotDetector.reset();
+    for (const surface of REQUIRED_PROTOCOL_SURFACES) {
+      if (surface.startsWith("snapshot:")) this.#observedSurfaces.delete(surface);
+    }
+  }
+
   #recordMismatch(surface: ProtocolMismatchSurface): void {
     this.#mismatchedSurfaces.add(surface);
     this.#lastMismatchSurface = surface;

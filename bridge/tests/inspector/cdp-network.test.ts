@@ -226,6 +226,31 @@ describe("installCdpNetworkObserver", () => {
     expect(JSON.stringify(write.mock.calls)).not.toMatch(/raw-camera-uuid|secret/);
   });
 
+  test("reports only tracked SmartThings Socket.IO closes to the recovery observer", async () => {
+    const session = new FakeSession();
+    const onSmartThingsWebSocketClose = vi.fn();
+    await installCdpNetworkObserver(session, { write: vi.fn() }, (value) => value, {
+      onSmartThingsWebSocketClose
+    });
+
+    await session.emit("Network.webSocketCreated", {
+      requestId: "smartthings-socket",
+      url: "wss://my.smartthings.com/socket.io/?EIO=4&transport=websocket"
+    });
+    await session.emit("Network.webSocketCreated", {
+      requestId: "other-socket",
+      url: "wss://example.test/socket.io/"
+    });
+    await session.emit("Network.webSocketClosed", { requestId: "smartthings-socket" });
+    await session.emit("Network.webSocketClosed", { requestId: "other-socket" });
+
+    expect(onSmartThingsWebSocketClose).toHaveBeenCalledOnce();
+    expect(onSmartThingsWebSocketClose).toHaveBeenCalledWith(
+      "wss://my.smartthings.com/socket.io/?EIO=4&transport=websocket",
+      expect.stringMatching(/:smartthings-socket$/u)
+    );
+  });
+
   test("redacts CDP opcode-1 websocket payloadData before byte bounding and persistence", async () => {
     await withPersistedCaptures(async (store, redact) => {
       const session = new FakeSession();

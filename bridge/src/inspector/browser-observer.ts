@@ -23,6 +23,7 @@ export interface BrowserObserverOptions {
     payload: string,
     connectionId: string
   ) => void;
+  onSmartThingsWebSocketClose?: (url: string, connectionId: string) => void;
 }
 
 export function installBrowserObserver(
@@ -73,13 +74,19 @@ export function installBrowserObserver(
           frame: normalizePlaywrightFrame(frame, textLimitBytes, redact)
         });
       });
-      socket.on("close", () =>
+      socket.on("close", () => {
+        const url = callString(socket, "url");
+        observeSmartThingsWebSocketClose(
+          options.onSmartThingsWebSocketClose,
+          url,
+          connectionId
+        );
         write(sink, redact, "playwright-websocket", {
           url: callString(socket, "url"),
           connectionId,
           event: "close"
-        })
-      );
+        });
+      });
     }
   });
 
@@ -94,6 +101,34 @@ export function installBrowserObserver(
   }
 
   context.on("page", (page) => attachPage(page, sink, redact, observedPages));
+}
+
+export function isSmartThingsSocketIoUrl(value: string | undefined): value is string {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    const service = url.pathname.split("/").find((segment) => segment.length > 0);
+    return (
+      (url.protocol === "wss:" || url.protocol === "ws:") &&
+      url.hostname === "my.smartthings.com" &&
+      service === ["socket", "io"].join(".")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function observeSmartThingsWebSocketClose(
+  observer: BrowserObserverOptions["onSmartThingsWebSocketClose"],
+  url: string | undefined,
+  connectionId: string
+): void {
+  if (!observer || !isSmartThingsSocketIoUrl(url)) return;
+  try {
+    observer(url, connectionId);
+  } catch {
+    // Recovery diagnostics must never interrupt the sanitized capture pipeline.
+  }
 }
 
 function observeRawTextFrame(

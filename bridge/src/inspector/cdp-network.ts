@@ -1,5 +1,9 @@
 import { sanitizeCaptureRecord, type CaptureSource } from "../state/capture-store.js";
-import type { CaptureSink, Redact } from "./browser-observer.js";
+import {
+  isSmartThingsSocketIoUrl,
+  type CaptureSink,
+  type Redact
+} from "./browser-observer.js";
 import { createHash } from "node:crypto";
 import {
   DEFAULT_CAPTURE_TEXT_LIMIT_BYTES,
@@ -18,6 +22,7 @@ export interface CdpNetworkOptions {
     payload: string,
     connectionId: string
   ) => void;
+  onSmartThingsWebSocketClose?: (url: string, connectionId: string) => void;
 }
 
 interface TrackedResponse {
@@ -36,8 +41,27 @@ export async function installCdpNetworkObserver(
 ): Promise<void> {
   const limit = options.responseBodyLimitBytes ?? DEFAULT_CAPTURE_TEXT_LIMIT_BYTES;
   const tracked = new Map<string, TrackedResponse>();
+  const trackedWebSockets = new Map<string, string>();
   const sessionScope = `cdp_session_${nextCdpSessionId++}`;
   await session.send("Network.enable");
+
+  session.on("Network.webSocketCreated", (payload) => {
+    const requestId = readString(payload, "requestId");
+    const url = readString(payload, "url");
+    if (requestId && url) trackedWebSockets.set(requestId, url);
+  });
+  session.on("Network.webSocketClosed", (payload) => {
+    const requestId = readString(payload, "requestId");
+    if (!requestId) return;
+    const url = trackedWebSockets.get(requestId);
+    trackedWebSockets.delete(requestId);
+    if (!url || !isSmartThingsSocketIoUrl(url) || !options.onSmartThingsWebSocketClose) return;
+    try {
+      options.onSmartThingsWebSocketClose(url, `${sessionScope}:${requestId}`);
+    } catch {
+      // Recovery diagnostics must never interrupt the sanitized capture pipeline.
+    }
+  });
 
   session.on("Network.webSocketFrameSent", (payload) => {
     observeRawTextFrame(options.onRawWebSocketFrame, "sent", payload, sessionScope);

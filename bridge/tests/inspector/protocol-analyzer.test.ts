@@ -307,6 +307,26 @@ describe("ProtocolAnalyzer", () => {
     });
   });
 
+  test("resets snapshot readiness for a new socket session without losing event counters", () => {
+    const analyzer = new ProtocolAnalyzer({ ttlMs: 60_000, maxEntries: 100 });
+    observeAllSnapshots(analyzer);
+    analyzer.observe(deviceEventRecord(fixture.fixture_deliveries[0]));
+    const before = analyzer.snapshot();
+
+    analyzer.resetSnapshotSession();
+
+    expect(analyzer.snapshot()).toMatchObject({
+      decodedDeviceEvents: before.decodedDeviceEvents,
+      uniqueLogicalEvents: before.uniqueLogicalEvents,
+      duplicateDeliveries: before.duplicateDeliveries,
+      journalSize: before.journalSize,
+      snapshotComplete: false,
+      snapshotCategories: {},
+      pendingSnapshotRequests: 0,
+      protocolComplete: false
+    });
+  });
+
   test("exports exactly the seven safe protocol surfaces used for completion", () => {
     const surfaces = [...REQUIRED_PROTOCOL_SURFACES].sort();
     expect(surfaces).toEqual([
