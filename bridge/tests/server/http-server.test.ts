@@ -365,6 +365,70 @@ describe("createBridgeHttpServer", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
+  test("streams the current inventory marker and subsequent device events, then unsubscribes on close", async () => {
+    const token = "e".repeat(32);
+    const unsubscribe = vi.fn();
+    let listener: ((value: unknown) => void) | undefined;
+    const devices = {
+      snapshot: vi.fn(() => ({ sequence: 41 })),
+      subscribe: vi.fn((next: (value: unknown) => void) => {
+        listener = next;
+        return unsubscribe;
+      })
+    } as unknown as DeviceStore;
+    const server = await createBridgeHttpServer({
+      store: createStore(),
+      host: "127.0.0.1",
+      port: 0,
+      auth: new BridgeAuth(token),
+      devices
+    });
+    servers.push(server);
+
+    const controller = new AbortController();
+    const response = await fetch(`http://127.0.0.1:${server.port}/api/v1/events`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: controller.signal
+    });
+    const reader = response.body?.getReader();
+    try {
+      expect(reader).toBeDefined();
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("text/event-stream; charset=utf-8");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+
+      const first = await readEventStreamMessage(reader!);
+      expect(first).toBe('data: {"schemaVersion":1,"sequence":41,"type":"inventory"}\n\n');
+      expect(devices.subscribe).toHaveBeenCalledTimes(1);
+
+      listener?.({
+        schemaVersion: 1,
+        type: "state",
+        sequence: 42,
+        deviceId: "dev_001",
+        state: {
+          component: "main",
+          capability: "relativeHumidityMeasurement",
+          attribute: "humidity",
+          value: 62.8,
+          unit: "%",
+          updatedAt: "2026-08-26T06:00:00.000Z"
+        }
+      });
+      const second = await readEventStreamMessage(reader!);
+      expect(JSON.parse(second.slice(6).trim())).toMatchObject({
+        type: "state",
+        sequence: 42,
+        deviceId: "dev_001",
+        state: { attribute: "humidity", value: 62.8 }
+      });
+    } finally {
+      if (reader) await reader.cancel().catch(() => undefined);
+      controller.abort();
+    }
+    await vi.waitFor(() => expect(unsubscribe).toHaveBeenCalledTimes(1));
+  });
+
   test("requires Bridge authentication and maps command failures to fixed safe HTTP errors", async () => {
     const token = "b".repeat(32);
     const execute = vi.fn(async () => {
@@ -506,6 +570,19 @@ async function postJson(url: string, body: unknown): Promise<Response> {
 
 async function expectFixedError(response: Response, code: string): Promise<void> {
   expect(await response.text()).toBe(JSON.stringify({ error: code }));
+}
+
+async function readEventStreamMessage(
+  reader: ReadableStreamDefaultReader<Uint8Array>
+): Promise<string> {
+  const decoder = new TextDecoder();
+  let message = "";
+  while (!message.includes("\n\n")) {
+    const chunk = await reader.read();
+    if (chunk.done) throw new Error("event stream ended before a complete message");
+    message += decoder.decode(chunk.value, { stream: true });
+  }
+  return message.slice(0, message.indexOf("\n\n") + 2);
 }
 
 async function rawHttpRequestWithoutBody(port: number): Promise<string> {

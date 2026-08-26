@@ -15,6 +15,7 @@ package.__path__ = [str(PACKAGE_ROOT)]  # type: ignore[attr-defined]
 sys.modules.setdefault("smartthings_web", package)
 
 from smartthings_web.bridge_client import (  # noqa: E402
+    BridgeAuthError,
     BridgeClientError,
     BridgeReadOnlyError,
     ReadOnlyBridgeClient,
@@ -166,6 +167,53 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
         self.assertEqual(body["controlLabel"], "Home Monitor")
         self.assertEqual(request.await_args.kwargs["timeout_seconds"], 90)
 
+    async def test_event_stream_yields_data_events_and_ignores_keepalives(self) -> None:
+        session = _FakeEventSession(
+            200,
+            [
+                b": keepalive\n",
+                b"\n",
+                b'data: {"schemaVersion":1,"sequence":41,"type":"inventory"}\n',
+                b"\n",
+                b'data: {"schemaVersion":1,"sequence":42,"type":"state","deviceId":"dev_001"}\n',
+                b"\n",
+            ],
+        )
+        client = SmartThingsWebBridgeClient(session, "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
+
+        events = [event async for event in client.async_events()]
+
+        self.assertEqual(
+            events,
+            [
+                {"schemaVersion": 1, "sequence": 41, "type": "inventory"},
+                {
+                    "schemaVersion": 1,
+                    "sequence": 42,
+                    "type": "state",
+                    "deviceId": "dev_001",
+                },
+            ],
+        )
+        self.assertEqual(session.request_headers, {"Authorization": f"Bearer {'x' * 32}"})
+
+    async def test_event_stream_maps_auth_and_invalid_json_failures(self) -> None:
+        unauthorized = SmartThingsWebBridgeClient(
+            _FakeEventSession(401, []),
+            "http://bridge.local",
+            "x" * 32,
+        )  # type: ignore[arg-type]
+        malformed = SmartThingsWebBridgeClient(
+            _FakeEventSession(200, [b"data: {\n"]),
+            "http://bridge.local",
+            "x" * 32,
+        )  # type: ignore[arg-type]
+
+        with self.assertRaisesRegex(BridgeAuthError, "bridge_auth_failed"):
+            _ = [event async for event in unauthorized.async_events()]
+        with self.assertRaisesRegex(BridgeClientError, "bridge_event_stream_failed"):
+            _ = [event async for event in malformed.async_events()]
+
     def test_inventory_parses_locations_scenes_and_non_value_controls(self) -> None:
         parsed = parse_inventory(
             {
@@ -254,4 +302,40 @@ class _FakeSession:
         self._response = _FakeResponse(status, payload)
 
     def request(self, *_args: object, **_kwargs: object) -> _FakeResponse:
+        return self._response
+
+
+class _FakeEventContent:
+    def __init__(self, lines: list[bytes]) -> None:
+        self._lines = iter(lines)
+
+    def __aiter__(self) -> "_FakeEventContent":
+        return self
+
+    async def __anext__(self) -> bytes:
+        try:
+            return next(self._lines)
+        except StopIteration as err:
+            raise StopAsyncIteration from err
+
+
+class _FakeEventResponse:
+    def __init__(self, status: int, lines: list[bytes]) -> None:
+        self.status = status
+        self.content = _FakeEventContent(lines)
+
+    async def __aenter__(self) -> "_FakeEventResponse":
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
+
+class _FakeEventSession:
+    def __init__(self, status: int, lines: list[bytes]) -> None:
+        self._response = _FakeEventResponse(status, lines)
+        self.request_headers: dict[str, str] | None = None
+
+    def get(self, _url: str, **kwargs: Any) -> _FakeEventResponse:
+        self.request_headers = kwargs.get("headers")
         return self._response

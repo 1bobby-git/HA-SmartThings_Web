@@ -6,9 +6,13 @@ from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
+import logging
 import re
 from typing import Any, Literal
 from urllib.parse import urlparse
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -218,7 +222,10 @@ class SmartThingsWebRuntime:
 
     def _notify_listeners(self) -> None:
         for listener in tuple(self.listeners):
-            listener()
+            try:
+                listener()
+            except Exception:  # noqa: BLE001 - one HA entity must not break the push loop
+                _LOGGER.exception("runtime_listener_failed")
 
 
 ControlKind = Literal["switch", "light"]

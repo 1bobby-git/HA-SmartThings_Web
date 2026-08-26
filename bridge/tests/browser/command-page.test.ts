@@ -1022,6 +1022,56 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(page.close).toHaveBeenCalledTimes(1);
   });
 
+  test("waits for the exact CSS room heading before falling back to page-wide accessibility scans", async () => {
+    const page = new FakeCommandPage();
+    const roomCards = new FakeLocator(1);
+    const lateExactRoomHeading = new FakeLocator(0, false, 1);
+    const roomCard = new FakeLocator(1);
+    const deviceCards = new FakeLocator(1);
+    const deviceWrapper = new FakeLocator(1);
+    const fallbackRoomHeading = new FakeLocator(1);
+    const fallbackRoomButtons = new FakeLocator(0, true);
+
+    roomCards.locator = vi.fn(() => lateExactRoomHeading);
+    lateExactRoomHeading.filter = vi.fn(() => lateExactRoomHeading);
+    lateExactRoomHeading.locator = vi.fn(() => roomCard);
+    fallbackRoomHeading.locator = vi.fn(() => roomCard);
+    deviceCards.filter = vi.fn(() => deviceWrapper);
+    page.locator = vi.fn((selector: string) => {
+      if (selector === "[data-testid='draggable-room']:visible") return roomCards;
+      expect(selector).toBe("[data-testid='device']:visible");
+      return deviceCards;
+    });
+    const getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "heading" && options?.name instanceof RegExp && options.name.test("Kitchen")) {
+        return fallbackRoomHeading;
+      }
+      if (role === "button") return fallbackRoomButtons;
+      return page.toggle;
+    });
+    page.getByRole = getByRole;
+    page.goto = vi.fn(async (url: string) => {
+      page.currentUrl = url;
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeSwitch({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      roomName: "Kitchen"
+    });
+
+    expect(lateExactRoomHeading.waitFor).toHaveBeenCalledWith({
+      state: "visible",
+      timeout: 3_000
+    });
+    expect(getByRole.mock.calls.filter(([role]) => role === "heading")).toHaveLength(0);
+    expect(roomCard.dispatchEvent).toHaveBeenCalledWith("click");
+    expect(deviceWrapper.click).toHaveBeenCalledTimes(1);
+  });
+
   test("activates the exact room before waiting for its lazily rendered device cards", async () => {
     const page = new FakeCommandPage();
     const hiddenDevice = new FakeLocator(0, true);

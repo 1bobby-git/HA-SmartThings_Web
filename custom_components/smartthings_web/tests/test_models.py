@@ -178,6 +178,31 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertEqual(runtime.inventory.sequence, 10)
         self.assertEqual(sensor_value(runtime), 20)
 
+    def test_one_failing_entity_listener_does_not_block_other_push_updates(self) -> None:
+        runtime = SmartThingsWebRuntime(
+            FakeClient(),
+            "loc_001",
+            inventory(10, 20, "2026-08-24T21:10:00Z"),
+        )
+        observations: list[int] = []
+
+        def failing_listener() -> None:
+            raise RuntimeError("entity write failed")
+
+        runtime.subscribe(failing_listener)
+        runtime.subscribe(lambda: observations.append(sensor_value(runtime)))
+
+        with self.assertLogs(level="ERROR") as captured:
+            changed = asyncio.run(
+                runtime.handle_event(state_event(11, 21, "2026-08-24T21:11:00Z"))
+            )
+
+        self.assertTrue(changed)
+        self.assertEqual(observations, [21])
+        self.assertEqual(len(captured.output), 1)
+        self.assertEqual(captured.records[0].getMessage(), "runtime_listener_failed")
+        self.assertIsNotNone(captured.records[0].exc_info)
+
     def test_control_kind_keeps_plain_switches_out_of_binary_sensor_and_light(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")
         device = current.devices["dev_001"]

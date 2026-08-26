@@ -1,0 +1,150 @@
+"""Tests for push-to-entity listener delivery."""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+import sys
+from types import ModuleType
+import unittest
+
+
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+package = sys.modules.setdefault("smartthings_web", ModuleType("smartthings_web"))
+package.__path__ = [str(PACKAGE_ROOT)]  # type: ignore[attr-defined]
+
+sys.modules.setdefault("homeassistant", ModuleType("homeassistant"))
+sys.modules.setdefault("homeassistant.helpers", ModuleType("homeassistant.helpers"))
+
+device_registry = ModuleType("homeassistant.helpers.device_registry")
+
+
+class DeviceInfo(dict[str, object]):
+    """Minimal DeviceInfo constructor used by the entity base."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(kwargs)
+
+
+device_registry.DeviceInfo = DeviceInfo  # type: ignore[attr-defined]
+sys.modules["homeassistant.helpers.device_registry"] = device_registry
+
+entity_helper = ModuleType("homeassistant.helpers.entity")
+
+
+class Entity:
+    """Minimal Home Assistant entity lifecycle surface."""
+
+    def __init__(self) -> None:
+        self.write_count = 0
+        self.remove_callbacks: list[object] = []
+
+    def async_write_ha_state(self) -> None:
+        self.write_count += 1
+
+    def async_on_remove(self, callback: object) -> None:
+        self.remove_callbacks.append(callback)
+
+
+entity_helper.Entity = Entity  # type: ignore[attr-defined]
+sys.modules["homeassistant.helpers.entity"] = entity_helper
+
+from smartthings_web.models import (  # noqa: E402
+    BridgeDevice,
+    BridgeInventory,
+    BridgeState,
+    SmartThingsWebRuntime,
+)
+
+entity_spec = importlib.util.spec_from_file_location(
+    "smartthings_web.entity_under_test",
+    PACKAGE_ROOT / "entity.py",
+)
+assert entity_spec is not None and entity_spec.loader is not None
+entity_under_test = importlib.util.module_from_spec(entity_spec)
+sys.modules[entity_spec.name] = entity_under_test
+entity_spec.loader.exec_module(entity_under_test)
+SmartThingsWebEntity = entity_under_test.SmartThingsWebEntity
+
+
+class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
+    """Prove a Bridge state push reaches Home Assistant state writing."""
+
+    async def test_runtime_push_writes_entity_state_and_unsubscribes_on_remove(self) -> None:
+        initial = BridgeState(
+            "main",
+            "relativeHumidityMeasurement",
+            "humidity",
+            51,
+            "%",
+            "2026-08-26T06:00:00.000Z",
+        )
+        device = BridgeDevice(
+            "dev_001",
+            "loc_001",
+            None,
+            "Humidity sensor",
+            "multi_sensor",
+            True,
+            states={initial.key: initial},
+        )
+        inventory = BridgeInventory(
+            1,
+            True,
+            "0.1.77",
+            "4:test",
+            {},
+            {},
+            {device.device_id: device},
+        )
+        runtime = SmartThingsWebRuntime(object(), "loc_001", inventory)
+        entity = SmartThingsWebEntity(runtime, device, initial, None)
+        Entity.__init__(entity)
+
+        await entity.async_added_to_hass()
+        changed = runtime.apply_state(
+            {
+                "schemaVersion": 1,
+                "type": "state",
+                "sequence": 2,
+                "deviceId": "dev_001",
+                "state": {
+                    "component": "main",
+                    "capability": "relativeHumidityMeasurement",
+                    "attribute": "humidity",
+                    "value": 62.8,
+                    "unit": "%",
+                    "updatedAt": "2026-08-26T06:00:01.000Z",
+                },
+            }
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(entity.write_count, 1)
+        self.assertEqual(entity.bridge_state.value, 62.8)  # type: ignore[union-attr]
+        self.assertEqual(len(entity.remove_callbacks), 1)
+
+        remove = entity.remove_callbacks[0]
+        assert callable(remove)
+        remove()
+        runtime.apply_state(
+            {
+                "schemaVersion": 1,
+                "type": "state",
+                "sequence": 3,
+                "deviceId": "dev_001",
+                "state": {
+                    "component": "main",
+                    "capability": "relativeHumidityMeasurement",
+                    "attribute": "humidity",
+                    "value": 63.1,
+                    "unit": "%",
+                    "updatedAt": "2026-08-26T06:00:02.000Z",
+                },
+            }
+        )
+        self.assertEqual(entity.write_count, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

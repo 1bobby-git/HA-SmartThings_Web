@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.77
+
+- Wait for the exact visible Cake room-card heading to hydrate before considering slower page-wide accessibility fallbacks.
+- Isolate Home Assistant entity-listener failures so one entity cannot interrupt the SSE push loop or block other sensor updates.
+- Add direct Bridge SSE delivery, HA SSE parsing, and runtime-to-entity write regression coverage.
+
 ## 0.1.76
 
 - Dispatch a navigation-only click event on the already verified unique visible same-page device wrapper, avoiding the fifteen-second actionability wait observed behind Cake's closing overlay.

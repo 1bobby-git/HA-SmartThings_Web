@@ -102,6 +102,7 @@ const MAX_VERIFIED_DETAIL_ROUTES = 256;
 const WARM_CONTROL_PROBE_TIMEOUT_MS = 1_500;
 const FRESH_CONTROL_PROBE_TIMEOUT_MS = 5_000;
 const FRESH_OBSERVED_TOGGLE_PROBE_TIMEOUT_MS = 15_000;
+const ROOM_CARD_HYDRATION_TIMEOUT_MS = 3_000;
 const ROOM_DEVICE_CARD_TIMEOUT_MS = 3_000;
 const LABELED_SCOPE_POLL_MS = 100;
 const LABELED_SCOPE_VISIBLE_PROBE_MS = 25;
@@ -1335,6 +1336,15 @@ async function findDeviceInRooms(
       .locator("h1,h2,h3,h4,h5,h6")
       .filter({ hasText: exactRoomName });
     let room: CommandLocatorLike;
+    try {
+      await roomCardHeadings.first().waitFor({
+        state: "visible",
+        timeout: ROOM_CARD_HYDRATION_TIMEOUT_MS
+      });
+    } catch {
+      // Older or changed Cake layouts may not expose the exact room-card heading.
+      // Keep the fail-closed accessibility fallbacks below for those layouts.
+    }
     const roomCardHeadingCount = await roomCardHeadings.count();
     if (roomCardHeadingCount > 1) throw new Error("command_room_not_found");
     if (roomCardHeadingCount === 1) {
