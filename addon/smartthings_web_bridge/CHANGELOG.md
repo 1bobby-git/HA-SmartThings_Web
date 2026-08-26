@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.76
+
+- Dispatch a navigation-only click event on the already verified unique visible same-page device wrapper, avoiding the fifteen-second actionability wait observed behind Cake's closing overlay.
+- Keep the exact detail URL, visible device dialog, dialog-scoped control, and post-command push confirmation gates unchanged.
+
 ## 0.1.75
 
 - Recover a dismissed warm detail from the already rendered exact device card before navigating anywhere, then require the exact detail URL and visible device dialog again before control lookup.

@@ -594,7 +594,7 @@ export class SmartThingsWebUiCommandExecutor {
           input.deviceName
         );
         if (samePageDevice) {
-          await samePageDevice.click({ timeout: 15_000 });
+          await samePageDevice.dispatchEvent("click");
           await waitForOpenedDeviceDetail(cached.page, input.deviceName, input.roomName);
           if (
             !isSmartThingsDeviceDetail(cached.page.url()) ||

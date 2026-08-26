@@ -507,15 +507,16 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     const detailUrl =
       "https://my.smartthings.com/location/loc_001/rooms/device/device_raw_001";
     page.card.click.mockImplementation(async () => {
+      page.currentUrl = detailUrl;
+    });
+    page.card.dispatchEvent.mockImplementation(async () => {
       events.push("opener");
       page.currentUrl = detailUrl;
-      if (page.card.click.mock.calls.length === 2) {
-        const recoveredDialog = new FakeLocator(1);
-        recoveredDialog.getByRole = (role, options) => page.getByRole(role!, options);
-        recoveredDialog.getByText = (text, options) => page.getByText(text!, options);
-        recoveredDialog.locator = (selector) => page.locator(selector!);
-        page.detailDialog = recoveredDialog;
-      }
+      const recoveredDialog = new FakeLocator(1);
+      recoveredDialog.getByRole = (role, options) => page.getByRole(role!, options);
+      recoveredDialog.getByText = (text, options) => page.getByText(text!, options);
+      recoveredDialog.locator = (selector) => page.locator(selector!);
+      page.detailDialog = recoveredDialog;
     });
     page.goto = vi.fn(async (url: string) => {
       page.currentUrl = url;
@@ -559,7 +560,8 @@ describe("SmartThingsWebUiCommandExecutor", () => {
 
     expect(page.goto).not.toHaveBeenCalled();
     expect(events).toEqual(["opener", "control"]);
-    expect(page.card.click).toHaveBeenCalledTimes(2);
+    expect(page.card.click).toHaveBeenCalledTimes(1);
+    expect(page.card.dispatchEvent).toHaveBeenCalledWith("click");
     expect(page.toggle.click).toHaveBeenCalledTimes(2);
     expect(page.close).not.toHaveBeenCalled();
     expect(diagnostics).toContain("warm_recovery_start");
