@@ -165,6 +165,7 @@ npm run deploy:haos:candidate
 
 ## 현재 검증 결과
 
+- `0.1.91`은 상세 페이지에서 로드된 인증 native client를 최대 24시간 검증·재사용하여, 최초 UI 탐색 뒤의 반복 제어가 다시 DOM 탐색 대기열로 내려가지 않게 합니다.
 - `0.1.90`은 인증된 in-page native 기기 명령을 느린 DOM 탐색 대기열 밖에서 즉시 전송하고, 응답 타이머 대신 기존 push/snapshot 확인을 권위로 사용합니다. 허용된 SmartThings presentation 아이콘은 HA 엔티티에 노출하며, 새로고침 버튼은 실제 관측된 refresh control에서만 생성합니다.
 - `0.1.89`는 my.smartthings.com Socket.IO 종료를 Playwright와 CDP 양쪽에서 즉시 감지해 keeper를 재로드하고 새 전체 snapshot이 끝날 때까지 readiness를 차단합니다. 송신 프레임은 push freshness를 연장하지 않으며, reconnect 때 같은 sequence inventory를 중복 fetch하지 않고 SSE marker도 O(1) sequence 조회로 전송합니다.
 - `0.1.88`은 현재 fingerprint가 호환되고 Bridge가 `ready+CONNECTED`라면 과거 protocol change 횟수를 현재 오류로 오판하지 않습니다. 물리 probe·Core continuity·72시간 소크는 시작 baseline보다 횟수가 증가할 때만 즉시 실패하므로 실제 규격 변경 보호는 유지됩니다.

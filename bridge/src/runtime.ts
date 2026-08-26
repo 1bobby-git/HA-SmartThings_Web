@@ -62,7 +62,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.90";
+const bridgeVersion = "0.1.91";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -131,7 +131,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     (rawLocationId) =>
       aliases.alias("location", aliases.alias("location", rawLocationId)),
     {
-      warmPageTtlMs: 300_000,
+      warmPageTtlMs: 24 * 60 * 60_000,
       onDiagnostic: (stage) => log.info(`command_diag:${stage}`),
       resolveRawDeviceId: (alias) => volatileIdentifiers.rawDeviceId(alias),
       resolveRawIdentifier: (alias) => volatileIdentifiers.rawIdentifier(alias)

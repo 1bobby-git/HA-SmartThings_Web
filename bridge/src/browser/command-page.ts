@@ -109,6 +109,7 @@ interface BackgroundPreemption {
 }
 
 const WARM_DETAIL_IDENTITY_TIMEOUT_MS = 500;
+const MAX_WARM_PAGE_TTL_MS = 24 * 60 * 60_000;
 const VERIFIED_ROUTE_IDENTITY_TIMEOUT_MS = 1_500;
 const VERIFIED_ROUTE_TTL_MS = 24 * 60 * 60_000;
 const MAX_VERIFIED_DETAIL_ROUTES = 256;
@@ -143,7 +144,9 @@ export class SmartThingsWebUiCommandExecutor {
     options?: CommandExecutorOptions
   ) {
     const ttl = options?.warmPageTtlMs ?? 0;
-    this.#warmPageTtlMs = Number.isFinite(ttl) ? Math.max(0, Math.min(300_000, ttl)) : 0;
+    this.#warmPageTtlMs = Number.isFinite(ttl)
+      ? Math.max(0, Math.min(MAX_WARM_PAGE_TTL_MS, ttl))
+      : 0;
     this.#onDiagnostic = options?.onDiagnostic;
     this.#resolveRawDeviceId = options?.resolveRawDeviceId;
     this.#resolveRawIdentifier = options?.resolveRawIdentifier;
@@ -592,7 +595,17 @@ export class SmartThingsWebUiCommandExecutor {
     if (!input.deviceId || !input.controlId || !observedCommand) {
       return "unavailable";
     }
-    const page = manager.currentKeeper?.() as CommandPageLike | undefined;
+    const cached = this.#warmDevicePage;
+    const cachedPage =
+      cached &&
+      cached.manager === manager &&
+      !cached.page.isClosed() &&
+      Date.now() - cached.lastUsedAt < this.#warmPageTtlMs &&
+      cached.page.evaluate &&
+      isSmartThingsLocation(cached.page.url())
+        ? cached.page
+        : undefined;
+    const page = cachedPage ?? (manager.currentKeeper?.() as CommandPageLike | undefined);
     if (!page || page.isClosed() || !page.evaluate || !isSmartThingsLocation(page.url())) {
       return "unavailable";
     }
@@ -607,7 +620,7 @@ export class SmartThingsWebUiCommandExecutor {
       return "unavailable";
     }
     try {
-      return await page.evaluate(
+      const result = await page.evaluate(
         async (command): Promise<"sent" | "unavailable" | "failed"> => {
           type WebpackRequire = {
             c?: Record<string, { exports?: unknown }>;
@@ -691,6 +704,10 @@ export class SmartThingsWebUiCommandExecutor {
           arguments: input.arguments
         }
       );
+      if (result === "sent" && cachedPage && cached && this.#warmDevicePage === cached) {
+        cached.lastUsedAt = Date.now();
+      }
+      return result;
     } catch {
       return "failed";
     }

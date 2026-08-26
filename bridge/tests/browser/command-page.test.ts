@@ -205,6 +205,49 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(manager.openCommandPage).not.toHaveBeenCalled();
   });
 
+  test("reuses the loaded client from a warm detail page for later native commands", async () => {
+    const warmPage = new FakeCommandPage() as FakeCommandPage & {
+      evaluate: <Result, Argument>(
+        pageFunction: (argument: Argument) => Result | Promise<Result>,
+        argument: Argument
+      ) => Promise<Result>;
+    };
+    const patch = vi.fn(async () => ({ data: { results: [{ status: "SUCCESS" }] } }));
+    warmPage.evaluate = nativeClientEvaluate(patch);
+    const manager = {
+      currentKeeper: vi.fn(() => undefined),
+      openCommandPage: vi.fn(async () => warmPage)
+    };
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => manager,
+      undefined,
+      {
+        warmPageTtlMs: 300_000,
+        resolveRawDeviceId: () => "raw-device",
+        resolveRawIdentifier: (alias) => ({ identifier_main: "main", identifier_switch: "switch" })[alias]
+      }
+    );
+
+    await executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" });
+    await executor.executeDeviceAction({
+      action: "off",
+      arguments: [],
+      attribute: "switch",
+      capability: "identifier_switch",
+      command: "off",
+      component: "identifier_main",
+      controlId: "identifier_toggle",
+      deviceId: "dev_001",
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      nativeCommand: "off"
+    });
+
+    expect(patch).toHaveBeenCalledTimes(1);
+    expect(manager.openCommandPage).toHaveBeenCalledTimes(1);
+    expect(warmPage.toggle.click).toHaveBeenCalledTimes(1);
+  });
+
   test("does not repeat a native command through UI when the authenticated dispatcher throws synchronously", async () => {
     const keeper = new FakeCommandPage() as FakeCommandPage & {
       evaluate: <Result, Argument>(

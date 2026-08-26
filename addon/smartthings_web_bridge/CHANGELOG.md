@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.91
+
+- Reuse the authenticated client loaded by a successful device-detail page for native commands instead of limiting native dispatch to the overview keeper.
+- Keep the single verified warm detail page available for up to 24 hours while continuing to validate that it is open and on SmartThings before each use.
+
 ## 0.1.90
 
 - Dispatch authenticated in-page native device commands outside the serialized DOM navigation queue, so a slow fallback control cannot delay unrelated native controls.
