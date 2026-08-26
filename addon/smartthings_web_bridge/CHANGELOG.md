@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.81
+
+- Dispatch device commands through the authenticated in-page SmartThings Web client before any DOM navigation fallback, while preserving post-command push confirmation.
+- Keep volatile raw identifiers only in process memory, clear them on browser restart, and never expose them through persistence, logs, SSE, or Home Assistant.
+- Preserve the warm command page during background detail discovery and fail closed unless switch and refresh actions bind to exact observed toggle and refresh controls.
+- Reject additional localized door control identities and keep graceful shutdown available when the final best-effort inventory persistence flush remains locked.
+
 ## 0.1.80
 
 - Publish SmartThings push state to Bridge SSE before diagnostic capture and normalized-inventory persistence can block the live path.

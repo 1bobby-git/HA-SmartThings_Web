@@ -4,6 +4,10 @@ export const ADVANCED_URL = "https://my.smartthings.com/advanced";
 export interface BrowserPageLike {
   url(): string;
   isClosed(): boolean;
+  evaluate?<Result, Argument>(
+    pageFunction: (argument: Argument) => Result | Promise<Result>,
+    argument: Argument
+  ): Promise<Result>;
   bringToFront?(): Promise<unknown>;
   goto(url: string, options?: { waitUntil?: "domcontentloaded" | "load" }): Promise<unknown>;
   close(): Promise<unknown>;

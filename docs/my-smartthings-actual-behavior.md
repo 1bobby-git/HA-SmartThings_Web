@@ -63,6 +63,17 @@ actionable. A command is successful only after a newer authoritative push
 confirms the requested value. Missing controls fail closed instead of clicking
 a similarly shaped page element.
 
+The supplied capture also contains four accepted device command exchanges.
+Cake sends them through its already authenticated Feathers client as
+`service("api/device").patch(deviceId, {query: {execute: true, commands}})`
+over the same Socket.IO transport used by the web application. Version 0.1.81
+uses that existing in-page dispatcher first, retaining raw device, component,
+and capability identifiers only in volatile process memory. It does not export
+cookies, replay authentication, create a second public API client, or treat the
+command ACK as state confirmation. If the dispatcher is not available before
+dispatch, the exact observed UI control remains the fallback; a rejected or
+uncertain dispatched command is never repeated through the UI.
+
 The user-supplied Cake `2.57.0` asset and its published source maps were also
 reviewed as implementation evidence. They show that room drag wrappers and
 device cards can both be buttons, while each real device is wrapped by
@@ -84,8 +95,9 @@ The Bridge therefore clicks only the unique visible `data-testid="device"`
 wrapper and never falls through to a page-wide named button, exact text label,
 or descendant control. Once opened, the power control exposed one accessible
 `switch`, one underlying `checkbox`, visible `Power` text, but no switch whose
-accessible name was exactly `Power`. The Bridge uses the only visible switch
-only when that fallback is unambiguous. A controlled `off → on → off` cycle was
+accessible name was exactly `Power`. The Bridge scopes the unique toggle to the
+exact observed Power swatch and does not accept a page-wide unlabeled switch.
+A controlled `off → on → off` cycle was
 confirmed only by newer push events and produced ordered companion power
 changes of `0 W → 16 W → 0 W` in Home Assistant within about two seconds of
 their Bridge timestamps.

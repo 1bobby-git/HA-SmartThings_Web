@@ -40,9 +40,13 @@ describe("SafeCommandService", () => {
       capability: "identifier_switch",
       command: "on",
       component: "main",
+      controlId: "identifier_toggle_power",
+      controlLabel: "Power",
+      deviceId: "dev_001",
       deviceName: "Safe plug",
       locationId: "loc_001",
-      locationNames: {}
+      locationNames: {},
+      nativeCommand: "on"
     });
   });
 
@@ -136,18 +140,21 @@ describe("SafeCommandService", () => {
     }
   });
 
-  test("binds switch commands to the matching observed toggle control", async () => {
-    const store = readyDeviceStore();
+  test("binds switch commands to the matching observed toggle and preserves its exact web command", async () => {
+    const store = readyDeviceStore(false);
     observeDeviceDetails(store, [
       detailSwatch("TOGGLE", "toggle", {
         swatchId: "identifier_toggle001",
         label: "Secondary outlet",
-        commands: ["on", "off"]
+        commands: ["switchOn", "switchOff"]
       })
     ]);
     const executor: SafeCommandExecutor = {
-      executeDeviceAction: vi.fn(async () => {
-        store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:01Z")));
+      executeDeviceAction: vi.fn(async (input) => {
+        store.observe(received(deviceEventFrame(
+          input.command,
+          input.command === "on" ? "2026-08-25T00:00:01Z" : "2026-08-25T00:00:02Z"
+        )));
       })
     };
     const service = new SafeCommandService({
@@ -163,8 +170,39 @@ describe("SafeCommandService", () => {
     });
     expect(executor.executeDeviceAction).toHaveBeenCalledWith(expect.objectContaining({
       controlId: "identifier_toggle001",
-      controlLabel: "Secondary outlet"
+      controlLabel: "Secondary outlet",
+      nativeCommand: "switchOn"
     }));
+
+    await expect(service.execute(command("off", "request_028_off"))).resolves.toMatchObject({
+      status: "confirmed"
+    });
+    expect(executor.executeDeviceAction).toHaveBeenLastCalledWith(expect.objectContaining({
+      controlId: "identifier_toggle001",
+      controlLabel: "Secondary outlet",
+      nativeCommand: "switchOff"
+    }));
+  });
+
+  test("rejects on and off when no observed safe toggle control exists", async () => {
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => undefined)
+    };
+    const service = new SafeCommandService({
+      devices: readyDeviceStore(false),
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute(command("on", "request_unobserved_on"))).rejects.toMatchObject({
+      code: "invalid_control_id"
+    });
+    await expect(service.execute(command("off", "request_unobserved_off"))).rejects.toMatchObject({
+      code: "invalid_control_id"
+    });
+    expect(executor.executeDeviceAction).not.toHaveBeenCalled();
   });
 
   test("deduplicates identical client request ids and rejects conflicting reuse", async () => {
@@ -508,7 +546,8 @@ describe("SafeCommandService", () => {
       command: "setOption",
       controlId: "identifier_enum001",
       controlLabel: "Mode",
-      attribute: "mode"
+      attribute: "mode",
+      nativeCommand: "setMode"
     }));
 
     await expect(service.execute(deviceCommand("setOption", "request_022", {
@@ -695,7 +734,9 @@ describe("SafeCommandService", () => {
     ["garageDoor", "Garage door"],
     ["valveState", "Valve state"],
     ["safeToggle", "문 열기"],
-    ["safeToggle", "밸브 제어"]
+    ["safeToggle", "밸브 제어"],
+    ["safeToggle", "현관문"],
+    ["safeToggle", "대문"]
   ])("rejects dangerous compound or localized controls: %s / %s", async (attribute, label) => {
     const store = readyDeviceStore();
     observeDeviceDetails(store, [
@@ -758,6 +799,15 @@ describe("SafeCommandService", () => {
 
   test("confirms refresh without caller-supplied component metadata from any newer device state", async () => {
     const store = readyDeviceStore();
+    observeDeviceDetails(store, [
+      detailSwatch("BUTTON", "button", {
+        swatchId: "identifier_refresh",
+        label: "Refresh",
+        attributeName: "refresh",
+        command: "refresh",
+        commands: ["refresh"]
+      })
+    ]);
     const service = new SafeCommandService({
       devices: store,
       status: connectedStatus(),
@@ -892,7 +942,7 @@ function connectedStatus(): RuntimeStatusStore {
   });
 }
 
-function readyDeviceStore(): DeviceStore {
+function readyDeviceStore(withToggle = true): DeviceStore {
   const store = new DeviceStore();
   store.observe(sent('421["find","api/device",{}]'));
   store.observe(
@@ -912,6 +962,15 @@ function readyDeviceStore(): DeviceStore {
       '433[null,[{"deviceId":"dev_001","locationId":"loc_001","componentId":"main","capabilityId":"identifier_switch","attributeName":"detectionFrequency","value":30,"unit":null,"timestamp":"2026-08-25T00:00:00Z"},{"deviceId":"dev_001","locationId":"loc_001","componentId":"main","capabilityId":"identifier_switch","attributeName":"volume","value":10,"unit":null,"timestamp":"2026-08-25T00:00:00Z"},{"deviceId":"dev_001","locationId":"loc_001","componentId":"main","capabilityId":"identifier_switch","attributeName":"mute","value":"unmuted","unit":null,"timestamp":"2026-08-25T00:00:00Z"},{"deviceId":"dev_001","locationId":"loc_001","componentId":"main","capabilityId":"identifier_switch","attributeName":"fanMode","value":"normal","unit":null,"timestamp":"2026-08-25T00:00:00Z"}]]'
     )
   );
+  if (withToggle) {
+    observeDeviceDetails(store, [
+      detailSwatch("TOGGLE", "toggle", {
+        swatchId: "identifier_toggle_power",
+        label: "Power",
+        commands: ["on", "off"]
+      })
+    ]);
+  }
   return store;
 }
 

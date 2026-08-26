@@ -65,6 +65,7 @@ export interface SafeCommandExecutor {
     capability: string;
     command: DeviceActionCommand;
     component: string;
+    deviceId: string;
     deviceName: string;
     locationId: string;
     locationNames: Readonly<Record<string, string>>;
@@ -73,6 +74,7 @@ export interface SafeCommandExecutor {
     controlLabel?: string;
     optionLabel?: string;
     optionCommand?: string;
+    nativeCommand?: string;
   }): Promise<void>;
   executeScene?(input: {
     action?: string;
@@ -144,6 +146,7 @@ interface DedupeEntry {
 type ResolvedDeviceRequest = SafeCommandRequest & {
   optionLabel?: string;
   optionCommand?: string;
+  nativeCommand?: string;
 };
 
 const oldRequestKeys = ["deviceId", "component", "capability", "command", "arguments", "clientRequestId"] as const;
@@ -251,6 +254,7 @@ export class SafeCommandService {
         capability: effective.capability,
         command: effective.command as DeviceActionCommand,
         component: effective.component,
+        deviceId: effective.targetId,
         deviceName: device.name,
         locationId: device.locationId,
         locationNames,
@@ -258,7 +262,8 @@ export class SafeCommandService {
         ...(effective.controlId ? { controlId: effective.controlId } : {}),
         ...(effective.controlLabel ? { controlLabel: effective.controlLabel } : {}),
         ...(effective.optionLabel ? { optionLabel: effective.optionLabel } : {}),
-        ...(effective.optionCommand ? { optionCommand: effective.optionCommand } : {})
+        ...(effective.optionCommand ? { optionCommand: effective.optionCommand } : {}),
+        ...(effective.nativeCommand ? { nativeCommand: effective.nativeCommand } : {})
       });
     } catch (error) {
       confirmation.cancel();
@@ -627,14 +632,30 @@ function armStateForCommand(command: string): string | undefined {
 }
 
 function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest): ResolvedDeviceRequest {
-  if (request.command === "refresh" && (!request.component || !request.capability)) {
-    const state = device.states[0];
-    if (!state) throw new SafeCommandError("capability_not_found");
+  if (request.command === "refresh") {
+    const matching = (device.controls ?? []).filter(
+      (control) =>
+        control.kind === "button" &&
+        (!request.controlId || control.id === request.controlId) &&
+        controlSupportsCommand(control, "refresh", true)
+    );
+    if (matching.length > 1) throw new SafeCommandError("command_control_ambiguous");
+    const control = matching[0];
+    if (!control) throw new SafeCommandError("invalid_control_id");
+    if (request.controlLabel && request.controlLabel !== control.label) {
+      throw new SafeCommandError("invalid_control_label");
+    }
+    if (dangerousControl(control)) throw new SafeCommandError("unsupported_command");
+    const nativeCommand = observedCommandFor(control, "refresh");
+    if (!nativeCommand) throw new SafeCommandError("unsupported_command");
     return {
       ...request,
-      component: state.component,
-      capability: state.capability,
-      attribute: request.attribute ?? state.attribute
+      component: control.component,
+      capability: control.capability,
+      attribute: control.attribute,
+      controlId: control.id,
+      controlLabel: control.label,
+      nativeCommand
     };
   }
   if (request.command === "on" || request.command === "off") {
@@ -659,13 +680,16 @@ function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest)
       if (hasExplicitCommand && !controlSupportsCommand(control, request.command, false)) {
         throw new SafeCommandError("unsupported_command");
       }
+      const nativeCommand = observedCommandFor(control, request.command) ?? request.command;
       return {
         ...request,
         attribute,
         controlId: control.id,
-        controlLabel: control.label
+        controlLabel: control.label,
+        nativeCommand
       };
     }
+    throw new SafeCommandError("invalid_control_id");
   }
   if (request.attribute) {
     validateCommandAttribute(request.command, request.attribute, request.controlId);
@@ -696,9 +720,23 @@ function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest)
     capability: control.capability,
     attribute: control.attribute,
     controlLabel: control.label,
+    nativeCommand: option?.command ?? nativeCommandFor(control, request.command),
     ...(option?.label ? { optionLabel: option.label } : {}),
     ...(option?.command ? { optionCommand: option.command } : {})
   };
+}
+
+function nativeCommandFor(
+  control: NonNullable<BridgeDevice["controls"]>[number],
+  requested: string
+): string {
+  if ((requested === "setOption" || requested === "setFanMode") && control.command) {
+    return control.command;
+  }
+  if (["press", "setNumber", "setVolume", "setPosition"].includes(requested) && control.command) {
+    return control.command;
+  }
+  return observedCommandFor(control, requested) ?? requested;
 }
 
 function validateCommandAttribute(
@@ -888,6 +926,35 @@ function controlSupportsCommand(
   command: string,
   requireExplicit: boolean
 ): boolean {
+  const explicitValues = [
+    control.command,
+    ...(control.commands ?? []),
+    ...Object.values(control.optionCommands ?? {})
+  ].filter((value): value is string => typeof value === "string");
+  if (explicitValues.length > 0) return observedCommandFor(control, command) !== undefined;
+  if (requireExplicit) return false;
+  const expected = commandAliases(command);
+  const normalized = [control.id, control.label, control.attribute].map((value) =>
+    normalizeCommandToken(value)
+  );
+  return expected.some((alias) => normalized.includes(alias));
+}
+
+function observedCommandFor(
+  control: NonNullable<BridgeDevice["controls"]>[number],
+  requested: string
+): string | undefined {
+  const expected = commandAliases(requested);
+  return [
+    control.command,
+    ...(control.commands ?? []),
+    ...Object.values(control.optionCommands ?? {})
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .find((value) => expected.includes(normalizeCommandToken(value)));
+}
+
+function commandAliases(command: string): string[] {
   const aliases: Record<string, string[]> = {
     on: ["on", "switchon", "enable", "enabled"],
     off: ["off", "switchoff", "disable", "disabled"],
@@ -902,19 +969,7 @@ function controlSupportsCommand(
     setPosition: ["setposition", "position", "shadelevel"],
     setOption: ["setoption"]
   };
-  const expected = aliases[command] ?? [command.toLowerCase()];
-  const explicitValues = [
-    control.command,
-    ...(control.commands ?? []),
-    ...Object.values(control.optionCommands ?? {})
-  ].filter((value): value is string => typeof value === "string");
-  const values = explicitValues.length > 0
-    ? explicitValues
-    : requireExplicit
-      ? []
-      : [control.id, control.label, control.attribute];
-  const normalized = values.map((value) => normalizeCommandToken(value));
-  return expected.some((alias) => normalized.includes(alias));
+  return aliases[command] ?? [normalizeCommandToken(command)];
 }
 
 function normalizeCommandToken(value: string): string {
@@ -967,7 +1022,10 @@ function dangerousControlText(value: string): boolean {
   if (/(?:door|lock|unlock|valve|garage)(?:state|control|command)/u.test(compact)) {
     return true;
   }
-  return /잠금|도어|차고|밸브|문\s*(?:열|닫)/u.test(value);
+  return (
+    /잠금|도어|차고|밸브|문\s*(?:열|닫)/u.test(value) ||
+    tokens.some((token) => ["문", "현관문", "대문", "창문", "출입문", "방화문", "자동문"].includes(token))
+  );
 }
 
 function safeControlLabel(value: unknown): value is string {

@@ -471,6 +471,10 @@ def _dangerous_control_text(value: str) -> bool:
     return bool(
         re.search(r"(?:door|lock|unlock|valve|garage)(?:state|control|command)", compact)
         or re.search(r"잠금|도어|차고|밸브|문\s*(?:열|닫)", value)
+        or any(
+            item in {"문", "현관문", "대문", "창문", "출입문", "방화문", "자동문"}
+            for item in tokens
+        )
     )
 
 

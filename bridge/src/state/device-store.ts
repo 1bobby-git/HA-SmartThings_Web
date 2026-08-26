@@ -261,6 +261,9 @@ export class DeviceStore {
     }
     try {
       this.#flushPersist();
+    } catch {
+      // Shutdown durability is best-effort when SQLite remains locked; never mask a graceful stop.
+      this.#onPersistenceError?.();
     } finally {
       this.#db?.close();
     }

@@ -33,11 +33,15 @@ interface CommandPageLike extends BrowserPageLike, CommandControlSurface {
   waitForTimeout?(timeout: number): Promise<unknown>;
 }
 
-type CommandPageManagerLike = Pick<KeeperPageManager, "openCommandPage">;
+type CommandPageManagerLike = Pick<KeeperPageManager, "openCommandPage"> &
+  Partial<Pick<KeeperPageManager, "currentKeeper">>;
 
 type CommandDiagnosticStage =
   | "foreground_requested"
   | "foreground_ready"
+  | "native_identifier_missing"
+  | "native_command_sent"
+  | "native_command_failed"
   | "warm_missing"
   | "warm_context_mismatch"
   | "warm_closed"
@@ -81,6 +85,8 @@ type CommandDiagnosticStage =
 interface CommandExecutorOptions {
   warmPageTtlMs?: number;
   onDiagnostic?: (stage: CommandDiagnosticStage) => void;
+  resolveRawDeviceId?: (alias: string) => string | undefined;
+  resolveRawIdentifier?: (alias: string) => string | undefined;
 }
 
 interface WarmDevicePage {
@@ -125,6 +131,8 @@ export class SmartThingsWebUiCommandExecutor {
   readonly #verifiedDetailRoutes = new Map<string, { detailUrl: string; verifiedAt: number }>();
   readonly #warmPageTtlMs: number;
   readonly #onDiagnostic: ((stage: CommandDiagnosticStage) => void) | undefined;
+  readonly #resolveRawDeviceId: ((alias: string) => string | undefined) | undefined;
+  readonly #resolveRawIdentifier: ((alias: string) => string | undefined) | undefined;
 
   constructor(
     private readonly getManager: () => CommandPageManagerLike | undefined,
@@ -134,6 +142,8 @@ export class SmartThingsWebUiCommandExecutor {
     const ttl = options?.warmPageTtlMs ?? 0;
     this.#warmPageTtlMs = Number.isFinite(ttl) ? Math.max(0, Math.min(300_000, ttl)) : 0;
     this.#onDiagnostic = options?.onDiagnostic;
+    this.#resolveRawDeviceId = options?.resolveRawDeviceId;
+    this.#resolveRawIdentifier = options?.resolveRawIdentifier;
   }
 
   hasWarmCommandPage(): boolean {
@@ -157,6 +167,8 @@ export class SmartThingsWebUiCommandExecutor {
   }): Promise<void> {
     await this.executeDeviceAction({
       ...input,
+      controlId: "compatibility_power",
+      controlLabel: "Power",
       command: "on",
       action: "on",
       component: "main",
@@ -167,6 +179,7 @@ export class SmartThingsWebUiCommandExecutor {
   }
 
   async executeDeviceAction(input: {
+    deviceId?: string;
     deviceName: string;
     locationId: string;
     locationNames?: Readonly<Record<string, string>>;
@@ -200,9 +213,11 @@ export class SmartThingsWebUiCommandExecutor {
     capability: string;
     attribute: string;
     arguments: unknown[];
+    controlId?: string;
     controlLabel?: string;
     optionLabel?: string;
     optionCommand?: string;
+    nativeCommand?: string;
   }): Promise<void> {
     this.#diagnostic("foreground_requested");
     await this.#runForeground(() => {
@@ -212,6 +227,7 @@ export class SmartThingsWebUiCommandExecutor {
   }
 
   async #executeDeviceAction(input: {
+    deviceId?: string;
     deviceName: string;
     locationId: string;
     locationNames?: Readonly<Record<string, string>>;
@@ -245,13 +261,24 @@ export class SmartThingsWebUiCommandExecutor {
     capability: string;
     attribute: string;
     arguments: unknown[];
+    controlId?: string;
     controlLabel?: string;
     optionLabel?: string;
     optionCommand?: string;
+    nativeCommand?: string;
   }): Promise<void> {
     const manager = this.getManager();
     if (!manager) {
       throw new Error("command_browser_unavailable");
+    }
+    const native = await this.#executeNativeDeviceAction(manager, input);
+    if (native === "sent") {
+      this.#diagnostic("native_command_sent");
+      return;
+    }
+    if (native === "failed") {
+      this.#diagnostic("native_command_failed");
+      throw new Error("command_execution_failed");
     }
     const warmPage = await this.#warmPageFor(manager, input);
     if (warmPage) {
@@ -383,7 +410,6 @@ export class SmartThingsWebUiCommandExecutor {
     detailSettleMs?: number;
   }): Promise<void> {
     // Navigation only: device state and controls still come from observed Socket.IO data.
-    await this.#invalidateWarmPage();
     const page = await this.openLocationPage(input.locationId, input.locationNames);
     this.#backgroundInspectionPage = page;
     try {
@@ -543,6 +569,143 @@ export class SmartThingsWebUiCommandExecutor {
     } finally {
       this.#foregroundOperationCount -= 1;
     }
+  }
+
+  async #executeNativeDeviceAction(
+    manager: CommandPageManagerLike,
+    input: {
+      deviceId?: string;
+      component: string;
+      capability: string;
+      command: string;
+      arguments: unknown[];
+      controlId?: string;
+      controlLabel?: string;
+      optionCommand?: string;
+      nativeCommand?: string;
+    }
+  ): Promise<"sent" | "unavailable" | "failed"> {
+    if (!input.deviceId || !input.controlId || !input.controlLabel) return "unavailable";
+    const page = manager.currentKeeper?.() as CommandPageLike | undefined;
+    if (!page || page.isClosed() || !page.evaluate || !isSmartThingsLocation(page.url())) {
+      return "unavailable";
+    }
+    const rawDeviceId = this.#resolveRawDeviceId?.(input.deviceId);
+    const rawComponent = this.#resolveNativeIdentifier(input.component);
+    const rawCapability = this.#resolveNativeIdentifier(input.capability);
+    if (!rawDeviceId || !rawComponent || !rawCapability) {
+      this.#diagnostic("native_identifier_missing");
+      return "unavailable";
+    }
+    try {
+      return await page.evaluate(
+        async (command): Promise<"sent" | "unavailable" | "failed"> => {
+          type WebpackRequire = {
+            c?: Record<string, { exports?: unknown }>;
+          };
+          type NativeService = {
+            patch?: (id: string, body: unknown) => unknown;
+          };
+          type NativeClient = {
+            service?: (name: string) => NativeService;
+          };
+          const pageWindow = window as typeof window & {
+            webpackChunk_smartthings_cake?: Array<unknown>;
+          };
+          const chunks = pageWindow.webpackChunk_smartthings_cake;
+          if (!Array.isArray(chunks)) return "unavailable";
+          let runtimeRequire: WebpackRequire | undefined;
+          try {
+            chunks.push([
+              [`smartthings_web_bridge_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`],
+              {},
+              (candidate: WebpackRequire) => {
+                runtimeRequire = candidate;
+              }
+            ]);
+          } catch {
+            return "unavailable";
+          }
+          if (!runtimeRequire?.c) return "unavailable";
+          let service: NativeService | undefined;
+          for (const module of Object.values(runtimeRequire.c)) {
+            const exports = module?.exports;
+            let candidates: unknown[];
+            try {
+              candidates = isPageRecord(exports)
+                ? [exports, ...Object.values(exports)]
+                : [exports];
+            } catch {
+              continue;
+            }
+            for (const candidate of candidates) {
+              try {
+                if (!isPageRecord(candidate) || typeof candidate.service !== "function") continue;
+                const possible = (candidate as NativeClient).service?.("api/device");
+                if (possible && typeof possible.patch === "function") {
+                  service = possible;
+                  break;
+                }
+              } catch {
+                // Continue searching loaded modules only; never initialize a new client.
+              }
+            }
+            if (service) break;
+          }
+          if (!service?.patch) return "unavailable";
+          const nativeCommand = {
+            capability: command.capability,
+            command: command.command,
+            component: command.component,
+            ...(command.arguments.length > 0 ? { arguments: command.arguments } : {})
+          };
+          let request: Promise<unknown>;
+          try {
+            request = Promise.resolve(
+              service.patch(command.deviceId, {
+                query: { execute: true, commands: [nativeCommand] }
+              })
+            );
+          } catch {
+            return "failed";
+          }
+          const settled = request.then(
+            (response) => {
+              const root = isPageRecord(response) ? response : undefined;
+              const data = isPageRecord(root?.data) ? root.data : undefined;
+              const results = Array.isArray(data?.results) ? data.results : [];
+              const first = isPageRecord(results[0]) ? results[0] : undefined;
+              return String(first?.status ?? "").toUpperCase() === "FAILED"
+                ? "failed" as const
+                : "sent" as const;
+            },
+            () => "failed" as const
+          );
+          const timeout = new Promise<"sent">((resolve) => {
+            setTimeout(() => resolve("sent"), 1_500);
+          });
+          return await Promise.race([settled, timeout]);
+
+          function isPageRecord(value: unknown): value is Record<string, unknown> {
+            return typeof value === "object" && value !== null && !Array.isArray(value);
+          }
+        },
+        {
+          deviceId: rawDeviceId,
+          component: rawComponent,
+          capability: rawCapability,
+          command: input.optionCommand ?? input.nativeCommand ?? input.command,
+          arguments: input.arguments
+        }
+      );
+    } catch {
+      return "failed";
+    }
+  }
+
+  #resolveNativeIdentifier(alias: string): string | undefined {
+    if (/^identifier_/u.test(alias)) return this.#resolveRawIdentifier?.(alias);
+    return /^[A-Za-z0-9_.:-]{1,160}$/u.test(alias) ? alias : undefined;
   }
 
   async #warmPageFor(
@@ -889,32 +1052,18 @@ async function executeDeviceControl(
   if (page.waitForTimeout && !dialog) throw new Error("command_target_not_found");
   const scope = dialog ? dialogControlSurface(dialog, page) : page;
   if (input.command === "on" || input.command === "off") {
-    if (input.controlLabel) {
-      await clickObservedToggleControl(
-        scope,
-        input.controlLabel,
-        observedToggleProbeTimeoutMs,
-        diagnostic
-      );
-      return;
-    }
-    const label = controlLabelFor(input.attribute);
-    try {
-      if (label) {
-        await clickRoleOrLabeledControl(scope, "switch", /^(?:Power|전원)$/iu, label, probeTimeoutMs);
-      } else {
-        await clickRoleControl(scope, "switch", /^(?:Power|전원)$/iu, probeTimeoutMs);
-      }
-    } catch (error) {
-      if (!(error instanceof Error) || error.message !== "command_control_not_found") {
-        throw error;
-      }
-      await clickRoleControl(scope, "switch", undefined, probeTimeoutMs);
-    }
+    if (!input.controlLabel) throw new Error("command_control_not_found");
+    await clickObservedToggleControl(
+      scope,
+      input.controlLabel,
+      observedToggleProbeTimeoutMs,
+      diagnostic
+    );
     return;
   }
   if (input.command === "refresh") {
-    await clickRoleControl(scope, "button", /^(?:Refresh|새로고침)$/iu, probeTimeoutMs);
+    if (!input.controlLabel) throw new Error("command_control_not_found");
+    await clickRoleControl(scope, "button", exactName(input.controlLabel), probeTimeoutMs);
     return;
   }
   if (input.command === "press") {

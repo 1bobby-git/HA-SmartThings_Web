@@ -221,6 +221,31 @@ describe("createBridgeRuntime", () => {
         eventTime: "2026-08-25T00:00:00Z"
       })
     });
+    await socket.emit("framesent", {
+      payload: `429${JSON.stringify(["get", "api/device", "raw-command-device-001", {}])}`
+    });
+    await socket.emit("framereceived", {
+      payload: `439${JSON.stringify([
+        null,
+        {
+          data: [
+            {
+              type: "TOGGLE",
+              toggle: {
+                deviceId: "raw-command-device-001",
+                locationId: "raw-location-001",
+                swatchId: "raw-toggle-power",
+                componentId: "main",
+                capabilityId: "switch",
+                attributeName: "switch",
+                label: "Power",
+                commands: ["on", "off"]
+              }
+            }
+          ]
+        }
+      ])}`
+    });
 
     const baseUrl = `http://127.0.0.1:${runtime.port}`;
     const pairingCode = await fetch(`${baseUrl}/api/v1/pairing-code`, { method: "POST" }).then(

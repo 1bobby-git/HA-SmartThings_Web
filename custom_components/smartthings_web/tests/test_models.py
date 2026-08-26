@@ -830,6 +830,8 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             ("valveState", "Power"),
             ("safeToggle", "문 열기"),
             ("safeToggle", "밸브 제어"),
+            ("safeToggle", "현관문"),
+            ("safeToggle", "대문"),
         ):
             with self.subTest(attribute=attribute, label=label):
                 control = BridgeControl(

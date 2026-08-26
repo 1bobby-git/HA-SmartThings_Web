@@ -346,6 +346,49 @@ describe("DeviceStore", () => {
     }
   });
 
+  test("does not mask graceful shutdown when the final best-effort persistence flush is locked", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-close-locked-"));
+    const sqlitePath = join(root, "bridge.sqlite");
+    let locker: DatabaseSync | undefined;
+    try {
+      const seed = new DeviceStore({ sqlitePath });
+      observeSnapshotState(seed, {
+        componentId: "identifier_component_main",
+        capabilityId: "identifier_capability_contact",
+        attributeName: "contact",
+        value: "closed",
+        timestamp: "2026-08-24T21:00:00.000Z"
+      });
+      seed.close();
+
+      const onPersistenceError = vi.fn();
+      const live = new DeviceStore({ sqlitePath, onPersistenceError });
+      locker = new DatabaseSync(sqlitePath);
+      locker.exec("BEGIN EXCLUSIVE");
+      live.observe(
+        liveStateEvent({
+          capability: "identifier_capability_contact",
+          attribute: "contact",
+          value: "open",
+          event_time: Date.parse("2026-08-24T21:00:01.000Z")
+        })
+      );
+
+      expect(() => live.close()).not.toThrow();
+      expect(onPersistenceError).toHaveBeenCalledOnce();
+    } finally {
+      if (locker) {
+        locker.exec("ROLLBACK");
+        locker.close();
+      }
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
   test("restores a persisted location whose optional updatedAt is null", () => {
     const root = mkdtempSync(join(tmpdir(), "stw-device-store-null-location-time-"));
     try {

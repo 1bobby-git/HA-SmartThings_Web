@@ -17,6 +17,7 @@ import {
   type ProbeRuntimeEvidence
 } from "./inspector/physical-action-correlation-probe.js";
 import { SqliteAliasStore } from "./security/alias-store.js";
+import { VolatileIdentifierMap } from "./security/volatile-identifier-map.js";
 import { bootstrapDataPaths } from "./security/data-paths.js";
 import { createRedactor } from "./security/redactor.js";
 import { installBrowserObserver, type CaptureSink } from "./inspector/browser-observer.js";
@@ -61,7 +62,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.80";
+const bridgeVersion = "0.1.81";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -106,6 +107,9 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   log.info("bridge_init:alias_store");
   const aliases = new SqliteAliasStore(paths.sqlitePath, secret);
   const redactor = createRedactor(aliases);
+  const volatileIdentifiers = new VolatileIdentifierMap((kind, rawIdentifier) =>
+    aliases.alias(kind, rawIdentifier)
+  );
   log.info("bridge_init:capture_store");
   const captures = new CaptureStore(paths.sqlitePath);
   const devices = new DeviceStore({
@@ -128,7 +132,9 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       aliases.alias("location", aliases.alias("location", rawLocationId)),
     {
       warmPageTtlMs: 300_000,
-      onDiagnostic: (stage) => log.info(`command_diag:${stage}`)
+      onDiagnostic: (stage) => log.info(`command_diag:${stage}`),
+      resolveRawDeviceId: (alias) => volatileIdentifiers.rawDeviceId(alias),
+      resolveRawIdentifier: (alias) => volatileIdentifiers.rawIdentifier(alias)
     }
   );
   const commands = new SafeCommandService({
@@ -186,7 +192,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     protocolIntegritySnapshot?.compatible === false,
     physicalActionProbe,
     devices,
-    cameraImages
+    cameraImages,
+    volatileIdentifiers
   );
   const sink = capturePipeline.sink;
   const heartbeat = () => {
@@ -261,11 +268,24 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       }
       try {
         const keeperManager = new KeeperPageManager(context);
-        await attachContext(context, keeperManager, sink, redactor, cameraImages, status, log, () => {
-          if (context === currentContext && keeperManager === currentKeeperManager) {
-            physicalActionProbe.recordBrowserIsolation(isProbeBrowserIsolated(context, keeperManager));
+        volatileIdentifiers.reset();
+        await attachContext(
+          context,
+          keeperManager,
+          sink,
+          redactor,
+          cameraImages,
+          volatileIdentifiers,
+          status,
+          log,
+          () => {
+            if (context === currentContext && keeperManager === currentKeeperManager) {
+              physicalActionProbe.recordBrowserIsolation(
+                isProbeBrowserIsolated(context, keeperManager)
+              );
+            }
           }
-        });
+        );
         currentContext = context;
         currentKeeperManager = keeperManager;
         detailDiscovery.reset();
@@ -412,6 +432,7 @@ async function attachContext(
   sink: CaptureSink,
   redact: (value: unknown) => unknown,
   cameraImages: CameraImageStore,
+  volatileIdentifiers: VolatileIdentifierMap,
   status: RuntimeStatusStore,
   log: BridgeRuntimeLog,
   onNewPage: () => void
@@ -424,8 +445,10 @@ async function attachContext(
   await keeperManager.reconcileRestoredPages();
 
   installBrowserObserver(context, sink, redact, {
-    onRawWebSocketFrame: (direction, payload, connectionId) =>
-      cameraImages.observeRawWebSocketFrame(direction, payload, connectionId)
+    onRawWebSocketFrame: (direction, payload, connectionId) => {
+      volatileIdentifiers.observeRawWebSocketFrame(direction, payload);
+      cameraImages.observeRawWebSocketFrame(direction, payload, connectionId);
+    }
   });
   context.on?.("page", (page) => {
     void installCdpForPage(
@@ -435,11 +458,20 @@ async function attachContext(
       redact,
       observedCdpPages,
       log,
-      cameraImages
+      cameraImages,
+      volatileIdentifiers
     );
     onNewPage();
   });
-  await installCdpForPages(context, sink, redact, observedCdpPages, log, cameraImages);
+  await installCdpForPages(
+    context,
+    sink,
+    redact,
+    observedCdpPages,
+    log,
+    cameraImages,
+    volatileIdentifiers
+  );
 
   let keeper = await keeperManager.ensureKeeper();
   if (restoredSettledKeeperPresent && classifySmartThingsUrl(keeper.url()) === "smartthings_location") {
@@ -467,11 +499,21 @@ async function installCdpForPages(
   redact: (value: unknown) => unknown,
   observedCdpPages: WeakSet<object>,
   log: BridgeRuntimeLog,
-  cameraImages: CameraImageStore
+  cameraImages: CameraImageStore,
+  volatileIdentifiers: VolatileIdentifierMap
 ): Promise<void> {
   await Promise.all(
     context.pages().map((page) =>
-      installCdpForPage(context, page, sink, redact, observedCdpPages, log, cameraImages)
+      installCdpForPage(
+        context,
+        page,
+        sink,
+        redact,
+        observedCdpPages,
+        log,
+        cameraImages,
+        volatileIdentifiers
+      )
     )
   );
 }
@@ -483,7 +525,8 @@ async function installCdpForPage(
   redact: (value: unknown) => unknown,
   observedCdpPages: WeakSet<object>,
   log: BridgeRuntimeLog,
-  cameraImages: CameraImageStore
+  cameraImages: CameraImageStore,
+  volatileIdentifiers: VolatileIdentifierMap
 ): Promise<void> {
   if (observedCdpPages.has(page) || !context.newCDPSession) {
     return;
@@ -491,8 +534,10 @@ async function installCdpForPage(
   try {
     const session = await context.newCDPSession(page);
     await installCdpNetworkObserver(session, sink, redact, {
-      onRawWebSocketFrame: (direction, payload, connectionId) =>
-        cameraImages.observeRawWebSocketFrame(direction, payload, connectionId)
+      onRawWebSocketFrame: (direction, payload, connectionId) => {
+        volatileIdentifiers.observeRawWebSocketFrame(direction, payload);
+        cameraImages.observeRawWebSocketFrame(direction, payload, connectionId);
+      }
     });
     observedCdpPages.add(page);
   } catch {
@@ -508,7 +553,8 @@ function createStatusCapturePipeline(
   initiallyProtocolBlocked: boolean,
   physicalActionProbe: PhysicalActionCorrelationProbe,
   devices: DeviceStore,
-  cameraImages: CameraImageStore
+  cameraImages: CameraImageStore,
+  volatileIdentifiers: VolatileIdentifierMap
 ): { sink: CaptureSink; reset: () => void } {
   let analyzer = new ProtocolAnalyzer({ ttlMs: 300_000, maxEntries: 100_000 });
   let protocolFingerprintObserved = false;
@@ -518,6 +564,7 @@ function createStatusCapturePipeline(
       physicalActionProbe.fail("runtime_restarted");
       devices.reset();
       cameraImages.reset();
+      volatileIdentifiers.reset();
       analyzer.reset();
       analyzer = new ProtocolAnalyzer({ ttlMs: 300_000, maxEntries: 100_000 });
       protocolFingerprintObserved = false;
