@@ -10,18 +10,21 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("publishes fast exact-room and warm-route recovery as version 0.1.74", () => {
+  test("publishes same-page warm-card recovery as version 0.1.75", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.74");
-    expect(packageMetadata.version).toBe("0.1.74");
-    expect(protocolMetadata.bridge_version).toBe("0.1.74");
+    expect(config.version).toBe("0.1.75");
+    expect(packageMetadata.version).toBe("0.1.75");
+    expect(protocolMetadata.bridge_version).toBe("0.1.75");
     expect(protocolMetadata.protocol_version).toBe(4);
-    expect(runtime).toContain('const bridgeVersion = "0.1.74";');
+    expect(runtime).toContain('const bridgeVersion = "0.1.75";');
+    expect(changelog).toContain("## 0.1.75");
+    expect(changelog).toContain("already rendered exact device card");
+    expect(changelog).toContain("without reloading the SmartThings application");
     expect(changelog).toContain("## 0.1.74");
     expect(changelog).toContain("CSS before any page-wide accessibility-tree fallback");
     expect(changelog).toContain("already verified exact detail URL");

@@ -406,14 +406,26 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     const page = new FakeCommandPage();
     const room = new FakeLocator(1);
     const roomHeading = new FakeLocator(1);
+    const roomDeviceScope = new FakeLocator(1);
+    const roomDevice = new FakeLocator(1);
+    const missingSamePageDevice = new FakeLocator(0, true);
+    let inRooms = false;
     roomHeading.locator = vi.fn(() => room);
     const diagnostics: string[] = [];
     const detailUrl =
       "https://my.smartthings.com/location/loc_001/rooms/device/device_raw_001";
     page.goto = vi.fn(async (url: string) => {
-      if (url === detailUrl) throw new Error("direct_route_navigation_failed");
       page.currentUrl = url;
+      inRooms = url.endsWith("/rooms");
     });
+    roomDeviceScope.filter = vi.fn(() =>
+      inRooms ? roomDevice : missingSamePageDevice
+    );
+    page.locator = vi.fn((selector: string) =>
+      selector === "[data-testid='draggable-room']:visible"
+        ? new FakeLocator(0)
+        : roomDeviceScope
+    );
     const defaultGetByRole = page.getByRole.bind(page);
     page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) =>
       role === "heading" && options?.name
@@ -422,9 +434,10 @@ describe("SmartThingsWebUiCommandExecutor", () => {
           ? room
           : defaultGetByRole(role, options)
     );
-    page.card.click.mockImplementation(async () => {
+    roomDevice.click.mockImplementation(async () => {
       page.currentUrl = detailUrl;
-      if (page.card.click.mock.calls.length === 2) {
+      inRooms = false;
+      if (roomDevice.click.mock.calls.length === 2) {
         const recoveredDialog = new FakeLocator(1);
         recoveredDialog.getByRole = (role, options) => page.getByRole(role!, options);
         recoveredDialog.getByText = (text, options) => page.getByText(text!, options);
@@ -470,41 +483,42 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
 
     expect(manager.openCommandPage).toHaveBeenCalledTimes(1);
-    expect(page.goto).toHaveBeenNthCalledWith(1, detailUrl, {
-      waitUntil: "domcontentloaded"
-    });
-    expect(page.goto).toHaveBeenNthCalledWith(
-      2,
+    expect(page.goto).toHaveBeenCalledTimes(1);
+    expect(page.goto).toHaveBeenCalledWith(
       "https://my.smartthings.com/location/loc_001/rooms",
       { waitUntil: "domcontentloaded" }
     );
-    expect(page.card.click).toHaveBeenCalledTimes(2);
+    expect(missingSamePageDevice.click).not.toHaveBeenCalled();
+    expect(roomDevice.click).toHaveBeenCalledTimes(2);
     expect(room.dispatchEvent).toHaveBeenCalledWith("click");
     expect(room.click).not.toHaveBeenCalled();
     expect(page.toggle.click).toHaveBeenCalledTimes(2);
     expect(page.close).not.toHaveBeenCalled();
     expect(diagnostics).toContain("warm_dialog_missing");
     expect(diagnostics).toContain("warm_recovery_start");
+    expect(diagnostics).toContain("warm_same_page_missing");
     expect(diagnostics).toContain("warm_recovery_ready");
   });
 
-  test("restores a dismissed warm detail directly only after exact identity revalidation", async () => {
+  test("restores a dismissed warm detail from the existing exact card before navigation", async () => {
     const page = new FakeCommandPage();
     const diagnostics: string[] = [];
     const events: string[] = [];
     const detailUrl =
       "https://my.smartthings.com/location/loc_001/rooms/device/device_raw_001";
     page.card.click.mockImplementation(async () => {
+      events.push("opener");
       page.currentUrl = detailUrl;
+      if (page.card.click.mock.calls.length === 2) {
+        const recoveredDialog = new FakeLocator(1);
+        recoveredDialog.getByRole = (role, options) => page.getByRole(role!, options);
+        recoveredDialog.getByText = (text, options) => page.getByText(text!, options);
+        recoveredDialog.locator = (selector) => page.locator(selector!);
+        page.detailDialog = recoveredDialog;
+      }
     });
     page.goto = vi.fn(async (url: string) => {
-      events.push("goto");
       page.currentUrl = url;
-      const recoveredDialog = new FakeLocator(1);
-      recoveredDialog.getByRole = (role, options) => page.getByRole(role!, options);
-      recoveredDialog.getByText = (text, options) => page.getByText(text!, options);
-      recoveredDialog.locator = (selector) => page.locator(selector!);
-      page.detailDialog = recoveredDialog;
     });
     page.toggle.click.mockImplementation(async () => {
       events.push("control");
@@ -526,6 +540,9 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
     events.length = 0;
     vi.mocked(page.goto).mockClear();
+    vi.mocked(page.goto).mockImplementation(async () => {
+      throw new Error("unexpected_navigation");
+    });
     page.detailDialog = new FakeLocator(0, true);
 
     await executor.executeDeviceAction({
@@ -540,10 +557,9 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       arguments: []
     });
 
-    expect(page.goto).toHaveBeenCalledTimes(1);
-    expect(page.goto).toHaveBeenCalledWith(detailUrl, { waitUntil: "domcontentloaded" });
-    expect(events).toEqual(["goto", "control"]);
-    expect(page.card.click).toHaveBeenCalledTimes(1);
+    expect(page.goto).not.toHaveBeenCalled();
+    expect(events).toEqual(["opener", "control"]);
+    expect(page.card.click).toHaveBeenCalledTimes(2);
     expect(page.toggle.click).toHaveBeenCalledTimes(2);
     expect(page.close).not.toHaveBeenCalled();
     expect(diagnostics).toContain("warm_recovery_start");

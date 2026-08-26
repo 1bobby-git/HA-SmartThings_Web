@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.75
+
+- Recover a dismissed warm detail from the already rendered exact device card before navigating anywhere, then require the exact detail URL and visible device dialog again before control lookup.
+- Fall back to the exact room path when that immediate card is missing or fails, without reloading the SmartThings application at the slow verified detail URL.
+
 ## 0.1.74
 
 - Resolve the exact visible Cake `draggable-room` heading through CSS before any page-wide accessibility-tree fallback, and go straight to the authoritative inventory room instead of probing the overview first.

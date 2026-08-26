@@ -41,6 +41,9 @@ type CommandDiagnosticStage =
   | "warm_route_invalid"
   | "warm_dialog_missing"
   | "warm_recovery_start"
+  | "warm_same_page_missing"
+  | "warm_same_page_ready"
+  | "warm_same_page_failed"
   | "warm_recovery_ready"
   | "warm_recovery_failed"
   | "warm_ready"
@@ -586,18 +589,27 @@ export class SmartThingsWebUiCommandExecutor {
     this.#diagnostic("warm_recovery_start");
     try {
       try {
-        await cached.page.goto(cached.detailUrl, { waitUntil: "domcontentloaded" });
-        if (
-          cached.page.url() === cached.detailUrl &&
-          isSmartThingsDeviceDetail(cached.page.url()) &&
-          (await hasExactVisibleDeviceDialog(cached.page, input.deviceName, input.roomName))
-        ) {
+        const samePageDevice = await immediateVisibleExactTextCard(
+          cached.page,
+          input.deviceName
+        );
+        if (samePageDevice) {
+          await samePageDevice.click({ timeout: 15_000 });
+          await waitForOpenedDeviceDetail(cached.page, input.deviceName, input.roomName);
+          if (
+            !isSmartThingsDeviceDetail(cached.page.url()) ||
+            !(await hasExactVisibleDeviceDialog(cached.page, input.deviceName, input.roomName))
+          ) {
+            throw new Error("command_target_not_found");
+          }
           this.#rememberSuccessfulDevicePage(cached.page, cached.manager, input);
+          this.#diagnostic("warm_same_page_ready");
           this.#diagnostic("warm_recovery_ready");
           return cached.page;
         }
+        this.#diagnostic("warm_same_page_missing");
       } catch {
-        // The exact room route below remains the fail-closed recovery path.
+        this.#diagnostic("warm_same_page_failed");
       }
 
       const device = await findDeviceInRooms(cached.page, input.deviceName, input.roomName);
@@ -1432,6 +1444,21 @@ async function visibleExactTextCard(
   if (wrapperCount === 0) return undefined;
   if (wrapperCount !== 1) throw new Error("command_target_ambiguous");
   return wrappers;
+}
+
+async function immediateVisibleExactTextCard(
+  page: CommandPageLike,
+  deviceName: string
+): Promise<CommandLocatorLike | undefined> {
+  const wrappers = exactTextDeviceCardLocators(page, deviceName);
+  const wrapperCount = await wrappers.count();
+  if (wrapperCount === 0) return undefined;
+  if (wrapperCount !== 1) throw new Error("command_target_ambiguous");
+  try {
+    return (await wrappers.first().isVisible()) ? wrappers : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function exactName(value: string): RegExp {
