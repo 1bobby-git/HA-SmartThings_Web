@@ -31,7 +31,7 @@ class FakeLocator {
     return this;
   }
 
-  filter(): FakeLocator {
+  filter(_options?: { has?: FakeLocator; hasText?: string | RegExp }): FakeLocator {
     return this;
   }
 
@@ -93,6 +93,7 @@ class FakeCommandPage {
   }
 
   locator(selector: string): FakeLocator {
+    if (selector === "[data-testid='draggable-room']:visible") return new FakeLocator(0);
     expect(selector).toBe("[data-testid='device']:visible");
     return this.card;
   }
@@ -203,7 +204,10 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(getByRole).toHaveBeenCalledWith("heading", {
       name: expect.any(RegExp)
     });
-    const headingCall = getByRole.mock.calls.find(([role]) => role === "heading");
+    const headingCall = getByRole.mock.calls.find(([role, options]) => {
+      const name = options?.name;
+      return role === "heading" && name instanceof RegExp && name.test("Safe plug Living room");
+    });
     const headingName = headingCall?.[1]?.name;
     expect(headingName).toBeInstanceOf(RegExp);
     expect((headingName as RegExp).test("Safe plug Living room")).toBe(true);
@@ -407,6 +411,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     const detailUrl =
       "https://my.smartthings.com/location/loc_001/rooms/device/device_raw_001";
     page.goto = vi.fn(async (url: string) => {
+      if (url === detailUrl) throw new Error("direct_route_navigation_failed");
       page.currentUrl = url;
     });
     const defaultGetByRole = page.getByRole.bind(page);
@@ -449,6 +454,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       locationId: "loc_001",
       roomName: "Entry"
     });
+    vi.mocked(page.goto).mockClear();
     page.detailDialog = new FakeLocator(0, true);
 
     await executor.executeDeviceAction({
@@ -464,7 +470,11 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
 
     expect(manager.openCommandPage).toHaveBeenCalledTimes(1);
-    expect(page.goto).toHaveBeenCalledWith(
+    expect(page.goto).toHaveBeenNthCalledWith(1, detailUrl, {
+      waitUntil: "domcontentloaded"
+    });
+    expect(page.goto).toHaveBeenNthCalledWith(
+      2,
       "https://my.smartthings.com/location/loc_001/rooms",
       { waitUntil: "domcontentloaded" }
     );
@@ -474,6 +484,68 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(page.toggle.click).toHaveBeenCalledTimes(2);
     expect(page.close).not.toHaveBeenCalled();
     expect(diagnostics).toContain("warm_dialog_missing");
+    expect(diagnostics).toContain("warm_recovery_start");
+    expect(diagnostics).toContain("warm_recovery_ready");
+  });
+
+  test("restores a dismissed warm detail directly only after exact identity revalidation", async () => {
+    const page = new FakeCommandPage();
+    const diagnostics: string[] = [];
+    const events: string[] = [];
+    const detailUrl =
+      "https://my.smartthings.com/location/loc_001/rooms/device/device_raw_001";
+    page.card.click.mockImplementation(async () => {
+      page.currentUrl = detailUrl;
+    });
+    page.goto = vi.fn(async (url: string) => {
+      events.push("goto");
+      page.currentUrl = url;
+      const recoveredDialog = new FakeLocator(1);
+      recoveredDialog.getByRole = (role, options) => page.getByRole(role!, options);
+      recoveredDialog.getByText = (text, options) => page.getByText(text!, options);
+      recoveredDialog.locator = (selector) => page.locator(selector!);
+      page.detailDialog = recoveredDialog;
+    });
+    page.toggle.click.mockImplementation(async () => {
+      events.push("control");
+    });
+    const manager = { openCommandPage: vi.fn(async () => page) };
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => manager,
+      undefined,
+      {
+        warmPageTtlMs: 30_000,
+        onDiagnostic: (stage) => diagnostics.push(stage)
+      }
+    );
+
+    await executor.executeSwitch({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      roomName: "Entry"
+    });
+    events.length = 0;
+    vi.mocked(page.goto).mockClear();
+    page.detailDialog = new FakeLocator(0, true);
+
+    await executor.executeDeviceAction({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      roomName: "Entry",
+      command: "off",
+      action: "off",
+      component: "main",
+      capability: "switch",
+      attribute: "switch",
+      arguments: []
+    });
+
+    expect(page.goto).toHaveBeenCalledTimes(1);
+    expect(page.goto).toHaveBeenCalledWith(detailUrl, { waitUntil: "domcontentloaded" });
+    expect(events).toEqual(["goto", "control"]);
+    expect(page.card.click).toHaveBeenCalledTimes(1);
+    expect(page.toggle.click).toHaveBeenCalledTimes(2);
+    expect(page.close).not.toHaveBeenCalled();
     expect(diagnostics).toContain("warm_recovery_start");
     expect(diagnostics).toContain("warm_recovery_ready");
   });
@@ -763,7 +835,6 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     await executor.executeDeviceAction({
       deviceName: "Safe plug",
       locationId: "loc_001",
-      roomName: "Living room",
       command: "on",
       action: "on",
       component: "main",
@@ -899,7 +970,11 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       text === "Kitchen" ? roomText : new FakeLocator(inRooms ? 1 : 0)
     );
     roomDeviceScope.filter = vi.fn(() => (inRooms ? roomDeviceWrapper : missingExactWrappers));
-    page.locator = vi.fn(() => roomDeviceScope);
+    page.locator = vi.fn((selector: string) =>
+      selector === "[data-testid='draggable-room']:visible"
+        ? new FakeLocator(0)
+        : roomDeviceScope
+    );
     page.goto = vi.fn(async (url: string) => {
       page.currentUrl = url;
       inRooms = true;
@@ -924,7 +999,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       timeout: 3_000
     });
     expect(roomDeviceWrapper.click).toHaveBeenCalledTimes(1);
-    expect(missingExactWrappers.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 1_000 });
+    expect(missingExactWrappers.waitFor).not.toHaveBeenCalled();
     expect(page.toggle.click).not.toHaveBeenCalled();
     expect(page.close).toHaveBeenCalledTimes(1);
   });
@@ -949,6 +1024,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     page.card = hiddenDevice;
     page.getByText = vi.fn((text?: string) => (text === "Kitchen" ? roomText : deviceText));
     page.locator = vi.fn((selector: string) => {
+      if (selector === "[data-testid='draggable-room']:visible") return new FakeLocator(0);
       expect(selector).toBe("[data-testid='device']:visible");
       return deviceCards;
     });
@@ -991,8 +1067,6 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       "fresh_page_opened",
       "fresh_location_ready",
       "fresh_navigation",
-      "fresh_overview_probe",
-      "fresh_overview_missing",
       "fresh_rooms_opened",
       "fresh_room_selected",
       "fresh_room_device_ready",
@@ -1055,6 +1129,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
     page.getByText = vi.fn(() => new FakeLocator(1));
     page.locator = vi.fn((selector: string) => {
+      if (selector === "[data-testid='draggable-room']:visible") return new FakeLocator(0);
       expect(selector).toBe("[data-testid='device']:visible");
       return deviceCards;
     });
@@ -1077,6 +1152,96 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(roomSurface.click).not.toHaveBeenCalled();
     expect(visibleDevice.click).toHaveBeenCalledTimes(1);
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
+  });
+
+  test("prefers the exact visible room heading in SmartThings room cards", async () => {
+    const page = new FakeCommandPage();
+    const roomCards = new FakeLocator(1);
+    const roomHeadings = new FakeLocator(1);
+    const exactHeading = new FakeLocator(1);
+    const roomSurface = new FakeLocator(1);
+    const hiddenDevice = new FakeLocator(0, true);
+    const visibleDevice = new FakeLocator(1);
+    const deviceCards = new FakeLocator(1);
+    let roomActive = false;
+    roomSurface.dispatchEvent.mockImplementation(async () => {
+      roomActive = true;
+    });
+    roomCards.locator = vi.fn((selector: string) => {
+      expect(selector).toBe("h1,h2,h3,h4,h5,h6");
+      return roomHeadings;
+    });
+    roomHeadings.filter = vi.fn(() => exactHeading);
+    exactHeading.locator = vi.fn(() => roomSurface);
+    deviceCards.filter = vi.fn(() => (roomActive ? visibleDevice : hiddenDevice));
+    page.locator = vi.fn((selector: string) => {
+      if (selector === "[data-testid='draggable-room']:visible") return roomCards;
+      if (selector === "[data-testid='device']:visible") return deviceCards;
+      throw new Error(`unexpected_selector:${selector}`);
+    });
+    const defaultGetByRole = page.getByRole.bind(page);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "heading") throw new Error("accessibility_tree_scan");
+      return defaultGetByRole(role, options);
+    });
+    page.goto = vi.fn(async (url: string) => {
+      page.currentUrl = url;
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeSwitch({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      roomName: "Kitchen"
+    });
+
+    expect(roomCards.locator).toHaveBeenCalledWith("h1,h2,h3,h4,h5,h6");
+    expect(roomHeadings.filter).toHaveBeenCalledWith({ hasText: expect.any(RegExp) });
+    const exactRoomName = vi.mocked(roomHeadings.filter).mock.calls[0]?.[0]?.hasText;
+    expect(exactRoomName).toBeInstanceOf(RegExp);
+    expect((exactRoomName as RegExp).test("Kitchen")).toBe(true);
+    expect((exactRoomName as RegExp).test("Kitchen device")).toBe(false);
+    expect(exactHeading.locator).toHaveBeenCalledWith("..");
+    expect(page.getByRole).not.toHaveBeenCalledWith("heading", expect.anything());
+    expect(roomSurface.dispatchEvent).toHaveBeenCalledWith("click");
+    expect(visibleDevice.click).toHaveBeenCalledTimes(1);
+    expect(page.toggle.click).toHaveBeenCalledTimes(1);
+  });
+
+  test("fails closed when SmartThings room cards contain duplicate exact headings", async () => {
+    const page = new FakeCommandPage();
+    const roomCards = new FakeLocator(2);
+    const roomHeadings = new FakeLocator(2);
+    const duplicateExactHeadings = new FakeLocator(2);
+    roomCards.locator = vi.fn(() => roomHeadings);
+    roomHeadings.filter = vi.fn(() => duplicateExactHeadings);
+    page.locator = vi.fn((selector: string) =>
+      selector === "[data-testid='draggable-room']:visible"
+        ? roomCards
+        : new FakeLocator(0, true)
+    );
+    page.getByRole = vi.fn(() => {
+      throw new Error("accessibility_fallback_must_not_run");
+    });
+    page.goto = vi.fn(async (url: string) => {
+      page.currentUrl = url;
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await expect(
+      executor.inspectDeviceDetails({
+        deviceName: "Safe plug",
+        locationId: "loc_001",
+        roomName: "Kitchen"
+      })
+    ).rejects.toThrow("command_room_not_found");
+
+    expect(page.getByRole).not.toHaveBeenCalled();
+    expect(page.toggle.click).not.toHaveBeenCalled();
   });
 
   test("fails closed when the exact room heading is ambiguous", async () => {
@@ -2452,6 +2617,55 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       expect(commandPage.card.click).toHaveBeenCalledTimes(1);
       expect(commandPage.toggle.click).toHaveBeenCalledTimes(1);
     } finally {
+      settle.resolve();
+      await Promise.allSettled([discovery, command]);
+    }
+  });
+
+  test("does not wait for a slow background page close before foreground control", async () => {
+    const discoveryPage = new FakeCommandPage();
+    const commandPage = new FakeCommandPage();
+    const settle = deferred();
+    const closeFinished = deferred();
+    discoveryPage.waitForTimeout = vi.fn(async () => settle.promise);
+    discoveryPage.close.mockImplementation(async () => {
+      await closeFinished.promise;
+      return undefined;
+    });
+    const manager = {
+      openCommandPage: vi.fn(async () =>
+        manager.openCommandPage.mock.calls.length === 1 ? discoveryPage : commandPage
+      )
+    };
+    const executor = new SmartThingsWebUiCommandExecutor(() => manager);
+
+    const discovery = executor.inspectDeviceDetails({
+      deviceName: "Safe plug",
+      locationId: "loc_001"
+    });
+    const discoveryResult = discovery.then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    await vi.waitFor(() => {
+      expect(discoveryPage.waitForTimeout).toHaveBeenCalledTimes(1);
+    });
+
+    const command = executor.executeSwitch({
+      deviceName: "Safe plug",
+      locationId: "loc_001"
+    });
+    try {
+      await vi.waitFor(() => expect(discoveryPage.close).toHaveBeenCalled(), { timeout: 500 });
+      await vi.waitFor(() => expect(commandPage.toggle.click).toHaveBeenCalledTimes(1), {
+        timeout: 500
+      });
+      await command;
+      await expect(discoveryResult).resolves.toMatchObject({
+        message: "detail_discovery_preempted"
+      });
+    } finally {
+      closeFinished.resolve();
       settle.resolve();
       await Promise.allSettled([discovery, command]);
     }

@@ -38,13 +38,13 @@ const CANDIDATE_ARCHIVE = "c".repeat(64);
 const ROLLBACK_ARCHIVE = "d".repeat(64);
 
 describe("HAOS candidate deployment gate", () => {
-  test("pins the deployed 0.1.72 build as the next rollback", () => {
+  test("pins the deployed 0.1.73 build as the next rollback", () => {
     expect(HAOS_ROLLBACK_COMMIT_SHA).toBe(
-      "c2ccceaa6578f3f9142a186a2c0a162f76826a98"
+      "070d74b7f5c7ed871f491cdba8809936409ba821"
     );
-    expect(HAOS_ROLLBACK_VERSION).toBe("0.1.72");
+    expect(HAOS_ROLLBACK_VERSION).toBe("0.1.73");
     expect(HAOS_ROLLBACK_MANIFEST_SHA256).toBe(
-      "ea6da1493633a59dd3f9e18dc83fd0e0b872d1cf215dc08e80e27e35e767ec05"
+      "a085d7399cb43905987096e3394d3d6e88cf3805b252745cbc6dbab826714db8"
     );
   });
 

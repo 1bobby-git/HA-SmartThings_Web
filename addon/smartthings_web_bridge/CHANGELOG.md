@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.74
+
+- Resolve the exact visible Cake `draggable-room` heading through CSS before any page-wide accessibility-tree fallback, and go straight to the authoritative inventory room instead of probing the overview first.
+- Reopen a dismissed warm device dialog at its already verified exact detail URL and revalidate the exact URL and dialog identity before control lookup, falling back to the exact room path only when that fails.
+- Let foreground control proceed after background inspection preemption without waiting for the separate inspection page's potentially slow close operation.
+
 ## 0.1.73
 
 - Resolve the exact room heading and its unique parent before scanning Cake's page-wide button accessibility tree, matching the observed `draggable-room` structure while retaining fail-closed room, device, dialog, and control checks.

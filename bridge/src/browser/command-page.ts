@@ -5,7 +5,7 @@ interface CommandLocatorLike {
   count(): Promise<number>;
   dispatchEvent(type: string): Promise<unknown>;
   fill(value: string, options?: { timeout?: number }): Promise<unknown>;
-  filter(options: { has: CommandLocatorLike }): CommandLocatorLike;
+  filter(options: { has?: CommandLocatorLike; hasText?: string | RegExp }): CommandLocatorLike;
   first(): CommandLocatorLike;
   getByRole(role: string, options?: { name?: string | RegExp }): CommandLocatorLike;
   getByText(text: string, options?: { exact?: boolean }): CommandLocatorLike;
@@ -529,7 +529,7 @@ export class SmartThingsWebUiCommandExecutor {
       this.#backgroundPreemption?.request();
       const backgroundPage = this.#backgroundInspectionPage;
       if (backgroundPage && !backgroundPage.isClosed()) {
-        await backgroundPage.close().catch(() => undefined);
+        void backgroundPage.close().catch(() => undefined);
       }
       return await this.#runExclusive(work);
     } finally {
@@ -585,6 +585,21 @@ export class SmartThingsWebUiCommandExecutor {
   ): Promise<CommandPageLike | undefined> {
     this.#diagnostic("warm_recovery_start");
     try {
+      try {
+        await cached.page.goto(cached.detailUrl, { waitUntil: "domcontentloaded" });
+        if (
+          cached.page.url() === cached.detailUrl &&
+          isSmartThingsDeviceDetail(cached.page.url()) &&
+          (await hasExactVisibleDeviceDialog(cached.page, input.deviceName, input.roomName))
+        ) {
+          this.#rememberSuccessfulDevicePage(cached.page, cached.manager, input);
+          this.#diagnostic("warm_recovery_ready");
+          return cached.page;
+        }
+      } catch {
+        // The exact room route below remains the fail-closed recovery path.
+      }
+
       const device = await findDeviceInRooms(cached.page, input.deviceName, input.roomName);
       await device.click({ timeout: 15_000 });
       await waitForOpenedDeviceDetail(cached.page, input.deviceName, input.roomName);
@@ -789,15 +804,6 @@ async function openDeviceDetail(
 ): Promise<void> {
   const diagnostic = options?.diagnostic ?? (() => undefined);
   if (options?.preferRooms && roomName) {
-    diagnostic("fresh_overview_probe");
-    const overviewDevice = await visibleExactTextCard(page, deviceName, 1_000);
-    if (overviewDevice) {
-      diagnostic("fresh_overview_ready");
-      await overviewDevice.click({ timeout: 15_000 });
-      diagnostic("fresh_device_clicked");
-      return;
-    }
-    diagnostic("fresh_overview_missing");
     const roomDevice = await findDeviceInRooms(page, deviceName, roomName, diagnostic);
     if ((await roomDevice.count()) !== 1) throw new Error("command_target_ambiguous");
     await roomDevice.click({ timeout: 15_000 });
@@ -1311,25 +1317,37 @@ async function findDeviceInRooms(
   await page.goto(`${url.origin}${route}/rooms`, { waitUntil: "domcontentloaded" });
   diagnostic("fresh_rooms_opened");
   if (roomName) {
-    const heading = page.getByRole("heading", { name: exactName(roomName) });
+    const exactRoomName = exactName(roomName);
+    const visibleRoomCards = page.locator("[data-testid='draggable-room']:visible");
+    const roomCardHeadings = visibleRoomCards
+      .locator("h1,h2,h3,h4,h5,h6")
+      .filter({ hasText: exactRoomName });
     let room: CommandLocatorLike;
-    const headingCount = await heading.count();
-    if (headingCount > 1) throw new Error("command_room_not_found");
-    if (headingCount === 1) {
-      room = heading.locator("..");
+    const roomCardHeadingCount = await roomCardHeadings.count();
+    if (roomCardHeadingCount > 1) throw new Error("command_room_not_found");
+    if (roomCardHeadingCount === 1) {
+      room = roomCardHeadings.locator("..");
       if ((await room.count()) !== 1) throw new Error("command_room_not_found");
     } else {
-      const namedRoom = page.getByRole("button", { name: exactName(roomName) });
-      const namedRoomCount = await namedRoom.count();
-      if (namedRoomCount > 1) throw new Error("command_room_not_found");
-      if (namedRoomCount === 1) {
-        room = namedRoom;
-      } else {
-        const roomText = page.getByText(roomName, { exact: true });
-        room = page.getByRole("button").filter({
-          has: roomText
-        });
+      const heading = page.getByRole("heading", { name: exactRoomName });
+      const headingCount = await heading.count();
+      if (headingCount > 1) throw new Error("command_room_not_found");
+      if (headingCount === 1) {
+        room = heading.locator("..");
         if ((await room.count()) !== 1) throw new Error("command_room_not_found");
+      } else {
+        const namedRoom = page.getByRole("button", { name: exactRoomName });
+        const namedRoomCount = await namedRoom.count();
+        if (namedRoomCount > 1) throw new Error("command_room_not_found");
+        if (namedRoomCount === 1) {
+          room = namedRoom;
+        } else {
+          const roomText = page.getByText(roomName, { exact: true });
+          room = page.getByRole("button").filter({
+            has: roomText
+          });
+          if ((await room.count()) !== 1) throw new Error("command_room_not_found");
+        }
       }
     }
     try {
