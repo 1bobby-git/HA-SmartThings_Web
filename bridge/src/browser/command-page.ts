@@ -56,6 +56,7 @@ const VERIFIED_ROUTE_TTL_MS = 24 * 60 * 60_000;
 const MAX_VERIFIED_DETAIL_ROUTES = 256;
 const WARM_CONTROL_PROBE_TIMEOUT_MS = 1_500;
 const FRESH_CONTROL_PROBE_TIMEOUT_MS = 5_000;
+const FRESH_OBSERVED_TOGGLE_PROBE_TIMEOUT_MS = 15_000;
 const ROOM_DEVICE_CARD_TIMEOUT_MS = 3_000;
 const LABELED_SCOPE_POLL_MS = 100;
 const LABELED_SCOPE_VISIBLE_PROBE_MS = 25;
@@ -223,7 +224,8 @@ export class SmartThingsWebUiCommandExecutor {
           routedPage,
           input,
           FRESH_CONTROL_PROBE_TIMEOUT_MS,
-          (stage) => this.#diagnostic(stage)
+          (stage) => this.#diagnostic(stage),
+          FRESH_OBSERVED_TOGGLE_PROBE_TIMEOUT_MS
         );
         this.#rememberSuccessfulDevicePage(routedPage, manager, input);
         keepWarm = this.#warmPageTtlMs > 0;
@@ -255,7 +257,8 @@ export class SmartThingsWebUiCommandExecutor {
         page,
         input,
         FRESH_CONTROL_PROBE_TIMEOUT_MS,
-        (stage) => this.#diagnostic(stage)
+        (stage) => this.#diagnostic(stage),
+        FRESH_OBSERVED_TOGGLE_PROBE_TIMEOUT_MS
       );
       this.#rememberSuccessfulDevicePage(page, manager, input);
       keepWarm = this.#warmPageTtlMs > 0;
@@ -674,11 +677,17 @@ async function executeDeviceControl(
     optionCommand?: string;
   },
   probeTimeoutMs: number,
-  diagnostic: (stage: CommandDiagnosticStage) => void = () => undefined
+  diagnostic: (stage: CommandDiagnosticStage) => void = () => undefined,
+  observedToggleProbeTimeoutMs = probeTimeoutMs
 ): Promise<void> {
   if (input.command === "on" || input.command === "off") {
     if (input.controlLabel) {
-      await clickObservedToggleControl(page, input.controlLabel, probeTimeoutMs, diagnostic);
+      await clickObservedToggleControl(
+        page,
+        input.controlLabel,
+        observedToggleProbeTimeoutMs,
+        diagnostic
+      );
       return;
     }
     const label = controlLabelFor(input.attribute);

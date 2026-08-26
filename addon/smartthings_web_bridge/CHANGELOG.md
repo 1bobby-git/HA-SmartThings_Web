@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.62
+
+- Allow a fresh or directly reopened detail page up to fifteen seconds to render the exact observed toggle swatch.
+- Keep warm-page probes short and leave unrelated controls at their existing five-second bound.
+
 ## 0.1.61
 
 - Give a unique control inside the exact observed swatch its own bounded visibility probe after late swatch rendering.

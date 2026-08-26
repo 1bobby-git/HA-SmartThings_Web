@@ -1465,9 +1465,9 @@ describe("SmartThingsWebUiCommandExecutor", () => {
   });
 
   test("clicks a button toggle only inside its observed exact swatch label", async () => {
-    const nowValues = [1_000, 1_000, 5_999, 5_999];
+    const nowValues = [1_000, 1_000, 15_999, 15_999];
     const now = vi.spyOn(Date, "now").mockImplementation(
-      () => nowValues.shift() ?? 5_999
+      () => nowValues.shift() ?? 15_999
     );
     const page = new FakeCommandPage();
     const card = new FakeLocator(1);
@@ -1507,7 +1507,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
 
     expect(label.locator).toHaveBeenCalledWith("..");
-    expect(button.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 5_000 });
+    expect(button.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 15_000 });
     expect(button.click).toHaveBeenCalledWith({ timeout: 15_000 });
     expect(page.card.click).toHaveBeenCalledTimes(1);
     expect(card.click).not.toHaveBeenCalled();

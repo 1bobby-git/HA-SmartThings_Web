@@ -1,10 +1,10 @@
 import type { HaosAppInfo, HaosCandidatePreflightResult } from "./haos-candidate-preflight-core.js";
 import { parseGuestExecText } from "./haos-runtime-api-audit-core.js";
 
-export const HAOS_ROLLBACK_COMMIT_SHA = "b9abf442c42a57aba01dbabc41c46201e7636e1d";
-export const HAOS_ROLLBACK_VERSION = "0.1.60";
+export const HAOS_ROLLBACK_COMMIT_SHA = "bb33bd596d7e8b5f0e5d58c0c583f106eb156a46";
+export const HAOS_ROLLBACK_VERSION = "0.1.61";
 export const HAOS_ROLLBACK_MANIFEST_SHA256 =
-  "23cec45c4000d76f8771d3d2e4aca4a2270c186f4b7318811a8f50c9eab0996f";
+  "92b1aee700e0f25c907c73153c5a8299abde39021ade11dd15366692e590bc0d";
 export const HAOS_ROLLBACK_RUNTIME_PATH =
   "/app/dist/bridge/src/inspector/protocol-analyzer.js";
 export const HAOS_ROLLBACK_RUNTIME_SHA256 =
