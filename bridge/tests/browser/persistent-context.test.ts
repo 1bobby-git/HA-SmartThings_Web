@@ -23,9 +23,9 @@ describe("persistent Chromium context", () => {
     expect(launch.options.args).toContain("--restore-last-session");
     expect(launch.options.args).toContain("--hide-crash-restore-bubble");
     expect(launch.options.args).not.toContain("--no-sandbox");
-    expect(launch.options.args).not.toContain("--disable-background-timer-throttling");
-    expect(launch.options.args).not.toContain("--disable-backgrounding-occluded-windows");
-    expect(launch.options.args).not.toContain("--disable-renderer-backgrounding");
+    expect(launch.options.args).toContain("--disable-background-timer-throttling");
+    expect(launch.options.args).toContain("--disable-backgrounding-occluded-windows");
+    expect(launch.options.args).toContain("--disable-renderer-backgrounding");
     expect(JSON.stringify(launch)).not.toMatch(/AppData|Google\\Chrome|User Data/i);
   });
 

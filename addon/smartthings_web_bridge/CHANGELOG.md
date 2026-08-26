@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.86
+
+- Keep the authenticated SmartThings Web keeper socket responsive while its Chromium window is inactive by disabling background timer and renderer throttling.
+- Disable Nagle delay for the local SSE stream and retry transient Bridge stream failures after 50 ms, with a bounded one-second backoff for repeated failures.
+
 ## 0.1.85
 
 - Send the canonical `on`/`off` command used by captured Cake toggle exchanges when an observed safe toggle omits its optional command metadata, avoiding the slow detail-page fallback.

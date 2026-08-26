@@ -44,6 +44,9 @@ from .models import (
 
 _LOGGER = logging.getLogger(__name__)
 
+_EVENT_RECONNECT_MIN_DELAY = 0.05
+_EVENT_RECONNECT_MAX_DELAY = 1.0
+
 PLATFORMS = [
     Platform.ALARM_CONTROL_PANEL,
     Platform.BINARY_SENSOR,
@@ -136,22 +139,27 @@ async def async_unload_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEnt
 async def _event_loop(entry: SmartThingsWebConfigEntry) -> None:
     """Maintain the Bridge push stream."""
     runtime = entry.runtime_data
+    reconnect_delay = _EVENT_RECONNECT_MIN_DELAY
     while True:
         try:
             runtime.apply_inventory(await runtime.client.async_get_inventory())
             async for event in runtime.client.async_events():
                 await runtime.handle_event(event)
+                reconnect_delay = _EVENT_RECONNECT_MIN_DELAY
         except BridgeAuthError:
             await asyncio.sleep(5)
         except BridgeClientError:
-            await asyncio.sleep(1)
+            await asyncio.sleep(reconnect_delay)
+            reconnect_delay = min(reconnect_delay * 2, _EVENT_RECONNECT_MAX_DELAY)
         except asyncio.CancelledError:
             raise
         except Exception:
             _LOGGER.exception("smartthings_web_event_loop_failed")
-            await asyncio.sleep(5)
+            await asyncio.sleep(max(reconnect_delay, 0.25))
+            reconnect_delay = min(reconnect_delay * 2, _EVENT_RECONNECT_MAX_DELAY)
         else:
-            await asyncio.sleep(1)
+            await asyncio.sleep(reconnect_delay)
+            reconnect_delay = min(reconnect_delay * 2, _EVENT_RECONNECT_MAX_DELAY)
 
 
 async def _repair_loop(

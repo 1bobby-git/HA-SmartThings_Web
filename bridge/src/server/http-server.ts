@@ -203,6 +203,7 @@ function openEventStream(
   response: ServerResponse,
   devices: DeviceStore
 ): void {
+  request.socket.setNoDelay(true);
   response.writeHead(200, {
     "cache-control": "no-store",
     connection: "keep-alive",

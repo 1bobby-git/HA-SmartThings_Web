@@ -103,7 +103,7 @@ from smartthings_web.__init__ import (  # noqa: E402
     _migrate_entity_registry,
     _repair_loop,
 )
-from smartthings_web.bridge_client import BridgeAuthError  # noqa: E402
+from smartthings_web.bridge_client import BridgeAuthError, BridgeClientError  # noqa: E402
 from smartthings_web.const import (  # noqa: E402
     CONF_CONTROL_MODE,
     CONF_LOCATION_ID,
@@ -372,6 +372,24 @@ class ControlPlaneTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.applied_sequences, [2, 3])
         self.assertEqual(runtime.handled_events, [{"type": "state", "sequence": 4}])
 
+    async def test_event_loop_retries_transient_bridge_failures_immediately_with_a_cap(self) -> None:
+        runtime = FakeReconnectRuntime()
+        original_sleep = integration.asyncio.sleep
+        delays: list[float] = []
+
+        async def fake_sleep(seconds: float) -> None:
+            delays.append(seconds)
+
+        integration.asyncio.sleep = fake_sleep
+        try:
+            with self.assertRaises(integration.asyncio.CancelledError):
+                await _event_loop(SimpleNamespace(runtime_data=runtime))
+        finally:
+            integration.asyncio.sleep = original_sleep
+
+        self.assertEqual(delays, [0.05, 0.1, 0.2])
+        self.assertEqual(runtime.client.inventory_calls, 4)
+
 
 class FakeHealthClient:
     """Minimal async health client."""
@@ -416,6 +434,29 @@ class FakeEventRuntime:
 
     async def handle_event(self, event: dict[str, object]) -> bool:
         self.handled_events.append(event)
+        return True
+
+
+class FakeReconnectClient:
+    """Inventory client that exposes the bounded transient reconnect schedule."""
+
+    def __init__(self) -> None:
+        self.inventory_calls = 0
+
+    async def async_get_inventory(self) -> SimpleNamespace:
+        self.inventory_calls += 1
+        if self.inventory_calls <= 3:
+            raise BridgeClientError("bridge_request_failed")
+        raise integration.asyncio.CancelledError
+
+
+class FakeReconnectRuntime:
+    """Minimal runtime for event-loop reconnect timing."""
+
+    def __init__(self) -> None:
+        self.client = FakeReconnectClient()
+
+    def apply_inventory(self, _inventory: SimpleNamespace) -> bool:
         return True
 
 
