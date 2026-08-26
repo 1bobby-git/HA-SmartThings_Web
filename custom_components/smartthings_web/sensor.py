@@ -130,8 +130,26 @@ class SmartThingsWebSensor(SmartThingsWebEntity, SensorEntity):
     ) -> None:
         super().__init__(runtime, device, state, description.name)
         self.description = description
-        self._attr_device_class = description.device_class
-        self._attr_state_class = description.state_class
+
+    @property
+    def device_class(self) -> SensorDeviceClass | None:
+        """Use a numeric device class only while the pushed value is numeric."""
+        state = self.bridge_state
+        if state is None or isinstance(state.value, bool) or not isinstance(
+            state.value, (int, float)
+        ):
+            return None
+        return self.description.device_class
+
+    @property
+    def state_class(self) -> SensorStateClass | None:
+        """Use a numeric state class only while the pushed value is numeric."""
+        state = self.bridge_state
+        if state is None or isinstance(state.value, bool) or not isinstance(
+            state.value, (int, float)
+        ):
+            return None
+        return self.description.state_class
 
     @property
     def native_value(self) -> Any:

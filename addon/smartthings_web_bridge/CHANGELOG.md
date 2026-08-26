@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.67
+
+- Preserve non-numeric pushed values such as battery health status without assigning Home Assistant numeric sensor classes.
+- Reapply numeric device and state classes automatically when a later push contains a numeric measurement.
+
 ## 0.1.66
 
 - Scope every control lookup to the exact verified device-detail dialog.
