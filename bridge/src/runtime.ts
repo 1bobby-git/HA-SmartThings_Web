@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 
 import type { BrowserContextLike, BrowserPageLike } from "./browser/keeper-page.js";
+import { installCakeClientCapture } from "./browser/cake-client-capture.js";
 import { KeeperPageManager } from "./browser/keeper-page.js";
 import { BrowserSupervisor } from "./browser/browser-supervisor.js";
 import { SmartThingsWebUiCommandExecutor } from "./browser/command-page.js";
@@ -56,13 +57,14 @@ export interface BridgeRuntime {
 }
 
 type ObservableContext = BrowserContextLike & {
+  addInitScript?: (script: () => void) => Promise<unknown>;
   on: (event: string, handler: (payload?: unknown) => void | Promise<void>) => void;
   close?: () => Promise<unknown>;
   browser?: () => { version?: () => string } | null;
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.91";
+const bridgeVersion = "0.1.92";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -267,6 +269,9 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         return context;
       }
       try {
+        if (!(await installCakeClientCapture(context))) {
+          log.warn("cake_client_capture_unavailable");
+        }
         const keeperManager = new KeeperPageManager(context);
         volatileIdentifiers.reset();
         await attachContext(

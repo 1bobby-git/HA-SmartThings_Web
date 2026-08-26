@@ -10,19 +10,21 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("publishes warm native dispatcher reuse as version 0.1.91", () => {
+  test("publishes private webpack client recovery as version 0.1.92", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.91");
-    expect(packageMetadata.version).toBe("0.1.91");
-    expect(protocolMetadata.bridge_version).toBe("0.1.91");
+    expect(config.version).toBe("0.1.92");
+    expect(packageMetadata.version).toBe("0.1.92");
+    expect(protocolMetadata.bridge_version).toBe("0.1.92");
     expect(protocolMetadata.protocol_version).toBe(4);
-    expect(runtime).toContain('const bridgeVersion = "0.1.91";');
-    expect(changelog).toContain("## 0.1.91");
+    expect(runtime).toContain('const bridgeVersion = "0.1.92";');
+    expect(changelog).toContain("## 0.1.92");
+    expect(changelog).toContain("webpack module factory");
+    expect(changelog).toContain("exact captured `patch` request");
     expect(changelog).toContain("authenticated in-page SmartThings Web client");
     expect(changelog).toContain("volatile raw identifiers");
     expect(changelog).toContain("observed toggle and refresh controls");

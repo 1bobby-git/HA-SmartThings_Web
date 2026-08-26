@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.92
+
+- Capture the authenticated Cake client when the SmartThings app naturally invokes its private webpack module factory, then reuse only that volatile reference.
+- Accept a verified SmartThings device-detail page as the warm native dispatcher instead of rejecting it as a non-location page.
+- Send the exact captured `patch` request to the existing `api/device` Socket.IO service without direct SmartThings API calls, cookie replay, or DOM state authority.
+
 ## 0.1.91
 
 - Reuse the authenticated client loaded by a successful device-detail page for native commands instead of limiting native dispatch to the overview keeper.

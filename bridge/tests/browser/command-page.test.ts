@@ -165,6 +165,99 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(keeper.close).not.toHaveBeenCalled();
   });
 
+  test("uses a client reference captured when the SmartThings app initialized it", async () => {
+    const keeper = new FakeCommandPage() as FakeCommandPage & {
+      evaluate: <Result, Argument>(
+        pageFunction: (argument: Argument) => Result | Promise<Result>,
+        argument: Argument
+      ) => Promise<Result>;
+    };
+    const patch = vi.fn(async () => ({ data: { results: [{ status: "ACCEPTED" }] } }));
+    keeper.evaluate = capturedNativeClientEvaluate(patch);
+    const manager = {
+      currentKeeper: vi.fn(() => keeper),
+      openCommandPage: vi.fn(async () => new FakeCommandPage())
+    };
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => manager,
+      undefined,
+      {
+        resolveRawDeviceId: () => "raw-device",
+        resolveRawIdentifier: (alias) => ({ identifier_main: "main", identifier_switch: "switch" })[alias]
+      }
+    );
+
+    await executor.executeDeviceAction({
+      action: "on",
+      arguments: [],
+      attribute: "switch",
+      capability: "identifier_switch",
+      command: "on",
+      component: "identifier_main",
+      controlId: "identifier_toggle",
+      deviceId: "dev_001",
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      nativeCommand: "on"
+    });
+
+    expect(patch).toHaveBeenCalledWith("raw-device", {
+      query: {
+        execute: true,
+        commands: [{ capability: "switch", command: "on", component: "main" }]
+      }
+    });
+    expect(manager.openCommandPage).not.toHaveBeenCalled();
+  });
+
+  test("does not initialize a marker-matching private webpack factory", async () => {
+    const keeper = new FakeCommandPage() as FakeCommandPage & {
+      evaluate: <Result, Argument>(
+        pageFunction: (argument: Argument) => Result | Promise<Result>,
+        argument: Argument
+      ) => Promise<Result>;
+    };
+    const patch = vi.fn(async () => ({ data: { results: [{ status: "ACCEPTED" }] } }));
+    const requireModule = vi.fn((moduleId: string) => {
+      expect(moduleId).toBe("90537");
+      return { A: { service: vi.fn(() => ({ patch })) } };
+    });
+    keeper.evaluate = nativeClientFactoryEvaluate(patch, requireModule);
+    const fallbackPage = new FakeCommandPage();
+    const manager = {
+      currentKeeper: vi.fn(() => keeper),
+      openCommandPage: vi.fn(async () => fallbackPage)
+    };
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => manager,
+      undefined,
+      {
+        resolveRawDeviceId: () => "raw-device",
+        resolveRawIdentifier: (alias) => ({ identifier_main: "main", identifier_switch: "switch" })[alias]
+      }
+    );
+
+    await executor.executeDeviceAction({
+      action: "on",
+      arguments: [],
+      attribute: "switch",
+      capability: "identifier_switch",
+      command: "on",
+      component: "identifier_main",
+      controlId: "identifier_toggle",
+      controlLabel: "Power",
+      deviceId: "dev_001",
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      nativeCommand: "on"
+    });
+
+    expect(requireModule).not.toHaveBeenCalled();
+    expect(patch).not.toHaveBeenCalled();
+    expect(manager.openCommandPage).toHaveBeenCalledTimes(1);
+    expect(fallbackPage.toggle.click).toHaveBeenCalledTimes(1);
+  });
+
   test("dispatches an observed native command even when the optional control label is absent", async () => {
     const keeper = new FakeCommandPage() as FakeCommandPage & {
       evaluate: <Result, Argument>(
@@ -229,6 +322,8 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     );
 
     await executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" });
+    warmPage.currentUrl =
+      "https://my.smartthings.com/location/loc_001/device/raw-device";
     await executor.executeDeviceAction({
       action: "off",
       arguments: [],
@@ -3267,6 +3362,72 @@ function nativeClientEvaluate(
     }) as typeof chunks.push;
     (globalThis as { window?: unknown }).window = {
       webpackChunk_smartthings_cake: chunks
+    };
+    try {
+      return await pageFunction(argument);
+    } finally {
+      (globalThis as { window?: unknown }).window = previousWindow;
+    }
+  };
+}
+
+function nativeClientFactoryEvaluate(
+  patch: ReturnType<typeof vi.fn>,
+  requireModule?: ReturnType<typeof vi.fn>
+): <Result, Argument>(
+  pageFunction: (argument: Argument) => Result | Promise<Result>,
+  argument: Argument
+) => Promise<Result> {
+  return async (pageFunction, argument) => {
+    const previousWindow = (globalThis as { window?: unknown }).window;
+    const client = {
+      service: vi.fn(() => ({ patch }))
+    };
+    const clientFactory = function authenticatedCakeClientFactory(): void {
+      // The live Cake bundle contains both markers in the already-loaded client module.
+      void "cake_session";
+      void "api/device";
+      void "api/subscription";
+    };
+    const runtimeRequire = Object.assign(
+      requireModule ?? vi.fn((moduleId: string) => {
+        expect(moduleId).toBe("90537");
+        return { A: client };
+      }),
+      {
+        m: { "90537": clientFactory }
+      }
+    );
+    const chunks: unknown[] = [];
+    chunks.push = ((entry: unknown[]) => {
+      const runtime = entry[2] as ((require: typeof runtimeRequire) => void) | undefined;
+      runtime?.(runtimeRequire);
+      return 1;
+    }) as typeof chunks.push;
+    (globalThis as { window?: unknown }).window = {
+      webpackChunk_smartthings_cake: chunks
+    };
+    try {
+      return await pageFunction(argument);
+    } finally {
+      (globalThis as { window?: unknown }).window = previousWindow;
+    }
+  };
+}
+
+function capturedNativeClientEvaluate(
+  patch: ReturnType<typeof vi.fn>
+): <Result, Argument>(
+  pageFunction: (argument: Argument) => Result | Promise<Result>,
+  argument: Argument
+) => Promise<Result> {
+  return async (pageFunction, argument) => {
+    const previousWindow = (globalThis as { window?: unknown }).window;
+    const client = {
+      service: vi.fn(() => ({ patch }))
+    };
+    (globalThis as { window?: unknown }).window = {
+      [Symbol.for("smartthings_web_bridge.cake_client")]: client
     };
     try {
       return await pageFunction(argument);

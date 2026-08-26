@@ -38,13 +38,19 @@ const CANDIDATE_ARCHIVE = "c".repeat(64);
 const ROLLBACK_ARCHIVE = "d".repeat(64);
 
 describe("HAOS candidate deployment gate", () => {
-  test("pins the deployed 0.1.90 build as the next rollback", () => {
+  test("pins the deployed 0.1.91 build as the next rollback", () => {
     expect(HAOS_ROLLBACK_COMMIT_SHA).toBe(
-      "884800b407cf66e566b092ede36b16e951b1c005"
+      "acd14a4c4bb64a0a7f4f4a8552a88f37a45602e1"
     );
-    expect(HAOS_ROLLBACK_VERSION).toBe("0.1.90");
+    expect(HAOS_ROLLBACK_VERSION).toBe("0.1.91");
     expect(HAOS_ROLLBACK_MANIFEST_SHA256).toBe(
-      "1f5ece070966cb3004d6473a12d1dc686a6e2218cb188fe05934316bed614412"
+      "70af9eace319c8b7b267d8dbf4ebc9f00b0b8479e09f51c29ad27e0124bc488a"
+    );
+    expect(HAOS_ROLLBACK_RUNTIME_PATH).toBe(
+      "/app/dist/bridge/src/browser/command-page.js"
+    );
+    expect(HAOS_ROLLBACK_RUNTIME_SHA256).toBe(
+      "54142e6ef39985693757fabec387842610cf9b22c00915245b62748f80033da4"
     );
   });
 

@@ -602,11 +602,11 @@ export class SmartThingsWebUiCommandExecutor {
       !cached.page.isClosed() &&
       Date.now() - cached.lastUsedAt < this.#warmPageTtlMs &&
       cached.page.evaluate &&
-      isSmartThingsLocation(cached.page.url())
+      isSmartThingsRuntimePage(cached.page.url())
         ? cached.page
         : undefined;
     const page = cachedPage ?? (manager.currentKeeper?.() as CommandPageLike | undefined);
-    if (!page || page.isClosed() || !page.evaluate || !isSmartThingsLocation(page.url())) {
+    if (!page || page.isClosed() || !page.evaluate || !isSmartThingsRuntimePage(page.url())) {
       return "unavailable";
     }
     const rawDeviceId = this.#resolveRawDeviceId?.(input.deviceId);
@@ -631,48 +631,32 @@ export class SmartThingsWebUiCommandExecutor {
           type NativeClient = {
             service?: (name: string) => NativeService;
           };
-          const pageWindow = window as typeof window & {
-            webpackChunk_smartthings_cake?: Array<unknown>;
-          };
-          const chunks = pageWindow.webpackChunk_smartthings_cake;
-          if (!Array.isArray(chunks)) return "unavailable";
-          let runtimeRequire: WebpackRequire | undefined;
-          try {
-            chunks.push([
-              [`smartthings_web_bridge_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`],
-              {},
-              (candidate: WebpackRequire) => {
-                runtimeRequire = candidate;
-              }
-            ]);
-          } catch {
-            return "unavailable";
-          }
-          if (!runtimeRequire?.c) return "unavailable";
-          let service: NativeService | undefined;
-          for (const module of Object.values(runtimeRequire.c)) {
-            const exports = module?.exports;
-            let candidates: unknown[];
+          const pageWindow = window as typeof window &
+            Record<PropertyKey, unknown> & {
+              webpackChunk_smartthings_cake?: Array<unknown>;
+            };
+          let service = findNativeService(
+            pageWindow[Symbol.for("smartthings_web_bridge.cake_client")]
+          );
+          if (!service) {
+            const chunks = pageWindow.webpackChunk_smartthings_cake;
+            if (!Array.isArray(chunks)) return "unavailable";
+            let runtimeRequire: WebpackRequire | undefined;
             try {
-              candidates = isPageRecord(exports)
-                ? [exports, ...Object.values(exports)]
-                : [exports];
-            } catch {
-              continue;
-            }
-            for (const candidate of candidates) {
-              try {
-                if (!isPageRecord(candidate) || typeof candidate.service !== "function") continue;
-                const possible = (candidate as NativeClient).service?.("api/device");
-                if (possible && typeof possible.patch === "function") {
-                  service = possible;
-                  break;
+              chunks.push([
+                [`smartthings_web_bridge_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`],
+                {},
+                (candidate: WebpackRequire) => {
+                  runtimeRequire = candidate;
                 }
-              } catch {
-                // Continue searching loaded modules only; never initialize a new client.
-              }
+              ]);
+            } catch {
+              return "unavailable";
             }
-            if (service) break;
+            for (const module of Object.values(runtimeRequire?.c ?? {})) {
+              service = findNativeService(module?.exports);
+              if (service) break;
+            }
           }
           if (!service?.patch) return "unavailable";
           const nativeCommand = {
@@ -691,6 +675,29 @@ export class SmartThingsWebUiCommandExecutor {
             return "failed";
           }
           return "sent";
+
+          function findNativeService(exports: unknown): NativeService | undefined {
+            let candidates: unknown[];
+            try {
+              candidates = isPageRecord(exports)
+                ? [exports, ...Object.values(exports)]
+                : [exports];
+            } catch {
+              return undefined;
+            }
+            for (const candidate of candidates) {
+              try {
+                if (!isPageRecord(candidate) || typeof candidate.service !== "function") continue;
+                const possible = (candidate as NativeClient).service?.("api/device");
+                if (possible && typeof possible.patch === "function") {
+                  return possible;
+                }
+              } catch {
+                // Continue searching loaded modules only; never initialize a new client.
+              }
+            }
+            return undefined;
+          }
 
           function isPageRecord(value: unknown): value is Record<string, unknown> {
             return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1735,6 +1742,10 @@ function isSmartThingsDeviceDetail(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isSmartThingsRuntimePage(value: string): boolean {
+  return isSmartThingsLocation(value) || isSmartThingsDeviceDetail(value);
 }
 
 function locationIdFromUrl(value: string): string | undefined {
