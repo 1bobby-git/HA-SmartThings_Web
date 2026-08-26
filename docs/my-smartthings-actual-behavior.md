@@ -116,6 +116,8 @@ The visible device name is not an exact standalone text node inside that
 dialog: Cake combines it with the back affordance and room name. The dialog's
 `h1` instead exposes an exact accessible name in the form `device + room`.
 Version 0.1.64 uses that accessible heading for exact identity validation.
+Version 0.1.65 also fails closed when the room is unknown: only an exact
+device-only accessible heading is accepted, never a prefix-matching device.
 
 ## Camera behavior
 

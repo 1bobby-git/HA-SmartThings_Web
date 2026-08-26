@@ -574,7 +574,7 @@ async function hasExactVisibleDeviceDialog(
 ): Promise<boolean> {
   const headingName = roomName
     ? exactName(`${deviceName} ${roomName}`)
-    : new RegExp(`^${escapeRegExp(deviceName)}(?:\\s+.+)?$`, "u");
+    : exactName(deviceName);
   const dialog = page.getByRole("dialog").filter({
     has: page.getByRole("heading", { name: headingName })
   });

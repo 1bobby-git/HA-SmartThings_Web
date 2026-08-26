@@ -202,6 +202,42 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
   });
 
+  test("rejects a prefix-matching detail heading when the room is unknown", async () => {
+    const page = new FakeCommandPage();
+    const wrongHeading = new FakeLocator(1);
+    const missingHeading = new FakeLocator(0, true);
+    page.detailDialog.filter = vi.fn((options?: { has?: FakeLocator }) =>
+      options?.has === wrongHeading ? page.detailDialog : missingHeading
+    );
+    page.card.click.mockImplementation(async () => {
+      page.currentUrl = "https://my.smartthings.com/location/loc_001/rooms/device/device_raw_001";
+    });
+    page.waitForTimeout = vi.fn(async () => undefined);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "dialog") return page.detailDialog;
+      if (role === "heading") {
+        const name = options?.name;
+        const matches =
+          name instanceof RegExp
+            ? name.test("Safe plug 2")
+            : name === "Safe plug 2";
+        return matches ? wrongHeading : missingHeading;
+      }
+      if (role === "button") return page.card;
+      return page.toggle;
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await expect(
+      executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" })
+    ).rejects.toThrow("command_target_not_found");
+
+    expect(page.toggle.waitFor).not.toHaveBeenCalled();
+    expect(page.toggle.click).not.toHaveBeenCalled();
+  });
+
   test("reports only fixed command stages while navigating to a fresh detail", async () => {
     const page = new FakeCommandPage();
     page.card.click.mockImplementation(async () => {

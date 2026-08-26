@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.65
+
+- Require an exact device-only accessible heading when inventory has no room name.
+- Reject prefix-matching device headings before probing any control.
+
 ## 0.1.64
 
 - Match the device-detail dialog by its exact accessible device-and-room heading, mirroring Cake's live modal structure.
