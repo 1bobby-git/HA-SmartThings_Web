@@ -48,6 +48,7 @@ class FakeLocator {
 class FakeCommandPage {
   card = new FakeLocator(1);
   detailDialog = new FakeLocator(1);
+  detailHeading = new FakeLocator(1);
   readonly toggle = new FakeLocator(1);
   readonly close = vi.fn(async () => undefined);
   waitForTimeout?: ReturnType<typeof vi.fn>;
@@ -65,6 +66,7 @@ class FakeCommandPage {
 
   getByRole(role: string, options?: { name?: string | RegExp }): FakeLocator {
     if (role === "dialog") return this.detailDialog;
+    if (role === "heading") return this.detailHeading;
     if (role === "button") {
       if (options?.name) {
         expect(options.name).toBeInstanceOf(RegExp);
@@ -164,6 +166,40 @@ describe("SmartThingsWebUiCommandExecutor", () => {
 
     await expect(page.getByText("Safe plug", { exact: true }).count()).resolves.toBe(1);
     expect(page.toggle.click).not.toHaveBeenCalled();
+  });
+
+  test("identifies the exact detail dialog by its device and room heading", async () => {
+    const page = new FakeCommandPage();
+    page.card.click.mockImplementation(async () => {
+      page.currentUrl = "https://my.smartthings.com/location/loc_001/rooms/device/device_raw_001";
+    });
+    page.waitForTimeout = vi.fn(async () => undefined);
+    const getByRole = vi.spyOn(page, "getByRole");
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      roomName: "Living room",
+      command: "on",
+      action: "on",
+      component: "main",
+      capability: "switch",
+      attribute: "switch",
+      arguments: []
+    });
+
+    expect(getByRole).toHaveBeenCalledWith("heading", {
+      name: expect.any(RegExp)
+    });
+    const headingCall = getByRole.mock.calls.find(([role]) => role === "heading");
+    const headingName = headingCall?.[1]?.name;
+    expect(headingName).toBeInstanceOf(RegExp);
+    expect((headingName as RegExp).test("Safe plug Living room")).toBe(true);
+    expect((headingName as RegExp).test("Unsafe plug Living room")).toBe(false);
+    expect(page.toggle.click).toHaveBeenCalledTimes(1);
   });
 
   test("reports only fixed command stages while navigating to a fresh detail", async () => {
@@ -1322,6 +1358,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     );
     page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
       if (role === "dialog") return page.detailDialog;
+      if (role === "heading") return page.detailHeading;
       if (role === "button" && options?.name instanceof RegExp && options.name.test("Air purifier")) {
         return card;
       }
@@ -1372,6 +1409,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     );
     page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
       if (role === "dialog") return page.detailDialog;
+      if (role === "heading") return page.detailHeading;
       if (role === "button" && options?.name instanceof RegExp && options.name.test("Air purifier")) {
         return card;
       }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.64
+
+- Match the device-detail dialog by its exact accessible device-and-room heading, mirroring Cake's live modal structure.
+- Keep the background device card and partial device-name matches outside the readiness proof.
+
 ## 0.1.63
 
 - Require the visible SmartThings device-detail dialog containing the exact device name before probing any control.

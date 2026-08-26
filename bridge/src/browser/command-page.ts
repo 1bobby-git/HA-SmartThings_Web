@@ -250,7 +250,7 @@ export class SmartThingsWebUiCommandExecutor {
       await openDeviceDetail(page, input.deviceName, input.roomName, {
         preferRooms: Boolean(input.roomName)
       });
-      await waitForOpenedDeviceDetail(page, input.deviceName);
+      await waitForOpenedDeviceDetail(page, input.deviceName, input.roomName);
       this.#diagnostic("fresh_detail_ready");
       this.#diagnostic("fresh_control_probe");
       await executeDeviceControl(
@@ -470,7 +470,7 @@ export class SmartThingsWebUiCommandExecutor {
       Date.now() - cached.lastUsedAt < this.#warmPageTtlMs &&
       cached.page.url() === cached.detailUrl &&
       isSmartThingsDeviceDetail(cached.page.url()) &&
-      (await hasExactVisibleDeviceDialog(cached.page, input.deviceName))
+      (await hasExactVisibleDeviceDialog(cached.page, input.deviceName, input.roomName))
     ) {
       return cached.page;
     }
@@ -498,6 +498,7 @@ export class SmartThingsWebUiCommandExecutor {
         !(await hasExactVisibleDeviceDialog(
           page,
           input.deviceName,
+          input.roomName,
           VERIFIED_ROUTE_IDENTITY_TIMEOUT_MS
         ))
       ) {
@@ -568,10 +569,14 @@ function deviceRouteKey(input: {
 async function hasExactVisibleDeviceDialog(
   page: CommandPageLike,
   deviceName: string,
+  roomName?: string,
   timeoutMs = WARM_DETAIL_IDENTITY_TIMEOUT_MS
 ): Promise<boolean> {
+  const headingName = roomName
+    ? exactName(`${deviceName} ${roomName}`)
+    : new RegExp(`^${escapeRegExp(deviceName)}(?:\\s+.+)?$`, "u");
   const dialog = page.getByRole("dialog").filter({
-    has: page.getByText(deviceName, { exact: true })
+    has: page.getByRole("heading", { name: headingName })
   });
   try {
     await dialog.first().waitFor({
@@ -633,7 +638,8 @@ async function openDeviceDetail(
 
 async function waitForOpenedDeviceDetail(
   page: CommandPageLike,
-  deviceName: string
+  deviceName: string,
+  roomName?: string
 ): Promise<void> {
   // Production Playwright pages always provide waitForTimeout. Keeping the
   // single-pass fallback preserves compatibility with minimal page adapters.
@@ -642,7 +648,7 @@ async function waitForOpenedDeviceDetail(
   for (let attempt = 0; attempt <= DETAIL_ROUTE_POLL_ATTEMPTS; attempt += 1) {
     if (
       isSmartThingsDeviceDetail(page.url()) &&
-      (await hasExactVisibleDeviceDialog(page, deviceName, DETAIL_IDENTITY_PROBE_MS))
+      (await hasExactVisibleDeviceDialog(page, deviceName, roomName, DETAIL_IDENTITY_PROBE_MS))
     ) {
       return;
     }

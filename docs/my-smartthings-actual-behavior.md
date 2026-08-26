@@ -112,6 +112,11 @@ contain the device controls. Version 0.1.63 therefore requires that dialog to
 contain the exact device name before probing any control; the background room
 card alone no longer satisfies detail readiness.
 
+The visible device name is not an exact standalone text node inside that
+dialog: Cake combines it with the back affordance and room name. The dialog's
+`h1` instead exposes an exact accessible name in the form `device + room`.
+Version 0.1.64 uses that accessible heading for exact identity validation.
+
 ## Camera behavior
 
 The supplied capture contained two thumbnail requests and no corresponding ACK
