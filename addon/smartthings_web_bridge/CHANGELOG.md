@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.66
+
+- Scope every control lookup to the exact verified device-detail dialog.
+- Allow a unique dialog-local switch or checkbox when Cake exposes the observed Power toggle without an addressable label.
+- Resynchronize Home Assistant from the Bridge-local full snapshot before every SSE connection and recover from transient stream authentication or connection failures.
+
 ## 0.1.65
 
 - Require an exact device-only accessible heading when inventory has no room name.

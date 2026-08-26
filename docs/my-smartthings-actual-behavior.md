@@ -118,6 +118,11 @@ dialog: Cake combines it with the back affordance and room name. The dialog's
 Version 0.1.64 uses that accessible heading for exact identity validation.
 Version 0.1.65 also fails closed when the room is unknown: only an exact
 device-only accessible heading is accepted, never a prefix-matching device.
+Version 0.1.66 scopes every control lookup to that exact dialog. If Cake's
+Power label cannot be addressed, only one dialog-local switch or checkbox is
+accepted; a background-card control is never a fallback. The HA event loop also
+fetches one Bridge-local full snapshot before each SSE connection and retries
+transient stream authentication/connection failures without polling SmartThings.
 
 ## Camera behavior
 

@@ -117,16 +117,17 @@ async def _event_loop(entry: SmartThingsWebConfigEntry) -> None:
     runtime = entry.runtime_data
     while True:
         try:
+            runtime.apply_inventory(await runtime.client.async_get_inventory())
             async for event in runtime.client.async_events():
                 await runtime.handle_event(event)
-        except BridgeAuthError:
-            return
-        except BridgeClientError:
+        except (BridgeAuthError, BridgeClientError):
             await asyncio.sleep(5)
         except asyncio.CancelledError:
             raise
         except Exception:
             await asyncio.sleep(5)
+        else:
+            await asyncio.sleep(1)
 
 
 async def _repair_loop(

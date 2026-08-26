@@ -54,6 +54,12 @@ class FakeCommandPage {
   waitForTimeout?: ReturnType<typeof vi.fn>;
   currentUrl = "https://my.smartthings.com/location/loc_001";
 
+  constructor() {
+    this.detailDialog.getByRole = (role, options) => this.getByRole(role!, options);
+    this.detailDialog.getByText = (text, options) => this.getByText(text!, options);
+    this.detailDialog.locator = (selector) => this.locator(selector!);
+  }
+
   url(): string {
     return this.currentUrl;
   }
@@ -236,6 +242,77 @@ describe("SmartThingsWebUiCommandExecutor", () => {
 
     expect(page.toggle.waitFor).not.toHaveBeenCalled();
     expect(page.toggle.click).not.toHaveBeenCalled();
+  });
+
+  test("uses the exact detail dialog's unique switch when its observed Power label is not addressable", async () => {
+    const page = new FakeCommandPage();
+    const missing = new FakeLocator(0, true);
+    page.card.click.mockImplementation(async () => {
+      page.currentUrl = "https://my.smartthings.com/location/loc_001/rooms/device/device_raw_001";
+    });
+    page.waitForTimeout = vi.fn(async () => undefined);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "dialog") return page.detailDialog;
+      if (role === "heading") return page.detailHeading;
+      if (role === "button") return page.card;
+      if (options?.name) return missing;
+      if (role === "switch") return page.toggle;
+      return missing;
+    });
+    page.getByText = vi.fn(() => missing);
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      command: "on",
+      action: "on",
+      component: "main",
+      capability: "switch",
+      attribute: "switch",
+      arguments: [],
+      controlLabel: "Power"
+    });
+
+    expect(page.toggle.click).toHaveBeenCalledTimes(1);
+  });
+
+  test("never falls back to a background switch outside the exact detail dialog", async () => {
+    const page = new FakeCommandPage();
+    const missing = new FakeLocator(0, true);
+    const backgroundSwitch = new FakeLocator(1);
+    page.card.click.mockImplementation(async () => {
+      page.currentUrl = "https://my.smartthings.com/location/loc_001/rooms/device/device_raw_001";
+    });
+    page.waitForTimeout = vi.fn(async () => undefined);
+    page.getByRole = vi.fn((role: string) => {
+      if (role === "dialog") return page.detailDialog;
+      if (role === "heading") return page.detailHeading;
+      if (role === "button") return page.card;
+      if (role === "switch") return backgroundSwitch;
+      return missing;
+    });
+    page.detailDialog.getByRole = vi.fn(() => missing);
+    page.detailDialog.getByText = vi.fn(() => missing);
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await expect(executor.executeDeviceAction({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      command: "on",
+      action: "on",
+      component: "main",
+      capability: "switch",
+      attribute: "switch",
+      arguments: [],
+      controlLabel: "Power"
+    })).rejects.toThrow("command_control_not_found");
+
+    expect(backgroundSwitch.click).not.toHaveBeenCalled();
   });
 
   test("reports only fixed command stages while navigating to a fresh detail", async () => {

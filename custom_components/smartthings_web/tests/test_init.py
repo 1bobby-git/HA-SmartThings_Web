@@ -87,9 +87,11 @@ _install_homeassistant_stubs()
 from smartthings_web.__init__ import (  # noqa: E402
     _async_update_repairs,
     _control_mode,
+    _event_loop,
     _migrate_entity_registry,
     _repair_loop,
 )
+from smartthings_web.bridge_client import BridgeAuthError  # noqa: E402
 from smartthings_web.const import (  # noqa: E402
     CONF_CONTROL_MODE,
     CONF_LOCATION_ID,
@@ -333,6 +335,25 @@ class ControlPlaneTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(calls, [("create", DOMAIN, "entry_001_samsung_login_required")])
 
+    async def test_event_loop_resyncs_and_recovers_after_stream_auth_failure(self) -> None:
+        runtime = FakeEventRuntime()
+        original_sleep = integration.asyncio.sleep
+
+        async def fake_sleep(_seconds: int) -> None:
+            return None
+
+        integration.asyncio.sleep = fake_sleep
+        try:
+            with self.assertRaises(integration.asyncio.CancelledError):
+                await _event_loop(SimpleNamespace(runtime_data=runtime))
+        finally:
+            integration.asyncio.sleep = original_sleep
+
+        self.assertEqual(runtime.client.inventory_calls, 2)
+        self.assertEqual(runtime.client.event_calls, 2)
+        self.assertEqual(runtime.applied_sequences, [2, 3])
+        self.assertEqual(runtime.handled_events, [{"type": "state", "sequence": 4}])
+
 
 class FakeHealthClient:
     """Minimal async health client."""
@@ -342,6 +363,42 @@ class FakeHealthClient:
 
     async def async_get_health(self) -> dict[str, object]:
         return self.health
+
+
+class FakeEventClient:
+    """Event client that simulates one transient stream-auth failure."""
+
+    def __init__(self) -> None:
+        self.inventory_calls = 0
+        self.event_calls = 0
+
+    async def async_get_inventory(self) -> SimpleNamespace:
+        self.inventory_calls += 1
+        return SimpleNamespace(sequence=self.inventory_calls + 1)
+
+    async def async_events(self):
+        self.event_calls += 1
+        if self.event_calls == 1:
+            raise BridgeAuthError("bridge_auth_failed")
+        yield {"type": "state", "sequence": 4}
+        raise integration.asyncio.CancelledError
+
+
+class FakeEventRuntime:
+    """Minimal runtime proving reconnect snapshot and event application order."""
+
+    def __init__(self) -> None:
+        self.client = FakeEventClient()
+        self.applied_sequences: list[int] = []
+        self.handled_events: list[dict[str, object]] = []
+
+    def apply_inventory(self, inventory: SimpleNamespace) -> bool:
+        self.applied_sequences.append(inventory.sequence)
+        return True
+
+    async def handle_event(self, event: dict[str, object]) -> bool:
+        self.handled_events.append(event)
+        return True
 
 
 def entity(

@@ -12,10 +12,14 @@ interface CommandLocatorLike {
   waitFor(options: { state: "visible"; timeout: number }): Promise<unknown>;
 }
 
-interface CommandPageLike extends BrowserPageLike {
+interface CommandControlSurface {
   getByRole(role: string, options?: { name?: string | RegExp }): CommandLocatorLike;
   getByText(text: string, options?: { exact?: boolean }): CommandLocatorLike;
   locator(selector: string): CommandLocatorLike;
+  waitForTimeout?(timeout: number): Promise<unknown>;
+}
+
+interface CommandPageLike extends BrowserPageLike, CommandControlSurface {
   mouse?: {
     move(x: number, y: number): Promise<unknown>;
     wheel(deltaX: number, deltaY: number): Promise<unknown>;
@@ -572,6 +576,15 @@ async function hasExactVisibleDeviceDialog(
   roomName?: string,
   timeoutMs = WARM_DETAIL_IDENTITY_TIMEOUT_MS
 ): Promise<boolean> {
+  return Boolean(await exactVisibleDeviceDialog(page, deviceName, roomName, timeoutMs));
+}
+
+async function exactVisibleDeviceDialog(
+  page: CommandPageLike,
+  deviceName: string,
+  roomName: string | undefined,
+  timeoutMs: number
+): Promise<CommandLocatorLike | undefined> {
   const headingName = roomName
     ? exactName(`${deviceName} ${roomName}`)
     : exactName(deviceName);
@@ -584,9 +597,23 @@ async function hasExactVisibleDeviceDialog(
       timeout: timeoutMs
     });
   } catch {
-    return false;
+    return undefined;
   }
-  return (await dialog.count()) === 1;
+  return (await dialog.count()) === 1 ? dialog.first() : undefined;
+}
+
+function dialogControlSurface(
+  dialog: CommandLocatorLike,
+  page: CommandPageLike
+): CommandControlSurface {
+  return {
+    getByRole: (role, options) => dialog.getByRole(role, options),
+    getByText: (text, options) => dialog.getByText(text, options),
+    locator: (selector) => dialog.locator(selector),
+    ...(page.waitForTimeout
+      ? { waitForTimeout: (timeout: number) => page.waitForTimeout!(timeout) }
+      : {})
+  };
 }
 
 async function waitForLocationRoute(
@@ -661,6 +688,8 @@ async function waitForOpenedDeviceDetail(
 async function executeDeviceControl(
   page: CommandPageLike,
   input: {
+    deviceName: string;
+    roomName?: string;
     command: string;
     attribute: string;
     arguments: unknown[];
@@ -672,10 +701,15 @@ async function executeDeviceControl(
   diagnostic: (stage: CommandDiagnosticStage) => void = () => undefined,
   observedToggleProbeTimeoutMs = probeTimeoutMs
 ): Promise<void> {
+  const dialog = page.waitForTimeout
+    ? await exactVisibleDeviceDialog(page, input.deviceName, input.roomName, probeTimeoutMs)
+    : undefined;
+  if (page.waitForTimeout && !dialog) throw new Error("command_target_not_found");
+  const scope = dialog ? dialogControlSurface(dialog, page) : page;
   if (input.command === "on" || input.command === "off") {
     if (input.controlLabel) {
       await clickObservedToggleControl(
-        page,
+        scope,
         input.controlLabel,
         observedToggleProbeTimeoutMs,
         diagnostic
@@ -685,33 +719,33 @@ async function executeDeviceControl(
     const label = controlLabelFor(input.attribute);
     try {
       if (label) {
-        await clickRoleOrLabeledControl(page, "switch", /^(?:Power|전원)$/iu, label, probeTimeoutMs);
+        await clickRoleOrLabeledControl(scope, "switch", /^(?:Power|전원)$/iu, label, probeTimeoutMs);
       } else {
-        await clickRoleControl(page, "switch", /^(?:Power|전원)$/iu, probeTimeoutMs);
+        await clickRoleControl(scope, "switch", /^(?:Power|전원)$/iu, probeTimeoutMs);
       }
     } catch (error) {
       if (!(error instanceof Error) || error.message !== "command_control_not_found") {
         throw error;
       }
-      await clickRoleControl(page, "switch", undefined, probeTimeoutMs);
+      await clickRoleControl(scope, "switch", undefined, probeTimeoutMs);
     }
     return;
   }
   if (input.command === "refresh") {
-    await clickRoleControl(page, "button", /^(?:Refresh|새로고침)$/iu, probeTimeoutMs);
+    await clickRoleControl(scope, "button", /^(?:Refresh|새로고침)$/iu, probeTimeoutMs);
     return;
   }
   if (input.command === "press") {
     if (!input.controlLabel) throw new Error("command_control_not_found");
-    await clickRoleOrLabeledControl(page, "button", exactName(input.controlLabel), input.controlLabel, probeTimeoutMs);
+    await clickRoleOrLabeledControl(scope, "button", exactName(input.controlLabel), input.controlLabel, probeTimeoutMs);
     return;
   }
   if (input.command === "mute" || input.command === "unmute") {
     const label = input.controlLabel ?? controlLabelFor(input.attribute);
     if (label) {
-      await clickRoleOrLabeledControl(page, "switch", /^(?:Mute|Muted|음소거)$/iu, label, probeTimeoutMs);
+      await clickRoleOrLabeledControl(scope, "switch", /^(?:Mute|Muted|음소거)$/iu, label, probeTimeoutMs);
     } else {
-      await clickRoleControl(page, "switch", /^(?:Mute|Muted|음소거)$/iu, probeTimeoutMs);
+      await clickRoleControl(scope, "switch", /^(?:Mute|Muted|음소거)$/iu, probeTimeoutMs);
     }
     return;
   }
@@ -722,7 +756,7 @@ async function executeDeviceControl(
     }
     const label = input.controlLabel ?? controlLabelFor(input.attribute);
     const slider = await findRoleOrLabeledControl(
-      page,
+      scope,
       "slider",
       label ? exactOrLocalized(label) : undefined,
       label,
@@ -742,29 +776,29 @@ async function executeDeviceControl(
       input.optionCommand &&
       label
     ) {
-      await clickLabeledSwatchCommand(page, label, input.optionCommand, probeTimeoutMs);
+      await clickLabeledSwatchCommand(scope, label, input.optionCommand, probeTimeoutMs);
       return;
     }
     try {
       const select = await findRoleControl(
-        page,
+        scope,
         "combobox",
         label ? exactOrLocalized(label) : undefined,
         probeTimeoutMs
       );
       await select.click({ timeout: 15_000 });
-      await clickExactlyOne(page.getByRole("option", { name: exactName(input.optionLabel ?? value) }));
+      await clickExactlyOne(scope.getByRole("option", { name: exactName(input.optionLabel ?? value) }));
     } catch (error) {
       if (!(error instanceof Error) || error.message !== "command_control_not_found" || !label) {
         throw error;
       }
-      await clickLabeledSwatchOption(page, label, input.optionLabel ?? value, probeTimeoutMs);
+      await clickLabeledSwatchOption(scope, label, input.optionLabel ?? value, probeTimeoutMs);
     }
     return;
   }
   if (isCoverButtonCommand(input.command)) {
     if (!input.controlLabel) throw new Error("command_control_not_found");
-    await clickRoleOrLabeledControl(page, "button", exactName(input.controlLabel), input.controlLabel, probeTimeoutMs);
+    await clickRoleOrLabeledControl(scope, "button", exactName(input.controlLabel), input.controlLabel, probeTimeoutMs);
     return;
   }
   if (input.command === "playTrackAndResume") {
@@ -773,24 +807,24 @@ async function executeDeviceControl(
       throw new Error("command_execution_failed");
     }
     const name = /Play track and resume|트랙.*재생|재생.*재개/iu;
-    const textbox = await findRoleControl(page, "textbox", name, probeTimeoutMs);
+    const textbox = await findRoleControl(scope, "textbox", name, probeTimeoutMs);
     await textbox.fill(value, { timeout: 15_000 });
-    await clickRoleControl(page, "button", name, probeTimeoutMs);
+    await clickRoleControl(scope, "button", name, probeTimeoutMs);
     return;
   }
   const name = mediaActionName(input.command);
   if (!name) throw new Error("command_control_not_found");
-  await clickRoleControl(page, "button", name, probeTimeoutMs);
+  await clickRoleControl(scope, "button", name, probeTimeoutMs);
 }
 
 async function clickObservedToggleControl(
-  page: CommandPageLike,
+  scope: CommandControlSurface,
   label: string,
   probeTimeoutMs: number,
   diagnostic: (stage: CommandDiagnosticStage) => void
 ): Promise<void> {
   const preferredName = exactOrLocalized(label);
-  const named = await uniqueRoleCandidate(page, ["switch", "checkbox"], preferredName);
+  const named = await uniqueRoleCandidate(scope, ["switch", "checkbox"], preferredName);
   if (named) {
     diagnostic("toggle_named_control_found");
     await named.waitFor({ state: "visible", timeout: probeTimeoutMs });
@@ -799,12 +833,15 @@ async function clickObservedToggleControl(
   }
   diagnostic("toggle_named_control_missing");
 
-  const scope = await labeledSwatchScope(page, labelVariants(label), probeTimeoutMs);
-  diagnostic(scope ? "toggle_labeled_scope_found" : "toggle_labeled_scope_missing");
-  if (!scope) throw new Error("command_control_not_found");
+  const labeledScope = await labeledSwatchScope(scope, labelVariants(label), probeTimeoutMs);
+  diagnostic(labeledScope ? "toggle_labeled_scope_found" : "toggle_labeled_scope_missing");
+  const candidateScope = labeledScope ?? scope;
   let scoped: CommandLocatorLike | undefined;
-  for (const role of ["switch", "checkbox", "button"] as const) {
-    const candidate = scope.getByRole(role);
+  const roles = labeledScope
+    ? (["switch", "checkbox", "button"] as const)
+    : (["switch", "checkbox"] as const);
+  for (const role of roles) {
+    const candidate = candidateScope.getByRole(role);
     const count = await candidate.count();
     diagnostic(`toggle_scoped_${role}_${countBucket(count)}`);
     if (count > 1) throw new Error("command_control_ambiguous");
@@ -845,7 +882,7 @@ async function uniqueRoleCandidate(
 }
 
 async function findRoleControl(
-  page: CommandPageLike,
+  page: CommandControlSurface,
   role: string,
   preferredName: RegExp | undefined,
   probeTimeoutMs: number
@@ -882,7 +919,7 @@ async function findRoleControl(
 }
 
 async function clickRoleControl(
-  page: CommandPageLike,
+  page: CommandControlSurface,
   role: string,
   preferredName: RegExp | undefined,
   probeTimeoutMs: number
@@ -892,7 +929,7 @@ async function clickRoleControl(
 }
 
 async function findRoleOrLabeledControl(
-  page: CommandPageLike,
+  page: CommandControlSurface,
   role: string,
   preferredName: RegExp | undefined,
   label: string | undefined,
@@ -924,7 +961,7 @@ async function findRoleOrLabeledControl(
 }
 
 async function clickRoleOrLabeledControl(
-  page: CommandPageLike,
+  page: CommandControlSurface,
   role: string,
   preferredName: RegExp,
   label: string,
@@ -935,7 +972,7 @@ async function clickRoleOrLabeledControl(
 }
 
 async function clickLabeledSwatchOption(
-  page: CommandPageLike,
+  page: CommandControlSurface,
   label: string,
   option: string,
   probeTimeoutMs: number
@@ -956,7 +993,7 @@ async function clickLabeledSwatchOption(
 }
 
 async function clickLabeledSwatchCommand(
-  page: CommandPageLike,
+  page: CommandControlSurface,
   label: string,
   command: string,
   probeTimeoutMs: number
@@ -980,7 +1017,7 @@ async function clickLabeledSwatchCommand(
 }
 
 async function findLabeledSwatchControl(
-  page: CommandPageLike,
+  page: CommandControlSurface,
   label: string,
   role: string,
   probeTimeoutMs: number
@@ -1001,7 +1038,7 @@ async function findLabeledSwatchControl(
 }
 
 async function labeledSwatchScope(
-  page: CommandPageLike,
+  page: CommandControlSurface,
   labels: string[],
   probeTimeoutMs: number
 ): Promise<CommandLocatorLike | undefined> {
