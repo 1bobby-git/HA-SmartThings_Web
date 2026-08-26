@@ -205,6 +205,34 @@ describe("SafeCommandService", () => {
     expect(executor.executeDeviceAction).not.toHaveBeenCalled();
   });
 
+  test("keeps a metadata-free observed toggle on the exact UI path", async () => {
+    const store = readyDeviceStore(false);
+    observeDeviceDetails(store, [
+      detailSwatch("TOGGLE", "toggle", {
+        swatchId: "identifier_toggle_ui_only",
+        label: "Power"
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async (input) => {
+        expect(input.nativeCommand).toBeUndefined();
+        expect(input.controlId).toBe("identifier_toggle_ui_only");
+        store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:01Z")));
+      })
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 1_000,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute(command("on", "request_ui_only_on"))).resolves.toMatchObject({
+      status: "confirmed"
+    });
+  });
+
   test("deduplicates identical client request ids and rejects conflicting reuse", async () => {
     const store = readyDeviceStore();
     const executor: SafeCommandExecutor = {

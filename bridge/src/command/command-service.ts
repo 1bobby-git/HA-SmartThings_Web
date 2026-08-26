@@ -680,13 +680,13 @@ function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest)
       if (hasExplicitCommand && !controlSupportsCommand(control, request.command, false)) {
         throw new SafeCommandError("unsupported_command");
       }
-      const nativeCommand = observedCommandFor(control, request.command) ?? request.command;
+      const nativeCommand = observedCommandFor(control, request.command);
       return {
         ...request,
         attribute,
         controlId: control.id,
         controlLabel: control.label,
-        nativeCommand
+        ...(nativeCommand ? { nativeCommand } : {})
       };
     }
     throw new SafeCommandError("invalid_control_id");
@@ -714,13 +714,14 @@ function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest)
   if (request.attribute && request.attribute !== control.attribute) throw new SafeCommandError("invalid_capability");
   if (request.controlLabel && request.controlLabel !== control.label) throw new SafeCommandError("invalid_control_label");
   const option = validateObservedControlCommand(control, request.command, request.arguments);
+  const nativeCommand = option?.command ?? nativeCommandFor(control, request.command);
   return {
     ...request,
     component: control.component,
     capability: control.capability,
     attribute: control.attribute,
     controlLabel: control.label,
-    nativeCommand: option?.command ?? nativeCommandFor(control, request.command),
+    ...(nativeCommand ? { nativeCommand } : {}),
     ...(option?.label ? { optionLabel: option.label } : {}),
     ...(option?.command ? { optionCommand: option.command } : {})
   };
@@ -729,14 +730,14 @@ function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest)
 function nativeCommandFor(
   control: NonNullable<BridgeDevice["controls"]>[number],
   requested: string
-): string {
+): string | undefined {
   if ((requested === "setOption" || requested === "setFanMode") && control.command) {
     return control.command;
   }
   if (["press", "setNumber", "setVolume", "setPosition"].includes(requested) && control.command) {
     return control.command;
   }
-  return observedCommandFor(control, requested) ?? requested;
+  return observedCommandFor(control, requested);
 }
 
 function validateCommandAttribute(

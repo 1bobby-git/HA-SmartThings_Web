@@ -199,10 +199,56 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       controlLabel: "Power",
       deviceId: "dev_001",
       deviceName: "Safe plug",
-      locationId: "loc_001"
+      locationId: "loc_001",
+      nativeCommand: "switchOff"
     })).rejects.toThrow("command_execution_failed");
 
     expect(manager.openCommandPage).not.toHaveBeenCalled();
+  });
+
+  test("uses exact UI control without probing native dispatch when no web command metadata was observed", async () => {
+    const keeper = new FakeCommandPage() as FakeCommandPage & {
+      evaluate: <Result, Argument>(
+        pageFunction: (argument: Argument) => Result | Promise<Result>,
+        argument: Argument
+      ) => Promise<Result>;
+    };
+    const evaluate = vi.fn(async () => "sent" as const);
+    keeper.evaluate = async <Result, Argument>(
+      _pageFunction: (argument: Argument) => Result | Promise<Result>,
+      _argument: Argument
+    ) => await evaluate() as Result;
+    const uiPage = new FakeCommandPage();
+    const manager = {
+      currentKeeper: vi.fn(() => keeper),
+      openCommandPage: vi.fn(async () => uiPage)
+    };
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => manager,
+      undefined,
+      {
+        resolveRawDeviceId: () => "raw-device",
+        resolveRawIdentifier: (alias) => ({ identifier_main: "main", identifier_switch: "switch" })[alias]
+      }
+    );
+
+    await executor.executeDeviceAction({
+      action: "on",
+      arguments: [],
+      attribute: "switch",
+      capability: "identifier_switch",
+      command: "on",
+      component: "identifier_main",
+      controlId: "identifier_toggle",
+      controlLabel: "Power",
+      deviceId: "dev_001",
+      deviceName: "Safe plug",
+      locationId: "loc_001"
+    });
+
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(manager.openCommandPage).toHaveBeenCalledTimes(1);
+    expect(uiPage.toggle.click).toHaveBeenCalledTimes(1);
   });
 
   test("opens an isolated command page and clicks one accessible device toggle", async () => {

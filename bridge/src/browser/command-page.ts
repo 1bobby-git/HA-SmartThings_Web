@@ -585,7 +585,10 @@ export class SmartThingsWebUiCommandExecutor {
       nativeCommand?: string;
     }
   ): Promise<"sent" | "unavailable" | "failed"> {
-    if (!input.deviceId || !input.controlId || !input.controlLabel) return "unavailable";
+    const observedCommand = input.optionCommand ?? input.nativeCommand;
+    if (!input.deviceId || !input.controlId || !input.controlLabel || !observedCommand) {
+      return "unavailable";
+    }
     const page = manager.currentKeeper?.() as CommandPageLike | undefined;
     if (!page || page.isClosed() || !page.evaluate || !isSmartThingsLocation(page.url())) {
       return "unavailable";
@@ -694,7 +697,7 @@ export class SmartThingsWebUiCommandExecutor {
           deviceId: rawDeviceId,
           component: rawComponent,
           capability: rawCapability,
-          command: input.optionCommand ?? input.nativeCommand ?? input.command,
+          command: observedCommand,
           arguments: input.arguments
         }
       );
