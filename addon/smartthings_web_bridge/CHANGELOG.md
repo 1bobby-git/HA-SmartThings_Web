@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.84
+
+- Reverse the second sanitized device-alias generation as well as every component/capability generation used by DeviceStore, allowing the authenticated native command path to start from the public inventory alias.
+
 ## 0.1.83
 
 - Parse bounded full-snapshot websocket frames up to 8 MiB for volatile native-command identifier mapping while retaining the smaller persisted diagnostic capture limit.

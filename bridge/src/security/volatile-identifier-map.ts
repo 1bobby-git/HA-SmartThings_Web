@@ -89,15 +89,16 @@ export class VolatileIdentifierMap {
       const pattern = kind === "device" ? DEVICE_ALIAS : IDENTIFIER_ALIAS;
       if (!pattern.test(alias)) return;
       target.set(alias, raw);
-      if (kind === "identifier") {
-        let normalizedAlias = alias;
-        // Sanitized component/capability ids can be normalized twice again by DeviceStore.
-        // Retain every in-process alias generation needed to reverse that exact pipeline.
-        for (let generation = 0; generation < 2; generation += 1) {
-          normalizedAlias = this.alias("identifier", normalizedAlias);
-          if (!IDENTIFIER_ALIAS.test(normalizedAlias)) break;
-          target.set(normalizedAlias, raw);
-        }
+      let normalizedAlias = alias;
+      // Websocket text is sanitized once while it is bounded and once when the
+      // capture record is created. DeviceStore then normalizes pushed component
+      // and capability tokens twice more. Retain only those exact in-process
+      // generations so every safe public alias can resolve back to the raw value.
+      const additionalGenerations = kind === "device" ? 1 : 3;
+      for (let generation = 0; generation < additionalGenerations; generation += 1) {
+        normalizedAlias = this.alias(kind, normalizedAlias);
+        if (!pattern.test(normalizedAlias)) break;
+        target.set(normalizedAlias, raw);
       }
       rawValues.add(raw);
     } catch {

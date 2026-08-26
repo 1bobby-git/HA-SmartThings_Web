@@ -28,12 +28,15 @@ describe("VolatileIdentifierMap", () => {
     );
 
     expect(identifiers.rawDeviceId("dev_raw-device")).toBe("raw-device");
+    expect(identifiers.rawDeviceId("dev_dev_raw-device")).toBe("raw-device");
     expect(identifiers.rawIdentifier("identifier_main")).toBe("main");
     expect(identifiers.rawIdentifier("identifier_switch")).toBe("switch");
     expect(identifiers.rawIdentifier("identifier_identifier_main")).toBe("main");
     expect(identifiers.rawIdentifier("identifier_identifier_switch")).toBe("switch");
     expect(identifiers.rawIdentifier("identifier_identifier_identifier_main")).toBe("main");
     expect(identifiers.rawIdentifier("identifier_identifier_identifier_switch")).toBe("switch");
+    expect(identifiers.rawIdentifier("identifier_identifier_identifier_identifier_main")).toBe("main");
+    expect(identifiers.rawIdentifier("identifier_identifier_identifier_identifier_switch")).toBe("switch");
   });
 
   test("maps identifiers from initial status ACKs and clears every raw value on reset", () => {
@@ -58,12 +61,14 @@ describe("VolatileIdentifierMap", () => {
     );
 
     expect(identifiers.rawDeviceId("dev_raw-device")).toBe("raw-device");
+    expect(identifiers.rawDeviceId("dev_dev_raw-device")).toBe("raw-device");
     expect(identifiers.rawIdentifier("identifier_main")).toBe("main");
     expect(identifiers.rawIdentifier("identifier_switch")).toBe("switch");
 
     identifiers.reset();
 
     expect(identifiers.rawDeviceId("dev_raw-device")).toBeUndefined();
+    expect(identifiers.rawDeviceId("dev_dev_raw-device")).toBeUndefined();
     expect(identifiers.rawIdentifier("identifier_main")).toBeUndefined();
     expect(identifiers.rawIdentifier("identifier_switch")).toBeUndefined();
   });
@@ -83,7 +88,8 @@ describe("VolatileIdentifierMap", () => {
     );
 
     expect(identifiers.rawDeviceId("dev_large-device")).toBe("large-device");
-    expect(identifiers.rawIdentifier("identifier_identifier_identifier_main")).toBe("main");
+    expect(identifiers.rawDeviceId("dev_dev_large-device")).toBe("large-device");
+    expect(identifiers.rawIdentifier("identifier_identifier_identifier_identifier_main")).toBe("main");
   });
 
   test("ignores unrelated ids and malformed or oversized frames", () => {

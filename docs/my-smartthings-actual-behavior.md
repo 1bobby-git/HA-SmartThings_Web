@@ -66,7 +66,7 @@ a similarly shaped page element.
 The supplied capture also contains four accepted device command exchanges.
 Cake sends them through its already authenticated Feathers client as
 `service("api/device").patch(deviceId, {query: {execute: true, commands}})`
-over the same Socket.IO transport used by the web application. Version 0.1.83
+over the same Socket.IO transport used by the web application. Version 0.1.84
 uses that existing in-page dispatcher first, retaining raw device, component,
 and capability identifiers only in volatile process memory. It does not export
 cookies, replay authentication, create a second public API client, or treat the
