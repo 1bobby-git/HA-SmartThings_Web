@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.87
+
+- Remove duplicate custom Chromium background flags after live HAOS process inspection confirmed that Playwright already supplies all three; retain the SSE and reconnect latency improvements without redundant launch arguments.
+
 ## 0.1.86
 
 - Keep the authenticated SmartThings Web keeper socket responsive while its Chromium window is inactive by disabling background timer and renderer throttling.
