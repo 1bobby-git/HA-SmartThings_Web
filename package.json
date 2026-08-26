@@ -1,6 +1,6 @@
 {
   "name": "ha-smartthings-web",
-  "version": "0.1.89",
+  "version": "0.1.90",
   "private": true,
   "type": "module",
   "packageManager": "npm@11.12.1",
@@ -23,6 +23,7 @@
     "audit:api-free:runtime": "tsx tools/haos-runtime-api-audit.ts",
     "audit:fixtures": "tsx tools/sanitized-fixture-audit.ts",
     "audit:secrets": "tsx tools/secret-scan.ts",
+    "perf:live-control": "tsx tools/haos-live-control-benchmark.ts",
     "protocol:replay": "tsx tools/replay-device-event-fixture.ts",
     "probe:physical-action:haos": "tsx tools/haos-physical-action-probe.ts",
     "snapshot:replay": "tsx tools/replay-snapshot-fixture.ts",

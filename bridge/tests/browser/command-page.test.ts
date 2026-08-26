@@ -165,14 +165,54 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(keeper.close).not.toHaveBeenCalled();
   });
 
-  test("does not repeat a native command through UI when the authenticated dispatcher rejects it", async () => {
+  test("dispatches an observed native command even when the optional control label is absent", async () => {
     const keeper = new FakeCommandPage() as FakeCommandPage & {
       evaluate: <Result, Argument>(
         pageFunction: (argument: Argument) => Result | Promise<Result>,
         argument: Argument
       ) => Promise<Result>;
     };
-    keeper.evaluate = nativeClientEvaluate(vi.fn(async () => {
+    const patch = vi.fn(async () => ({ data: { results: [{ status: "SUCCESS" }] } }));
+    keeper.evaluate = nativeClientEvaluate(patch);
+    const manager = {
+      currentKeeper: vi.fn(() => keeper),
+      openCommandPage: vi.fn(async () => new FakeCommandPage())
+    };
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => manager,
+      undefined,
+      {
+        resolveRawDeviceId: () => "raw-device",
+        resolveRawIdentifier: (alias) => ({ identifier_main: "main", identifier_switch: "switch" })[alias]
+      }
+    );
+
+    await executor.executeDeviceAction({
+      action: "on",
+      arguments: [],
+      attribute: "switch",
+      capability: "identifier_switch",
+      command: "on",
+      component: "identifier_main",
+      controlId: "identifier_toggle",
+      deviceId: "dev_001",
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      nativeCommand: "on"
+    });
+
+    expect(patch).toHaveBeenCalledTimes(1);
+    expect(manager.openCommandPage).not.toHaveBeenCalled();
+  });
+
+  test("does not repeat a native command through UI when the authenticated dispatcher throws synchronously", async () => {
+    const keeper = new FakeCommandPage() as FakeCommandPage & {
+      evaluate: <Result, Argument>(
+        pageFunction: (argument: Argument) => Result | Promise<Result>,
+        argument: Argument
+      ) => Promise<Result>;
+    };
+    keeper.evaluate = nativeClientEvaluate(vi.fn(() => {
       throw new Error("server rejected raw-device");
     }));
     const manager = {
@@ -204,6 +244,123 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     })).rejects.toThrow("command_execution_failed");
 
     expect(manager.openCommandPage).not.toHaveBeenCalled();
+  });
+
+  test("dispatches a native command without waiting behind an active DOM fallback", async () => {
+    const keeper = new FakeCommandPage() as FakeCommandPage & {
+      evaluate: <Result, Argument>(
+        pageFunction: (argument: Argument) => Result | Promise<Result>,
+        argument: Argument
+      ) => Promise<Result>;
+    };
+    const patch = vi.fn(async () => ({ data: { results: [{ status: "SUCCESS" }] } }));
+    keeper.evaluate = nativeClientEvaluate(patch);
+    const slowPage = new FakeCommandPage();
+    const slowClick = deferred();
+    slowPage.toggle.click.mockImplementation(async () => {
+      await slowClick.promise;
+      return undefined;
+    });
+    const manager = {
+      currentKeeper: vi.fn(() => keeper),
+      openCommandPage: vi.fn(async () => slowPage)
+    };
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => manager,
+      undefined,
+      {
+        resolveRawDeviceId: () => "raw-device",
+        resolveRawIdentifier: (alias) => ({ identifier_main: "main", identifier_switch: "switch" })[alias]
+      }
+    );
+
+    const slowCommand = executor.executeDeviceAction({
+      action: "on",
+      arguments: [],
+      attribute: "switch",
+      capability: "identifier_switch",
+      command: "on",
+      component: "identifier_main",
+      controlId: "identifier_toggle",
+      controlLabel: "Power",
+      deviceName: "Slow plug",
+      locationId: "loc_001"
+    });
+    await vi.waitFor(() => expect(slowPage.toggle.click).toHaveBeenCalledTimes(1));
+
+    const nativeCommand = executor.executeDeviceAction({
+      action: "off",
+      arguments: [],
+      attribute: "switch",
+      capability: "identifier_switch",
+      command: "off",
+      component: "identifier_main",
+      controlId: "identifier_toggle",
+      controlLabel: "Power",
+      deviceId: "dev_001",
+      deviceName: "Fast plug",
+      locationId: "loc_001",
+      nativeCommand: "switchOff"
+    });
+    try {
+      await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(1), { timeout: 250 });
+      await nativeCommand;
+    } finally {
+      slowClick.resolve();
+      await Promise.allSettled([slowCommand, nativeCommand]);
+    }
+  });
+
+  test("returns from native dispatch after patch invocation without waiting for its response", async () => {
+    const keeper = new FakeCommandPage() as FakeCommandPage & {
+      evaluate: <Result, Argument>(
+        pageFunction: (argument: Argument) => Result | Promise<Result>,
+        argument: Argument
+      ) => Promise<Result>;
+    };
+    const response = deferred();
+    const patch = vi.fn(async () => {
+      await response.promise;
+      return { data: { results: [{ status: "SUCCESS" }] } };
+    });
+    keeper.evaluate = nativeClientEvaluate(patch);
+    const manager = {
+      currentKeeper: vi.fn(() => keeper),
+      openCommandPage: vi.fn(async () => new FakeCommandPage())
+    };
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => manager,
+      undefined,
+      {
+        resolveRawDeviceId: () => "raw-device",
+        resolveRawIdentifier: (alias) => ({ identifier_main: "main", identifier_switch: "switch" })[alias]
+      }
+    );
+
+    let resolved = false;
+    const command = executor.executeDeviceAction({
+      action: "on",
+      arguments: [],
+      attribute: "switch",
+      capability: "identifier_switch",
+      command: "on",
+      component: "identifier_main",
+      controlId: "identifier_toggle",
+      controlLabel: "Power",
+      deviceId: "dev_001",
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      nativeCommand: "switchOn"
+    }).then(() => {
+      resolved = true;
+    });
+    try {
+      await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(resolved).toBe(true), { timeout: 250 });
+    } finally {
+      response.resolve();
+      await command;
+    }
   });
 
   test("uses exact UI control without probing native dispatch when no web command metadata was observed", async () => {

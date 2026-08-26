@@ -223,13 +223,26 @@ export class SmartThingsWebUiCommandExecutor {
     nativeCommand?: string;
   }): Promise<void> {
     this.#diagnostic("foreground_requested");
+    const manager = this.getManager();
+    if (!manager) {
+      throw new Error("command_browser_unavailable");
+    }
+    const native = await this.#executeNativeDeviceAction(manager, input);
+    if (native === "sent") {
+      this.#diagnostic("native_command_sent");
+      return;
+    }
+    if (native === "failed") {
+      this.#diagnostic("native_command_failed");
+      throw new Error("command_execution_failed");
+    }
     await this.#runForeground(() => {
       this.#diagnostic("foreground_ready");
-      return this.#executeDeviceAction(input);
+      return this.#executeDeviceActionFallback(manager, input);
     });
   }
 
-  async #executeDeviceAction(input: {
+  async #executeDeviceActionFallback(manager: CommandPageManagerLike, input: {
     deviceId?: string;
     deviceName: string;
     locationId: string;
@@ -270,19 +283,6 @@ export class SmartThingsWebUiCommandExecutor {
     optionCommand?: string;
     nativeCommand?: string;
   }): Promise<void> {
-    const manager = this.getManager();
-    if (!manager) {
-      throw new Error("command_browser_unavailable");
-    }
-    const native = await this.#executeNativeDeviceAction(manager, input);
-    if (native === "sent") {
-      this.#diagnostic("native_command_sent");
-      return;
-    }
-    if (native === "failed") {
-      this.#diagnostic("native_command_failed");
-      throw new Error("command_execution_failed");
-    }
     const warmPage = await this.#warmPageFor(manager, input);
     if (warmPage) {
       try {
@@ -589,7 +589,7 @@ export class SmartThingsWebUiCommandExecutor {
     }
   ): Promise<"sent" | "unavailable" | "failed"> {
     const observedCommand = input.optionCommand ?? input.nativeCommand;
-    if (!input.deviceId || !input.controlId || !input.controlLabel || !observedCommand) {
+    if (!input.deviceId || !input.controlId || !observedCommand) {
       return "unavailable";
     }
     const page = manager.currentKeeper?.() as CommandPageLike | undefined;
@@ -668,32 +668,16 @@ export class SmartThingsWebUiCommandExecutor {
             component: command.component,
             ...(command.arguments.length > 0 ? { arguments: command.arguments } : {})
           };
-          let request: Promise<unknown>;
           try {
-            request = Promise.resolve(
+            void Promise.resolve(
               service.patch(command.deviceId, {
                 query: { execute: true, commands: [nativeCommand] }
               })
-            );
+            ).catch(() => undefined);
           } catch {
             return "failed";
           }
-          const settled = request.then(
-            (response) => {
-              const root = isPageRecord(response) ? response : undefined;
-              const data = isPageRecord(root?.data) ? root.data : undefined;
-              const results = Array.isArray(data?.results) ? data.results : [];
-              const first = isPageRecord(results[0]) ? results[0] : undefined;
-              return String(first?.status ?? "").toUpperCase() === "FAILED"
-                ? "failed" as const
-                : "sent" as const;
-            },
-            () => "failed" as const
-          );
-          const timeout = new Promise<"sent">((resolve) => {
-            setTimeout(() => resolve("sent"), 1_500);
-          });
-          return await Promise.race([settled, timeout]);
+          return "sent";
 
           function isPageRecord(value: unknown): value is Record<string, unknown> {
             return typeof value === "object" && value !== null && !Array.isArray(value);

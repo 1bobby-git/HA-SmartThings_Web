@@ -51,6 +51,7 @@ sys.modules["homeassistant.helpers.entity"] = entity_helper
 
 from smartthings_web.models import (  # noqa: E402
     BridgeDevice,
+    BridgeDevicePresentation,
     BridgeInventory,
     BridgeState,
     SmartThingsWebRuntime,
@@ -163,6 +164,113 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(entity.write_count, 1)
         self.assertEqual(unrelated.write_count, 0)
         self.assertEqual(device_entity.write_count, 2)
+
+    def test_device_info_entities_use_safe_online_icon_when_present(self) -> None:
+        state = BridgeState(
+            "main",
+            "temperatureMeasurement",
+            "temperature",
+            24,
+            "C",
+            "2026-08-26T06:00:00.000Z",
+        )
+        device = BridgeDevice(
+            "dev_001",
+            "loc_001",
+            None,
+            "Humidity sensor",
+            "multi_sensor",
+            True,
+            presentation=BridgeDevicePresentation(
+                icon_url="https://client.smartthings.com/icons/oneui/contact/on",
+                inactive_icon_url="https://client.smartthings.com/icons/oneui/contact/off",
+            ),
+            states={state.key: state},
+        )
+        runtime = SmartThingsWebRuntime(
+            object(), "loc_001", BridgeInventory(1, True, "0.1.89", "4", {}, {}, {device.device_id: device})
+        )
+
+        entity = SmartThingsWebDeviceEntity(runtime, device, "sensor", None)
+        state_entity = SmartThingsWebEntity(runtime, device, state, None)
+        Entity.__init__(entity)
+        Entity.__init__(state_entity)
+
+        self.assertEqual(
+            entity._attr_entity_picture, "https://client.smartthings.com/icons/oneui/contact/on"
+        )
+        self.assertEqual(
+            state_entity._attr_entity_picture,
+            "https://client.smartthings.com/icons/oneui/contact/on",
+        )
+
+    def test_device_entity_picture_falls_back_to_inactive_icon_when_offline(self) -> None:
+        state = BridgeState(
+            "main",
+            "temperatureMeasurement",
+            "temperature",
+            24,
+            "C",
+            "2026-08-26T06:00:00.000Z",
+        )
+        device = BridgeDevice(
+            "dev_001",
+            "loc_001",
+            None,
+            "Humidity sensor",
+            "multi_sensor",
+            False,
+            presentation=BridgeDevicePresentation(
+                icon_url="https://client.smartthings.com/icons/oneui/contact/on",
+                inactive_icon_url="https://client.smartthings.com/icons/oneui/contact/off",
+            ),
+            states={state.key: state},
+        )
+        runtime = SmartThingsWebRuntime(
+            object(), "loc_001", BridgeInventory(1, True, "0.1.89", "4", {}, {}, {device.device_id: device})
+        )
+
+        entity = SmartThingsWebDeviceEntity(runtime, device, "sensor", None)
+        Entity.__init__(entity)
+
+        self.assertEqual(
+            entity._attr_entity_picture,
+            "https://client.smartthings.com/icons/oneui/contact/off",
+        )
+
+    def test_entity_picture_ignores_unsafe_inactive_icon_when_online(self) -> None:
+        state = BridgeState(
+            "main",
+            "temperatureMeasurement",
+            "temperature",
+            24,
+            "C",
+            "2026-08-26T06:00:00.000Z",
+        )
+        device = BridgeDevice(
+            "dev_001",
+            "loc_001",
+            None,
+            "Humidity sensor",
+            "multi_sensor",
+            True,
+            presentation=BridgeDevicePresentation(
+                icon_url="javascript:alert(1)",
+                inactive_icon_url="https://client.smartthings.com/icons/oneui/contact/off",
+            ),
+            states={state.key: state},
+        )
+        runtime = SmartThingsWebRuntime(
+            object(), "loc_001", BridgeInventory(1, True, "0.1.89", "4", {}, {}, {device.device_id: device})
+        )
+
+        entity = SmartThingsWebDeviceEntity(runtime, device, "sensor", None)
+        Entity.__init__(entity)
+
+        self.assertEqual(
+            entity._attr_entity_picture,
+            "https://client.smartthings.com/icons/oneui/contact/off",
+        )
 
 
 if __name__ == "__main__":

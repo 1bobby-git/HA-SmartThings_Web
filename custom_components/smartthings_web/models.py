@@ -597,7 +597,17 @@ SELECT_PRIMARY_DOMAIN_ATTRIBUTES = (
 
 def is_refreshable_device(device: BridgeDevice) -> bool:
     """Return whether a device has state that maps to a refresh action."""
-    return any(_control_mentions(control, "refresh") for control in device.controls.values()) or device_has_any_state(device, REFRESH_ATTRIBUTES)
+    return any(
+        _is_observed_refresh_control(control) for control in device.controls.values()
+    )
+
+
+def _is_observed_refresh_control(control: BridgeControl) -> bool:
+    if not safe_observed_control(control) or control.kind != "button":
+        return False
+    return _control_mentions(control, "refresh") and any(
+        "refresh" == command.lower() for command in control.commands
+    )
 
 
 def is_image_device(device: BridgeDevice) -> bool:
@@ -741,7 +751,7 @@ def refresh_controls(device: BridgeDevice) -> list[BridgeControl]:
     return [
         control
         for control in device.controls.values()
-        if control.kind == "button" and _control_mentions(control, "refresh")
+        if _is_observed_refresh_control(control)
     ]
 
 

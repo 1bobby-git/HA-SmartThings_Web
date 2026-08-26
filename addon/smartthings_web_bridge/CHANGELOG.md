@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.90
+
+- Dispatch authenticated in-page native device commands outside the serialized DOM navigation queue, so a slow fallback control cannot delay unrelated native controls.
+- Return from native dispatch immediately after the authenticated patch is invoked and use the existing authoritative push/snapshot confirmation path for success.
+- Expose allowlisted SmartThings presentation artwork on Home Assistant entities and create refresh buttons only from real observed refresh controls.
+- Add a guarded live control benchmark that permits only the explicitly allowlisted Home Assistant entity, requires an initial and final OFF state, and records sanitized Bridge/HA timing evidence.
+
 ## 0.1.89
 
 - Recover the authenticated keeper immediately when the consumer-web Socket.IO transport closes, and require a fresh complete snapshot before readiness returns.

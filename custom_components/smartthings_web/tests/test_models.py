@@ -30,6 +30,9 @@ from models import (  # noqa: E402
     is_image_device,
     is_media_device,
     is_refreshable_device,
+    parse_device_presentation,
+    refresh_controls,
+    _safe_device_asset_url,
     location_arm_state,
     location_name,
     number_controls,
@@ -527,6 +530,96 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertTrue(is_media_device(device))
         self.assertTrue(is_fan_device(device))
         self.assertTrue(is_image_device(device))
+
+    def test_refresh_controls_only_use_button_controls_with_refresh_mention(self) -> None:
+        battery_state = BridgeState(
+            "main",
+            "battery",
+            "battery",
+            80,
+            "%",
+            "2026-08-24T21:10:00Z",
+        )
+        device = BridgeDevice(
+            "dev_001",
+            "loc_001",
+            None,
+            "Camera",
+            "camera",
+            True,
+            controls={
+                "refresh": BridgeControl(
+                    "refresh",
+                    "button",
+                    "Refresh",
+                    commands=("refresh",),
+                ),
+                "not_refresh": BridgeControl(
+                    "not_refresh",
+                    "button",
+                    "Refresh",
+                    commands=(),
+                ),
+                "slider": BridgeControl(
+                    "level",
+                    "slider",
+                    "Level",
+                    minimum=0,
+                    maximum=100,
+                ),
+            },
+            states={battery_state.key: battery_state},
+        )
+
+        controls = [control.control_id for control in refresh_controls(device)]
+        self.assertEqual(controls, ["refresh"])
+
+    def test_is_refreshable_device_depends_on_observed_refresh_control(self) -> None:
+        image_state = BridgeState(
+            "main",
+            "camera",
+            "image",
+            "data",
+            None,
+            "2026-08-24T21:10:00Z",
+        )
+        device = BridgeDevice(
+            "dev_001",
+            "loc_001",
+            None,
+            "Camera",
+            "camera",
+            True,
+            controls={
+                "battery_only": BridgeControl(
+                    "battery_only",
+                    "value",
+                    "Battery",
+                )
+            },
+            states={image_state.key: image_state},
+        )
+
+        self.assertFalse(is_refreshable_device(device))
+
+    def test_refresh_control_with_unsafe_fields_is_rejected_by_url_guard(self) -> None:
+        self.assertIsNone(
+            _safe_device_asset_url("https://example.com/icons/oneui/contact/on", animation=False)
+        )
+        parsed = parse_device_presentation(
+            {
+                "assetType": "oneui",
+                "iconUrl": "https://client.smartthings.com/icons/oneui/contact/on",
+                "inactiveIconUrl": "https://example.com/icons/oneui/contact/off",
+            }
+        )
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(
+            parsed.icon_url, "https://client.smartthings.com/icons/oneui/contact/on"
+        )
+        self.assertIsNone(parsed.inactive_icon_url)
+        self.assertEqual(parsed.inactive_icon_url, None)
 
     def test_number_range_and_options_parse_normalized_metadata(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")

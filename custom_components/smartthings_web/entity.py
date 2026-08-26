@@ -10,6 +10,7 @@ from .models import (
     BridgeDevice,
     BridgeState,
     SmartThingsWebRuntime,
+    _safe_device_asset_url,
     device_hardware_version,
     device_manufacturer,
     device_model,
@@ -31,6 +32,24 @@ def device_info_for(device: BridgeDevice) -> DeviceInfo:
     )
 
 
+def _entity_picture_for(device: BridgeDevice) -> str | None:
+    """Return an allowlisted SmartThings entity-picture URL for this device."""
+    if device.presentation is None:
+        return None
+    preferred = device.presentation.icon_url if device.online else None
+    fallback = (
+        device.presentation.inactive_icon_url
+        if device.presentation.inactive_icon_url is not None
+        else device.presentation.icon_url
+    )
+    if device.online:
+        return (
+            _safe_device_asset_url(preferred, animation=False)
+            or _safe_device_asset_url(fallback, animation=False)
+        )
+    return _safe_device_asset_url(fallback, animation=False)
+
+
 class SmartThingsWebEntity(Entity):
     """Base SmartThings Web push entity."""
 
@@ -50,6 +69,7 @@ class SmartThingsWebEntity(Entity):
         self._attr_name = name
         self._attr_unique_id = entity_unique_id(device.device_id, state)
         self._attr_device_info = device_info_for(device)
+        self._attr_entity_picture = _entity_picture_for(device)
 
     @property
     def available(self) -> bool:
@@ -95,6 +115,7 @@ class SmartThingsWebDeviceEntity(Entity):
         self._attr_name = name
         self._attr_unique_id = f"{device.device_id}_{suffix}"
         self._attr_device_info = device_info_for(device)
+        self._attr_entity_picture = _entity_picture_for(device)
 
     @property
     def available(self) -> bool:

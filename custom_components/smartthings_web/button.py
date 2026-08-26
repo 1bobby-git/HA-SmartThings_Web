@@ -16,6 +16,7 @@ from .models import (
     SmartThingsWebRuntime,
     button_controls,
     control_label,
+    refresh_controls,
     safe_observed_control,
 )
 
@@ -36,18 +37,37 @@ async def async_setup_entry(
                 continue
             controls = button_controls(device)
             if controls:
+                actual_refresh_ids = {
+                    control.control_id for control in refresh_controls(device)
+                }
                 for control in controls:
+                    if _mentions_refresh(control) and control.control_id not in actual_refresh_ids:
+                        continue
                     unique_id = f"{device.device_id}_button_{control.control_id}"
                     if unique_id in known:
                         continue
                     known.add(unique_id)
                     entities.append(SmartThingsWebButton(runtime, device, control))
-                continue
         if entities:
             async_add_entities(entities)
 
     discover()
     entry.async_on_unload(runtime.subscribe(discover))
+
+
+def _mentions_refresh(control: BridgeControl) -> bool:
+    """Return whether a button control text indicates a refresh action."""
+    haystack = " ".join(
+        item
+        for item in (
+            control.control_id,
+            control.label,
+            control.attribute or "",
+            *control.commands,
+        )
+        if item
+    ).lower()
+    return "refresh" in haystack
 
 
 class SmartThingsWebButton(SmartThingsWebDeviceEntity, ButtonEntity):
@@ -95,6 +115,14 @@ class SmartThingsWebButton(SmartThingsWebDeviceEntity, ButtonEntity):
         ):
             raise HomeAssistantError("SmartThings Web button control is unavailable")
         try:
+            command = (
+                "refresh"
+                if any(
+                    candidate.control_id == control.control_id
+                    for candidate in refresh_controls(device)
+                )
+                else "press"
+            )
             await self.runtime.client.async_execute_command(
                 target_type="device",
                 target_id=self.device_id,
@@ -103,7 +131,7 @@ class SmartThingsWebButton(SmartThingsWebDeviceEntity, ButtonEntity):
                 component=control.component,
                 capability=control.capability,
                 attribute=control.attribute,
-                command="press",
+                command=command,
                 arguments=[],
             )
         except BridgeClientError as err:
