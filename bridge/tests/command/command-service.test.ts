@@ -105,6 +105,37 @@ describe("SafeCommandService", () => {
     }
   });
 
+  test("does not let timeout resync bypass the configured stability window", async () => {
+    vi.useFakeTimers();
+    const store = readyDeviceStore();
+    const resync = vi.fn(async () => {
+      store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:01Z")));
+    });
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: { executeDeviceAction: vi.fn(async () => undefined) },
+      timeoutMs: 1_000,
+      confirmationStabilityMs: 500,
+      resync
+    });
+
+    try {
+      const result = service.execute(command("on", "request_032"));
+      const rejected = expect(result).rejects.toMatchObject({
+        code: "command_confirmation_timeout"
+      });
+      await vi.advanceTimersByTimeAsync(1_001);
+      store.observe(received(deviceEventFrame("off", "2026-08-25T00:00:02Z")));
+      await vi.advanceTimersByTimeAsync(500);
+
+      await rejected;
+      expect(resync).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("binds switch commands to the matching observed toggle control", async () => {
     const store = readyDeviceStore();
     observeDeviceDetails(store, [

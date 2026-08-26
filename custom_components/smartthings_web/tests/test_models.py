@@ -97,6 +97,21 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             latest.devices["dev_001"].presentation,
         )
 
+    def test_inventory_merge_clears_presentation_removed_by_latest_snapshot(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:00:00Z")
+        latest = inventory(11, 21, "2026-08-24T21:01:00Z")
+        current.devices["dev_001"].presentation = BridgeDevicePresentation(
+            asset_type="contact_sensor",
+            icon_url="https://client.smartthings.com/icons/oneui/contact/on",
+        )
+        self.assertIsNone(latest.devices["dev_001"].presentation)
+        runtime = SmartThingsWebRuntime(FakeClient(latest), "loc_001", current)
+
+        changed = asyncio.run(runtime.handle_event({"type": "inventory", "sequence": 11}))
+
+        self.assertTrue(changed)
+        self.assertIsNone(runtime.inventory.devices["dev_001"].presentation)
+
     def test_inventory_merge_does_not_lose_devices_from_an_incomplete_restart_snapshot(self) -> None:
         current = inventory(50, 20, "2026-08-24T21:00:00Z")
         partial = BridgeInventory(

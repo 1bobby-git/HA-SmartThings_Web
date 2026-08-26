@@ -10,19 +10,19 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("publishes fail-closed device targeting as version 0.1.56", () => {
+  test("publishes stable push confirmation as version 0.1.57", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.56");
-    expect(packageMetadata.version).toBe("0.1.56");
-    expect(protocolMetadata.bridge_version).toBe("0.1.56");
+    expect(config.version).toBe("0.1.57");
+    expect(packageMetadata.version).toBe("0.1.57");
+    expect(protocolMetadata.bridge_version).toBe("0.1.57");
     expect(protocolMetadata.protocol_version).toBe(4);
-    expect(runtime).toContain('const bridgeVersion = "0.1.56";');
-    expect(changelog).toContain("## 0.1.56");
+    expect(runtime).toContain('const bridgeVersion = "0.1.57";');
+    expect(changelog).toContain("## 0.1.57");
     expect(changelog).toContain("SmartThings icon");
     expect(changelog).toContain("## 0.1.38");
     expect(changelog).toContain("scenes");

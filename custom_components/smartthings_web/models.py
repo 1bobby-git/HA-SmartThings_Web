@@ -173,7 +173,7 @@ class SmartThingsWebRuntime:
                 name=latest_device.name,
                 device_type=latest_device.device_type,
                 online=latest_device.online,
-                presentation=latest_device.presentation or existing.presentation,
+                presentation=latest_device.presentation,
                 states=states,
                 controls={**existing.controls, **latest_device.controls},
             )

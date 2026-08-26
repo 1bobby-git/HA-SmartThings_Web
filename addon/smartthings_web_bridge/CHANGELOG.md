@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.57
+
+- Apply the 500 ms push stability requirement to timeout-triggered full snapshot resynchronization as well as direct device events.
+- Reject a requested state that reverses during the timeout boundary instead of confirming from a transient snapshot.
+- Clear removed presentation metadata during Home Assistant's atomic inventory merge instead of retaining a stale icon/model hint.
+
 ## 0.1.56
 
 - Open device details only by clicking the unique visible `data-testid="device"` wrapper; never click a page-wide named button, an exact text label, or a descendant inline action as a fallback.

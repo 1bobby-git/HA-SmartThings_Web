@@ -521,8 +521,13 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
         void options
           .resync()
           .catch(() => undefined)
-          .then(() => {
+          .then(async () => {
             if (settled) return;
+            const stabilityMs = Math.max(0, options.stabilityMs ?? 0);
+            if (stabilityMs > 0 && options.matchesSnapshot?.() === true) {
+              await new Promise<void>((resolve) => setTimeout(resolve, stabilityMs));
+              if (settled) return;
+            }
             const sequence = options.devices.snapshot().sequence;
             if (
               sequence > options.afterSequence &&
