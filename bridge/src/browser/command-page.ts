@@ -599,7 +599,6 @@ export class SmartThingsWebUiCommandExecutor {
       return cached.page;
     } catch {
       this.#diagnostic("warm_recovery_failed");
-      this.#verifiedDetailRoutes.delete(deviceRouteKey(input));
       await this.#invalidateWarmPage();
       return undefined;
     }
@@ -1312,18 +1311,24 @@ async function findDeviceInRooms(
   await page.goto(`${url.origin}${route}/rooms`, { waitUntil: "domcontentloaded" });
   diagnostic("fresh_rooms_opened");
   if (roomName) {
-    const roomText = page.getByText(roomName, { exact: true });
-    let room = page.getByRole("button").filter({
-      has: roomText
-    });
-    if ((await room.count()) !== 1) {
+    const heading = page.getByRole("heading", { name: exactName(roomName) });
+    let room: CommandLocatorLike;
+    const headingCount = await heading.count();
+    if (headingCount > 1) throw new Error("command_room_not_found");
+    if (headingCount === 1) {
+      room = heading.locator("..");
+      if ((await room.count()) !== 1) throw new Error("command_room_not_found");
+    } else {
       const namedRoom = page.getByRole("button", { name: exactName(roomName) });
-      if ((await namedRoom.count()) === 1) {
+      const namedRoomCount = await namedRoom.count();
+      if (namedRoomCount > 1) throw new Error("command_room_not_found");
+      if (namedRoomCount === 1) {
         room = namedRoom;
       } else {
-        const heading = page.getByRole("heading", { name: exactName(roomName) });
-        if ((await heading.count()) !== 1) throw new Error("command_room_not_found");
-        room = heading.locator("..");
+        const roomText = page.getByText(roomName, { exact: true });
+        room = page.getByRole("button").filter({
+          has: roomText
+        });
         if ((await room.count()) !== 1) throw new Error("command_room_not_found");
       }
     }

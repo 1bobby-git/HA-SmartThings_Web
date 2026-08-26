@@ -401,6 +401,8 @@ describe("SmartThingsWebUiCommandExecutor", () => {
   test("recovers a dismissed warm detail on the same exact room and device page", async () => {
     const page = new FakeCommandPage();
     const room = new FakeLocator(1);
+    const roomHeading = new FakeLocator(1);
+    roomHeading.locator = vi.fn(() => room);
     const diagnostics: string[] = [];
     const detailUrl =
       "https://my.smartthings.com/location/loc_001/rooms/device/device_raw_001";
@@ -409,7 +411,11 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
     const defaultGetByRole = page.getByRole.bind(page);
     page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) =>
-      role === "button" && !options?.name ? room : defaultGetByRole(role, options)
+      role === "heading" && options?.name
+        ? roomHeading
+        : role === "button" && !options?.name
+          ? room
+          : defaultGetByRole(role, options)
     );
     page.card.click.mockImplementation(async () => {
       page.currentUrl = detailUrl;
@@ -503,9 +509,9 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(freshPage.toggle.click).toHaveBeenCalledTimes(1);
   });
 
-  test("skips a known-invalid verified route after warm recovery fails", async () => {
+  test("revalidates the verified route after warm recovery fails", async () => {
     const warmPage = new FakeCommandPage();
-    const freshPage = new FakeCommandPage();
+    const routedPage = new FakeCommandPage();
     const room = new FakeLocator(1);
     const detailUrl =
       "https://my.smartthings.com/location/loc_001/rooms/device/device_raw_001";
@@ -519,11 +525,10 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     warmPage.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) =>
       role === "button" && !options?.name ? room : warmGetByRole(role, options)
     );
-    freshPage.card.click.mockImplementation(async () => {
-      freshPage.currentUrl = detailUrl;
+    routedPage.goto = vi.fn(async (url: string) => {
+      routedPage.currentUrl = url;
     });
-    freshPage.goto = vi.fn(async () => undefined);
-    const pages = [warmPage, freshPage];
+    const pages = [warmPage, routedPage];
     const manager = {
       openCommandPage: vi.fn(async () => {
         const page = pages.shift();
@@ -562,10 +567,74 @@ describe("SmartThingsWebUiCommandExecutor", () => {
 
     expect(manager.openCommandPage).toHaveBeenCalledTimes(2);
     expect(warmPage.close).toHaveBeenCalledTimes(1);
-    expect(freshPage.goto).not.toHaveBeenCalled();
-    expect(freshPage.toggle.click).toHaveBeenCalledTimes(1);
+    expect(routedPage.goto).toHaveBeenCalledWith(detailUrl, { waitUntil: "domcontentloaded" });
+    expect(routedPage.card.click).not.toHaveBeenCalled();
+    expect(routedPage.toggle.click).toHaveBeenCalledTimes(1);
     expect(diagnostics.indexOf("warm_recovery_failed")).toBeLessThan(
-      diagnostics.lastIndexOf("verified_route_missing")
+      diagnostics.indexOf("verified_route_opened")
+    );
+    expect(diagnostics.indexOf("verified_route_opened")).toBeLessThan(
+      diagnostics.indexOf("verified_route_ready")
+    );
+    expect(diagnostics.filter((stage) => stage === "fresh_page_opened")).toHaveLength(1);
+  });
+
+  test("falls back to fresh navigation only after verified route validation fails", async () => {
+    const warmPage = new FakeCommandPage();
+    const routedPage = new FakeCommandPage();
+    const freshPage = new FakeCommandPage();
+    const detailUrl =
+      "https://my.smartthings.com/location/loc_001/device/device_raw_001";
+    warmPage.card.click.mockImplementation(async () => {
+      warmPage.currentUrl = detailUrl;
+    });
+    routedPage.detailDialog = new FakeLocator(0, true);
+    routedPage.goto = vi.fn(async (url: string) => {
+      routedPage.currentUrl = url;
+    });
+    freshPage.card.click.mockImplementation(async () => {
+      freshPage.currentUrl = detailUrl;
+    });
+    const pages = [warmPage, routedPage, freshPage];
+    const manager = {
+      openCommandPage: vi.fn(async () => {
+        const page = pages.shift();
+        if (!page) throw new Error("unexpected_new_page");
+        return page;
+      })
+    };
+    const diagnostics: string[] = [];
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => manager,
+      undefined,
+      {
+        warmPageTtlMs: 30_000,
+        onDiagnostic: (stage) => diagnostics.push(stage)
+      }
+    );
+
+    await executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" });
+    warmPage.detailDialog = new FakeLocator(0, true);
+
+    await executor.executeDeviceAction({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      command: "off",
+      action: "off",
+      component: "main",
+      capability: "switch",
+      attribute: "switch",
+      arguments: []
+    });
+
+    expect(manager.openCommandPage).toHaveBeenCalledTimes(3);
+    expect(routedPage.goto).toHaveBeenCalledWith(detailUrl, { waitUntil: "domcontentloaded" });
+    expect(routedPage.toggle.click).not.toHaveBeenCalled();
+    expect(routedPage.close).toHaveBeenCalledTimes(1);
+    expect(freshPage.card.click).toHaveBeenCalledTimes(1);
+    expect(freshPage.toggle.click).toHaveBeenCalledTimes(1);
+    expect(diagnostics.indexOf("verified_route_invalid")).toBeLessThan(
+      diagnostics.lastIndexOf("fresh_page_opened")
     );
   });
 
@@ -814,11 +883,14 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     const missingExactWrappers = new FakeLocator(0, true);
     const roomDeviceScope = new FakeLocator(1);
     const roomButton = new FakeLocator(1);
+    const roomHeading = new FakeLocator(1);
     const roomDeviceWrapper = new FakeLocator(1);
     const roomText = new FakeLocator(1);
     let inRooms = false;
     page.card = overviewCard;
+    roomHeading.locator = vi.fn(() => roomButton);
     page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "heading") return roomHeading;
       if (role === "button" && options?.name instanceof RegExp) return page.card;
       if (role === "button") return roomButton;
       return page.toggle;
@@ -865,11 +937,13 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     const deviceText = new FakeLocator(1);
     const roomButtons = new FakeLocator(1);
     const roomButton = new FakeLocator(1);
+    const roomHeading = new FakeLocator(1);
     const deviceCards = new FakeLocator(0, true);
     let roomActive = false;
     roomButton.dispatchEvent.mockImplementation(async () => {
       roomActive = true;
     });
+    roomHeading.locator = vi.fn(() => roomButton);
     roomButtons.filter = vi.fn(() => roomButton);
     deviceCards.filter = vi.fn(() => (roomActive ? visibleDevice : hiddenDevice));
     page.card = hiddenDevice;
@@ -879,6 +953,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       return deviceCards;
     });
     page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "heading") return roomHeading;
       if (role === "button" && options?.name) return hiddenDevice;
       if (role === "button") return roomButtons;
       if (role === "textbox") return new FakeLocator(0);
@@ -900,7 +975,8 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       roomName: "Kitchen"
     });
 
-    expect(roomButtons.filter).toHaveBeenCalledWith({ has: roomText });
+    expect(roomHeading.locator).toHaveBeenCalledWith("..");
+    expect(roomButtons.filter).not.toHaveBeenCalled();
     expect(roomButton.isVisible).toHaveBeenCalledTimes(1);
     expect(roomButton.waitFor).not.toHaveBeenCalled();
     expect(roomButton.dispatchEvent).toHaveBeenCalledWith("click");
@@ -958,9 +1034,8 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(readyPage.toggle.click).toHaveBeenCalledTimes(1);
   });
 
-  test("activates a heading-backed room surface when Cake exposes no room button", async () => {
+  test("prefers the exact room heading parent before scanning page-wide buttons", async () => {
     const page = new FakeCommandPage();
-    const missingButtons = new FakeLocator(0);
     const heading = new FakeLocator(1);
     const roomSurface = new FakeLocator(1);
     const hiddenDevice = new FakeLocator(0, true);
@@ -971,12 +1046,12 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       roomActive = true;
     });
     heading.locator = vi.fn(() => roomSurface);
-    missingButtons.filter = vi.fn(() => missingButtons);
     deviceCards.filter = vi.fn(() => (roomActive ? visibleDevice : hiddenDevice));
+    const pageGetByRole = page.getByRole.bind(page);
     page.getByRole = vi.fn((role: string) => {
       if (role === "heading") return heading;
-      if (role === "button") return missingButtons;
-      return page.toggle;
+      if (role === "button") throw new Error("page_wide_button_scan");
+      return pageGetByRole(role);
     });
     page.getByText = vi.fn(() => new FakeLocator(1));
     page.locator = vi.fn((selector: string) => {
@@ -997,10 +1072,66 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
 
     expect(heading.locator).toHaveBeenCalledWith("..");
+    expect(page.getByRole).not.toHaveBeenCalledWith("button");
     expect(roomSurface.dispatchEvent).toHaveBeenCalledWith("click");
     expect(roomSurface.click).not.toHaveBeenCalled();
     expect(visibleDevice.click).toHaveBeenCalledTimes(1);
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
+  });
+
+  test("fails closed when the exact room heading is ambiguous", async () => {
+    const page = new FakeCommandPage();
+    page.card = new FakeLocator(0, true);
+    const duplicateHeadings = new FakeLocator(2);
+    const pageGetByRole = page.getByRole.bind(page);
+    page.getByRole = vi.fn((role: string) =>
+      role === "heading" ? duplicateHeadings : pageGetByRole(role)
+    );
+    page.goto = vi.fn(async (url: string) => {
+      page.currentUrl = url;
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await expect(
+      executor.inspectDeviceDetails({
+        deviceName: "Safe plug",
+        locationId: "loc_001",
+        roomName: "Kitchen"
+      })
+    ).rejects.toThrow("command_room_not_found");
+
+    expect(page.toggle.click).not.toHaveBeenCalled();
+  });
+
+  test("fails closed when the exact room heading parent is hidden", async () => {
+    const page = new FakeCommandPage();
+    page.card = new FakeLocator(0, true);
+    const heading = new FakeLocator(1);
+    const hiddenRoom = new FakeLocator(1, true);
+    heading.locator = vi.fn(() => hiddenRoom);
+    const pageGetByRole = page.getByRole.bind(page);
+    page.getByRole = vi.fn((role: string) =>
+      role === "heading" ? heading : pageGetByRole(role)
+    );
+    page.goto = vi.fn(async (url: string) => {
+      page.currentUrl = url;
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await expect(
+      executor.inspectDeviceDetails({
+        deviceName: "Safe plug",
+        locationId: "loc_001",
+        roomName: "Kitchen"
+      })
+    ).rejects.toThrow("command_room_not_found");
+
+    expect(hiddenRoom.dispatchEvent).not.toHaveBeenCalled();
+    expect(page.toggle.click).not.toHaveBeenCalled();
   });
 
   test("fails closed when the accessible device target is ambiguous", async () => {
@@ -1533,16 +1664,19 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     const exactDeviceWrapper = new FakeLocator(1);
     const roomButtons = new FakeLocator(2);
     const exactRoomButton = new FakeLocator(1);
+    const roomHeading = new FakeLocator(1);
     const roomText = new FakeLocator(1);
     roomButtons.filter = vi.fn(() => exactRoomButton);
     let roomActive = false;
     exactRoomButton.dispatchEvent.mockImplementation(async () => {
       roomActive = true;
     });
+    roomHeading.locator = vi.fn(() => exactRoomButton);
     deviceScope.filter = vi.fn(() => (roomActive ? exactDeviceWrapper : missingOverviewWrapper));
     page.card = missingOverviewWrapper;
     page.locator = vi.fn(() => deviceScope);
     page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "heading") return roomHeading;
       if (role === "button" && options?.name) return new FakeLocator(2);
       if (role === "button") return roomButtons;
       return page.toggle;

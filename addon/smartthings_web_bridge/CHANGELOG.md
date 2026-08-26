@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.73
+
+- Resolve the exact room heading and its unique parent before scanning Cake's page-wide button accessibility tree, matching the observed `draggable-room` structure while retaining fail-closed room, device, dialog, and control checks.
+- Keep a freshly verified detail route after same-page warm recovery fails, then independently revalidate its exact URL and device dialog on a new page before any control lookup.
+
 ## 0.1.72
 
 - Replace the room target's retrying visibility wait with Playwright's non-waiting visibility check before dispatching its navigation-only click event.
