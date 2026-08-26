@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.83
+
+- Parse bounded full-snapshot websocket frames up to 8 MiB for volatile native-command identifier mapping while retaining the smaller persisted diagnostic capture limit.
+- Distinguish missing device, component, and capability mappings with fixed-value diagnostics that never reveal identifiers.
+
 ## 0.1.82
 
 - Retain the third identifier-alias generation produced by sanitized component metadata plus DeviceStore normalization, so the authenticated native command path is available immediately after a full snapshot.

@@ -40,6 +40,9 @@ type CommandDiagnosticStage =
   | "foreground_requested"
   | "foreground_ready"
   | "native_identifier_missing"
+  | "native_device_identifier_missing"
+  | "native_component_identifier_missing"
+  | "native_capability_identifier_missing"
   | "native_command_sent"
   | "native_command_failed"
   | "warm_missing"
@@ -597,6 +600,9 @@ export class SmartThingsWebUiCommandExecutor {
     const rawComponent = this.#resolveNativeIdentifier(input.component);
     const rawCapability = this.#resolveNativeIdentifier(input.capability);
     if (!rawDeviceId || !rawComponent || !rawCapability) {
+      if (!rawDeviceId) this.#diagnostic("native_device_identifier_missing");
+      if (!rawComponent) this.#diagnostic("native_component_identifier_missing");
+      if (!rawCapability) this.#diagnostic("native_capability_identifier_missing");
       this.#diagnostic("native_identifier_missing");
       return "unavailable";
     }

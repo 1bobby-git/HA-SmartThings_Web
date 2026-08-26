@@ -10,6 +10,7 @@ const CAPABILITY_KEYS = new Set(["capability", "capabilityId", "capability_id"])
 const MAX_IDENTIFIER_LENGTH = 256;
 const MAX_WALK_DEPTH = 24;
 const MAX_WALK_NODES = 100_000;
+const MAX_VOLATILE_FRAME_BYTES = 8 * 1024 * 1024;
 
 export class VolatileIdentifierMap {
   readonly #deviceAliases = new Map<string, string>();
@@ -22,7 +23,7 @@ export class VolatileIdentifierMap {
   ) {}
 
   observeRawWebSocketFrame(_direction: "sent" | "received", raw: string): void {
-    const decoded = decodeSocketIoTextFrame(raw);
+    const decoded = decodeSocketIoTextFrame(raw, { maxBytes: MAX_VOLATILE_FRAME_BYTES });
     if (decoded.kind === "invalid") return;
     if (decoded.kind === "event" || decoded.kind === "ack" || decoded.kind === "binary_ack") {
       this.#walk(decoded.args);

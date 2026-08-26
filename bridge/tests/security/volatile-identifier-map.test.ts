@@ -68,6 +68,24 @@ describe("VolatileIdentifierMap", () => {
     expect(identifiers.rawIdentifier("identifier_switch")).toBeUndefined();
   });
 
+  test("maps a device from a full snapshot larger than the diagnostic capture text limit", () => {
+    const identifiers = new VolatileIdentifierMap((kind, raw) =>
+      kind === "device" ? `dev_${raw}` : `identifier_${raw}`
+    );
+    const filler = "x".repeat(1_200_000);
+
+    identifiers.observeRawWebSocketFrame(
+      "received",
+      `431${JSON.stringify([
+        null,
+        [{ deviceId: "large-device", componentId: "main", capabilityId: "switch", filler }]
+      ])}`
+    );
+
+    expect(identifiers.rawDeviceId("dev_large-device")).toBe("large-device");
+    expect(identifiers.rawIdentifier("identifier_identifier_identifier_main")).toBe("main");
+  });
+
   test("ignores unrelated ids and malformed or oversized frames", () => {
     const alias = vi.fn((kind: "device" | "identifier", raw: string) =>
       kind === "device" ? `dev_${raw}` : `identifier_${raw}`
@@ -76,7 +94,7 @@ describe("VolatileIdentifierMap", () => {
 
     identifiers.observeRawWebSocketFrame("received", '42["event",{"id":"not-a-device"}]');
     identifiers.observeRawWebSocketFrame("received", "not-socket-io");
-    identifiers.observeRawWebSocketFrame("received", `42["event","${"x".repeat(1_048_577)}"]`);
+    identifiers.observeRawWebSocketFrame("received", `42["event","${"x".repeat(8 * 1024 * 1024)}"]`);
 
     expect(alias).not.toHaveBeenCalled();
   });
