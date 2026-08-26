@@ -253,7 +253,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       });
       expect(routedPage.detailHeading.waitFor).toHaveBeenCalledWith({
         state: "visible",
-        timeout: 5_000
+        timeout: 1_500
       });
       expect(routedPage.card.click).not.toHaveBeenCalled();
       expect(routedPage.toggle.click).toHaveBeenCalledTimes(1);
@@ -467,6 +467,10 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
     expect(overviewCard.waitFor).not.toHaveBeenCalled();
     expect(roomButton.click).toHaveBeenCalledTimes(1);
+    expect(roomDeviceWrapper.waitFor).toHaveBeenCalledWith({
+      state: "visible",
+      timeout: 3_000
+    });
     expect(roomDeviceWrapper.click).toHaveBeenCalledTimes(1);
     expect(missingExactWrappers.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 1_000 });
     expect(page.toggle.click).not.toHaveBeenCalled();
@@ -1392,6 +1396,47 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(checkbox.click).toHaveBeenCalledWith({ timeout: 15_000 });
   });
 
+  test("clicks a button toggle only inside its observed exact swatch label", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const missingToggle = new FakeLocator(0, true);
+    const label = new FakeLocator(1);
+    const swatch = new FakeLocator(1);
+    const button = new FakeLocator(1);
+    label.locator = vi.fn(() => swatch);
+    swatch.getByRole = vi.fn((role: string) =>
+      role === "button" ? button : missingToggle
+    );
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Safe plug")) {
+        return card;
+      }
+      if (role === "button") return card;
+      return missingToggle;
+    });
+    page.getByText = vi.fn((text: string) => (text === "Power" ? label : missingToggle));
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      command: "on",
+      action: "on",
+      component: "main",
+      capability: "switch",
+      attribute: "switch",
+      controlLabel: "Power",
+      arguments: []
+    });
+
+    expect(label.locator).toHaveBeenCalledWith("..");
+    expect(button.click).toHaveBeenCalledWith({ timeout: 15_000 });
+    expect(page.card.click).toHaveBeenCalledTimes(1);
+    expect(card.click).not.toHaveBeenCalled();
+  });
+
   test("prefers one accessible switch when the same observed toggle also exposes a checkbox", async () => {
     const page = new FakeCommandPage();
     const card = new FakeLocator(1);
@@ -1464,6 +1509,40 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     ).rejects.toThrow("command_control_ambiguous");
 
     expect(ambiguousSwitches.click).not.toHaveBeenCalled();
+  });
+
+  test("fails closed when an observed label contains multiple button toggles", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const missing = new FakeLocator(0, true);
+    const label = new FakeLocator(1);
+    const swatch = new FakeLocator(1);
+    const ambiguousButtons = new FakeLocator(2);
+    label.locator = vi.fn(() => swatch);
+    swatch.getByRole = vi.fn((role: string) =>
+      role === "button" ? ambiguousButtons : missing
+    );
+    page.getByRole = vi.fn((role: string) => (role === "button" ? card : missing));
+    page.getByText = vi.fn((text: string) => (text === "Power" ? label : missing));
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await expect(
+      executor.executeDeviceAction({
+        deviceName: "Safe plug",
+        locationId: "loc_001",
+        command: "on",
+        action: "on",
+        component: "main",
+        capability: "switch",
+        attribute: "switch",
+        controlLabel: "Power",
+        arguments: []
+      })
+    ).rejects.toThrow("command_control_ambiguous");
+
+    expect(ambiguousButtons.click).not.toHaveBeenCalled();
   });
 
   test("selects an observed option from its exact enumerated control", async () => {

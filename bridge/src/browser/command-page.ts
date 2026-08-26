@@ -40,11 +40,12 @@ interface WarmDevicePage {
 }
 
 const WARM_DETAIL_IDENTITY_TIMEOUT_MS = 500;
-const VERIFIED_ROUTE_IDENTITY_TIMEOUT_MS = 5_000;
+const VERIFIED_ROUTE_IDENTITY_TIMEOUT_MS = 1_500;
 const VERIFIED_ROUTE_TTL_MS = 24 * 60 * 60_000;
 const MAX_VERIFIED_DETAIL_ROUTES = 256;
 const WARM_CONTROL_PROBE_TIMEOUT_MS = 1_500;
 const FRESH_CONTROL_PROBE_TIMEOUT_MS = 5_000;
+const ROOM_DEVICE_CARD_TIMEOUT_MS = 3_000;
 const LABELED_SCOPE_POLL_MS = 100;
 const LABELED_SCOPE_VISIBLE_PROBE_MS = 25;
 const LOCATION_ROUTE_POLL_MS = 100;
@@ -733,7 +734,7 @@ async function clickObservedToggleControl(
   const scope = await labeledSwatchScope(page, labelVariants(label), probeTimeoutMs);
   if (!scope) throw new Error("command_control_not_found");
   const remainingMs = Math.max(1, deadline - Date.now());
-  const scoped = await uniqueRoleCandidate(scope, ["switch", "checkbox"]);
+  const scoped = await uniqueRoleCandidate(scope, ["switch", "checkbox", "button"]);
   if (!scoped) throw new Error("command_control_not_found");
   try {
     await scoped.waitFor({ state: "visible", timeout: remainingMs });
@@ -1041,7 +1042,7 @@ async function findDeviceInRooms(
     }
     await room.click({ timeout: 15_000 });
   }
-  let device = await visibleExactTextCard(page, deviceName, 15_000);
+  let device = await visibleExactTextCard(page, deviceName, ROOM_DEVICE_CARD_TIMEOUT_MS);
   if (!device) {
     device = await scrollForDevice(page, deviceName);
   }

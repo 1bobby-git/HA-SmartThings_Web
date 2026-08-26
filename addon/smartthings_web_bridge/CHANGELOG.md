@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.58
+
+- Accept a single button-rendered toggle only inside the exact observed Power swatch, while preserving switch/checkbox priority and ambiguity rejection.
+- Shorten verified-detail and exact-room discovery probes so stale optimized routes fall back faster without weakening push confirmation.
+- Retain a revalidated exact device-detail page for five minutes to accelerate consecutive commands on the same device.
+
 ## 0.1.57
 
 - Apply the 500 ms push stability requirement to timeout-triggered full snapshot resynchronization as well as direct device events.

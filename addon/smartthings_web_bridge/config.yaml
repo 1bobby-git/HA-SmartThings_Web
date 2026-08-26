@@ -1,7 +1,7 @@
 name: SmartThings Web Bridge
 slug: smartthings_web_bridge
 description: Headed Chromium bridge for observing SmartThings Web traffic from Home Assistant.
-version: 0.1.57
+version: 0.1.58
 url: https://github.com/1bobby-git/HA-SmartThings_Web
 startup: services
 boot: auto
