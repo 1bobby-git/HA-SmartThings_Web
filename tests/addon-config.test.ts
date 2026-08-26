@@ -10,18 +10,22 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("publishes scoped entity push listeners as version 0.1.79", () => {
+  test("publishes low-latency push delivery as version 0.1.80", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.79");
-    expect(packageMetadata.version).toBe("0.1.79");
-    expect(protocolMetadata.bridge_version).toBe("0.1.79");
+    expect(config.version).toBe("0.1.80");
+    expect(packageMetadata.version).toBe("0.1.80");
+    expect(protocolMetadata.bridge_version).toBe("0.1.80");
     expect(protocolMetadata.protocol_version).toBe(4);
-    expect(runtime).toContain('const bridgeVersion = "0.1.79";');
+    expect(runtime).toContain('const bridgeVersion = "0.1.80";');
+    expect(changelog).toContain("## 0.1.80");
+    expect(changelog).toContain("before diagnostic capture");
+    expect(changelog).toContain("Coalesce full normalized-inventory persistence");
+    expect(changelog).toContain("duplicate-delivery protocol counters");
     expect(changelog).toContain("## 0.1.79");
     expect(changelog).toContain("matching state and device listeners");
     expect(changelog).toContain("exact visible Cake room-card heading");

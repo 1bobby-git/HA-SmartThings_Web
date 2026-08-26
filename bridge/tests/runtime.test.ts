@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
@@ -549,6 +550,18 @@ describe("createBridgeRuntime", () => {
       protocolInvalidFrameCount: 0,
       lastParserSuccessAtMs: expect.any(Number)
     });
+
+    const db = new DatabaseSync(join(root, "bridge.sqlite"), { readOnly: true });
+    try {
+      const persisted = db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM captures WHERE source = 'playwright-websocket-frame' AND payload_json LIKE '%DEVICE_EVENT%'"
+        )
+        .get() as { count: number };
+      expect(persisted.count).toBe(1);
+    } finally {
+      db.close();
+    }
   });
 
   test("marks snapshot complete only after all real ACK categories and becomes ready after push", async () => {

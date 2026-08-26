@@ -61,7 +61,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.79";
+const bridgeVersion = "0.1.80";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -110,6 +110,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   const captures = new CaptureStore(paths.sqlitePath);
   const devices = new DeviceStore({
     sqlitePath: paths.sqlitePath,
+    onPersistenceError: () => log.warn("device_store_persist_failed"),
     normalizeStateToken: (value) =>
       aliases.alias("identifier", aliases.alias("identifier", value))
   });
@@ -523,11 +524,13 @@ function createStatusCapturePipeline(
     },
     sink: {
       write(record) {
-        captures.write(record);
+        // Live state delivery is authoritative; diagnostics must never sit ahead of SSE publication.
         devices.observe(record);
         const now = Date.now();
         if (record.source === "playwright-websocket-frame" || record.source === "cdp-websocket-frame") {
           const analysis = analyzer.observe(record);
+          // Count every delivery in memory, but persist only the first copy of one logical event.
+          if (analysis?.kind !== "duplicate") captures.write(record);
           const protocol = analyzer.snapshot();
           const current = status.getSnapshot();
           const basePatch: RuntimeStatusPatch = {
@@ -611,6 +614,7 @@ function createStatusCapturePipeline(
           status.update(basePatch);
           return;
         }
+        captures.write(record);
         if (record.source === "cdp-eventsource") {
           status.update({ lastEventAtMs: now });
         }

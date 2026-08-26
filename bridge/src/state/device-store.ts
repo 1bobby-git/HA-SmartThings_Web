@@ -129,6 +129,8 @@ const SNAPSHOT_QUERIES = new Set<SnapshotQuery>([
 ]);
 const ID_PATTERN = /^(?:loc|dev|identifier)_[A-Za-z0-9]{3,64}$/u;
 const TOKEN_PATTERN = /^[A-Za-z0-9_.:-]{1,160}$/u;
+const INVENTORY_PERSIST_COALESCE_MS = 25;
+const INVENTORY_PERSIST_RETRY_MS = 250;
 
 export class DeviceStore {
   readonly #locations = new Map<string, BridgeLocation>();
@@ -139,13 +141,18 @@ export class DeviceStore {
   readonly #listeners = new Set<Listener>();
   readonly #normalizeStateToken: StateTokenNormalizer;
   readonly #db: DatabaseSync | undefined;
+  readonly #onPersistenceError: (() => void) | undefined;
+  #persistTimer: ReturnType<typeof setTimeout> | undefined;
+  #persistPending = false;
   #sequence = 0;
 
   constructor(options: {
     normalizeStateToken?: StateTokenNormalizer;
     sqlitePath?: string;
+    onPersistenceError?: () => void;
   } = {}) {
     this.#normalizeStateToken = options.normalizeStateToken ?? ((value) => value);
+    this.#onPersistenceError = options.onPersistenceError;
     if (options.sqlitePath) {
       mkdirSync(dirname(options.sqlitePath), { recursive: true, mode: 0o700 });
       this.#db = new DatabaseSync(options.sqlitePath);
@@ -195,8 +202,8 @@ export class DeviceStore {
       this.#pending.delete(key);
       if (this.#applySnapshot(pending.query, snapshotBody(decoded.args))) {
         const sequence = this.#nextSequence();
-        this.#persist();
         this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
+        this.#schedulePersist();
       }
       return;
     }
@@ -210,8 +217,8 @@ export class DeviceStore {
     }
     if (decoded.kind === "event" && decoded.eventName === "api/subscription SCENE_LIFECYCLE_EVENT") {
       const sequence = this.#nextSequence();
-      this.#persist();
       this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
+      this.#schedulePersist();
     }
   }
 
@@ -248,7 +255,15 @@ export class DeviceStore {
   }
 
   close(): void {
-    this.#db?.close();
+    if (this.#persistTimer !== undefined) {
+      clearTimeout(this.#persistTimer);
+      this.#persistTimer = undefined;
+    }
+    try {
+      this.#flushPersist();
+    } finally {
+      this.#db?.close();
+    }
   }
 
   #applySnapshot(query: SnapshotQuery, body: unknown): boolean {
@@ -406,7 +421,6 @@ export class DeviceStore {
       return;
     }
     const sequence = this.#nextSequence();
-    this.#persist();
     this.#publish({
       schemaVersion: 1,
       sequence,
@@ -414,6 +428,7 @@ export class DeviceStore {
       deviceId,
       state: cloneState(state)
     });
+    this.#schedulePersist();
   }
 
   #applySecurityArmStateEvent(input: unknown): void {
@@ -446,8 +461,8 @@ export class DeviceStore {
       return;
     }
     const sequence = this.#nextSequence();
-    this.#persist();
     this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
+    this.#schedulePersist();
   }
 
   #ensureDevice(id: string, locationId: string): MutableDevice {
@@ -536,8 +551,30 @@ export class DeviceStore {
     }
   }
 
-  #persist(): void {
+  #schedulePersist(): void {
     if (!this.#db) return;
+    this.#persistPending = true;
+    this.#armPersistTimer(INVENTORY_PERSIST_COALESCE_MS);
+  }
+
+  #armPersistTimer(delayMs: number): void {
+    if (!this.#db) return;
+    if (this.#persistTimer !== undefined) return;
+    // Keep the push-to-SSE path synchronous and coalesce the large durability snapshot behind it.
+    this.#persistTimer = setTimeout(() => {
+      this.#persistTimer = undefined;
+      try {
+        this.#flushPersist();
+      } catch {
+        this.#onPersistenceError?.();
+        this.#armPersistTimer(INVENTORY_PERSIST_RETRY_MS);
+      }
+    }, delayMs);
+    this.#persistTimer.unref();
+  }
+
+  #flushPersist(): void {
+    if (!this.#db || !this.#persistPending) return;
     this.#db
       .prepare(`
         INSERT INTO normalized_inventory (schema_version, inventory_json, persisted_at)
@@ -547,6 +584,7 @@ export class DeviceStore {
           persisted_at = excluded.persisted_at
       `)
       .run(JSON.stringify(this.snapshot()), new Date().toISOString());
+    this.#persistPending = false;
   }
 }
 

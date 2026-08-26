@@ -237,6 +237,115 @@ describe("DeviceStore", () => {
     }
   });
 
+  test("publishes live state before coalesced inventory persistence", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-live-first-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const store = new DeviceStore({ sqlitePath });
+      observeSnapshotState(store, {
+        componentId: "identifier_component_main",
+        capabilityId: "identifier_capability_contact",
+        attributeName: "contact",
+        value: "closed",
+        timestamp: "2026-08-24T21:00:00.000Z"
+      });
+      store.close();
+
+      const live = new DeviceStore({ sqlitePath });
+      const persistedSequencesAtPublish: number[] = [];
+      live.subscribe(() => {
+        const observer = new DatabaseSync(sqlitePath, { readOnly: true });
+        try {
+          persistedSequencesAtPublish.push(readPersistedSequence(observer));
+        } finally {
+          observer.close();
+        }
+      });
+
+      live.observe(
+        liveStateEvent({
+          capability: "identifier_capability_contact",
+          attribute: "contact",
+          value: "open",
+          event_time: Date.parse("2026-08-24T21:00:01.000Z")
+        })
+      );
+
+      expect(live.snapshot().sequence).toBe(2);
+      expect(persistedSequencesAtPublish).toEqual([1]);
+      live.close();
+
+      const observer = new DatabaseSync(sqlitePath, { readOnly: true });
+      try {
+        expect(readPersistedSequence(observer)).toBe(2);
+      } finally {
+        observer.close();
+      }
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
+  test("retries a transient coalesced persistence failure without interrupting live publish", async () => {
+    vi.useFakeTimers();
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-persist-retry-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const seed = new DeviceStore({ sqlitePath });
+      observeSnapshotState(seed, {
+        componentId: "identifier_component_main",
+        capabilityId: "identifier_capability_contact",
+        attributeName: "contact",
+        value: "closed",
+        timestamp: "2026-08-24T21:00:00.000Z"
+      });
+      seed.close();
+
+      const onPersistenceError = vi.fn();
+      const live = new DeviceStore({ sqlitePath, onPersistenceError });
+      const listener = vi.fn();
+      live.subscribe(listener);
+      const locker = new DatabaseSync(sqlitePath);
+      locker.exec("BEGIN EXCLUSIVE");
+
+      live.observe(
+        liveStateEvent({
+          capability: "identifier_capability_contact",
+          attribute: "contact",
+          value: "open",
+          event_time: Date.parse("2026-08-24T21:00:01.000Z")
+        })
+      );
+      expect(listener).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(30);
+      expect(onPersistenceError).toHaveBeenCalledOnce();
+
+      locker.exec("COMMIT");
+      locker.close();
+      await vi.advanceTimersByTimeAsync(300);
+      live.close();
+
+      const observer = new DatabaseSync(sqlitePath, { readOnly: true });
+      try {
+        expect(readPersistedSequence(observer)).toBe(2);
+      } finally {
+        observer.close();
+      }
+    } finally {
+      vi.useRealTimers();
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
   test("restores a persisted location whose optional updatedAt is null", () => {
     const root = mkdtempSync(join(tmpdir(), "stw-device-store-null-location-time-"));
     try {
@@ -853,6 +962,13 @@ function observeSnapshotState(
       ])}`
     )
   );
+}
+
+function readPersistedSequence(db: DatabaseSync): number {
+  const row = db
+    .prepare("SELECT inventory_json AS inventoryJson FROM normalized_inventory WHERE schema_version = 1")
+    .get() as { inventoryJson: string };
+  return (JSON.parse(row.inventoryJson) as { sequence: number }).sequence;
 }
 
 function observeLocationSnapshot(

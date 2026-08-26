@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.80
+
+- Publish SmartThings push state to Bridge SSE before diagnostic capture and normalized-inventory persistence can block the live path.
+- Coalesce full normalized-inventory persistence across event bursts, retry transient write failures, and flush the newest snapshot during graceful shutdown.
+- Keep duplicate-delivery protocol counters intact without repeatedly persisting the same logical SmartThings Web device event.
+
 ## 0.1.79
 
 - Deliver existing pushed states only to matching state and device listeners; run global discovery/registry listeners only for a new state key or inventory change.
