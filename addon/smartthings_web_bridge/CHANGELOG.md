@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.82
+
+- Retain the third identifier-alias generation produced by sanitized component metadata plus DeviceStore normalization, so the authenticated native command path is available immediately after a full snapshot.
+
 ## 0.1.81
 
 - Dispatch device commands through the authenticated in-page SmartThings Web client before any DOM navigation fallback, while preserving post-command push confirmation.

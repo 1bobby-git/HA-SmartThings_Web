@@ -32,6 +32,8 @@ describe("VolatileIdentifierMap", () => {
     expect(identifiers.rawIdentifier("identifier_switch")).toBe("switch");
     expect(identifiers.rawIdentifier("identifier_identifier_main")).toBe("main");
     expect(identifiers.rawIdentifier("identifier_identifier_switch")).toBe("switch");
+    expect(identifiers.rawIdentifier("identifier_identifier_identifier_main")).toBe("main");
+    expect(identifiers.rawIdentifier("identifier_identifier_identifier_switch")).toBe("switch");
   });
 
   test("maps identifiers from initial status ACKs and clears every raw value on reset", () => {

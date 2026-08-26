@@ -89,8 +89,14 @@ export class VolatileIdentifierMap {
       if (!pattern.test(alias)) return;
       target.set(alias, raw);
       if (kind === "identifier") {
-        const normalizedAlias = this.alias("identifier", alias);
-        if (IDENTIFIER_ALIAS.test(normalizedAlias)) target.set(normalizedAlias, raw);
+        let normalizedAlias = alias;
+        // Sanitized component/capability ids can be normalized twice again by DeviceStore.
+        // Retain every in-process alias generation needed to reverse that exact pipeline.
+        for (let generation = 0; generation < 2; generation += 1) {
+          normalizedAlias = this.alias("identifier", normalizedAlias);
+          if (!IDENTIFIER_ALIAS.test(normalizedAlias)) break;
+          target.set(normalizedAlias, raw);
+        }
       }
       rawValues.add(raw);
     } catch {
