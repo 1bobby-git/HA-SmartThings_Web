@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.61
+
+- Give a unique control inside the exact observed swatch its own bounded visibility probe after late swatch rendering.
+- Preserve exact scope, uniqueness checks, and push confirmation while avoiding a one-millisecond residual visibility timeout.
+
 ## 0.1.60
 
 - Add fixed, identifier-free toggle discovery stages that distinguish missing names, exact swatch scope, and scoped accessibility-role counts.

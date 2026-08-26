@@ -798,11 +798,9 @@ async function clickObservedToggleControl(
   }
   diagnostic("toggle_named_control_missing");
 
-  const deadline = Date.now() + probeTimeoutMs;
   const scope = await labeledSwatchScope(page, labelVariants(label), probeTimeoutMs);
   diagnostic(scope ? "toggle_labeled_scope_found" : "toggle_labeled_scope_missing");
   if (!scope) throw new Error("command_control_not_found");
-  const remainingMs = Math.max(1, deadline - Date.now());
   let scoped: CommandLocatorLike | undefined;
   for (const role of ["switch", "checkbox", "button"] as const) {
     const candidate = scope.getByRole(role);
@@ -816,7 +814,7 @@ async function clickObservedToggleControl(
   }
   if (!scoped) throw new Error("command_control_not_found");
   try {
-    await scoped.waitFor({ state: "visible", timeout: remainingMs });
+    await scoped.waitFor({ state: "visible", timeout: probeTimeoutMs });
   } catch {
     throw new Error("command_control_not_found");
   }

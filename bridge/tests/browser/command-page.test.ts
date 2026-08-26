@@ -1465,6 +1465,10 @@ describe("SmartThingsWebUiCommandExecutor", () => {
   });
 
   test("clicks a button toggle only inside its observed exact swatch label", async () => {
+    const nowValues = [1_000, 1_000, 5_999, 5_999];
+    const now = vi.spyOn(Date, "now").mockImplementation(
+      () => nowValues.shift() ?? 5_999
+    );
     const page = new FakeCommandPage();
     const card = new FakeLocator(1);
     const missingToggle = new FakeLocator(0, true);
@@ -1503,6 +1507,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
 
     expect(label.locator).toHaveBeenCalledWith("..");
+    expect(button.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 5_000 });
     expect(button.click).toHaveBeenCalledWith({ timeout: 15_000 });
     expect(page.card.click).toHaveBeenCalledTimes(1);
     expect(card.click).not.toHaveBeenCalled();
@@ -1516,6 +1521,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       "toggle_scoped_checkbox_0",
       "toggle_scoped_button_1"
     ]);
+    now.mockRestore();
   });
 
   test("prefers one accessible switch when the same observed toggle also exposes a checkbox", async () => {
