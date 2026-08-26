@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from pathlib import Path
 import sys
 import unittest
@@ -32,10 +33,11 @@ from models import (  # noqa: E402
     location_arm_state,
     location_name,
     number_controls,
-    number_state_allowed,
     numeric_range_for,
     option_values,
     parse_command_result,
+    primary_state_attributes,
+    safe_generic_toggle_control,
     select_controls,
     sensor_extra_attributes,
     sensor_native_value,
@@ -132,6 +134,34 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertIn("dev_001", runtime.inventory.devices)
         self.assertEqual(sensor_value(runtime), 20)
 
+    def test_ready_inventory_atomically_removes_items_absent_from_latest_snapshot(self) -> None:
+        current = inventory(50, 20, "2026-08-24T21:00:00Z")
+        stale = BridgeDevice(
+            "dev_002",
+            "loc_001",
+            "room_stale",
+            "Removed sensor",
+            "sensor",
+            True,
+        )
+        current.devices[stale.device_id] = stale
+        current.rooms["room_stale"] = ("loc_001", "Removed room")
+        current.scenes["scene_stale"] = BridgeScene(
+            "scene_stale",
+            "loc_001",
+            "Removed scene",
+            "2026-08-24T21:00:00Z",
+        )
+        latest = inventory(51, 21, "2026-08-24T21:01:00Z")
+        runtime = SmartThingsWebRuntime(FakeClient(), "loc_001", current)
+
+        changed = runtime.apply_inventory(latest)
+
+        self.assertTrue(changed)
+        self.assertEqual(runtime.inventory.devices, latest.devices)
+        self.assertEqual(runtime.inventory.rooms, latest.rooms)
+        self.assertEqual(runtime.inventory.scenes, latest.scenes)
+
     def test_sequence_gap_immediately_resynchronizes_from_a_full_snapshot(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:00:00Z")
         latest = inventory(12, 22, "2026-08-24T21:02:00Z")
@@ -165,6 +195,46 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertEqual(runtime.inventory.sequence, 11)
         self.assertEqual(sensor_value(runtime), 20)
 
+    def test_repeated_button_events_with_the_same_timestamp_keep_each_sequence(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        button = BridgeState(
+            "main",
+            "button",
+            "button",
+            "pushed",
+            None,
+            "2026-08-24T21:11:00Z",
+        )
+        current.devices["dev_001"].states[button.key] = button
+        runtime = SmartThingsWebRuntime(FakeClient(), "loc_001", current)
+        calls: list[int] = []
+        runtime.subscribe_state(
+            "dev_001",
+            button.key,
+            lambda: calls.append(runtime.inventory.sequence),
+        )
+
+        for sequence in (11, 12):
+            changed = asyncio.run(
+                runtime.handle_event(
+                    {
+                        "type": "state",
+                        "sequence": sequence,
+                        "deviceId": "dev_001",
+                        "state": {
+                            "component": "main",
+                            "capability": "button",
+                            "attribute": "button",
+                            "value": "pushed",
+                            "updatedAt": "2026-08-24T21:11:00Z",
+                        },
+                    }
+                )
+            )
+            self.assertTrue(changed)
+
+        self.assertEqual(calls, [11, 12])
+
     def test_timestamp_without_timezone_is_rejected_and_left_for_gap_resync(self) -> None:
         runtime = SmartThingsWebRuntime(
             FakeClient(),
@@ -189,8 +259,11 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         def failing_listener() -> None:
             raise RuntimeError("entity write failed")
 
-        runtime.subscribe(failing_listener)
-        runtime.subscribe(lambda: observations.append(sensor_value(runtime)))
+        state = next(iter(runtime.inventory.devices["dev_001"].states.values()))
+        runtime.subscribe_state("dev_001", state.key, failing_listener)
+        runtime.subscribe_state(
+            "dev_001", state.key, lambda: observations.append(sensor_value(runtime))
+        )
 
         with self.assertLogs(level="ERROR") as captured:
             changed = asyncio.run(
@@ -202,6 +275,109 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertEqual(len(captured.output), 1)
         self.assertEqual(captured.records[0].getMessage(), "runtime_listener_failed")
         self.assertIsNotNone(captured.records[0].exc_info)
+
+    def test_state_push_notifies_only_matching_state_and_device_listeners(self) -> None:
+        runtime = SmartThingsWebRuntime(
+            FakeClient(),
+            "loc_001",
+            inventory(10, 20, "2026-08-24T21:10:00Z"),
+        )
+        humidity = next(iter(runtime.inventory.devices["dev_001"].states.values()))
+        battery = BridgeState(
+            "main",
+            "battery",
+            "battery",
+            80,
+            "%",
+            "2026-08-24T21:10:00Z",
+        )
+        runtime.inventory.devices["dev_001"].states[battery.key] = battery
+        runtime.inventory.devices["dev_002"] = BridgeDevice(
+            "dev_002",
+            "loc_001",
+            None,
+            "Other sensor",
+            "sensor",
+            True,
+            states={battery.key: battery},
+        )
+        calls: list[str] = []
+        runtime.subscribe(lambda: calls.append("global"))
+        runtime.subscribe_state("dev_001", humidity.key, lambda: calls.append("humidity"))
+        runtime.subscribe_state("dev_001", battery.key, lambda: calls.append("battery"))
+        runtime.subscribe_device("dev_001", lambda: calls.append("device_1"))
+        runtime.subscribe_device("dev_002", lambda: calls.append("device_2"))
+
+        changed = runtime.apply_state(state_event(11, 21, "2026-08-24T21:11:00Z"))
+
+        self.assertTrue(changed)
+        self.assertCountEqual(calls, ["humidity", "device_1"])
+
+    def test_new_state_key_runs_discovery_and_its_device_listener_once(self) -> None:
+        runtime = SmartThingsWebRuntime(
+            FakeClient(),
+            "loc_001",
+            inventory(10, 20, "2026-08-24T21:10:00Z"),
+        )
+        calls: list[str] = []
+        runtime.subscribe(lambda: calls.append("discovery"))
+        runtime.subscribe_device("dev_001", lambda: calls.append("device"))
+
+        changed = runtime.apply_state(
+            {
+                "type": "state",
+                "sequence": 11,
+                "deviceId": "dev_001",
+                "state": {
+                    "component": "main",
+                    "capability": "battery",
+                    "attribute": "battery",
+                    "value": 80,
+                    "unit": "%",
+                    "updatedAt": "2026-08-24T21:11:00Z",
+                },
+            }
+        )
+
+        self.assertTrue(changed)
+        self.assertCountEqual(calls, ["discovery", "device"])
+
+    def test_inventory_merge_notifies_only_changed_device_subscribers(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        unchanged_state = BridgeState(
+            "main",
+            "battery",
+            "battery",
+            80,
+            "%",
+            "2026-08-24T21:10:00Z",
+        )
+        current.devices["dev_002"] = BridgeDevice(
+            "dev_002",
+            "loc_001",
+            None,
+            "Other sensor",
+            "sensor",
+            True,
+            states={unchanged_state.key: unchanged_state},
+        )
+        runtime = SmartThingsWebRuntime(FakeClient(), "loc_001", current)
+        changed_state = next(iter(current.devices["dev_001"].states.values()))
+        calls: list[str] = []
+        runtime.subscribe(lambda: calls.append("global"))
+        runtime.subscribe_state("dev_001", changed_state.key, lambda: calls.append("state_1"))
+        runtime.subscribe_device("dev_001", lambda: calls.append("device_1"))
+        runtime.subscribe_state(
+            "dev_002", unchanged_state.key, lambda: calls.append("state_2")
+        )
+        runtime.subscribe_device("dev_002", lambda: calls.append("device_2"))
+
+        latest = inventory(11, 21, "2026-08-24T21:11:00Z")
+        latest.devices["dev_002"] = deepcopy(current.devices["dev_002"])
+        changed = runtime.apply_inventory(latest)
+
+        self.assertTrue(changed)
+        self.assertCountEqual(calls, ["global", "state_1", "device_1"])
 
     def test_control_kind_keeps_plain_switches_out_of_binary_sensor_and_light(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")
@@ -338,8 +514,6 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertTrue(is_media_device(device))
         self.assertTrue(is_fan_device(device))
         self.assertTrue(is_image_device(device))
-        self.assertFalse(number_state_allowed(device, device.states[("main", "media", "volume")]))
-        self.assertTrue(number_state_allowed(device, device.states[("main", "fan", "level")]))
 
     def test_number_range_and_options_parse_normalized_metadata(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")
@@ -362,9 +536,44 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         )
         device.states = {frequency.key: frequency, range_state.key: range_state}
 
-        self.assertTrue(number_state_allowed(device, frequency))
         self.assertEqual(numeric_range_for(device, frequency), (10.0, 120.0, 5.0))
         self.assertEqual(option_values({"values": [{"value": "auto"}, {"name": "sleep"}]}), ["auto", "sleep"])
+
+    def test_richer_domains_do_not_create_duplicate_number_entities(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        playback = BridgeState(
+            "main",
+            "mediaPlayback",
+            "playbackStatus",
+            "paused",
+            None,
+            "2026-08-24T21:10:00Z",
+        )
+        volume = BridgeState(
+            "main",
+            "audioVolume",
+            "volume",
+            20,
+            "%",
+            "2026-08-24T21:10:00Z",
+        )
+        device.states = {playback.key: playback, volume.key: volume}
+        device.controls = {
+            "volume": BridgeControl(
+                "volume",
+                "slider",
+                "Volume",
+                component="main",
+                capability="audioVolume",
+                attribute="volume",
+                minimum=0,
+                maximum=100,
+                step=1,
+            )
+        }
+
+        self.assertEqual(number_controls(device), [])
 
     def test_level_only_devices_are_not_fans_without_fan_identity(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")
@@ -394,7 +603,6 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         }
 
         self.assertFalse(is_fan_device(device))
-        self.assertTrue(number_state_allowed(device, level))
         self.assertEqual([control.control_id for control in number_controls(device)], ["level_slider"])
 
     def test_fan_identity_allows_level_based_fan_speed(self) -> None:
@@ -413,7 +621,6 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         device.states = {level.key: level}
 
         self.assertTrue(is_fan_device(device))
-        self.assertTrue(number_state_allowed(device, level))
 
     def test_fan_semantic_controls_identify_fans_without_level_fallback(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")
@@ -451,7 +658,6 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         device.states = {fan_speed.key: fan_speed}
 
         self.assertTrue(is_fan_device(device))
-        self.assertTrue(number_state_allowed(device, fan_speed))
 
     def test_air_purifier_percent_and_space_delimited_modes_are_actionable(self) -> None:
         """Match the pushed shape used by the live Air Purifier devices."""
@@ -477,7 +683,6 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         device.states = {fan_mode.key: fan_mode, percent.key: percent}
 
         self.assertTrue(is_fan_device(device))
-        self.assertTrue(number_state_allowed(device, percent))
         self.assertEqual(numeric_range_for(device, percent), (0.0, 100.0, 1.0))
         self.assertEqual(option_values("Quiet Mode"), ["Quiet Mode"])
         self.assertEqual(
@@ -589,6 +794,52 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         }
 
         self.assertEqual([control.control_id for control in select_controls(device)], ["sound"])
+
+    def test_primary_attributes_preserve_duplicate_components_without_overwrite(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        first = BridgeState(
+            "main",
+            "audioVolume",
+            "volume",
+            10,
+            "%",
+            "2026-08-24T21:10:00Z",
+        )
+        second = BridgeState(
+            "zone2",
+            "audioVolume",
+            "volume",
+            20,
+            "%",
+            "2026-08-24T21:10:00Z",
+        )
+        device.states = {first.key: first, second.key: second}
+
+        attributes = primary_state_attributes(device, {"volume"})
+
+        self.assertEqual(len(attributes), 2)
+        self.assertEqual(set(attributes.values()), {10, 20})
+        self.assertNotIn("volume", attributes)
+
+    def test_generic_toggle_rejects_compound_and_localized_dangerous_controls(self) -> None:
+        for attribute, label in (
+            ("doorLock", "Power"),
+            ("lockState", "Power"),
+            ("garageDoor", "Power"),
+            ("valveState", "Power"),
+            ("safeToggle", "문 열기"),
+            ("safeToggle", "밸브 제어"),
+        ):
+            with self.subTest(attribute=attribute, label=label):
+                control = BridgeControl(
+                    "toggle",
+                    "toggle",
+                    label,
+                    attribute=attribute,
+                    commands=("switchOn", "switchOff"),
+                )
+                self.assertFalse(safe_generic_toggle_control(control))
 
     def test_command_result_accepts_only_push_confirmed_response(self) -> None:
         result = parse_command_result(

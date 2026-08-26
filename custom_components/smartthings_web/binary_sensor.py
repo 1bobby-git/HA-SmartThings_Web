@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -16,28 +17,55 @@ from .models import BridgeDevice, BridgeState, SmartThingsWebRuntime
 @dataclass(frozen=True)
 class BinaryDescription:
     name: str
+    translation_key: str
     on_value: str
     device_class: BinarySensorDeviceClass | None
+    entity_category: EntityCategory | None = None
 
 
 BINARY_STATES = {
     "acceleration": BinaryDescription(
-        "Acceleration", "active", BinarySensorDeviceClass.MOVING
+        "Acceleration", "acceleration", "active", BinarySensorDeviceClass.MOVING
     ),
-    "contact": BinaryDescription("Contact", "open", BinarySensorDeviceClass.OPENING),
-    "doorState": BinaryDescription("Door", "open", BinarySensorDeviceClass.OPENING),
+    "contact": BinaryDescription(
+        "Contact", "contact", "open", BinarySensorDeviceClass.OPENING
+    ),
+    "doorState": BinaryDescription(
+        "Door", "door", "open", BinarySensorDeviceClass.OPENING
+    ),
     "filterStatus": BinaryDescription(
-        "Filter status", "replace", BinarySensorDeviceClass.PROBLEM
+        "Filter status", "filter_status", "replace", BinarySensorDeviceClass.PROBLEM
     ),
-    "motion": BinaryDescription("Motion", "active", BinarySensorDeviceClass.MOTION),
-    "water": BinaryDescription("Moisture", "wet", BinarySensorDeviceClass.MOISTURE),
-    "presence": BinaryDescription("Presence", "present", BinarySensorDeviceClass.PRESENCE),
-    "sound": BinaryDescription("Sound", "detected", BinarySensorDeviceClass.SOUND),
-    "tamper": BinaryDescription("Tamper", "detected", BinarySensorDeviceClass.TAMPER),
-    "gas": BinaryDescription("Gas", "detected", BinarySensorDeviceClass.GAS),
-    "smoke": BinaryDescription("Smoke", "detected", BinarySensorDeviceClass.SMOKE),
+    "motion": BinaryDescription(
+        "Motion", "motion", "active", BinarySensorDeviceClass.MOTION
+    ),
+    "water": BinaryDescription(
+        "Moisture", "moisture", "wet", BinarySensorDeviceClass.MOISTURE
+    ),
+    "presence": BinaryDescription(
+        "Presence", "presence", "present", BinarySensorDeviceClass.PRESENCE
+    ),
+    "sound": BinaryDescription(
+        "Sound", "sound", "detected", BinarySensorDeviceClass.SOUND
+    ),
+    "tamper": BinaryDescription(
+        "Tamper",
+        "tamper",
+        "detected",
+        BinarySensorDeviceClass.TAMPER,
+        EntityCategory.DIAGNOSTIC,
+    ),
+    "gas": BinaryDescription(
+        "Gas", "gas", "detected", BinarySensorDeviceClass.GAS
+    ),
+    "smoke": BinaryDescription(
+        "Smoke", "smoke", "detected", BinarySensorDeviceClass.SMOKE
+    ),
     "carbonMonoxide": BinaryDescription(
-        "Carbon monoxide", "detected", BinarySensorDeviceClass.CO
+        "Carbon monoxide",
+        "carbon_monoxide",
+        "detected",
+        BinarySensorDeviceClass.CO,
     ),
 }
 
@@ -81,8 +109,10 @@ class SmartThingsWebBinarySensor(SmartThingsWebEntity, BinarySensorEntity):
         state: BridgeState,
         description: BinaryDescription,
     ) -> None:
-        super().__init__(runtime, device, state, description.name)
+        super().__init__(runtime, device, state, None)
         self.description = description
+        self._attr_translation_key = description.translation_key
+        self._attr_entity_category = description.entity_category
         self._attr_device_class = _device_class(device, state, description)
 
     @property

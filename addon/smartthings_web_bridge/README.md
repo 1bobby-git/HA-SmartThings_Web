@@ -12,7 +12,7 @@ Generated text is canonical UTF-8/LF. Equivalent Windows and Linux checkouts the
 
 Keep backup copies outside `/addons`. Supervisor scans child folders there as local apps, so a backup containing the same slug can make an older version appear current.
 
-Use the Ingress noVNC page to sign in manually. Do not store Samsung credentials, cookies, or tokens in add-on options. After the Bridge reaches `CONNECTED`, generate a ten-minute pairing code and add the `SmartThings Web` integration. The limited alpha registers observed devices and creates supported read-only sensor and binary-sensor entities; it does not control devices.
+Use the Ingress noVNC page to sign in manually. Do not store Samsung credentials, cookies, or tokens in add-on options. After the Bridge reaches `CONNECTED`, generate a ten-minute pairing code and add the `SmartThings Web` integration. As of 0.1.79, the limited alpha registers observed devices, keeps official-integration gaps as diagnostic sensors, maps clear device roles to primary entities such as media players, fans, updates, events, covers, and climate entities, and preserves raw SmartThings Web content as attributes. It does not create synthetic refresh controls unless a real observed SmartThings Web button control exists.
 
 Live Home Assistant 2026.8.3 registration produced 213 devices and 352 read-only entities from the observed inventory. Cached inventory remains loadable during a temporary browser re-login window, while live push updates resume only after the Bridge returns to `CONNECTED`.
 

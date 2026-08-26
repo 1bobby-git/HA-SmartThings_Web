@@ -4,6 +4,10 @@ interface CommandLocatorLike {
   click(options?: { timeout?: number }): Promise<unknown>;
   count(): Promise<number>;
   dispatchEvent(type: string): Promise<unknown>;
+  evaluate?<Result, Argument>(
+    pageFunction: (element: Element, argument: Argument) => Result,
+    argument: Argument
+  ): Promise<Result>;
   fill(value: string, options?: { timeout?: number }): Promise<unknown>;
   filter(options: { has?: CommandLocatorLike; hasText?: string | RegExp }): CommandLocatorLike;
   first(): CommandLocatorLike;
@@ -179,6 +183,8 @@ export class SmartThingsWebUiCommandExecutor {
       | "stop"
       | "nextTrack"
       | "previousTrack"
+      | "fastForward"
+      | "rewind"
       | "mute"
       | "unmute"
       | "playTrackAndResume"
@@ -186,8 +192,6 @@ export class SmartThingsWebUiCommandExecutor {
       | "setOption"
       | "open"
       | "close"
-      | "stop"
-      | "pause"
       | "openShade"
       | "closeShade"
       | "setPosition";
@@ -224,6 +228,8 @@ export class SmartThingsWebUiCommandExecutor {
       | "stop"
       | "nextTrack"
       | "previousTrack"
+      | "fastForward"
+      | "rewind"
       | "mute"
       | "unmute"
       | "playTrackAndResume"
@@ -231,8 +237,6 @@ export class SmartThingsWebUiCommandExecutor {
       | "setOption"
       | "open"
       | "close"
-      | "stop"
-      | "pause"
       | "openShade"
       | "closeShade"
       | "setPosition";
@@ -940,7 +944,7 @@ async function executeDeviceControl(
       label,
       probeTimeoutMs
     );
-    await slider.fill(String(value), { timeout: 15_000 });
+    await setNumericControlValue(slider, value);
     return;
   }
   if (input.command === "setFanMode" || input.command === "setOption") {
@@ -954,7 +958,13 @@ async function executeDeviceControl(
       input.optionCommand &&
       label
     ) {
-      await clickLabeledSwatchCommand(scope, label, input.optionCommand, probeTimeoutMs);
+      await clickObservedEnumeratedOption(
+        scope,
+        label,
+        input.optionCommand,
+        input.optionLabel ?? value,
+        probeTimeoutMs
+      );
       return;
     }
     try {
@@ -974,25 +984,82 @@ async function executeDeviceControl(
     }
     return;
   }
+  if (["play", "pause", "stop", "fastForward", "rewind", "nextTrack", "previousTrack", "playTrackAndResume"].includes(input.command)) {
+    if (!input.controlLabel) throw new Error("command_control_not_found");
+    if (input.optionCommand) {
+      await clickObservedEnumeratedOption(
+        scope,
+        input.controlLabel,
+        input.optionCommand,
+        input.optionLabel ?? input.command,
+        probeTimeoutMs
+      );
+      return;
+    }
+    if (input.command === "playTrackAndResume") {
+      const value = input.arguments[0];
+      if (typeof value !== "string" || value.length === 0) {
+        throw new Error("command_execution_failed");
+      }
+      const name = exactName(input.controlLabel);
+      const textbox = await findRoleControl(scope, "textbox", name, probeTimeoutMs);
+      await textbox.fill(value, { timeout: 15_000 });
+      await clickRoleOrLabeledControl(
+        scope,
+        "button",
+        name,
+        input.controlLabel,
+        probeTimeoutMs
+      );
+      return;
+    }
+    await clickRoleOrLabeledControl(
+      scope,
+      "button",
+      exactName(input.controlLabel),
+      input.controlLabel,
+      probeTimeoutMs
+    );
+    return;
+  }
   if (isCoverButtonCommand(input.command)) {
     if (!input.controlLabel) throw new Error("command_control_not_found");
     await clickRoleOrLabeledControl(scope, "button", exactName(input.controlLabel), input.controlLabel, probeTimeoutMs);
     return;
   }
-  if (input.command === "playTrackAndResume") {
-    const value = input.arguments[0];
-    if (typeof value !== "string" || value.length === 0) {
-      throw new Error("command_execution_failed");
-    }
-    const name = /Play track and resume|트랙.*재생|재생.*재개/iu;
-    const textbox = await findRoleControl(scope, "textbox", name, probeTimeoutMs);
-    await textbox.fill(value, { timeout: 15_000 });
-    await clickRoleControl(scope, "button", name, probeTimeoutMs);
-    return;
+  throw new Error("command_control_not_found");
+}
+
+async function setNumericControlValue(
+  control: CommandLocatorLike,
+  value: number
+): Promise<void> {
+  if (control.evaluate) {
+    const handled = await control.evaluate((element, nextValue) => {
+      if (!(element instanceof HTMLInputElement) || element.type !== "range") {
+        return false;
+      }
+      const minimum = element.min === "" ? Number.NEGATIVE_INFINITY : Number(element.min);
+      const maximum = element.max === "" ? Number.POSITIVE_INFINITY : Number(element.max);
+      if (nextValue < minimum || nextValue > maximum) {
+        throw new Error("command_execution_failed");
+      }
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value"
+      )?.set;
+      if (setter) {
+        setter.call(element, String(nextValue));
+      } else {
+        element.value = String(nextValue);
+      }
+      element.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+      return true;
+    }, value);
+    if (handled) return;
   }
-  const name = mediaActionName(input.command);
-  if (!name) throw new Error("command_control_not_found");
-  await clickRoleControl(scope, "button", name, probeTimeoutMs);
+  await control.fill(String(value), { timeout: 15_000 });
 }
 
 async function clickObservedToggleControl(
@@ -1198,6 +1265,23 @@ async function clickLabeledSwatchCommand(
   await control.click({ timeout: 15_000 });
 }
 
+async function clickObservedEnumeratedOption(
+  page: CommandControlSurface,
+  label: string,
+  command: string,
+  option: string,
+  probeTimeoutMs: number
+): Promise<void> {
+  try {
+    await clickLabeledSwatchCommand(page, label, command, probeTimeoutMs);
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "command_control_not_found") {
+      throw error;
+    }
+    await clickLabeledSwatchOption(page, label, option, probeTimeoutMs);
+  }
+}
+
 async function findLabeledSwatchControl(
   page: CommandControlSurface,
   label: string,
@@ -1278,17 +1362,6 @@ async function clickExactlyOne(control: CommandLocatorLike): Promise<void> {
   }
   if ((await control.count()) !== 1) throw new Error("command_control_ambiguous");
   await control.click({ timeout: 15_000 });
-}
-
-function mediaActionName(command: string): RegExp | undefined {
-  const labels: Record<string, RegExp> = {
-    play: /^(?:Play|재생)$/iu,
-    pause: /^(?:Pause|일시\s*정지)$/iu,
-    stop: /^(?:Stop|정지)$/iu,
-    nextTrack: /^(?:Next|Next track|다음|다음 트랙)$/iu,
-    previousTrack: /^(?:Previous|Previous track|이전|이전 트랙)$/iu
-  };
-  return labels[command];
 }
 
 function locationActionName(action: "armAway" | "armStay" | "disarm"): RegExp {

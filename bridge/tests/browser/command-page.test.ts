@@ -6,6 +6,8 @@ class FakeLocator {
   readonly click = vi.fn(async () => undefined);
   readonly dispatchEvent = vi.fn(async () => undefined);
   readonly fill = vi.fn(async () => undefined);
+  readonly evaluateArguments: unknown[] = [];
+  nativeRangeHandled = false;
   readonly isVisible: ReturnType<typeof vi.fn>;
   readonly waitFor: ReturnType<typeof vi.fn>;
 
@@ -25,6 +27,14 @@ class FakeLocator {
 
   async count(): Promise<number> {
     return this.waited && this.matchesAfterWait !== undefined ? this.matchesAfterWait : this.matches;
+  }
+
+  async evaluate<Result, Argument>(
+    _pageFunction: (element: Element, argument: Argument) => Result,
+    argument: Argument
+  ): Promise<Result> {
+    this.evaluateArguments.push(argument);
+    return this.nativeRangeHandled as unknown as Result;
   }
 
   first(): FakeLocator {
@@ -2034,6 +2044,49 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(rangeInput.fill).toHaveBeenCalledWith("45", { timeout: 15_000 });
   });
 
+  test("uses the native range setter and events when the observed slider is an input range", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const missingNamedSlider = new FakeLocator(0, true);
+    const label = new FakeLocator(1);
+    const swatch = new FakeLocator(1);
+    const rangeInput = new FakeLocator(1);
+    rangeInput.nativeRangeHandled = true;
+    label.locator = vi.fn(() => swatch);
+    swatch.getByRole = vi.fn((role: string) =>
+      role === "slider" ? rangeInput : new FakeLocator(0, true)
+    );
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Speaker")) {
+        return card;
+      }
+      if (role === "button") return card;
+      if (role === "slider") return missingNamedSlider;
+      return new FakeLocator(0, true);
+    });
+    page.getByText = vi.fn((text?: string) =>
+      text === "Volume" ? label : new FakeLocator(0, true)
+    );
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "Speaker",
+      locationId: "loc_001",
+      command: "setVolume",
+      action: "setVolume",
+      component: "main",
+      capability: "audioVolume",
+      attribute: "volume",
+      controlLabel: "Volume",
+      arguments: [45]
+    });
+
+    expect(rangeInput.evaluateArguments).toEqual([45]);
+    expect(rangeInput.fill).not.toHaveBeenCalled();
+  });
+
   test("maps an Air Purifier percent state to the localized fan-speed slider", async () => {
     const page = new FakeCommandPage();
     const card = new FakeLocator(1);
@@ -2508,6 +2561,59 @@ describe("SmartThingsWebUiCommandExecutor", () => {
 
     expect(swatch.locator).toHaveBeenCalledWith('[data-command="setSleep"]');
     expect(option.click).toHaveBeenCalledWith({ timeout: 15_000 });
+  });
+
+  test("clicks only the exact observed playback button", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    const play = new FakeLocator(1);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Living room speaker")) {
+        return card;
+      }
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Play")) {
+        return play;
+      }
+      if (role === "button") return card;
+      if (role === "dialog") return page.detailDialog;
+      if (role === "heading") return page.detailHeading;
+      return new FakeLocator(0, true);
+    });
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await executor.executeDeviceAction({
+      deviceName: "Living room speaker",
+      locationId: "loc_001",
+      command: "play",
+      action: "play",
+      component: "main",
+      capability: "mediaPlayback",
+      attribute: "playbackStatus",
+      controlLabel: "Play",
+      arguments: []
+    });
+
+    expect(play.click).toHaveBeenCalledWith({ timeout: 15_000 });
+  });
+
+  test("refuses playback without an observed control label", async () => {
+    const page = new FakeCommandPage();
+    const executor = new SmartThingsWebUiCommandExecutor(() => ({
+      openCommandPage: vi.fn(async () => page)
+    }));
+
+    await expect(executor.executeDeviceAction({
+      deviceName: "Living room speaker",
+      locationId: "loc_001",
+      command: "play",
+      action: "play",
+      component: "main",
+      capability: "mediaPlayback",
+      attribute: "playbackStatus",
+      arguments: []
+    })).rejects.toThrow("command_control_not_found");
   });
 
   test("does not guess enum option labels when observed option text is not rendered", async () => {

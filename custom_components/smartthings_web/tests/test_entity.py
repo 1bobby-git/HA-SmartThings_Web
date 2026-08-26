@@ -65,6 +65,7 @@ entity_under_test = importlib.util.module_from_spec(entity_spec)
 sys.modules[entity_spec.name] = entity_under_test
 entity_spec.loader.exec_module(entity_under_test)
 SmartThingsWebEntity = entity_under_test.SmartThingsWebEntity
+SmartThingsWebDeviceEntity = entity_under_test.SmartThingsWebDeviceEntity
 
 
 class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
@@ -79,6 +80,14 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
             "%",
             "2026-08-26T06:00:00.000Z",
         )
+        battery = BridgeState(
+            "main",
+            "battery",
+            "battery",
+            80,
+            "%",
+            "2026-08-26T06:00:00.000Z",
+        )
         device = BridgeDevice(
             "dev_001",
             "loc_001",
@@ -86,7 +95,7 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
             "Humidity sensor",
             "multi_sensor",
             True,
-            states={initial.key: initial},
+            states={initial.key: initial, battery.key: battery},
         )
         inventory = BridgeInventory(
             1,
@@ -99,9 +108,15 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
         )
         runtime = SmartThingsWebRuntime(object(), "loc_001", inventory)
         entity = SmartThingsWebEntity(runtime, device, initial, None)
+        unrelated = SmartThingsWebEntity(runtime, device, battery, None)
+        device_entity = SmartThingsWebDeviceEntity(runtime, device, "device", None)
         Entity.__init__(entity)
+        Entity.__init__(unrelated)
+        Entity.__init__(device_entity)
 
         await entity.async_added_to_hass()
+        await unrelated.async_added_to_hass()
+        await device_entity.async_added_to_hass()
         changed = runtime.apply_state(
             {
                 "schemaVersion": 1,
@@ -121,6 +136,8 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(changed)
         self.assertEqual(entity.write_count, 1)
+        self.assertEqual(unrelated.write_count, 0)
+        self.assertEqual(device_entity.write_count, 1)
         self.assertEqual(entity.bridge_state.value, 62.8)  # type: ignore[union-attr]
         self.assertEqual(len(entity.remove_callbacks), 1)
 
@@ -144,6 +161,8 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         self.assertEqual(entity.write_count, 1)
+        self.assertEqual(unrelated.write_count, 0)
+        self.assertEqual(device_entity.write_count, 2)
 
 
 if __name__ == "__main__":

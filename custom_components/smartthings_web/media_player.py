@@ -17,7 +17,8 @@ from .models import (
     SmartThingsWebRuntime,
     control_supports_command,
     is_media_device,
-    token_values,
+    primary_state_attributes,
+    safe_observed_control,
 )
 
 
@@ -61,6 +62,8 @@ class SmartThingsWebMediaPlayer(SmartThingsWebDeviceEntity, MediaPlayerEntity):
             return STATE_OFF
         return {
             "playing": STATE_PLAYING,
+            "fast forwarding": STATE_PLAYING,
+            "rewinding": STATE_PLAYING,
             "paused": STATE_PAUSED,
             "stopped": STATE_IDLE,
             "idle": STATE_IDLE,
@@ -71,28 +74,23 @@ class SmartThingsWebMediaPlayer(SmartThingsWebDeviceEntity, MediaPlayerEntity):
         """Expose only controls observed for this media device."""
         device = self.bridge_device
         features = MediaPlayerEntityFeature(0)
-        if _raw_state(device, "switch") is not None:
+        if _control_for(device, "on") is not None and _control_for(device, "off") is not None:
             features |= MediaPlayerEntityFeature.TURN_ON | MediaPlayerEntityFeature.TURN_OFF
-        playback = _string_options(_raw_state(device, "supportedPlaybackCommands"))
-        if "play" in playback:
+        if _control_for(device, "play") is not None:
             features |= MediaPlayerEntityFeature.PLAY
-        if "pause" in playback:
+        if _control_for(device, "pause") is not None:
             features |= MediaPlayerEntityFeature.PAUSE
-        if "stop" in playback:
+        if _control_for(device, "stop") is not None:
             features |= MediaPlayerEntityFeature.STOP
-        tracks = _string_options(_raw_state(device, "supportedTrackControlCommands"))
-        if "nextTrack" in tracks:
+        if _has_preferred_command(device, "nextTrack", "fastForward"):
             features |= MediaPlayerEntityFeature.NEXT_TRACK
-        if "previousTrack" in tracks:
+        if _has_preferred_command(device, "previousTrack", "rewind"):
             features |= MediaPlayerEntityFeature.PREVIOUS_TRACK
-        if _raw_state(device, "volume") is not None:
+        if _control_for(device, "setVolume") is not None:
             features |= MediaPlayerEntityFeature.VOLUME_SET
-        if _raw_state(device, "mute") is not None:
+        if _control_for(device, "mute") is not None and _control_for(device, "unmute") is not None:
             features |= MediaPlayerEntityFeature.VOLUME_MUTE
-        if device and any(
-            control_supports_command(control, "playTrackAndResume")
-            for control in device.controls.values()
-        ):
+        if _control_for(device, "playTrackAndResume") is not None:
             features |= MediaPlayerEntityFeature.PLAY_MEDIA
         return features
 
@@ -121,6 +119,37 @@ class SmartThingsWebMediaPlayer(SmartThingsWebDeviceEntity, MediaPlayerEntity):
                     return value
         return data if isinstance(data, str) else None
 
+    @property
+    def media_artist(self) -> str | None:
+        """Return the current artist when SmartThings supplies it."""
+        data = _raw_state(self.bridge_device, "audioTrackData")
+        if not isinstance(data, dict):
+            return None
+        for key in ("artist", "artistName", "subtitle"):
+            value = data.get(key)
+            if isinstance(value, str):
+                return value
+        return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Keep all pushed media content on the primary media entity."""
+        device = self.bridge_device
+        if device is None:
+            return {}
+        return primary_state_attributes(
+            device,
+            {
+                "audioTrackData",
+                "mute",
+                "playbackStatus",
+                "switch",
+                "supportedPlaybackCommands",
+                "supportedTrackControlCommands",
+                "volume",
+            },
+        )
+
     async def async_turn_on(self) -> None:
         await self._async_command("on", [])
 
@@ -137,10 +166,14 @@ class SmartThingsWebMediaPlayer(SmartThingsWebDeviceEntity, MediaPlayerEntity):
         await self._async_command("stop", [])
 
     async def async_media_next_track(self) -> None:
-        await self._async_command("nextTrack", [])
+        await self._async_command(
+            _preferred_command(self.bridge_device, "nextTrack", "fastForward"), []
+        )
 
     async def async_media_previous_track(self) -> None:
-        await self._async_command("previousTrack", [])
+        await self._async_command(
+            _preferred_command(self.bridge_device, "previousTrack", "rewind"), []
+        )
 
     async def async_set_volume_level(self, volume: float) -> None:
         await self._async_command("setVolume", [round(max(0.0, min(1.0, volume)) * 100)])
@@ -154,6 +187,10 @@ class SmartThingsWebMediaPlayer(SmartThingsWebDeviceEntity, MediaPlayerEntity):
 
     async def _async_command(self, command: str, arguments: list[object]) -> None:
         control = _control_for(self.bridge_device, command)
+        if control is None:
+            raise HomeAssistantError(
+                f"SmartThings Web media device has no observed {command} control"
+            )
         state = _state_for_command(self.bridge_device, command)
         try:
             await self.runtime.client.async_execute_command(
@@ -192,10 +229,6 @@ def _numeric_state(device: BridgeDevice | None, attribute: str) -> float | None:
     return float(value)
 
 
-def _string_options(value: object | None) -> set[str]:
-    return set(token_values(value))
-
-
 def _state_for_command(device: BridgeDevice | None, command: str):
     attributes = {
         "on": ("switch",),
@@ -208,6 +241,8 @@ def _state_for_command(device: BridgeDevice | None, command: str):
         "unmute": ("mute",),
         "nextTrack": ("audioTrackData", "supportedTrackControlCommands"),
         "previousTrack": ("audioTrackData", "supportedTrackControlCommands"),
+        "fastForward": ("playbackStatus", "supportedPlaybackCommands"),
+        "rewind": ("playbackStatus", "supportedPlaybackCommands"),
         "playTrackAndResume": ("audioTrackData", "playbackStatus"),
     }.get(command, ())
     if device is None:
@@ -221,9 +256,56 @@ def _state_for_command(device: BridgeDevice | None, command: str):
 def _control_for(device: BridgeDevice | None, command: str) -> BridgeControl | None:
     if device is None:
         return None
+    matches = []
     for control in device.controls.values():
-        if control.kind == "value":
+        if control.kind == "value" or not safe_observed_control(control):
             continue
-        if control_supports_command(control, command):
-            return control
-    return None
+        if command in {"on", "off"}:
+            matched = control.kind == "toggle" and control.attribute == "switch"
+        elif command in {"mute", "unmute"}:
+            matched = control.kind == "toggle" and control.attribute == "mute"
+        elif command == "setVolume":
+            matched = control.kind == "slider" and control.attribute == "volume"
+        elif command == "playTrackAndResume":
+            matched = control.kind == "button" and control_supports_command(
+                control, command
+            )
+        elif command in {
+            "fastForward",
+            "nextTrack",
+            "pause",
+            "play",
+            "previousTrack",
+            "rewind",
+            "stop",
+        }:
+            matched = (
+                control.kind in {"button", "enumerated"}
+                and control_supports_command(control, command)
+            )
+        else:
+            matched = False
+        if matched:
+            matches.append(control)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _preferred_command(
+    device: BridgeDevice | None, primary: str, official_fallback: str
+) -> str:
+    if _control_for(device, primary) is not None:
+        return primary
+    if _control_for(device, official_fallback) is not None:
+        return official_fallback
+    raise HomeAssistantError(
+        f"SmartThings Web media device has no observed {primary} or {official_fallback} control"
+    )
+
+
+def _has_preferred_command(
+    device: BridgeDevice | None, primary: str, official_fallback: str
+) -> bool:
+    return (
+        _control_for(device, primary) is not None
+        or _control_for(device, official_fallback) is not None
+    )

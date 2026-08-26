@@ -8,6 +8,7 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.const import (
+    EntityCategory,
     LIGHT_LUX,
     PERCENTAGE,
     UnitOfElectricCurrent,
@@ -25,65 +26,178 @@ from .models import (
     BridgeDevice,
     BridgeState,
     SmartThingsWebRuntime,
+    firmware_states,
     sensor_extra_attributes,
     sensor_native_value,
     sensor_state_allowed,
+    sensor_state_owned_by_primary_domain,
 )
 
 
 @dataclass(frozen=True)
 class SensorDescription:
     name: str
+    translation_key: str | None = None
     device_class: SensorDeviceClass | None = None
     state_class: SensorStateClass | None = SensorStateClass.MEASUREMENT
     default_unit: str | None = None
+    entity_category: EntityCategory | None = None
+    enabled_default: bool = True
 
 
 SENSOR_STATES = {
     "temperature": SensorDescription(
-        "Temperature", SensorDeviceClass.TEMPERATURE, default_unit=UnitOfTemperature.CELSIUS
+        "Temperature",
+        "temperature",
+        SensorDeviceClass.TEMPERATURE,
+        default_unit=UnitOfTemperature.CELSIUS,
     ),
     "humidity": SensorDescription(
-        "Humidity", SensorDeviceClass.HUMIDITY, default_unit=PERCENTAGE
+        "Humidity", "humidity", SensorDeviceClass.HUMIDITY, default_unit=PERCENTAGE
     ),
     "battery": SensorDescription(
-        "Battery", SensorDeviceClass.BATTERY, default_unit=PERCENTAGE
+        "Battery",
+        "battery",
+        SensorDeviceClass.BATTERY,
+        default_unit=PERCENTAGE,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     "power": SensorDescription(
-        "Power", SensorDeviceClass.POWER, default_unit=UnitOfPower.WATT
+        "Power", "power", SensorDeviceClass.POWER, default_unit=UnitOfPower.WATT
     ),
     "energy": SensorDescription(
         "Energy",
+        "energy",
         SensorDeviceClass.ENERGY,
         SensorStateClass.TOTAL_INCREASING,
         UnitOfEnergy.KILO_WATT_HOUR,
     ),
     "voltage": SensorDescription(
-        "Voltage", SensorDeviceClass.VOLTAGE, default_unit=UnitOfElectricPotential.VOLT
+        "Voltage",
+        "voltage",
+        SensorDeviceClass.VOLTAGE,
+        default_unit=UnitOfElectricPotential.VOLT,
     ),
     "current": SensorDescription(
-        "Current", SensorDeviceClass.CURRENT, default_unit=UnitOfElectricCurrent.AMPERE
+        "Current",
+        "current",
+        SensorDeviceClass.CURRENT,
+        default_unit=UnitOfElectricCurrent.AMPERE,
     ),
     "illuminance": SensorDescription(
-        "Illuminance", SensorDeviceClass.ILLUMINANCE, default_unit=LIGHT_LUX
+        "Illuminance",
+        "illuminance",
+        SensorDeviceClass.ILLUMINANCE,
+        default_unit=LIGHT_LUX,
     ),
     "carbonDioxide": SensorDescription(
-        "Carbon dioxide", SensorDeviceClass.CO2, default_unit="ppm"
+        "Carbon dioxide", "carbon_dioxide", SensorDeviceClass.CO2, default_unit="ppm"
     ),
     "fineDustLevel": SensorDescription(
-        "PM2.5", SensorDeviceClass.PM25, default_unit="µg/m³"
+        "PM2.5", "fine_dust", SensorDeviceClass.PM25, default_unit="µg/m³"
     ),
     "veryFineDustLevel": SensorDescription(
-        "PM1", SensorDeviceClass.PM1, default_unit="µg/m³"
+        "PM1", "very_fine_dust", SensorDeviceClass.PM1, default_unit="µg/m³"
     ),
     "dustLevel": SensorDescription(
-        "PM10", SensorDeviceClass.PM10, default_unit="µg/m³"
+        "PM10", "dust", SensorDeviceClass.PM10, default_unit="µg/m³"
     ),
     "rssi": SensorDescription(
-        "RSSI", SensorDeviceClass.SIGNAL_STRENGTH, default_unit="dBm"
+        "RSSI",
+        "rssi",
+        SensorDeviceClass.SIGNAL_STRENGTH,
+        default_unit="dBm",
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
-    "lqi": SensorDescription("LQI", state_class=None),
-    "signalMetrics": SensorDescription("Received Signal Metrics", state_class=None),
+    "lqi": SensorDescription(
+        "LQI",
+        "lqi",
+        state_class=None,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    "signalMetrics": SensorDescription(
+        "Received Signal Metrics",
+        "signal_metrics",
+        state_class=None,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    "airQuality": SensorDescription(
+        "Air quality", "air_quality", default_unit="CAQI"
+    ),
+    "atmosphericPressure": SensorDescription(
+        "Atmospheric pressure",
+        "atmospheric_pressure",
+        SensorDeviceClass.ATMOSPHERIC_PRESSURE,
+    ),
+    "filterLifeRemaining": SensorDescription(
+        "Filter life remaining", "filter_life_remaining", default_unit=PERCENTAGE
+    ),
+    "tvocLevel": SensorDescription(
+        "TVOC",
+        "tvoc",
+        SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS_PARTS,
+        default_unit="ppm",
+    ),
+    "formaldehydeLevel": SensorDescription(
+        "Formaldehyde", "formaldehyde", default_unit="ppm"
+    ),
+    "odorLevel": SensorDescription("Odor", "odor", state_class=None),
+    "soundPressureLevel": SensorDescription(
+        "Sound pressure",
+        "sound_pressure",
+        SensorDeviceClass.SOUND_PRESSURE,
+        default_unit="dB",
+    ),
+    "peopleCounter": SensorDescription("People", "people", state_class=SensorStateClass.MEASUREMENT),
+    "remainingTime": SensorDescription(
+        "Remaining time", "remaining_time", SensorDeviceClass.DURATION, default_unit="min"
+    ),
+    "operationTime": SensorDescription(
+        "Operation time", "operation_time", SensorDeviceClass.DURATION, default_unit="min"
+    ),
+    "checkInterval": SensorDescription(
+        "Check interval",
+        "check_interval",
+        SensorDeviceClass.DURATION,
+        default_unit="s",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    "imageTransferProgress": SensorDescription(
+        "Image transfer progress",
+        "image_transfer_progress",
+        default_unit=PERCENTAGE,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    "captureTime": SensorDescription(
+        "Capture time", "capture_time", state_class=None, entity_category=EntityCategory.DIAGNOSTIC
+    ),
+    "clip": SensorDescription(
+        "Clip metadata", "clip", state_class=None, entity_category=EntityCategory.DIAGNOSTIC
+    ),
+    "image": SensorDescription(
+        "Image metadata", "image", state_class=None, entity_category=EntityCategory.DIAGNOSTIC
+    ),
+    "stream": SensorDescription(
+        "Stream metadata", "stream", state_class=None, entity_category=EntityCategory.DIAGNOSTIC
+    ),
+    "supportedSoundTypes": SensorDescription(
+        "Supported sound types",
+        "supported_sound_types",
+        state_class=None,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    "status": SensorDescription(
+        "Status", "status", state_class=None, entity_category=EntityCategory.DIAGNOSTIC
+    ),
+    "healthStatus": SensorDescription(
+        "Health status", "health_status", state_class=None, entity_category=EntityCategory.DIAGNOSTIC
+    ),
+    "DeviceWatch-DeviceStatus": SensorDescription(
+        "Device status", "device_status", state_class=None, entity_category=EntityCategory.DIAGNOSTIC
+    ),
+    "value": SensorDescription(
+        "Value", "value", state_class=None, entity_category=EntityCategory.DIAGNOSTIC
+    ),
 }
 
 
@@ -101,11 +215,18 @@ async def async_setup_entry(
         for device in runtime.inventory.devices.values():
             if device.location_id != runtime.location_id:
                 continue
+            firmware_keys = {item.key for item in firmware_states(device).values()}
             for state in device.states.values():
-                if not sensor_state_allowed(state.attribute):
+                if not sensor_state_allowed(
+                    state.attribute,
+                    firmware=state.key in firmware_keys,
+                    primary_domain=sensor_state_owned_by_primary_domain(device, state),
+                ):
                     continue
                 description = SENSOR_STATES.get(state.attribute) or SensorDescription(
-                    _attribute_name(state.attribute), state_class=None
+                    _attribute_name(state.attribute),
+                    state_class=None,
+                    entity_category=EntityCategory.DIAGNOSTIC,
                 )
                 unique_id = "_".join((device.device_id, *state.key))
                 if unique_id not in known:
@@ -128,8 +249,16 @@ class SmartThingsWebSensor(SmartThingsWebEntity, SensorEntity):
         state: BridgeState,
         description: SensorDescription,
     ) -> None:
-        super().__init__(runtime, device, state, description.name)
+        super().__init__(
+            runtime,
+            device,
+            state,
+            None if description.translation_key else description.name,
+        )
         self.description = description
+        self._attr_translation_key = description.translation_key
+        self._attr_entity_category = description.entity_category
+        self._attr_entity_registry_enabled_default = description.enabled_default
 
     @property
     def device_class(self) -> SensorDeviceClass | None:
@@ -173,6 +302,8 @@ class SmartThingsWebSensor(SmartThingsWebEntity, SensorEntity):
             return {
                 "C": "°C",
                 "F": "°F",
+                "sec": "s",
+                "Sec": "s",
                 "Î¼g/m^3": "µg/m³",
                 "µg/m^3": "µg/m³",
             }.get(state.unit, state.unit)

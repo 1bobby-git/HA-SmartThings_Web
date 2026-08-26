@@ -19,7 +19,14 @@ from .models import (
     control_supports_command,
     cover_controls,
     is_cover_device,
+    primary_state_attributes,
 )
+
+COVER_EXTRA_ATTRIBUTES = {
+    "shadeLevel",
+    "supportedWindowShadeCommands",
+    "windowShade",
+}
 
 
 async def async_setup_entry(
@@ -85,6 +92,14 @@ class SmartThingsWebCover(SmartThingsWebDeviceEntity, CoverEntity):
             return None
         return max(0, min(100, int(round(float(value)))))
 
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Keep pushed cover metadata on the primary cover entity."""
+        device = self.bridge_device
+        if device is None:
+            return {}
+        return primary_state_attributes(device, COVER_EXTRA_ATTRIBUTES)
+
     async def async_open_cover(self, **kwargs: Any) -> None:
         """Open the cover without optimistic state mutation."""
         await self._async_command("open", "openShade")
@@ -135,25 +150,21 @@ class SmartThingsWebCover(SmartThingsWebDeviceEntity, CoverEntity):
 
 
 def _find_control(controls: list[BridgeControl], *commands: str) -> BridgeControl | None:
-    return next(
-        (
-            control
-            for control in controls
-            if any(control_supports_command(control, command) for command in commands)
-        ),
-        None,
-    )
+    matches = [
+        control
+        for control in controls
+        if any(control_supports_command(control, command) for command in commands)
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _position_control(controls: list[BridgeControl]) -> BridgeControl | None:
-    return next(
-        (
-            control
-            for control in controls
-            if control.kind == "slider" and control.attribute == "shadeLevel"
-        ),
-        None,
-    )
+    matches = [
+        control
+        for control in controls
+        if control.kind == "slider" and control.attribute == "shadeLevel"
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _state_value(device: BridgeDevice | None, attribute: str) -> object | None:

@@ -83,7 +83,7 @@ class SmartThingsWebImage(SmartThingsWebDeviceEntity, ImageEntity):
             self.async_update_token()
             self.async_write_ha_state()
 
-        self.async_on_remove(self.runtime.subscribe(handle_update))
+        self.async_on_remove(self.runtime.subscribe_device(self.device_id, handle_update))
 
 
 def _parse_time(value: str | None) -> datetime | None:

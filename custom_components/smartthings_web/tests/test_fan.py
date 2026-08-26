@@ -66,7 +66,7 @@ entity_module.SmartThingsWebDeviceEntity = SmartThingsWebDeviceEntity  # type: i
 sys.modules["smartthings_web.entity"] = entity_module
 
 from smartthings_web.fan import SmartThingsWebFan  # noqa: E402
-from smartthings_web.models import BridgeDevice, BridgeState  # noqa: E402
+from smartthings_web.models import BridgeControl, BridgeDevice, BridgeState  # noqa: E402
 
 
 class SmartThingsWebFanTests(unittest.TestCase):
@@ -89,7 +89,17 @@ class SmartThingsWebFanTests(unittest.TestCase):
             None,
             True,
             states={switch.key: switch},
-            controls={},
+            controls={
+                "power": BridgeControl(
+                    "power",
+                    "toggle",
+                    "Power",
+                    component="main",
+                    capability="switch",
+                    attribute="switch",
+                    commands=("on", "off"),
+                )
+            },
         )
 
         features = SmartThingsWebFan(object(), device).supported_features
@@ -139,12 +149,36 @@ class SmartThingsWebFanTests(unittest.TestCase):
             None,
             True,
             states={state.key: state for state in states},
-            controls={},
+            controls={
+                "mode": BridgeControl(
+                    "mode",
+                    "enumerated",
+                    "Fan mode",
+                    component="main",
+                    capability="fanMode",
+                    attribute="fanMode",
+                    options=("off", "low", "medium", "high", "auto", "sleep"),
+                ),
+                "speed": BridgeControl(
+                    "speed",
+                    "slider",
+                    "Fan speed",
+                    component="main",
+                    capability="fanSpeedPercent",
+                    attribute="percent",
+                    minimum=0,
+                    maximum=100,
+                    step=1,
+                ),
+            },
         )
         fan = SmartThingsWebFan(object(), device)
 
         self.assertEqual(fan.percentage, 0)
-        self.assertEqual(fan.preset_modes, ["off", "low", "medium", "high", "auto"])
+        self.assertEqual(
+            fan.preset_modes,
+            ["off", "low", "medium", "high", "auto", "sleep"],
+        )
         self.assertTrue(fan.supported_features & FanEntityFeature.SET_SPEED)
         self.assertTrue(fan.supported_features & FanEntityFeature.PRESET_MODE)
         self.assertTrue(fan.supported_features & FanEntityFeature.TURN_ON)
@@ -195,7 +229,17 @@ class SmartThingsWebFanTests(unittest.TestCase):
             None,
             True,
             states={state.key: state for state in states},
-            controls={},
+            controls={
+                "mode": BridgeControl(
+                    "mode",
+                    "enumerated",
+                    "Air purifier mode",
+                    component="main",
+                    capability="airPurifierMode",
+                    attribute="airPurifierMode",
+                    options=("off", "auto", "sleep"),
+                )
+            },
         )
         fan = SmartThingsWebFan(object(), device)
         fan._async_command = AsyncMock()  # type: ignore[method-assign]

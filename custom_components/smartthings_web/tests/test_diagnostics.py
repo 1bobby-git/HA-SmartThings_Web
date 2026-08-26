@@ -12,6 +12,7 @@ import unittest
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 package = ModuleType("smartthings_web")
 package.__path__ = [str(PACKAGE_ROOT)]  # type: ignore[attr-defined]
+package.SmartThingsWebConfigEntry = object  # type: ignore[attr-defined]
 sys.modules.setdefault("smartthings_web", package)
 
 

@@ -16,7 +16,7 @@ from .models import (
     SmartThingsWebRuntime,
     button_controls,
     control_label,
-    is_refreshable_device,
+    safe_observed_control,
 )
 
 
@@ -25,7 +25,7 @@ async def async_setup_entry(
     entry: SmartThingsWebConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Create refresh buttons and discover newly capable devices."""
+    """Create only buttons observed in SmartThings Web device details."""
     runtime = entry.runtime_data
     known: set[str] = set()
 
@@ -41,14 +41,8 @@ async def async_setup_entry(
                     if unique_id in known:
                         continue
                     known.add(unique_id)
-                    entities.append(SmartThingsWebRefreshButton(runtime, device, control))
+                    entities.append(SmartThingsWebButton(runtime, device, control))
                 continue
-            if not is_refreshable_device(device):
-                continue
-            unique_id = f"{device.device_id}_refresh"
-            if unique_id not in known:
-                known.add(unique_id)
-                entities.append(SmartThingsWebRefreshButton(runtime, device, None))
         if entities:
             async_add_entities(entities)
 
@@ -56,36 +50,60 @@ async def async_setup_entry(
     entry.async_on_unload(runtime.subscribe(discover))
 
 
-class SmartThingsWebRefreshButton(SmartThingsWebDeviceEntity, ButtonEntity):
+class SmartThingsWebButton(SmartThingsWebDeviceEntity, ButtonEntity):
     """Run one observed device action through SmartThings Web."""
 
     def __init__(
         self,
         runtime: SmartThingsWebRuntime,
         device: BridgeDevice,
-        control: BridgeControl | None,
+        control: BridgeControl,
     ) -> None:
         self.control = control
-        suffix = f"button_{control.control_id}" if control else "refresh"
+        suffix = f"button_{control.control_id}"
         super().__init__(
             runtime,
             device,
             suffix,
-            control_label(control, "Refresh") if control else "Refresh",
+            control_label(control, "Button"),
+        )
+
+    @property
+    def available(self) -> bool:
+        """Stay available only while the exact observed button still exists."""
+        device = self.bridge_device
+        control = (
+            device.controls.get(self.control.control_id) if device is not None else None
+        )
+        return (
+            super().available
+            and control is not None
+            and control.kind == "button"
+            and safe_observed_control(control)
         )
 
     async def async_press(self) -> None:
         """Request a device action without optimistic state mutation."""
+        device = self.bridge_device
+        control = (
+            device.controls.get(self.control.control_id) if device is not None else None
+        )
+        if (
+            control is None
+            or control.kind != "button"
+            or not safe_observed_control(control)
+        ):
+            raise HomeAssistantError("SmartThings Web button control is unavailable")
         try:
             await self.runtime.client.async_execute_command(
                 target_type="device",
                 target_id=self.device_id,
-                control_id=self.control.control_id if self.control else None,
-                control_label=self.control.label if self.control else None,
-                component=self.control.component if self.control else None,
-                capability=self.control.capability if self.control else None,
-                attribute=self.control.attribute if self.control else None,
-                command="press" if self.control else "refresh",
+                control_id=control.control_id,
+                control_label=control.label,
+                component=control.component,
+                capability=control.capability,
+                attribute=control.attribute,
+                command="press",
                 arguments=[],
             )
         except BridgeClientError as err:

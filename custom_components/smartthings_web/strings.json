@@ -50,5 +50,65 @@
       "title": "SmartThings Web Bridge needs Samsung login",
       "description": "Open the Bridge add-on and renew the Samsung web login session. Home Assistant only renews the local Bridge pairing token."
     }
+  },
+  "entity": {
+    "sensor": {
+      "temperature": { "name": "Temperature" },
+      "humidity": { "name": "Humidity" },
+      "battery": { "name": "Battery" },
+      "power": { "name": "Power" },
+      "energy": { "name": "Energy" },
+      "voltage": { "name": "Voltage" },
+      "current": { "name": "Current" },
+      "illuminance": { "name": "Illuminance" },
+      "carbon_dioxide": { "name": "Carbon dioxide" },
+      "fine_dust": { "name": "PM2.5" },
+      "very_fine_dust": { "name": "PM1" },
+      "dust": { "name": "PM10" },
+      "rssi": { "name": "RSSI" },
+      "lqi": { "name": "LQI" },
+      "signal_metrics": { "name": "Received signal metrics" },
+      "air_quality": { "name": "Air quality" },
+      "atmospheric_pressure": { "name": "Atmospheric pressure" },
+      "filter_life_remaining": { "name": "Filter life remaining" },
+      "tvoc": { "name": "TVOC" },
+      "formaldehyde": { "name": "Formaldehyde" },
+      "odor": { "name": "Odor" },
+      "sound_pressure": { "name": "Sound pressure" },
+      "people": { "name": "People" },
+      "remaining_time": { "name": "Remaining time" },
+      "operation_time": { "name": "Operation time" },
+      "check_interval": { "name": "Check interval" },
+      "image_transfer_progress": { "name": "Image transfer progress" },
+      "capture_time": { "name": "Capture time" },
+      "clip": { "name": "Clip metadata" },
+      "image": { "name": "Image metadata" },
+      "stream": { "name": "Stream metadata" },
+      "supported_sound_types": { "name": "Supported sound types" },
+      "status": { "name": "Status" },
+      "health_status": { "name": "Health status" },
+      "device_status": { "name": "Device status" },
+      "value": { "name": "Value" }
+    },
+    "binary_sensor": {
+      "acceleration": { "name": "Acceleration" },
+      "contact": { "name": "Contact" },
+      "door": { "name": "Door" },
+      "filter_status": { "name": "Filter status" },
+      "motion": { "name": "Motion" },
+      "moisture": { "name": "Moisture" },
+      "presence": { "name": "Presence" },
+      "sound": { "name": "Sound" },
+      "tamper": { "name": "Tamper" },
+      "gas": { "name": "Gas" },
+      "smoke": { "name": "Smoke" },
+      "carbon_monoxide": { "name": "Carbon monoxide" }
+    },
+    "update": {
+      "firmware": { "name": "Firmware" }
+    },
+    "event": {
+      "button": { "name": "Button" }
+    }
   }
 }

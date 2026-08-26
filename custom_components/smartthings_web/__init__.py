@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -29,14 +30,19 @@ from .const import (
     DOMAIN,
     REPAIR_SAMSUNG_LOGIN_REQUIRED,
 )
+from .entity import device_info_for
 from .models import (
     BridgeInventory,
     SmartThingsWebRuntime,
     entity_unique_id,
+    firmware_states,
     is_fan_device,
     is_media_device,
     number_controls,
+    sensor_state_owned_by_primary_domain,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [
     Platform.ALARM_CONTROL_PANEL,
@@ -44,6 +50,7 @@ PLATFORMS = [
     Platform.BUTTON,
     Platform.CLIMATE,
     Platform.COVER,
+    Platform.EVENT,
     Platform.FAN,
     Platform.IMAGE,
     Platform.LIGHT,
@@ -53,6 +60,7 @@ PLATFORMS = [
     Platform.SELECT,
     Platform.SENSOR,
     Platform.SWITCH,
+    Platform.UPDATE,
 ]
 SmartThingsWebConfigEntry = ConfigEntry[SmartThingsWebRuntime]
 
@@ -79,6 +87,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
     runtime = SmartThingsWebRuntime(client=runtime_client, location_id=location_id, inventory=inventory)
     entry.runtime_data = runtime
     _migrate_entity_registry(hass, entry, inventory)
+    registered_metadata: dict[str, tuple[object, ...]] = {}
 
     def register_devices() -> None:
         registry = dr.async_get(hass)
@@ -86,13 +95,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
             if device.location_id != location_id:
                 continue
             room = runtime.inventory.rooms.get(device.room_id) if device.room_id else None
-            registry.async_get_or_create(
-                config_entry_id=entry.entry_id,
-                identifiers={(DOMAIN, device.device_id)},
-                name=device.name,
-                model=device.device_type,
-                suggested_area=room[1] if room and room[0] == location_id else None,
+            device_info = device_info_for(device)
+            metadata = (
+                device.name,
+                device_info.get("manufacturer"),
+                device_info.get("model"),
+                device_info.get("hw_version"),
+                device_info.get("sw_version"),
+                room[1] if room and room[0] == location_id else None,
             )
+            if registered_metadata.get(device.device_id) == metadata:
+                continue
+            registry_entry = registry.async_get_or_create(
+                config_entry_id=entry.entry_id,
+                suggested_area=room[1] if room and room[0] == location_id else None,
+                **device_info,
+            )
+            if registry_entry.manufacturer == "SmartThings Web":
+                registry.async_update_device(registry_entry.id, manufacturer=None)
+            registered_metadata[device.device_id] = metadata
 
     register_devices()
     entry.async_on_unload(runtime.subscribe(register_devices))
@@ -120,11 +141,14 @@ async def _event_loop(entry: SmartThingsWebConfigEntry) -> None:
             runtime.apply_inventory(await runtime.client.async_get_inventory())
             async for event in runtime.client.async_events():
                 await runtime.handle_event(event)
-        except (BridgeAuthError, BridgeClientError):
+        except BridgeAuthError:
             await asyncio.sleep(5)
+        except BridgeClientError:
+            await asyncio.sleep(1)
         except asyncio.CancelledError:
             raise
         except Exception:
+            _LOGGER.exception("smartthings_web_event_loop_failed")
             await asyncio.sleep(5)
         else:
             await asyncio.sleep(1)
@@ -207,15 +231,28 @@ def _migrate_entity_registry(
     registry_entries = list(er.async_entries_for_config_entry(registry, entry.entry_id))
     old_to_new: dict[str, str] = {}
     duplicate_number_ids: set[str] = set()
+    stale_firmware_sensor_ids: set[str] = set()
+    stale_event_sensor_ids: set[str] = set()
+    stale_primary_sensor_ids: set[str] = set()
+    synthetic_refresh_ids: set[str] = set()
     number_state_ids_by_device: dict[str, set[str]] = {}
     switch_ids: set[str] = set()
     primary_domain_switch_ids: set[str] = set()
     current_fan_ids: set[str] = set()
     current_device_ids: set[str] = set()
+    active_number_ids: set[str] = set()
     for device in inventory.devices.values():
         if device.location_id != entry.data[CONF_LOCATION_ID]:
             continue
         current_device_ids.add(device.device_id)
+        synthetic_refresh_ids.add(f"{device.device_id}_refresh")
+        for state in firmware_states(device).values():
+            stale_firmware_sensor_ids.add(entity_unique_id(device.device_id, state))
+        for state in device.states.values():
+            if state.attribute == "button":
+                stale_event_sensor_ids.add(entity_unique_id(device.device_id, state))
+            if sensor_state_owned_by_primary_domain(device, state):
+                stale_primary_sensor_ids.add(entity_unique_id(device.device_id, state))
         number_state_ids_by_device[device.device_id] = {
             entity_unique_id(device.device_id, state) for state in device.states.values()
         }
@@ -231,12 +268,14 @@ def _migrate_entity_registry(
                     primary_domain_switch_ids.update((old_unique_id, new_unique_id))
         for control in number_controls(device):
             state = _matching_control_state(device, control)
+            control_unique_id = f"{device.device_id}_number_{control.control_id}"
             if state is None:
+                active_number_ids.add(control_unique_id)
                 continue
-            duplicate_number_ids.add(f"{device.device_id}_number_{control.control_id}")
-            old_to_new[f"{device.device_id}_number_{control.control_id}"] = entity_unique_id(
-                device.device_id, state
-            )
+            state_unique_id = entity_unique_id(device.device_id, state)
+            active_number_ids.add(state_unique_id)
+            duplicate_number_ids.add(control_unique_id)
+            old_to_new[control_unique_id] = state_unique_id
 
     stale_registry_number_ids = _stale_registry_number_ids(
         registry_entries,
@@ -247,8 +286,43 @@ def _migrate_entity_registry(
         if entity_entry.platform != DOMAIN:
             continue
         if (
+            entity_entry.domain == Platform.SENSOR
+            and entity_entry.unique_id in stale_firmware_sensor_ids
+        ):
+            registry.async_remove(entity_entry.entity_id)
+            continue
+        if (
+            entity_entry.domain == Platform.SENSOR
+            and entity_entry.unique_id in stale_event_sensor_ids
+        ):
+            registry.async_remove(entity_entry.entity_id)
+            continue
+        if (
+            entity_entry.domain == Platform.SENSOR
+            and entity_entry.unique_id in stale_primary_sensor_ids
+        ):
+            registry.async_remove(entity_entry.entity_id)
+            continue
+        if (
+            entity_entry.domain == Platform.BUTTON
+            and entity_entry.unique_id in synthetic_refresh_ids
+        ):
+            registry.async_remove(entity_entry.entity_id)
+            continue
+        if (
             entity_entry.domain == Platform.NUMBER
             and entity_entry.unique_id in stale_registry_number_ids
+        ):
+            registry.async_remove(entity_entry.entity_id)
+            continue
+        if (
+            entity_entry.domain == Platform.NUMBER
+            and entity_entry.unique_id not in duplicate_number_ids
+            and _unobserved_number_unique_id(
+                entity_entry.unique_id,
+                current_device_ids,
+                active_number_ids,
+            )
         ):
             registry.async_remove(entity_entry.entity_id)
             continue
@@ -293,6 +367,17 @@ def _stale_fan_unique_id(
         return False
     device_id = unique_id.removesuffix("_fan")
     return device_id in current_device_ids and device_id not in current_fan_ids
+
+
+def _unobserved_number_unique_id(
+    unique_id: str,
+    current_device_ids: set[str],
+    active_number_ids: set[str],
+) -> bool:
+    """Remove old writable numbers that no longer have an observed web slider."""
+    return unique_id not in active_number_ids and any(
+        unique_id.startswith(f"{device_id}_") for device_id in current_device_ids
+    )
 
 
 def _stale_registry_number_ids(
@@ -342,15 +427,17 @@ def _entity_id_stem(entity_id: str) -> str:
 
 def _matching_control_state(device: BridgeDevice, control: object):
     """Find the state mirrored by an observed slider control."""
-    return next(
-        (
-            state
-            for state in device.states.values()
-            if state.attribute == getattr(control, "attribute", None)
-            and (
-                getattr(control, "component", None) is None
-                or state.component == getattr(control, "component", None)
-            )
-        ),
-        None,
-    )
+    matches = [
+        state
+        for state in device.states.values()
+        if state.attribute == getattr(control, "attribute", None)
+        and (
+            getattr(control, "component", None) is None
+            or state.component == getattr(control, "component", None)
+        )
+        and (
+            getattr(control, "capability", None) is None
+            or state.capability == getattr(control, "capability", None)
+        )
+    ]
+    return matches[0] if len(matches) == 1 else None

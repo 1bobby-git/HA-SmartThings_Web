@@ -473,10 +473,16 @@ export class DeviceStore {
   #setState(device: MutableDevice, state: BridgeDeviceState): boolean {
     const key = stateKey(state);
     const current = device.states.get(key);
-    if (current && isOlderOrUndated(state.updatedAt, current.updatedAt)) {
+    const momentaryEvent = state.attribute === "button";
+    if (
+      current &&
+      (momentaryEvent
+        ? isStrictlyOlderOrUndated(state.updatedAt, current.updatedAt)
+        : isOlderOrUndated(state.updatedAt, current.updatedAt))
+    ) {
       return false;
     }
-    if (current && JSON.stringify(current) === JSON.stringify(state)) {
+    if (current && !momentaryEvent && JSON.stringify(current) === JSON.stringify(state)) {
       return false;
     }
     device.states.set(key, cloneState(state));
@@ -1087,6 +1093,12 @@ function isOlderOrUndated(candidate: string | null, current: string | null): boo
   if (current === null) return false;
   if (candidate === null) return true;
   return Date.parse(candidate) <= Date.parse(current);
+}
+
+function isStrictlyOlderOrUndated(candidate: string | null, current: string | null): boolean {
+  if (current === null) return false;
+  if (candidate === null) return true;
+  return Date.parse(candidate) < Date.parse(current);
 }
 
 function jsonValue(value: unknown): BridgeJsonValue | undefined {

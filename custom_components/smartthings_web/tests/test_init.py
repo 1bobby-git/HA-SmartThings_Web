@@ -37,6 +37,7 @@ def _install_homeassistant_stubs() -> None:
         BUTTON = "button"
         CLIMATE = "climate"
         COVER = "cover"
+        EVENT = "event"
         FAN = "fan"
         IMAGE = "image"
         LIGHT = "light"
@@ -46,6 +47,7 @@ def _install_homeassistant_stubs() -> None:
         SELECT = "select"
         SENSOR = "sensor"
         SWITCH = "switch"
+        UPDATE = "update"
 
     const.Platform = Platform  # type: ignore[attr-defined]
     sys.modules["homeassistant.const"] = const
@@ -63,8 +65,18 @@ def _install_homeassistant_stubs() -> None:
     sys.modules["homeassistant.helpers"] = helpers
 
     device_registry = ModuleType("homeassistant.helpers.device_registry")
+
+    class DeviceInfo(dict[str, object]):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__(kwargs)
+
+    device_registry.DeviceInfo = DeviceInfo  # type: ignore[attr-defined]
     device_registry.async_get = lambda _hass: None  # type: ignore[attr-defined]
     sys.modules["homeassistant.helpers.device_registry"] = device_registry
+
+    entity = ModuleType("homeassistant.helpers.entity")
+    entity.Entity = object  # type: ignore[attr-defined]
+    sys.modules["homeassistant.helpers.entity"] = entity
 
     entity_registry = ModuleType("homeassistant.helpers.entity_registry")
     entity_registry.async_get = lambda _hass: None  # type: ignore[attr-defined]
@@ -189,7 +201,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         self.assertEqual(registry.removed, ["number.motion_detection_frequency_2"])
         self.assertEqual(registry.updated, [])
 
-    def test_removes_registry_duplicate_when_initial_inventory_has_no_control(self) -> None:
+    def test_removes_old_numbers_when_no_observed_slider_exists(self) -> None:
         registry = FakeRegistry(
             [
                 entity("number.motion_detection_frequency", "number", "dev_motion_main_motion_detectionFrequency"),
@@ -214,7 +226,13 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(registry.removed, ["number.motion_detection_frequency_2"])
+        self.assertEqual(
+            registry.removed,
+            [
+                "number.motion_detection_frequency",
+                "number.motion_detection_frequency_2",
+            ],
+        )
         self.assertEqual(registry.updated, [])
 
     def test_updates_control_number_unique_id_when_state_number_is_missing(self) -> None:

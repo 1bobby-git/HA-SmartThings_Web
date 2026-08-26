@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.79
+
+- Deliver existing pushed states only to matching state and device listeners; run global discovery/registry listeners only for a new state key or inventory change.
+- Scope inventory refresh writes to devices whose normalized state or metadata actually changed.
+- Aggregate raw firmware fields into one read-only `update` entity, publish physical button pushes as `event` entities, apply official-style names/classes/categories, and consolidate richer-domain values into primary entity attributes while retaining other SmartThings Web-only values as diagnostic sensors.
+- Drive native SmartThings Web range inputs for all observed numeric sliders and route enumerated media/fan/select options through their exact observed commands.
+- Map speaker fast-forward/rewind to Home Assistant next/previous, preserve current-track metadata, and add brightness/color-temperature handling for observed light sliders.
+- Keep read-only pushed content visible while exposing writable switch, light, fan, media, and number features only when their exact web control has been observed.
+
 ## 0.1.78
 
 - Report the restored cached inventory count immediately after Bridge startup and browser reconnects, while keeping login-required sessions unready until fresh push proof returns.

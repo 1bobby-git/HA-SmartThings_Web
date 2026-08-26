@@ -42,6 +42,8 @@ type DeviceActionCommand =
   | "stop"
   | "nextTrack"
   | "previousTrack"
+  | "fastForward"
+  | "rewind"
   | "mute"
   | "unmute"
   | "playTrackAndResume"
@@ -49,8 +51,6 @@ type DeviceActionCommand =
   | "setOption"
   | "open"
   | "close"
-  | "stop"
-  | "pause"
   | "openShade"
   | "closeShade"
   | "setPosition";
@@ -217,23 +217,30 @@ export class SafeCommandService {
     const effective = resolveDeviceRequest(device, request);
     if (!effective.component || !effective.capability) throw new SafeCommandError("capability_not_found");
     const attribute = effective.attribute ?? "switch";
-    validateCommandAttribute(effective.command, attribute);
+    validateCommandAttribute(effective.command, attribute, effective.controlId);
     const state = findState(device, effective.component, effective.capability, attribute);
     if (!state && !allowsMissingCurrentState(effective.command)) throw new SafeCommandError("capability_not_found");
     if (!isSupportedDeviceCommand(effective.command)) throw new SafeCommandError("unsupported_command");
     const matchAny = confirmsAnyNewDeviceState(effective);
     const desired = matchAny ? undefined : desiredValueFor(effective.command, effective.arguments, state);
     if (!matchAny && desired === undefined) throw new SafeCommandError("invalid_arguments");
-    if (state && desired !== undefined && JSON.stringify(state.value) === JSON.stringify(desired)) return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
-    const confirmation = waitForState({
-      devices: this.options.devices,
-      request: effective,
-      attribute,
-      desired,
-      afterSequence: snapshot.sequence,
-      stabilityMs: this.options.confirmationStabilityMs ?? 0,
-      resync: this.options.resync
-    });
+    if (state && desired !== undefined && stateValuesEqual(state.value, desired)) return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
+    const confirmation = matchAny
+      ? waitForAnyDeviceEvent({
+          devices: this.options.devices,
+          deviceId: effective.targetId,
+          afterSequence: snapshot.sequence,
+          resync: this.options.resync
+        })
+      : waitForState({
+          devices: this.options.devices,
+          request: effective,
+          attribute,
+          desired,
+          afterSequence: snapshot.sequence,
+          stabilityMs: this.options.confirmationStabilityMs ?? 0,
+          resync: this.options.resync
+        });
     const roomName = device.roomId ? snapshot.rooms.find((room) => room.id === device.roomId)?.name : undefined;
     try {
       if (!this.options.executor.executeDeviceAction) throw new SafeCommandError("command_execution_failed");
@@ -393,7 +400,7 @@ function waitForState(options: { devices: DeviceStore; request: SafeCommandReque
         candidate.capability === options.request.capability &&
         candidate.attribute === options.attribute
     );
-    return state !== undefined && JSON.stringify(state.value) === JSON.stringify(options.desired);
+    return state !== undefined && stateValuesEqual(state.value, options.desired);
   };
   return waitForPredicate({
     devices: options.devices,
@@ -407,7 +414,7 @@ function waitForState(options: { devices: DeviceStore; request: SafeCommandReque
         event.state.capability === options.request.capability &&
         event.state.attribute === options.attribute &&
         (options.desired === undefined ||
-          JSON.stringify(event.state.value) === JSON.stringify(options.desired))) ||
+          stateValuesEqual(event.state.value, options.desired))) ||
       (event.type === "inventory" && snapshotMatches()),
     invalidates: (event) =>
       options.desired !== undefined &&
@@ -416,7 +423,7 @@ function waitForState(options: { devices: DeviceStore; request: SafeCommandReque
         event.state.component === options.request.component &&
         event.state.capability === options.request.capability &&
         event.state.attribute === options.attribute &&
-        JSON.stringify(event.state.value) !== JSON.stringify(options.desired)) ||
+        !stateValuesEqual(event.state.value, options.desired)) ||
         (event.type === "inventory" && !snapshotMatches())),
     matchesSnapshot: snapshotMatches
   });
@@ -432,6 +439,20 @@ function waitForAnyDeviceEventInLocation(options: { devices: DeviceStore; locati
       const device = options.devices.snapshot().devices.find((candidate) => candidate.id === event.deviceId);
       return device?.locationId === options.locationId;
     }
+  });
+}
+
+function waitForAnyDeviceEvent(options: {
+  devices: DeviceStore;
+  deviceId: string;
+  afterSequence: number;
+  resync: () => Promise<unknown>;
+}): ConfirmationWait {
+  return waitForPredicate({
+    devices: options.devices,
+    afterSequence: options.afterSequence,
+    resync: options.resync,
+    matches: (event) => event.type === "state" && event.deviceId === options.deviceId
   });
 }
 
@@ -551,7 +572,7 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
 }
 
 function isSupportedDeviceCommand(command: string): boolean {
-  return ["on", "off", "press", "setNumber", "setVolume", "mute", "unmute", "setFanMode", "setOption", "open", "close", "stop", "pause", "openShade", "closeShade", "setPosition", "fanSpeed", "volume", "play", "nextTrack", "previousTrack", "refresh", "playTrackAndResume"].includes(command);
+  return ["on", "off", "press", "setNumber", "setVolume", "mute", "unmute", "setFanMode", "setOption", "open", "close", "stop", "pause", "openShade", "closeShade", "setPosition", "fanSpeed", "volume", "play", "nextTrack", "previousTrack", "fastForward", "rewind", "refresh", "playTrackAndResume"].includes(command);
 }
 
 function confirmsAnyNewDeviceState(request: SafeCommandRequest): boolean {
@@ -567,12 +588,29 @@ function allowsMissingCurrentState(command: string): boolean {
 }
 
 function desiredValueFor(command: string, args: BridgeJsonValue[], state: BridgeDeviceState | undefined): BridgeJsonValue | undefined {
-  if (command === "on" || command === "off") return command;
+  if (command === "on" || command === "off") {
+    if (typeof state?.value === "boolean") return command === "on";
+    if (typeof state?.value === "string") {
+      const current = state.value.trim().toLowerCase();
+      if (["enabled", "disabled"].includes(current)) {
+        return command === "on" ? "enabled" : "disabled";
+      }
+      if (["true", "false"].includes(current)) {
+        return command === "on" ? "true" : "false";
+      }
+      if (["active", "inactive"].includes(current)) {
+        return command === "on" ? "active" : "inactive";
+      }
+    }
+    return command;
+  }
   if (command === "mute" && args.length === 0) return "muted";
   if (command === "unmute" && args.length === 0) return "unmuted";
   if (command === "play" && args.length === 0) return "playing";
   if (command === "pause" && args.length === 0) return "paused";
   if (command === "stop" && args.length === 0) return "stopped";
+  if (command === "fastForward" && args.length === 0) return "fast forwarding";
+  if (command === "rewind" && args.length === 0) return "rewinding";
   if ((command === "open" || command === "openShade") && args.length === 0) return "open";
   if ((command === "close" || command === "closeShade") && args.length === 0) return "closed";
   if (args.length !== 1) return undefined;
@@ -629,8 +667,17 @@ function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest)
       };
     }
   }
-  const observedFanMode = request.command === "setFanMode" && Boolean(request.controlId);
-  const observedControlCommand = isControlBoundCommand(request.command) && Boolean(request.controlId);
+  if (request.attribute) {
+    validateCommandAttribute(request.command, request.attribute, request.controlId);
+  }
+  if (request.command === "setFanMode" && !request.controlId) {
+    throw new SafeCommandError("invalid_control_id");
+  }
+  const observedFanMode = request.command === "setFanMode";
+  if (isControlBoundCommand(request.command) && !request.controlId) {
+    throw new SafeCommandError("invalid_control_id");
+  }
+  const observedControlCommand = isControlBoundCommand(request.command);
   if (!observedControlCommand && !observedFanMode) {
     if (requiresObservedControl(request.command)) throw new SafeCommandError("invalid_control_id");
     return request;
@@ -654,8 +701,12 @@ function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest)
   };
 }
 
-function validateCommandAttribute(command: string, attribute: string): void {
-  if (command === "setNumber" && !NUMBER_ATTRIBUTES.has(attribute)) {
+function validateCommandAttribute(
+  command: string,
+  attribute: string,
+  controlId?: string
+): void {
+  if (command === "setNumber" && !controlId && !NUMBER_ATTRIBUTES.has(attribute)) {
     throw new SafeCommandError("unsupported_command");
   }
   if (command === "setVolume" && attribute !== "volume") {
@@ -667,7 +718,11 @@ function validateCommandAttribute(command: string, attribute: string): void {
   if (command === "setOption" && !safeOptionAttribute(attribute)) {
     throw new SafeCommandError("unsupported_command");
   }
-  if ((isCoverButtonCommand(command) || command === "setPosition") && !COVER_ATTRIBUTES.has(attribute)) {
+  if (
+    (["open", "close", "openShade", "closeShade"].includes(command) ||
+      command === "setPosition") &&
+    !COVER_ATTRIBUTES.has(attribute)
+  ) {
     throw new SafeCommandError("unsupported_command");
   }
 }
@@ -690,13 +745,29 @@ const COVER_ATTRIBUTES = new Set([
   "windowShade"
 ]);
 
-const dangerousControlPattern = /(?:^|[_\s:-])(?:lock|unlock|valve|door|garage)(?:$|[_\s:-])|doorstate/iu;
-
 function isControlBoundCommand(command: string): boolean {
   return (
     requiresObservedControl(command) ||
     command === "setNumber" ||
-    command === "setVolume"
+    command === "setVolume" ||
+    command === "mute" ||
+    command === "unmute" ||
+    isMediaControlCommand(command)
+  );
+}
+
+function isPlaybackOptionCommand(command: string): boolean {
+  return ["play", "pause", "stop", "fastForward", "rewind"].includes(command);
+}
+
+function isEnumeratedMediaCommand(command: string): boolean {
+  return isPlaybackOptionCommand(command) || ["nextTrack", "previousTrack"].includes(command);
+}
+
+function isMediaControlCommand(command: string): boolean {
+  return (
+    isPlaybackOptionCommand(command) ||
+    ["nextTrack", "previousTrack", "playTrackAndResume"].includes(command)
   );
 }
 
@@ -755,6 +826,40 @@ function validateObservedControlCommand(
     }
     return undefined;
   }
+  if (command === "mute" || command === "unmute") {
+    if (control.kind !== "toggle" || control.attribute !== "mute") {
+      throw new SafeCommandError("capability_not_found");
+    }
+    if (!controlSupportsCommand(control, command, false)) {
+      throw new SafeCommandError("unsupported_command");
+    }
+    return undefined;
+  }
+  if (isMediaControlCommand(command)) {
+    if (isEnumeratedMediaCommand(command) && control.kind === "enumerated") {
+      const matches = Object.entries(control.optionCommands ?? {}).filter(
+        ([, optionCommand]) => normalizeCommandToken(optionCommand) === normalizeCommandToken(command)
+      );
+      if (matches.length !== 1) throw new SafeCommandError("unsupported_command");
+      const match = matches[0];
+      if (!match) throw new SafeCommandError("unsupported_command");
+      const [option, optionCommand] = match;
+      return {
+        label: control.optionLabels?.[option] ?? option,
+        ...(optionCommand ? { command: optionCommand } : {})
+      };
+    }
+    if (control.kind !== "button" || !controlSupportsCommand(control, command, true)) {
+      throw new SafeCommandError("unsupported_command");
+    }
+    if (
+      command === "playTrackAndResume" &&
+      (args.length !== 1 || typeof args[0] !== "string" || args[0].length === 0)
+    ) {
+      throw new SafeCommandError("invalid_arguments");
+    }
+    return undefined;
+  }
   if (command === "setPosition") {
     if (control.kind !== "slider" || control.attribute !== "shadeLevel") {
       throw new SafeCommandError("capability_not_found");
@@ -784,17 +889,25 @@ function controlSupportsCommand(
   requireExplicit: boolean
 ): boolean {
   const aliases: Record<string, string[]> = {
+    on: ["on", "switchon", "enable", "enabled"],
+    off: ["off", "switchoff", "disable", "disabled"],
     open: ["open", "openshade"],
     openShade: ["openshade", "open"],
     close: ["close", "closeshade"],
     closeShade: ["closeshade", "close"],
     pause: ["pause", "stop"],
     stop: ["stop", "pause"],
+    mute: ["mute", "unmute"],
+    unmute: ["unmute", "mute"],
     setPosition: ["setposition", "position", "shadelevel"],
     setOption: ["setoption"]
   };
   const expected = aliases[command] ?? [command.toLowerCase()];
-  const explicitValues = [control.command, ...(control.commands ?? [])].filter((value): value is string => typeof value === "string");
+  const explicitValues = [
+    control.command,
+    ...(control.commands ?? []),
+    ...Object.values(control.optionCommands ?? {})
+  ].filter((value): value is string => typeof value === "string");
   const values = explicitValues.length > 0
     ? explicitValues
     : requireExplicit
@@ -808,15 +921,53 @@ function normalizeCommandToken(value: string): string {
   return value.toLowerCase().replace(/[\s_.:-]+/gu, "");
 }
 
+function stateValuesEqual(
+  actual: BridgeJsonValue,
+  desired: BridgeJsonValue | undefined
+): boolean {
+  if (desired === undefined) return false;
+  if (typeof actual === "string" && typeof desired === "string") {
+    return actual.trim().toLowerCase() === desired.trim().toLowerCase();
+  }
+  return JSON.stringify(actual) === JSON.stringify(desired);
+}
+
 function dangerousControl(control: NonNullable<BridgeDevice["controls"]>[number]): boolean {
-  return [control.capability, control.attribute, control.command, control.label, ...(control.commands ?? [])]
+  return [
+    control.id,
+    control.capability,
+    control.attribute,
+    control.command,
+    control.label,
+    ...(control.commands ?? []),
+    ...Object.values(control.optionCommands ?? {})
+  ]
     .filter((value): value is string => typeof value === "string")
-    .some((value) => dangerousControlPattern.test(value));
+    .some(dangerousControlText);
 }
 
 function safeOptionAttribute(attribute: string): boolean {
-  if (!tokenPattern.test(attribute) || dangerousControlPattern.test(attribute)) return false;
+  if (!tokenPattern.test(attribute) || dangerousControlText(attribute)) return false;
   return !COVER_ATTRIBUTES.has(attribute);
+}
+
+function dangerousControlText(value: string): boolean {
+  const separated = value.replace(/([a-z0-9])([A-Z])/gu, "$1 $2").toLowerCase();
+  const tokens = separated.split(/[^a-z0-9가-힣]+/u).filter(Boolean);
+  if (
+    tokens.some(
+      (token) =>
+        ["lock", "unlock", "valve", "door", "garage"].includes(token) ||
+        /^(?:lock|unlock|valve|door|garage)\d*$/u.test(token)
+    )
+  ) {
+    return true;
+  }
+  const compact = tokens.join("");
+  if (/(?:door|lock|unlock|valve|garage)(?:state|control|command)/u.test(compact)) {
+    return true;
+  }
+  return /잠금|도어|차고|밸브|문\s*(?:열|닫)/u.test(value);
 }
 
 function safeControlLabel(value: unknown): value is string {

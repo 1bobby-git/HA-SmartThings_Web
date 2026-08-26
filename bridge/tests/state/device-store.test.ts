@@ -142,6 +142,32 @@ describe("DeviceStore", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  test("publishes every repeated button event even when value and timestamp match", () => {
+    const store = new DeviceStore();
+    observeSnapshotState(store, {
+      componentId: "identifier_component_main",
+      capabilityId: "identifier_capability_button",
+      attributeName: "button",
+      value: "pushed",
+      timestamp: "2026-08-24T21:15:53.000Z"
+    });
+    const listener = vi.fn();
+    store.subscribe(listener);
+    const repeated = liveStateEvent({
+      capability: "identifier_capability_button",
+      attribute: "button",
+      value: "pushed",
+      event_time: Date.parse("2026-08-24T21:15:53.000Z")
+    });
+
+    store.observe(repeated);
+    store.observe(repeated);
+
+    expect(store.snapshot().sequence).toBe(3);
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener.mock.calls.map(([event]) => event.sequence)).toEqual([2, 3]);
+  });
+
   test("rejects a live event without a valid updated timestamp", () => {
     const store = new DeviceStore();
     observeSnapshotState(store, {

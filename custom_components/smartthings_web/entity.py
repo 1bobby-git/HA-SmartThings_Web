@@ -6,7 +6,29 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
 
 from .const import DOMAIN
-from .models import BridgeDevice, BridgeState, SmartThingsWebRuntime, entity_unique_id
+from .models import (
+    BridgeDevice,
+    BridgeState,
+    SmartThingsWebRuntime,
+    device_hardware_version,
+    device_manufacturer,
+    device_model,
+    device_software_version,
+    entity_unique_id,
+)
+
+
+def device_info_for(device: BridgeDevice) -> DeviceInfo:
+    """Return official-style registry metadata available from the web snapshot."""
+    return DeviceInfo(
+        identifiers={(DOMAIN, device.device_id)},
+        name=device.name,
+        manufacturer=device_manufacturer(device),
+        model=device_model(device),
+        hw_version=device_hardware_version(device),
+        sw_version=device_software_version(device),
+        configuration_url="https://account.smartthings.com",
+    )
 
 
 class SmartThingsWebEntity(Entity):
@@ -27,11 +49,7 @@ class SmartThingsWebEntity(Entity):
         self.state_key = state.key
         self._attr_name = name
         self._attr_unique_id = entity_unique_id(device.device_id, state)
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, device.device_id)},
-            name=device.name,
-            model=device.device_type,
-        )
+        self._attr_device_info = device_info_for(device)
 
     @property
     def available(self) -> bool:
@@ -42,12 +60,21 @@ class SmartThingsWebEntity(Entity):
     @property
     def bridge_state(self) -> BridgeState | None:
         """Return the current state."""
-        device = self.runtime.inventory.devices.get(self.device_id)
+        device = self.bridge_device
         return device.states.get(self.state_key) if device else None
+
+    @property
+    def bridge_device(self) -> BridgeDevice | None:
+        """Return the latest immutable device snapshot backing this state entity."""
+        return self.runtime.inventory.devices.get(self.device_id)
 
     async def async_added_to_hass(self) -> None:
         """Subscribe to Bridge pushes."""
-        self.async_on_remove(self.runtime.subscribe(self.async_write_ha_state))
+        self.async_on_remove(
+            self.runtime.subscribe_state(
+                self.device_id, self.state_key, self.async_write_ha_state
+            )
+        )
 
 
 class SmartThingsWebDeviceEntity(Entity):
@@ -67,11 +94,7 @@ class SmartThingsWebDeviceEntity(Entity):
         self.device_id = device.device_id
         self._attr_name = name
         self._attr_unique_id = f"{device.device_id}_{suffix}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, device.device_id)},
-            name=device.name,
-            model=device.device_type,
-        )
+        self._attr_device_info = device_info_for(device)
 
     @property
     def available(self) -> bool:
@@ -86,4 +109,6 @@ class SmartThingsWebDeviceEntity(Entity):
 
     async def async_added_to_hass(self) -> None:
         """Subscribe to Bridge pushes."""
-        self.async_on_remove(self.runtime.subscribe(self.async_write_ha_state))
+        self.async_on_remove(
+            self.runtime.subscribe_device(self.device_id, self.async_write_ha_state)
+        )

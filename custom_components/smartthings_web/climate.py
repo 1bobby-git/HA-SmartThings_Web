@@ -19,6 +19,7 @@ from .models import (
     SmartThingsWebRuntime,
     climate_controls,
     is_climate_device,
+    primary_state_attributes,
 )
 
 
@@ -38,6 +39,14 @@ TEMPERATURE_ATTRIBUTES = {
     "coolingSetpoint",
     "heatingSetpoint",
     "targetTemperature",
+}
+
+CLIMATE_EXTRA_ATTRIBUTES = {
+    "coolingSetpoint",
+    "heatingSetpoint",
+    "supportedThermostatModes",
+    "targetTemperature",
+    "thermostatMode",
 }
 
 
@@ -81,7 +90,7 @@ class SmartThingsWebClimate(SmartThingsWebDeviceEntity, ClimateEntity):
         """Expose only climate actions backed by observed controls."""
         controls = climate_controls(self.bridge_device) if self.bridge_device else []
         features = ClimateEntityFeature(0)
-        if _temperature_control(controls) is not None:
+        if _temperature_control(controls, self.hvac_mode) is not None:
             features |= ClimateEntityFeature.TARGET_TEMPERATURE
         return features
 
@@ -112,6 +121,14 @@ class SmartThingsWebClimate(SmartThingsWebDeviceEntity, ClimateEntity):
                 return value
         return None
 
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Keep pushed thermostat metadata on the primary climate entity."""
+        device = self.bridge_device
+        if device is None:
+            return {}
+        return primary_state_attributes(device, CLIMATE_EXTRA_ATTRIBUTES)
+
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set thermostat mode without optimistic state mutation."""
         controls = climate_controls(self.bridge_device) if self.bridge_device else []
@@ -129,7 +146,7 @@ class SmartThingsWebClimate(SmartThingsWebDeviceEntity, ClimateEntity):
         if isinstance(temperature, bool) or not isinstance(temperature, (int, float)):
             raise HomeAssistantError("SmartThings Web climate temperature is invalid")
         controls = climate_controls(self.bridge_device) if self.bridge_device else []
-        control = _temperature_control(controls)
+        control = _temperature_control(controls, self.hvac_mode)
         if control is None:
             raise HomeAssistantError("SmartThings Web climate temperature control is unavailable")
         await self._execute(control, "setNumber", [float(temperature)])
@@ -163,14 +180,12 @@ def _mode_options(device: BridgeDevice | None) -> list[str]:
 
 
 def _mode_control(controls: list[BridgeControl]) -> BridgeControl | None:
-    return next(
-        (
-            control
-            for control in controls
-            if control.kind == "enumerated" and control.attribute == "thermostatMode"
-        ),
-        None,
-    )
+    matches = [
+        control
+        for control in controls
+        if control.kind == "enumerated" and control.attribute == "thermostatMode"
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _bridge_mode_for_hvac(control: BridgeControl, hvac_mode: HVACMode) -> str | None:
@@ -185,15 +200,31 @@ def _bridge_mode_for_hvac(control: BridgeControl, hvac_mode: HVACMode) -> str | 
     )
 
 
-def _temperature_control(controls: list[BridgeControl]) -> BridgeControl | None:
-    return next(
-        (
-            control
-            for control in controls
-            if control.kind == "slider" and control.attribute in TEMPERATURE_ATTRIBUTES
-        ),
-        None,
-    )
+def _temperature_control(
+    controls: list[BridgeControl], hvac_mode: HVACMode | None = None
+) -> BridgeControl | None:
+    candidates = [
+        control
+        for control in controls
+        if control.kind == "slider" and control.attribute in TEMPERATURE_ATTRIBUTES
+    ]
+    target = [
+        control for control in candidates if control.attribute == "targetTemperature"
+    ]
+    if len(target) == 1:
+        return target[0]
+    if len(target) > 1:
+        return None
+    mode_attribute = {
+        HVACMode.COOL: "coolingSetpoint",
+        HVACMode.HEAT: "heatingSetpoint",
+    }.get(hvac_mode)
+    if mode_attribute is not None:
+        matches = [
+            control for control in candidates if control.attribute == mode_attribute
+        ]
+        return matches[0] if len(matches) == 1 else None
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def _state_value(device: BridgeDevice | None, attribute: str) -> object | None:

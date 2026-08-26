@@ -15,6 +15,7 @@ from .models import (
     BridgeDevice,
     SmartThingsWebRuntime,
     control_label,
+    safe_observed_control,
     select_controls,
 )
 
@@ -65,37 +66,66 @@ class SmartThingsWebSelect(SmartThingsWebDeviceEntity, SelectEntity):
         self._attr_options = list(control.options)
 
     @property
+    def available(self) -> bool:
+        """Stay available only while the exact observed option control exists."""
+        return super().available and self._current_control is not None
+
+    @property
     def current_option(self) -> str | None:
         """Return the current selected value from pushed state."""
-        if self.control.attribute is None:
+        control = self._current_control
+        if control is None or control.attribute is None:
             return None
         device = self.bridge_device
         if device is None:
             return None
         for state in device.states.values():
             if (
-                state.attribute == self.control.attribute
-                and (self.control.component is None or state.component == self.control.component)
+                state.attribute == control.attribute
+                and (control.component is None or state.component == control.component)
                 and isinstance(state.value, str)
             ):
                 return state.value
         return None
 
+    @property
+    def options(self) -> list[str]:
+        """Return the latest exact options from the observed web control."""
+        control = self._current_control
+        return list(control.options) if control is not None else []
+
     async def async_select_option(self, option: str) -> None:
         """Set an option without optimistic state mutation."""
         if option not in self.options:
             raise HomeAssistantError("SmartThings Web select option is invalid")
+        control = self._current_control
+        if control is None:
+            raise HomeAssistantError("SmartThings Web select control is unavailable")
         try:
             await self.runtime.client.async_execute_command(
                 target_type="device",
                 target_id=self.device_id,
-                component=self.control.component,
-                capability=self.control.capability,
-                attribute=self.control.attribute,
-                control_id=self.control.control_id,
-                control_label=self.control.label,
+                component=control.component,
+                capability=control.capability,
+                attribute=control.attribute,
+                control_id=control.control_id,
+                control_label=control.label,
                 command="setOption",
                 arguments=[option],
             )
         except BridgeClientError as err:
             raise HomeAssistantError(bridge_error_message("select command", err)) from err
+
+    @property
+    def _current_control(self) -> BridgeControl | None:
+        device = self.bridge_device
+        if device is None:
+            return None
+        control = device.controls.get(self.control.control_id)
+        return (
+            control
+            if control is not None
+            and control.kind == "enumerated"
+            and safe_observed_control(control)
+            else None
+        )

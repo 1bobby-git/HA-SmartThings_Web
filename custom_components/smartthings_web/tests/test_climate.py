@@ -88,6 +88,8 @@ sys.modules["smartthings_web.entity"] = entity_module
 from smartthings_web.climate import (  # noqa: E402
     SmartThingsWebClimate,
     _bridge_mode_for_hvac,
+    _mode_control,
+    _temperature_control,
 )
 from smartthings_web.models import BridgeControl, BridgeDevice, BridgeState  # noqa: E402
 
@@ -140,6 +142,54 @@ class SmartThingsWebClimateTests(unittest.TestCase):
         )
 
         self.assertEqual(_bridge_mode_for_hvac(control, HVACMode.AUTO), "eco")
+
+    def test_ambiguous_mode_controls_fail_closed(self) -> None:
+        controls = [
+            BridgeControl(
+                f"mode_{index}",
+                "enumerated",
+                "Mode",
+                attribute="thermostatMode",
+                options=("off", "cool"),
+            )
+            for index in range(2)
+        ]
+
+        self.assertIsNone(_mode_control(controls))
+
+    def test_temperature_control_follows_current_mode_without_guessing(self) -> None:
+        cooling = BridgeControl(
+            "cooling",
+            "slider",
+            "Cooling setpoint",
+            attribute="coolingSetpoint",
+            minimum=16,
+            maximum=30,
+        )
+        heating = BridgeControl(
+            "heating",
+            "slider",
+            "Heating setpoint",
+            attribute="heatingSetpoint",
+            minimum=5,
+            maximum=30,
+        )
+
+        self.assertIs(_temperature_control([cooling, heating], HVACMode.COOL), cooling)
+        self.assertIs(_temperature_control([cooling, heating], HVACMode.HEAT), heating)
+        self.assertIsNone(_temperature_control([cooling, heating], HVACMode.AUTO))
+
+        duplicate = BridgeControl(
+            "cooling_duplicate",
+            "slider",
+            "Cooling setpoint 2",
+            attribute="coolingSetpoint",
+            minimum=16,
+            maximum=30,
+        )
+        self.assertIsNone(
+            _temperature_control([cooling, duplicate, heating], HVACMode.COOL)
+        )
 
 
 if __name__ == "__main__":

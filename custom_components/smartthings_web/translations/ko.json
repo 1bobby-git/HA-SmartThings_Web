@@ -50,5 +50,65 @@
       "title": "SmartThings Web Bridge에 Samsung 로그인이 필요합니다",
       "description": "Bridge 애드온을 열어 Samsung 웹 로그인 세션을 갱신하세요. Home Assistant 재인증은 로컬 Bridge 페어링 토큰만 갱신합니다."
     }
+  },
+  "entity": {
+    "sensor": {
+      "temperature": { "name": "온도" },
+      "humidity": { "name": "습도" },
+      "battery": { "name": "배터리" },
+      "power": { "name": "전력" },
+      "energy": { "name": "에너지" },
+      "voltage": { "name": "전압" },
+      "current": { "name": "전류" },
+      "illuminance": { "name": "조도" },
+      "carbon_dioxide": { "name": "이산화탄소" },
+      "fine_dust": { "name": "초미세먼지" },
+      "very_fine_dust": { "name": "극초미세먼지" },
+      "dust": { "name": "미세먼지" },
+      "rssi": { "name": "RSSI" },
+      "lqi": { "name": "LQI" },
+      "signal_metrics": { "name": "수신 신호 메트릭" },
+      "air_quality": { "name": "공기질" },
+      "atmospheric_pressure": { "name": "기압" },
+      "filter_life_remaining": { "name": "필터 잔여 수명" },
+      "tvoc": { "name": "총휘발성유기화합물" },
+      "formaldehyde": { "name": "포름알데히드" },
+      "odor": { "name": "냄새" },
+      "sound_pressure": { "name": "음압" },
+      "people": { "name": "인원" },
+      "remaining_time": { "name": "남은 시간" },
+      "operation_time": { "name": "동작 시간" },
+      "check_interval": { "name": "확인 주기" },
+      "image_transfer_progress": { "name": "이미지 전송 진행률" },
+      "capture_time": { "name": "촬영 시간" },
+      "clip": { "name": "클립 메타데이터" },
+      "image": { "name": "이미지 메타데이터" },
+      "stream": { "name": "스트림 메타데이터" },
+      "supported_sound_types": { "name": "지원 소리 유형" },
+      "status": { "name": "상태" },
+      "health_status": { "name": "상태 진단" },
+      "device_status": { "name": "기기 상태" },
+      "value": { "name": "값" }
+    },
+    "binary_sensor": {
+      "acceleration": { "name": "가속도" },
+      "contact": { "name": "열림 감지" },
+      "door": { "name": "문" },
+      "filter_status": { "name": "필터 상태" },
+      "motion": { "name": "움직임" },
+      "moisture": { "name": "수분" },
+      "presence": { "name": "재실" },
+      "sound": { "name": "소리" },
+      "tamper": { "name": "변조 감지" },
+      "gas": { "name": "가스" },
+      "smoke": { "name": "연기" },
+      "carbon_monoxide": { "name": "일산화탄소" }
+    },
+    "update": {
+      "firmware": { "name": "펌웨어" }
+    },
+    "event": {
+      "button": { "name": "버튼" }
+    }
   }
 }

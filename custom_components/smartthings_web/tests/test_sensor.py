@@ -22,6 +22,7 @@ class SensorDeviceClass:
     """Minimal HA sensor device-class values used by the integration."""
 
     BATTERY = "battery"
+    ATMOSPHERIC_PRESSURE = "atmospheric_pressure"
     CO2 = "carbon_dioxide"
     CURRENT = "current"
     ENERGY = "energy"
@@ -32,7 +33,10 @@ class SensorDeviceClass:
     PM25 = "pm25"
     POWER = "power"
     SIGNAL_STRENGTH = "signal_strength"
+    SOUND_PRESSURE = "sound_pressure"
     TEMPERATURE = "temperature"
+    DURATION = "duration"
+    VOLATILE_ORGANIC_COMPOUNDS_PARTS = "volatile_organic_compounds_parts"
     VOLTAGE = "voltage"
 
 
@@ -61,6 +65,7 @@ sensor_module.SensorStateClass = SensorStateClass  # type: ignore[attr-defined]
 sys.modules["homeassistant.components.sensor"] = sensor_module
 
 const_module = ModuleType("homeassistant.const")
+const_module.EntityCategory = SimpleNamespace(DIAGNOSTIC="diagnostic")  # type: ignore[attr-defined]
 const_module.LIGHT_LUX = "lx"  # type: ignore[attr-defined]
 const_module.PERCENTAGE = "%"  # type: ignore[attr-defined]
 const_module.UnitOfElectricCurrent = SimpleNamespace(AMPERE="A")  # type: ignore[attr-defined]

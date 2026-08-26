@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -69,6 +69,8 @@ class BridgeControl:
     attribute: str | None = None
     commands: tuple[str, ...] = ()
     options: tuple[str, ...] = ()
+    option_labels: dict[str, str] = field(default_factory=dict)
+    option_commands: dict[str, str] = field(default_factory=dict)
     minimum: float | None = None
     maximum: float | None = None
     step: float | None = None
@@ -130,11 +132,35 @@ class SmartThingsWebRuntime:
     location_id: str
     inventory: BridgeInventory
     listeners: set[Callable[[], None]] = field(default_factory=set)
+    state_listeners: dict[
+        tuple[str, tuple[str, str, str]], set[Callable[[], None]]
+    ] = field(default_factory=dict)
+    device_listeners: dict[str, set[Callable[[], None]]] = field(default_factory=dict)
 
     def subscribe(self, listener: Callable[[], None]) -> Callable[[], None]:
         """Subscribe to state changes."""
         self.listeners.add(listener)
         return lambda: self.listeners.discard(listener)
+
+    def subscribe_state(
+        self,
+        device_id: str,
+        state_key: tuple[str, str, str],
+        listener: Callable[[], None],
+    ) -> Callable[[], None]:
+        """Subscribe to one exact pushed device state."""
+        key = (device_id, state_key)
+        self.state_listeners.setdefault(key, set()).add(listener)
+        return lambda: self._remove_scoped_listener(self.state_listeners, key, listener)
+
+    def subscribe_device(
+        self, device_id: str, listener: Callable[[], None]
+    ) -> Callable[[], None]:
+        """Subscribe to any pushed state or inventory change for one device."""
+        self.device_listeners.setdefault(device_id, set()).add(listener)
+        return lambda: self._remove_scoped_listener(
+            self.device_listeners, device_id, listener
+        )
 
     async def handle_event(self, event: dict[str, Any]) -> bool:
         """Apply one SSE event, resynchronizing on reconnects and gaps."""
@@ -159,17 +185,20 @@ class SmartThingsWebRuntime:
     def apply_inventory(self, latest: BridgeInventory) -> bool:
         """Atomically merge the newest full or partial Bridge inventory."""
         current = self.inventory
-        devices = deepcopy(current.devices)
+        authoritative = latest.ready
+        devices = {} if authoritative else deepcopy(current.devices)
         for device_id, latest_device in latest.devices.items():
-            existing = devices.get(device_id)
+            existing = current.devices.get(device_id)
             if existing is None:
                 devices[device_id] = deepcopy(latest_device)
                 continue
-            states = deepcopy(existing.states)
+            states = {} if authoritative else deepcopy(existing.states)
             for key, candidate in latest_device.states.items():
-                present = states.get(key)
+                present = existing.states.get(key)
                 if present is None or _state_is_newer(candidate, present):
                     states[key] = deepcopy(candidate)
+                elif authoritative:
+                    states[key] = deepcopy(present)
             devices[device_id] = BridgeDevice(
                 device_id=latest_device.device_id,
                 location_id=latest_device.location_id,
@@ -179,22 +208,57 @@ class SmartThingsWebRuntime:
                 online=latest_device.online,
                 presentation=latest_device.presentation,
                 states=states,
-                controls={**existing.controls, **latest_device.controls},
+                controls=(
+                    deepcopy(latest_device.controls)
+                    if authoritative
+                    else {**existing.controls, **latest_device.controls}
+                ),
             )
         merged = BridgeInventory(
             sequence=latest.sequence,
             ready=latest.ready,
             bridge_version=latest.bridge_version,
             protocol_version=latest.protocol_version,
-            locations=_merge_locations(current.locations, latest.locations),
-            rooms={**current.rooms, **latest.rooms},
+            locations=(
+                _merge_locations(
+                    {
+                        location_id: location
+                        for location_id, location in current.locations.items()
+                        if location_id in latest.locations
+                    },
+                    latest.locations,
+                )
+                if authoritative
+                else _merge_locations(current.locations, latest.locations)
+            ),
+            rooms=(
+                deepcopy(latest.rooms)
+                if authoritative
+                else {**current.rooms, **latest.rooms}
+            ),
             devices=devices,
-            scenes=_merge_scenes(current.scenes, latest.scenes),
+            scenes=(
+                _merge_scenes(
+                    {
+                        scene_id: scene
+                        for scene_id, scene in current.scenes.items()
+                        if scene_id in latest.scenes
+                    },
+                    latest.scenes,
+                )
+                if authoritative
+                else _merge_scenes(current.scenes, latest.scenes)
+            ),
         )
         if merged == current:
             return False
+        changed_device_ids = {
+            device_id
+            for device_id in current.devices.keys() | merged.devices.keys()
+            if current.devices.get(device_id) != merged.devices.get(device_id)
+        }
         self.inventory = merged
-        self._notify_listeners()
+        self._notify_listeners(device_ids=changed_device_ids)
         return True
 
     def apply_state(self, event: dict[str, Any]) -> bool:
@@ -213,19 +277,66 @@ class SmartThingsWebRuntime:
         if sequence is None or sequence <= self.inventory.sequence:
             return False
         current = device.states.get(state.key)
+        new_state_key = current is None
         self.inventory.sequence = sequence
-        if current is not None and not _state_is_newer(state, current):
+        repeated_event = (
+            current is not None
+            and state.attribute in EVENT_ATTRIBUTES
+            and _timestamp(state.updated_at) == _timestamp(current.updated_at)
+        )
+        if current is not None and not _state_is_newer(state, current) and not repeated_event:
             return False
         device.states[state.key] = state
-        self._notify_listeners()
+        self._notify_listeners(
+            device_ids={device_id},
+            state_keys={(device_id, state.key)},
+            notify_global=(
+                new_state_key or state.attribute in DEVICE_REGISTRY_ATTRIBUTES
+            ),
+        )
         return True
 
-    def _notify_listeners(self) -> None:
-        for listener in tuple(self.listeners):
+    def _notify_listeners(
+        self,
+        *,
+        device_ids: set[str] | None = None,
+        state_keys: set[tuple[str, tuple[str, str, str]]] | None = None,
+        notify_global: bool = True,
+    ) -> None:
+        listeners = set(self.listeners) if notify_global else set()
+        if device_ids is None:
+            for scoped in self.device_listeners.values():
+                listeners.update(scoped)
+            for scoped in self.state_listeners.values():
+                listeners.update(scoped)
+        else:
+            for device_id in device_ids:
+                listeners.update(self.device_listeners.get(device_id, ()))
+            if state_keys is None:
+                for (device_id, _state_key), scoped in self.state_listeners.items():
+                    if device_id in device_ids:
+                        listeners.update(scoped)
+            else:
+                for key in state_keys:
+                    listeners.update(self.state_listeners.get(key, ()))
+        for listener in tuple(listeners):
             try:
                 listener()
             except Exception:  # noqa: BLE001 - one HA entity must not break the push loop
                 _LOGGER.exception("runtime_listener_failed")
+
+    @staticmethod
+    def _remove_scoped_listener(
+        listeners: dict[Any, set[Callable[[], None]]],
+        key: Any,
+        listener: Callable[[], None],
+    ) -> None:
+        scoped = listeners.get(key)
+        if scoped is None:
+            return
+        scoped.discard(listener)
+        if not scoped:
+            listeners.pop(key, None)
 
 
 ControlKind = Literal["switch", "light"]
@@ -247,6 +358,33 @@ BINARY_ATTRIBUTES = frozenset(
     }
 )
 
+EVENT_ATTRIBUTES = frozenset({"button"})
+
+FIRMWARE_ATTRIBUTES = frozenset(
+    {
+        "availableVersion",
+        "currentVersion",
+        "lastUpdateStatus",
+        "lastUpdateStatusReason",
+        "lastUpdateTime",
+        "state",
+        "updateAvailable",
+    }
+)
+
+DEVICE_REGISTRY_ATTRIBUTES = frozenset(
+    {
+        "currentVersion",
+        "mnhw",
+        "mnfv",
+        "mnmn",
+        "mnmo",
+        "model",
+        "modelCode",
+        "txicDeviceFwVer",
+    }
+)
+
 
 def control_kind(device: BridgeDevice, switch_state: BridgeState) -> ControlKind | None:
     """Classify only verified, safe switch-shaped controls."""
@@ -262,8 +400,78 @@ def control_kind(device: BridgeDevice, switch_state: BridgeState) -> ControlKind
     light_specific = (
         "colorTemperatureRange" in attributes
         or {"hue", "saturation"}.issubset(attributes)
+        or (
+            "level" in attributes
+            and any(
+                control.kind == "slider"
+                and control.attribute == "level"
+                and safe_observed_control(control)
+                for control in device.controls.values()
+            )
+        )
     )
     return "light" if light_specific else "switch"
+
+
+def toggle_control_for_state(
+    device: BridgeDevice, state: BridgeState
+) -> BridgeControl | None:
+    """Return the unique exact toggle control backing one pushed state."""
+    matches = [
+        control
+        for control in device.controls.values()
+        if control.kind == "toggle"
+        and control.component == state.component
+        and control.capability == state.capability
+        and control.attribute == state.attribute
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def safe_generic_toggle_control(control: BridgeControl) -> bool:
+    """Accept only a reversible observed toggle outside dangerous device classes."""
+    if not safe_observed_control(control):
+        return False
+    values = {
+        value.lower().replace("_", "").replace("-", "")
+        for value in control.commands
+    }
+    return bool(values & {"on", "switchon", "enable", "enabled"}) and bool(
+        values & {"off", "switchoff", "disable", "disabled"}
+    )
+
+
+def safe_observed_control(control: BridgeControl) -> bool:
+    """Reject dangerous actuators regardless of compound or localized naming."""
+    identity = " ".join(
+        value
+        for value in (
+            control.control_id,
+            control.capability,
+            control.attribute,
+            control.label,
+            *control.commands,
+            *control.option_commands.values(),
+        )
+        if value
+    )
+    return not _dangerous_control_text(identity)
+
+
+def _dangerous_control_text(value: str) -> bool:
+    separated = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value).lower()
+    tokens = [item for item in re.split(r"[^a-z0-9가-힣]+", separated) if item]
+    if any(
+        item in {"lock", "unlock", "valve", "door", "garage"}
+        or re.fullmatch(r"(?:lock|unlock|valve|door|garage)\d*", item)
+        for item in tokens
+    ):
+        return True
+    compact = "".join(tokens)
+    return bool(
+        re.search(r"(?:door|lock|unlock|valve|garage)(?:state|control|command)", compact)
+        or re.search(r"잠금|도어|차고|밸브|문\s*(?:열|닫)", value)
+    )
 
 
 def entity_unique_id(device_id: str, state: BridgeState) -> str:
@@ -333,6 +541,7 @@ FAN_ATTRIBUTES = {
     "airPurifierMode",
     "fanMode",
     "fanSpeed",
+    "supportedAcFanModes",
     "supportedAirPurifierModes",
     "supportedFanModes",
 }
@@ -353,19 +562,6 @@ FAN_IDENTITY_TERMS = {
     "선풍기",
     "팬",
     "환풍",
-}
-
-NUMBER_ATTRIBUTES = {
-    "colorTemperature",
-    "coolingSetpoint",
-    "detectionFrequency",
-    "fanSpeed",
-    "heatingSetpoint",
-    "level",
-    "percent",
-    "setpoint",
-    "targetTemperature",
-    "volume",
 }
 
 COVER_ATTRIBUTES = {
@@ -448,21 +644,6 @@ def is_climate_device(device: BridgeDevice) -> bool:
     )
 
 
-def number_state_allowed(device: BridgeDevice, state: BridgeState) -> bool:
-    """Return whether a numeric state should be exposed as a control number."""
-    if isinstance(state.value, bool) or not isinstance(state.value, (int, float)):
-        return False
-    if state.attribute not in NUMBER_ATTRIBUTES:
-        return False
-    if state.attribute in {"volume"} and is_media_device(device):
-        return False
-    if state.attribute == "fanSpeed" and not is_fan_device(device):
-        return False
-    if state.attribute == "percent" and not is_fan_device(device):
-        return False
-    return True
-
-
 def number_controls(device: BridgeDevice) -> list[BridgeControl]:
     """Return slider controls discovered from detail swatches."""
     return [
@@ -472,7 +653,44 @@ def number_controls(device: BridgeDevice) -> list[BridgeControl]:
         and control.attribute is not None
         and control.minimum is not None
         and control.maximum is not None
+        and safe_observed_control(control)
+        and not _slider_owned_by_richer_domain(device, control)
     ]
+
+
+def number_control_for_state(
+    device: BridgeDevice, state: BridgeState
+) -> BridgeControl | None:
+    """Return the unique exact observed slider mirroring one pushed state."""
+    matches = [
+        control
+        for control in number_controls(device)
+        if (control.component is None or control.component == state.component)
+        and (control.capability is None or control.capability == state.capability)
+        and control.attribute == state.attribute
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _slider_owned_by_richer_domain(
+    device: BridgeDevice, control: BridgeControl
+) -> bool:
+    attribute = control.attribute
+    if attribute == "volume" and is_media_device(device):
+        return True
+    if attribute == "shadeLevel" and is_cover_device(device):
+        return True
+    if attribute in {"coolingSetpoint", "heatingSetpoint", "targetTemperature"} and is_climate_device(device):
+        return True
+    if attribute not in {"colorTemperature", "level"}:
+        return False
+    return any(
+        state.attribute == "switch"
+        and control_kind(device, state) == "light"
+        and (toggle := toggle_control_for_state(device, state)) is not None
+        and safe_observed_control(toggle)
+        for state in device.states.values()
+    )
 
 
 def cover_controls(device: BridgeDevice) -> list[BridgeControl]:
@@ -481,6 +699,7 @@ def cover_controls(device: BridgeDevice) -> list[BridgeControl]:
         control
         for control in device.controls.values()
         if control.kind in {"button", "slider", "enumerated"}
+        and safe_observed_control(control)
         and (
             control.attribute in COVER_ATTRIBUTES
             or _control_mentions(control, "shade", "windowshade", "blind", "cover")
@@ -495,6 +714,7 @@ def climate_controls(device: BridgeDevice) -> list[BridgeControl]:
         for control in device.controls.values()
         if control.kind in {"enumerated", "slider"}
         and control.attribute in CLIMATE_ATTRIBUTES
+        and safe_observed_control(control)
     ]
 
 
@@ -506,6 +726,7 @@ def select_controls(device: BridgeDevice) -> list[BridgeControl]:
         if control.kind == "enumerated"
         and bool(control.options)
         and control.attribute not in SELECT_PRIMARY_DOMAIN_ATTRIBUTES
+        and safe_observed_control(control)
     ]
 
 
@@ -520,7 +741,11 @@ def refresh_controls(device: BridgeDevice) -> list[BridgeControl]:
 
 def button_controls(device: BridgeDevice) -> list[BridgeControl]:
     """Return non-value button controls discovered from detail swatches."""
-    return [control for control in device.controls.values() if control.kind == "button"]
+    return [
+        control
+        for control in device.controls.values()
+        if control.kind == "button" and safe_observed_control(control)
+    ]
 
 
 def control_label(control: BridgeControl, fallback: str) -> str:
@@ -532,6 +757,8 @@ def control_supports_command(control: BridgeControl, command: str) -> bool:
     """Match a web control command without confusing Play with Play Track."""
     command_lower = command.lower()
     aliases = {
+        "on": {"on", "switchon", "enable", "enabled"},
+        "off": {"off", "switchoff", "disable", "disabled"},
         "setvolume": {"setvolume", "volume"},
         "unmute": {"unmute", "mute"},
         "playtrackandresume": {"playtrackandresume", "play track and resume"},
@@ -541,6 +768,7 @@ def control_supports_command(control: BridgeControl, command: str) -> bool:
         control.label or "",
         control.attribute or "",
         *control.commands,
+        *control.option_commands.values(),
     ]
     normalized = {
         " ".join(value.lower().replace("_", " ").replace("-", " ").split())
@@ -605,9 +833,154 @@ def token_values(value: Any) -> list[str]:
     return option_values(value)
 
 
-def sensor_state_allowed(attribute: str) -> bool:
+def primary_state_attributes(
+    device: BridgeDevice,
+    attributes: Iterable[str],
+    *,
+    component: str | None = None,
+) -> dict[str, Any]:
+    """Preserve primary-domain raw values without losing duplicate component keys."""
+    allowed = set(attributes)
+    selected = [
+        state
+        for state in device.states.values()
+        if state.attribute in allowed
+        and (component is None or state.component == component)
+    ]
+    counts: dict[str, int] = {}
+    for state in selected:
+        counts[state.attribute] = counts.get(state.attribute, 0) + 1
+    return {
+        (
+            state.attribute
+            if counts[state.attribute] == 1
+            else f"smartthings_{state.component}_{state.capability}_{state.attribute}"
+        ): state.value
+        for state in selected
+    }
+
+
+def sensor_state_allowed(
+    attribute: str, *, firmware: bool = False, primary_domain: bool = False
+) -> bool:
     """Return whether a normalized state needs a sensor representation."""
-    return attribute != "switch" and attribute not in BINARY_ATTRIBUTES
+    return (
+        attribute != "switch"
+        and attribute not in BINARY_ATTRIBUTES
+        and attribute not in EVENT_ATTRIBUTES
+        and not firmware
+        and not primary_domain
+    )
+
+
+def sensor_state_owned_by_primary_domain(
+    device: BridgeDevice, state: BridgeState
+) -> bool:
+    """Avoid raw sensor duplicates when an official-style rich domain owns a state."""
+    attribute = state.attribute
+    if is_media_device(device) and attribute in MEDIA_ATTRIBUTES:
+        return True
+    if is_fan_device(device) and attribute in FAN_ATTRIBUTES | {"level", "percent"}:
+        return True
+    if is_cover_device(device) and attribute in COVER_ATTRIBUTES:
+        return True
+    if is_climate_device(device) and attribute in {
+        "coolingSetpoint",
+        "heatingSetpoint",
+        "supportedThermostatModes",
+        "targetTemperature",
+        "thermostatMode",
+    }:
+        return True
+    if number_control_for_state(device, state) is not None:
+        return True
+    if attribute in {
+        "colorTemperature",
+        "colorTemperatureRange",
+        "hue",
+        "level",
+        "levelRange",
+        "saturation",
+        "supportedColorModes",
+    } and any(
+        candidate.attribute == "switch"
+        and control_kind(device, candidate) == "light"
+        and toggle_control_for_state(device, candidate) is not None
+        for candidate in device.states.values()
+    ):
+        return True
+    toggle = toggle_control_for_state(device, state)
+    if (
+        toggle is not None
+        and attribute not in {"switch", "mute", "windowShade"}
+        and safe_generic_toggle_control(toggle)
+    ):
+        return True
+    return False
+
+
+def firmware_states(device: BridgeDevice) -> dict[str, BridgeState]:
+    """Return one coherent firmware capability instead of raw duplicate sensors."""
+    by_capability: dict[tuple[str, str], dict[str, BridgeState]] = {}
+    for state in device.states.values():
+        if state.attribute in FIRMWARE_ATTRIBUTES:
+            by_capability.setdefault((state.component, state.capability), {})[
+                state.attribute
+            ] = state
+    candidates = [
+        states
+        for states in by_capability.values()
+        if "currentVersion" in states and "availableVersion" in states
+    ]
+    if not candidates:
+        return {}
+    return max(candidates, key=lambda states: len(states))
+
+
+def device_software_version(device: BridgeDevice) -> str | None:
+    """Return a compact device-registry software version when firmware reports one."""
+    state = firmware_states(device).get("currentVersion")
+    value = _device_metadata_value(state)
+    if value is None:
+        value = _first_device_metadata_value(device, "mnfv", "txicDeviceFwVer")
+    if value is None:
+        return None
+    return re.sub(r"\s+\(\d+\)$", "", value) or value
+
+
+def device_manufacturer(device: BridgeDevice) -> str | None:
+    """Return the pushed manufacturer name when SmartThings supplies it."""
+    return _first_device_metadata_value(device, "mnmn")
+
+
+def device_model(device: BridgeDevice) -> str | None:
+    """Prefer the pushed manufacturer model over the generic presentation type."""
+    return _first_device_metadata_value(device, "mnmo", "model", "modelCode") or device.device_type
+
+
+def device_hardware_version(device: BridgeDevice) -> str | None:
+    """Return the pushed hardware revision when available."""
+    return _first_device_metadata_value(device, "mnhw")
+
+
+def _first_device_metadata_value(
+    device: BridgeDevice, *attributes: str
+) -> str | None:
+    for attribute in attributes:
+        for state in device.states.values():
+            if state.attribute != attribute:
+                continue
+            value = _device_metadata_value(state)
+            if value is not None:
+                return value
+    return None
+
+
+def _device_metadata_value(state: BridgeState | None) -> str | None:
+    if state is None or not isinstance(state.value, str):
+        return None
+    value = state.value.strip()
+    return value if 0 < len(value) <= 255 else None
 
 
 def sensor_native_value(value: Any) -> Any:
@@ -799,6 +1172,8 @@ def parse_control(raw: Any) -> BridgeControl | None:
             )
         ),
         options=tuple(option_values(raw.get("options"))),
+        option_labels=_safe_string_map(raw.get("optionLabels")),
+        option_commands=_safe_string_map(raw.get("optionCommands")),
         minimum=float(minimum)
         if isinstance(minimum, (int, float)) and not isinstance(minimum, bool)
         else None,
@@ -809,6 +1184,20 @@ def parse_control(raw: Any) -> BridgeControl | None:
         if isinstance(step, (int, float)) and not isinstance(step, bool)
         else None,
     )
+
+
+def _safe_string_map(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: item
+        for key, item in value.items()
+        if isinstance(key, str)
+        and isinstance(item, str)
+        and key not in {"__proto__", "prototype", "constructor"}
+        and 0 < len(key) <= 255
+        and 0 < len(item) <= 255
+    }
 
 
 def parse_state(raw: dict[str, Any]) -> BridgeState | None:

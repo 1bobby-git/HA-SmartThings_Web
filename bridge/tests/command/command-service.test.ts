@@ -302,6 +302,41 @@ describe("SafeCommandService", () => {
 
   test("confirms number, media, and fan commands with exact newer state values", async () => {
     const store = readyDeviceStore();
+    observeDeviceDetails(store, [
+      detailSwatch("SLIDER", "slider", {
+        swatchId: "identifier_frequency",
+        label: "Detection frequency",
+        attributeName: "detectionFrequency",
+        min: 0,
+        max: 3600
+      }),
+      detailSwatch("SLIDER", "slider", {
+        swatchId: "identifier_percent",
+        label: "Percent",
+        attributeName: "percent",
+        min: 0,
+        max: 100
+      }),
+      detailSwatch("SLIDER", "slider", {
+        swatchId: "identifier_volume",
+        label: "Volume",
+        attributeName: "volume",
+        min: 0,
+        max: 100
+      }),
+      detailSwatch("TOGGLE", "toggle", {
+        swatchId: "identifier_mute",
+        label: "Mute",
+        attributeName: "mute",
+        commands: ["mute", "unmute"]
+      }),
+      detailSwatch("ENUMERATED", "enumerated", {
+        swatchId: "identifier_fan_mode",
+        label: "Fan mode",
+        attributeName: "fanMode",
+        options: ["normal", "auto"]
+      })
+    ]);
     const executor: SafeCommandExecutor = {
       executeDeviceAction: vi.fn(async (input) => {
         if (input.command === "setNumber") {
@@ -330,24 +365,113 @@ describe("SafeCommandService", () => {
 
     await expect(service.execute(deviceCommand("setNumber", "request_008", {
       attribute: "detectionFrequency",
-      arguments: [42]
+      arguments: [42],
+      controlId: "identifier_frequency"
     }))).resolves.toMatchObject({ status: "confirmed" });
     await expect(service.execute(deviceCommand("setNumber", "request_008b", {
       attribute: "percent",
-      arguments: [55]
+      arguments: [55],
+      controlId: "identifier_percent"
     }))).resolves.toMatchObject({ status: "confirmed" });
     await expect(service.execute(deviceCommand("setVolume", "request_009", {
       attribute: "volume",
-      arguments: [12]
+      arguments: [12],
+      controlId: "identifier_volume"
     }))).resolves.toMatchObject({ status: "confirmed" });
     await expect(service.execute(deviceCommand("mute", "request_010", {
       attribute: "mute",
-      arguments: []
+      arguments: [],
+      controlId: "identifier_mute"
     }))).resolves.toMatchObject({ status: "confirmed" });
     await expect(service.execute(deviceCommand("setFanMode", "request_011", {
       attribute: "fanMode",
-      arguments: ["auto"]
+      arguments: ["auto"],
+      controlId: "identifier_fan_mode"
     }))).resolves.toMatchObject({ status: "confirmed" });
+  });
+
+  test("requires and executes the exact observed playback control", async () => {
+    const store = readyDeviceStore();
+    observeDeviceDetails(store, [
+      detailSwatch("BUTTON", "button", {
+        swatchId: "identifier_play",
+        label: "Play",
+        capabilityId: "identifier_mediaPlayback",
+        attributeName: "playbackStatus",
+        commands: ["play"]
+      }),
+      detailSwatch("ENUMERATED", "enumerated", {
+        swatchId: "identifier_track",
+        label: "Track control",
+        capabilityId: "identifier_mediaTrackControl",
+        attributeName: "supportedTrackControlCommands",
+        possibleStates: [
+          { status: "next", label: "Next track", command: "nextTrack" }
+        ]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async (input) => {
+        if (input.command === "play") {
+          store.observe(received(deviceEventFrame(
+            "playing",
+            "2026-08-25T00:00:01Z",
+            "playbackStatus",
+            "dev_001",
+            "identifier_mediaPlayback"
+          )));
+        }
+        if (input.command === "nextTrack") {
+          store.observe(received(deviceEventFrame(
+            { title: "Next" },
+            "2026-08-25T00:00:02Z",
+            "audioTrackData",
+            "dev_001",
+            "identifier_mediaTrackControl"
+          )));
+        }
+      })
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 1_000,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute(deviceCommand("play", "request_play_001", {
+      attribute: "playbackStatus",
+      arguments: [],
+      controlId: "identifier_play",
+      controlLabel: "Play",
+      capability: "identifier_mediaPlayback"
+    }))).resolves.toMatchObject({ status: "confirmed" });
+    expect(executor.executeDeviceAction).toHaveBeenCalledWith(expect.objectContaining({
+      command: "play",
+      controlId: "identifier_play",
+      controlLabel: "Play"
+    }));
+
+    await expect(service.execute(deviceCommand("nextTrack", "request_track_001", {
+      attribute: "supportedTrackControlCommands",
+      arguments: [],
+      controlId: "identifier_track",
+      controlLabel: "Track control",
+      capability: "identifier_mediaTrackControl"
+    }))).resolves.toMatchObject({ status: "confirmed" });
+    expect(executor.executeDeviceAction).toHaveBeenCalledWith(expect.objectContaining({
+      command: "nextTrack",
+      controlId: "identifier_track",
+      optionLabel: "Next track",
+      optionCommand: "nextTrack"
+    }));
+
+    await expect(service.execute(deviceCommand("play", "request_play_002", {
+      attribute: "playbackStatus",
+      arguments: [],
+      capability: "identifier_mediaPlayback"
+    }))).rejects.toMatchObject({ code: "invalid_control_id" });
   });
 
   test("requires observed enumerated controls and exact option pushes for setOption", async () => {
@@ -565,8 +689,51 @@ describe("SafeCommandService", () => {
     }))).rejects.toMatchObject({ code: "unsupported_command" });
   });
 
+  test.each([
+    ["doorLock", "Door lock"],
+    ["lockState", "Lock state"],
+    ["garageDoor", "Garage door"],
+    ["valveState", "Valve state"],
+    ["safeToggle", "문 열기"],
+    ["safeToggle", "밸브 제어"]
+  ])("rejects dangerous compound or localized controls: %s / %s", async (attribute, label) => {
+    const store = readyDeviceStore();
+    observeDeviceDetails(store, [
+      detailSwatch("BUTTON", "button", {
+        swatchId: "identifier_danger001",
+        label,
+        capabilityId: "identifier_capability_custom",
+        attributeName: attribute,
+        commands: ["press"]
+      })
+    ]);
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: { executeDeviceAction: vi.fn(async () => undefined) },
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute(deviceCommand("press", "request_027b", {
+      attribute,
+      arguments: [],
+      controlId: "identifier_danger001",
+      capability: "identifier_capability_custom"
+    }))).rejects.toMatchObject({ code: "unsupported_command" });
+  });
+
   test("rejects stale or wrong-device confirmations for generic device commands", async () => {
     const store = readyDeviceStore();
+    observeDeviceDetails(store, [
+      detailSwatch("SLIDER", "slider", {
+        swatchId: "identifier_frequency_stale",
+        label: "Detection frequency",
+        attributeName: "detectionFrequency",
+        min: 0,
+        max: 3600
+      })
+    ]);
     const resync = vi.fn(async () => undefined);
     const service = new SafeCommandService({
       devices: store,
@@ -583,7 +750,8 @@ describe("SafeCommandService", () => {
 
     await expect(service.execute(deviceCommand("setNumber", "request_012", {
       attribute: "detectionFrequency",
-      arguments: [42]
+      arguments: [42],
+      controlId: "identifier_frequency_stale"
     }))).rejects.toMatchObject({ code: "command_confirmation_timeout" });
     expect(resync).toHaveBeenCalledTimes(1);
   });
@@ -775,7 +943,8 @@ function deviceEventFrame(
   value: unknown,
   eventTime: string,
   attribute = "switch",
-  deviceId = "dev_001"
+  deviceId = "dev_001",
+  capability = "identifier_switch"
 ): string {
   return `42${JSON.stringify([
     "api/subscription DEVICE_EVENT",
@@ -787,7 +956,7 @@ function deviceEventFrame(
           device_id: deviceId,
           location_id: "loc_001",
           component: "main",
-          capability: "identifier_switch",
+          capability,
           attribute,
           value,
           unit: null

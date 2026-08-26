@@ -20,8 +20,8 @@ from .models import (
     control_label,
     entity_unique_id,
     number_controls,
-    number_state_allowed,
     numeric_range_for,
+    safe_observed_control,
 )
 
 
@@ -39,32 +39,24 @@ async def async_setup_entry(
         for device in runtime.inventory.devices.values():
             if device.location_id != runtime.location_id:
                 continue
-            controls = number_controls(device)
-            if controls:
-                for control in controls:
-                    state = _matching_state(device, control)
-                    unique_id = (
-                        entity_unique_id(device.device_id, state)
-                        if state
-                        else f"{device.device_id}_number_{control.control_id}"
+            for control in number_controls(device):
+                state = _matching_state(device, control)
+                unique_id = (
+                    entity_unique_id(device.device_id, state)
+                    if state
+                    else f"{device.device_id}_number_{control.control_id}"
+                )
+                if unique_id in known:
+                    continue
+                known.add(unique_id)
+                entities.append(
+                    SmartThingsWebNumber(
+                        runtime,
+                        device,
+                        state,
+                        control,
                     )
-                    if unique_id in known:
-                        continue
-                    known.add(unique_id)
-                    entities.append(
-                        SmartThingsWebNumber(
-                            runtime,
-                            device,
-                            state,
-                            control,
-                        )
-                    )
-                continue
-            for state in device.states.values():
-                unique_id = "_".join((device.device_id, *state.key))
-                if number_state_allowed(device, state) and unique_id not in known:
-                    known.add(unique_id)
-                    entities.append(SmartThingsWebNumber(runtime, device, state, None))
+                )
         if entities:
             async_add_entities(entities)
 
@@ -103,6 +95,11 @@ class SmartThingsWebNumber(SmartThingsWebDeviceEntity, NumberEntity):
         self._attr_native_unit_of_measurement = state.unit if state else None
 
     @property
+    def available(self) -> bool:
+        """Stay available only while the exact observed slider still exists."""
+        return super().available and self._current_control is not None
+
+    @property
     def native_value(self) -> float | None:
         """Return the last pushed numeric value."""
         state = self._current_state
@@ -110,19 +107,33 @@ class SmartThingsWebNumber(SmartThingsWebDeviceEntity, NumberEntity):
             return None
         return float(state.value)
 
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Preserve the exact pushed slider payload on the number entity."""
+        state = self._current_state
+        if state is None:
+            return {}
+        return {
+            "smartthings_raw_value": state.value,
+            "smartthings_updated_at": state.updated_at,
+        }
+
     async def async_set_native_value(self, value: float) -> None:
         """Request a numeric value without optimistic state mutation."""
         state = self._current_state
+        control = self._current_control
+        if control is None:
+            raise HomeAssistantError("SmartThings Web number has no observed slider control")
         try:
             await self.runtime.client.async_execute_command(
                 target_type="device",
                 target_id=self.device_id,
-                component=self.control.component if self.control else state.component if state else None,
-                capability=self.control.capability if self.control else state.capability if state else None,
-                attribute=self.control.attribute if self.control else state.attribute if state else None,
-                control_id=self.control.control_id if self.control else None,
-                control_label=self.control.label if self.control else None,
-                command="setNumber",
+                component=control.component,
+                capability=control.capability,
+                attribute=control.attribute,
+                control_id=control.control_id,
+                control_label=control.label,
+                command=_command_for(control, state),
                 arguments=[value],
             )
         except BridgeClientError as err:
@@ -137,18 +148,61 @@ class SmartThingsWebNumber(SmartThingsWebDeviceEntity, NumberEntity):
             return device.states.get(self.state_key)
         return None
 
+    @property
+    def _current_control(self) -> BridgeControl | None:
+        device = self.bridge_device
+        if device is None or self.control is None:
+            return None
+        control = device.controls.get(self.control.control_id)
+        original = self.control
+        state_key = self.state_key
+        return (
+            control
+            if control is not None
+            and control.kind == "slider"
+            and safe_observed_control(control)
+            and control.attribute == original.attribute
+            and (
+                original.component is None
+                or control.component == original.component
+            )
+            and (
+                original.capability is None
+                or control.capability == original.capability
+            )
+            and (
+                state_key is None
+                or (
+                    control.attribute == state_key[2]
+                    and (control.component is None or control.component == state_key[0])
+                    and (control.capability is None or control.capability == state_key[1])
+                )
+            )
+            else None
+        )
+
 
 def _name(attribute: str) -> str:
     return re.sub(r"(?<!^)(?=[A-Z])", " ", attribute).replace("_", " ").strip().title()
 
 
 def _matching_state(device: BridgeDevice, control: BridgeControl) -> BridgeState | None:
-    return next(
-        (
-            state
-            for state in device.states.values()
-            if state.attribute == control.attribute
-            and (control.component is None or state.component == control.component)
-        ),
-        None,
-    )
+    matches = [
+        state
+        for state in device.states.values()
+        if state.attribute == control.attribute
+        and (control.component is None or state.component == control.component)
+        and (control.capability is None or state.capability == control.capability)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _command_for(
+    control: BridgeControl | None, state: BridgeState | None
+) -> str:
+    attribute = control.attribute if control else state.attribute if state else None
+    if attribute == "volume":
+        return "setVolume"
+    if attribute == "shadeLevel":
+        return "setPosition"
+    return "setNumber"

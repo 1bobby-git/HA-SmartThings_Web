@@ -78,7 +78,10 @@ class SmartThingsWebDeviceEntity:
 entity_module.SmartThingsWebDeviceEntity = SmartThingsWebDeviceEntity  # type: ignore[attr-defined]
 sys.modules["smartthings_web.entity"] = entity_module
 
-from smartthings_web.media_player import SmartThingsWebMediaPlayer  # noqa: E402
+from smartthings_web.media_player import (  # noqa: E402
+    SmartThingsWebMediaPlayer,
+    _preferred_command,
+)
 from smartthings_web.models import BridgeControl, BridgeDevice, BridgeState  # noqa: E402
 
 
@@ -114,17 +117,7 @@ class SmartThingsWebMediaPlayerTests(unittest.TestCase):
             None,
             True,
             states={state.key: state for state in states},
-            controls={
-                "play_track": BridgeControl(
-                    "play_track",
-                    "button",
-                    "Play track and resume",
-                    component="main",
-                    capability="audioTrackData",
-                    attribute="audioTrackData",
-                    commands=("playTrackAndResume",),
-                )
-            },
+            controls=_media_controls(),
         )
 
         features = SmartThingsWebMediaPlayer(object(), device).supported_features
@@ -168,6 +161,112 @@ class SmartThingsWebMediaPlayerTests(unittest.TestCase):
 
         self.assertFalse(features & MediaPlayerEntityFeature.PLAY_MEDIA)
 
+    def test_track_command_uses_only_observed_actions(self) -> None:
+        primary = BridgeControl(
+            "next",
+            "button",
+            "Next track",
+            attribute="audioTrackData",
+            commands=("nextTrack",),
+        )
+        fallback = BridgeControl(
+            "playback",
+            "enumerated",
+            "Playback",
+            attribute="playbackStatus",
+            options=("fast forwarding",),
+            option_commands={"fast forwarding": "fastForward"},
+        )
+        primary_device = BridgeDevice(
+            "dev_primary",
+            "loc_001",
+            None,
+            "Speaker",
+            None,
+            True,
+            controls={primary.control_id: primary},
+        )
+        fallback_device = BridgeDevice(
+            "dev_fallback",
+            "loc_001",
+            None,
+            "Speaker",
+            None,
+            True,
+            controls={fallback.control_id: fallback},
+        )
+        ambiguous_primary_device = BridgeDevice(
+            "dev_ambiguous",
+            "loc_001",
+            None,
+            "Speaker",
+            None,
+            True,
+            controls={
+                "next_1": primary,
+                "next_2": BridgeControl(
+                    "next_2",
+                    "button",
+                    "Next track 2",
+                    attribute="audioTrackData",
+                    commands=("nextTrack",),
+                ),
+                fallback.control_id: fallback,
+            },
+        )
+        unavailable_device = BridgeDevice(
+            "dev_none",
+            "loc_001",
+            None,
+            "Speaker",
+            None,
+            True,
+        )
+
+        self.assertEqual(
+            _preferred_command(primary_device, "nextTrack", "fastForward"),
+            "nextTrack",
+        )
+        self.assertEqual(
+            _preferred_command(fallback_device, "nextTrack", "fastForward"),
+            "fastForward",
+        )
+        self.assertEqual(
+            _preferred_command(
+                ambiguous_primary_device,
+                "nextTrack",
+                "fastForward",
+            ),
+            "fastForward",
+        )
+        with self.assertRaises(exceptions_module.HomeAssistantError):
+            _preferred_command(unavailable_device, "nextTrack", "fastForward")
+
+    def test_unsafe_control_cannot_advertise_or_supply_media_fallback(self) -> None:
+        unsafe = BridgeControl(
+            "garageDoorControl",
+            "button",
+            "Garage door",
+            attribute="playbackStatus",
+            commands=("fastForward", "playTrackAndResume"),
+        )
+        device = BridgeDevice(
+            "dev_unsafe",
+            "loc_001",
+            None,
+            "Speaker",
+            None,
+            True,
+            controls={unsafe.control_id: unsafe},
+        )
+
+        features = SmartThingsWebMediaPlayer(object(), device).supported_features
+
+        self.assertFalse(features & MediaPlayerEntityFeature.NEXT_TRACK)
+        self.assertFalse(features & MediaPlayerEntityFeature.PLAY_MEDIA)
+        with self.assertRaises(exceptions_module.HomeAssistantError):
+            _preferred_command(device, "nextTrack", "fastForward")
+
     def test_all_media_services_forward_exact_bridge_commands_without_state_mutation(self) -> None:
         values = {
             "switch": "off",
@@ -189,15 +288,6 @@ class SmartThingsWebMediaPlayerTests(unittest.TestCase):
             )
             for attribute, value in values.items()
         ]
-        play_track = BridgeControl(
-            "play_track",
-            "button",
-            "Play track and resume",
-            component="main",
-            capability="audioTrackData",
-            attribute="audioTrackData",
-            commands=("playTrackAndResume",),
-        )
         device = BridgeDevice(
             "dev_003",
             "loc_001",
@@ -206,7 +296,7 @@ class SmartThingsWebMediaPlayerTests(unittest.TestCase):
             None,
             True,
             states={state.key: state for state in states},
-            controls={play_track.control_id: play_track},
+            controls=_media_controls(),
         )
 
         class Client:
@@ -258,6 +348,82 @@ class SmartThingsWebMediaPlayerTests(unittest.TestCase):
             {key: state.value for key, state in device.states.items()},
             before,
         )
+
+
+def _media_controls() -> dict[str, BridgeControl]:
+    controls = [
+        BridgeControl(
+            "power",
+            "toggle",
+            "Power",
+            component="main",
+            capability="switch",
+            attribute="switch",
+            commands=("on", "off"),
+        ),
+        BridgeControl(
+            "playback",
+            "enumerated",
+            "Playback",
+            component="main",
+            capability="mediaPlayback",
+            attribute="playbackStatus",
+            options=("playing", "paused", "stopped"),
+            option_commands={
+                "playing": "play",
+                "paused": "pause",
+                "stopped": "stop",
+            },
+        ),
+        BridgeControl(
+            "next",
+            "button",
+            "Next track",
+            component="main",
+            capability="mediaTrackControl",
+            attribute="audioTrackData",
+            commands=("nextTrack",),
+        ),
+        BridgeControl(
+            "previous",
+            "button",
+            "Previous track",
+            component="main",
+            capability="mediaTrackControl",
+            attribute="audioTrackData",
+            commands=("previousTrack",),
+        ),
+        BridgeControl(
+            "volume",
+            "slider",
+            "Volume",
+            component="main",
+            capability="audioVolume",
+            attribute="volume",
+            minimum=0,
+            maximum=100,
+            step=1,
+        ),
+        BridgeControl(
+            "mute",
+            "toggle",
+            "Mute",
+            component="main",
+            capability="audioMute",
+            attribute="mute",
+            commands=("mute", "unmute"),
+        ),
+        BridgeControl(
+            "play_track",
+            "button",
+            "Play track and resume",
+            component="main",
+            capability="audioTrackData",
+            attribute="audioTrackData",
+            commands=("playTrackAndResume",),
+        ),
+    ]
+    return {control.control_id: control for control in controls}
 
 
 if __name__ == "__main__":
