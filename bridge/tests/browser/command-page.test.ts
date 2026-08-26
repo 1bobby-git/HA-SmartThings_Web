@@ -296,9 +296,8 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
     page.detailDialog.getByRole = vi.fn(() => missing);
     page.detailDialog.getByText = vi.fn(() => missing);
-    const executor = new SmartThingsWebUiCommandExecutor(() => ({
-      openCommandPage: vi.fn(async () => page)
-    }));
+    const manager = { openCommandPage: vi.fn(async () => page) };
+    const executor = new SmartThingsWebUiCommandExecutor(() => manager);
 
     await expect(executor.executeDeviceAction({
       deviceName: "Safe plug",
@@ -312,6 +311,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       controlLabel: "Power"
     })).rejects.toThrow("command_control_not_found");
 
+    expect(manager.openCommandPage).toHaveBeenCalledTimes(1);
     expect(backgroundSwitch.click).not.toHaveBeenCalled();
   });
 
@@ -748,6 +748,37 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(roomButton.click).toHaveBeenCalledTimes(1);
     expect(visibleDevice.click).toHaveBeenCalledTimes(1);
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
+  });
+
+  test("retries one fresh page when cold room navigation fails before control probing", async () => {
+    const coldPage = new FakeCommandPage();
+    const readyPage = new FakeCommandPage();
+    const missing = new FakeLocator(0, true);
+    coldPage.card = missing;
+    coldPage.getByRole = vi.fn(() => missing);
+    coldPage.getByText = vi.fn(() => missing);
+    coldPage.locator = vi.fn(() => missing);
+    coldPage.goto = vi.fn(async (url: string) => {
+      coldPage.currentUrl = url;
+    });
+    const manager = {
+      openCommandPage: vi
+        .fn()
+        .mockResolvedValueOnce(coldPage)
+        .mockResolvedValueOnce(readyPage)
+    };
+    const executor = new SmartThingsWebUiCommandExecutor(() => manager);
+
+    await executor.executeSwitch({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      roomName: "Kitchen"
+    });
+
+    expect(manager.openCommandPage).toHaveBeenCalledTimes(2);
+    expect(coldPage.toggle.click).not.toHaveBeenCalled();
+    expect(coldPage.close).toHaveBeenCalledTimes(1);
+    expect(readyPage.toggle.click).toHaveBeenCalledTimes(1);
   });
 
   test("activates a heading-backed room surface when Cake exposes no room button", async () => {

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.68
+
+- Retry one cold room-navigation failure on a new page before any control probing, while preserving exact room, device, and detail-dialog matching.
+- Close the failed page and never retry after control discovery starts or a mutation might have occurred.
+
 ## 0.1.67
 
 - Preserve non-numeric pushed values such as battery health status without assigning Home Assistant numeric sensor classes.

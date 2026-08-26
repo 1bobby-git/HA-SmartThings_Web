@@ -243,18 +243,30 @@ export class SmartThingsWebUiCommandExecutor {
         if (!keepWarm) await routedPage.close().catch(() => undefined);
       }
     }
-    const page = (await manager.openCommandPage()) as CommandPageLike;
+    let page: CommandPageLike | undefined;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const candidate = (await manager.openCommandPage()) as CommandPageLike;
+      try {
+        if (!isSmartThingsLocation(candidate.url())) {
+          throw new Error("command_login_required");
+        }
+        await this.ensureLocation(candidate, input.locationId, input.locationNames);
+        this.#diagnostic("fresh_navigation");
+        await openDeviceDetail(candidate, input.deviceName, input.roomName, {
+          preferRooms: Boolean(input.roomName)
+        });
+        await waitForOpenedDeviceDetail(candidate, input.deviceName, input.roomName);
+        page = candidate;
+        break;
+      } catch (error) {
+        await candidate.close().catch(() => undefined);
+        if (attempt === 0 && isRetryableFreshNavigationError(error)) continue;
+        throw error;
+      }
+    }
+    if (!page) throw new Error("command_target_not_found");
     let keepWarm = false;
     try {
-      if (!isSmartThingsLocation(page.url())) {
-        throw new Error("command_login_required");
-      }
-      await this.ensureLocation(page, input.locationId, input.locationNames);
-      this.#diagnostic("fresh_navigation");
-      await openDeviceDetail(page, input.deviceName, input.roomName, {
-        preferRooms: Boolean(input.roomName)
-      });
-      await waitForOpenedDeviceDetail(page, input.deviceName, input.roomName);
       this.#diagnostic("fresh_detail_ready");
       this.#diagnostic("fresh_control_probe");
       await executeDeviceControl(
@@ -1240,6 +1252,10 @@ async function visibleExactTextCard(
 
 function exactName(value: string): RegExp {
   return new RegExp(`^\\s*${escapeRegExp(value)}\\s*$`, "u");
+}
+
+function isRetryableFreshNavigationError(error: unknown): boolean {
+  return error instanceof Error && error.message === "command_room_not_found";
 }
 
 function isSmartThingsLocation(value: string): boolean {
