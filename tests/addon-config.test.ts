@@ -10,19 +10,22 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("publishes fixed command phase diagnostics as version 0.1.69", () => {
+  test("publishes measured command latency fixes as version 0.1.70", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.69");
-    expect(packageMetadata.version).toBe("0.1.69");
-    expect(protocolMetadata.bridge_version).toBe("0.1.69");
+    expect(config.version).toBe("0.1.70");
+    expect(packageMetadata.version).toBe("0.1.70");
+    expect(protocolMetadata.bridge_version).toBe("0.1.70");
     expect(protocolMetadata.protocol_version).toBe(4);
-    expect(runtime).toContain('const bridgeVersion = "0.1.69";');
-    expect(changelog).toContain("## 0.1.69");
+    expect(runtime).toContain('const bridgeVersion = "0.1.70";');
+    expect(changelog).toContain("## 0.1.70");
+    expect(changelog).toContain("foreground command");
+    expect(changelog).toContain("same warm page");
+    expect(changelog).toContain("navigation-only room button");
     expect(changelog).toContain("fixed phase diagnostics");
     expect(changelog).toContain("one cold room-navigation failure");
     expect(changelog).toContain("non-numeric pushed values");

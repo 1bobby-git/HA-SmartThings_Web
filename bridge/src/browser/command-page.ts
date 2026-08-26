@@ -1,7 +1,7 @@
 import type { BrowserPageLike, KeeperPageManager } from "./keeper-page.js";
 
 interface CommandLocatorLike {
-  click(options?: { timeout?: number }): Promise<unknown>;
+  click(options?: { timeout?: number; force?: boolean }): Promise<unknown>;
   count(): Promise<number>;
   fill(value: string, options?: { timeout?: number }): Promise<unknown>;
   filter(options: { has: CommandLocatorLike }): CommandLocatorLike;
@@ -30,12 +30,17 @@ interface CommandPageLike extends BrowserPageLike, CommandControlSurface {
 type CommandPageManagerLike = Pick<KeeperPageManager, "openCommandPage">;
 
 type CommandDiagnosticStage =
+  | "foreground_requested"
+  | "foreground_ready"
   | "warm_missing"
   | "warm_context_mismatch"
   | "warm_closed"
   | "warm_expired"
   | "warm_route_invalid"
   | "warm_dialog_missing"
+  | "warm_recovery_start"
+  | "warm_recovery_ready"
+  | "warm_recovery_failed"
   | "warm_ready"
   | "verified_route_missing"
   | "verified_route_expired"
@@ -79,6 +84,12 @@ interface WarmDevicePage {
   lastUsedAt: number;
 }
 
+interface BackgroundPreemption {
+  readonly promise: Promise<void>;
+  readonly requested: boolean;
+  request(): void;
+}
+
 const WARM_DETAIL_IDENTITY_TIMEOUT_MS = 500;
 const VERIFIED_ROUTE_IDENTITY_TIMEOUT_MS = 1_500;
 const VERIFIED_ROUTE_TTL_MS = 24 * 60 * 60_000;
@@ -87,6 +98,7 @@ const WARM_CONTROL_PROBE_TIMEOUT_MS = 1_500;
 const FRESH_CONTROL_PROBE_TIMEOUT_MS = 5_000;
 const FRESH_OBSERVED_TOGGLE_PROBE_TIMEOUT_MS = 15_000;
 const ROOM_DEVICE_CARD_TIMEOUT_MS = 3_000;
+const ROOM_SELECTION_TIMEOUT_MS = 1_500;
 const LABELED_SCOPE_POLL_MS = 100;
 const LABELED_SCOPE_VISIBLE_PROBE_MS = 25;
 const LOCATION_ROUTE_POLL_MS = 100;
@@ -99,6 +111,7 @@ export class SmartThingsWebUiCommandExecutor {
   #uiQueue: Promise<void> = Promise.resolve();
   #warmDevicePage: WarmDevicePage | undefined;
   #backgroundInspectionPage: CommandPageLike | undefined;
+  #backgroundPreemption: BackgroundPreemption | undefined;
   #foregroundOperationCount = 0;
   readonly #verifiedDetailRoutes = new Map<string, { detailUrl: string; verifiedAt: number }>();
   readonly #warmPageTtlMs: number;
@@ -182,7 +195,11 @@ export class SmartThingsWebUiCommandExecutor {
     optionLabel?: string;
     optionCommand?: string;
   }): Promise<void> {
-    await this.#runForeground(() => this.#executeDeviceAction(input));
+    this.#diagnostic("foreground_requested");
+    await this.#runForeground(() => {
+      this.#diagnostic("foreground_ready");
+      return this.#executeDeviceAction(input);
+    });
   }
 
   async #executeDeviceAction(input: {
@@ -320,14 +337,32 @@ export class SmartThingsWebUiCommandExecutor {
     detailSettleMs?: number;
   }): Promise<void> {
     if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
+    const preemption = createBackgroundPreemption();
+    this.#backgroundPreemption = preemption;
     try {
       await this.#runExclusive(async () => {
-        if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
-        await this.#inspectDeviceDetails(input);
+        if (this.#foregroundOperationCount > 0 || preemption.requested) {
+          throw new Error("detail_discovery_preempted");
+        }
+        const inspection = this.#inspectDeviceDetails(input);
+        const outcome = await Promise.race([
+          inspection.then(
+            () => ({ type: "completed" as const }),
+            (error: unknown) => ({ type: "failed" as const, error })
+          ),
+          preemption.promise.then(() => ({ type: "preempted" as const }))
+        ]);
+        if (outcome.type === "preempted") {
+          void inspection.catch(() => undefined);
+          throw new Error("detail_discovery_preempted");
+        }
+        if (outcome.type === "failed") throw outcome.error;
       });
     } catch (error) {
       if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
       throw error;
+    } finally {
+      if (this.#backgroundPreemption === preemption) this.#backgroundPreemption = undefined;
     }
   }
 
@@ -490,6 +525,7 @@ export class SmartThingsWebUiCommandExecutor {
   async #runForeground<T>(work: () => Promise<T>): Promise<T> {
     this.#foregroundOperationCount += 1;
     try {
+      this.#backgroundPreemption?.request();
       const backgroundPage = this.#backgroundInspectionPage;
       if (backgroundPage && !backgroundPage.isClosed()) {
         await backgroundPage.close().catch(() => undefined);
@@ -536,11 +572,35 @@ export class SmartThingsWebUiCommandExecutor {
     }
     if (!(await hasExactVisibleDeviceDialog(cached.page, input.deviceName, input.roomName))) {
       this.#diagnostic("warm_dialog_missing");
-      await this.#invalidateWarmPage();
-      return undefined;
+      return this.#recoverWarmPage(cached, input);
     }
     this.#diagnostic("warm_ready");
     return cached.page;
+  }
+
+  async #recoverWarmPage(
+    cached: WarmDevicePage,
+    input: { deviceName: string; locationId: string; roomName?: string }
+  ): Promise<CommandPageLike | undefined> {
+    this.#diagnostic("warm_recovery_start");
+    try {
+      const device = await findDeviceInRooms(cached.page, input.deviceName, input.roomName);
+      await device.click({ timeout: 15_000 });
+      await waitForOpenedDeviceDetail(cached.page, input.deviceName, input.roomName);
+      if (
+        !isSmartThingsDeviceDetail(cached.page.url()) ||
+        !(await hasExactVisibleDeviceDialog(cached.page, input.deviceName, input.roomName))
+      ) {
+        throw new Error("command_target_not_found");
+      }
+      this.#rememberSuccessfulDevicePage(cached.page, cached.manager, input);
+      this.#diagnostic("warm_recovery_ready");
+      return cached.page;
+    } catch {
+      this.#diagnostic("warm_recovery_failed");
+      await this.#invalidateWarmPage();
+      return undefined;
+    }
   }
 
   async #openVerifiedDetailPage(
@@ -628,6 +688,25 @@ export class SmartThingsWebUiCommandExecutor {
       // Diagnostics must never change command behavior.
     }
   }
+}
+
+function createBackgroundPreemption(): BackgroundPreemption {
+  let requested = false;
+  let resolvePromise: () => void = () => undefined;
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    get requested() {
+      return requested;
+    },
+    request: () => {
+      if (requested) return;
+      requested = true;
+      resolvePromise();
+    }
+  };
 }
 
 function deviceRouteKey(input: {
@@ -1246,7 +1325,12 @@ async function findDeviceInRooms(
         if ((await room.count()) !== 1) throw new Error("command_room_not_found");
       }
     }
-    await room.click({ timeout: 15_000 });
+    try {
+      await room.waitFor({ state: "visible", timeout: ROOM_SELECTION_TIMEOUT_MS });
+    } catch {
+      throw new Error("command_room_not_found");
+    }
+    await room.click({ timeout: ROOM_SELECTION_TIMEOUT_MS, force: true });
     diagnostic("fresh_room_selected");
   }
   let device = await visibleExactTextCard(page, deviceName, ROOM_DEVICE_CARD_TIMEOUT_MS);

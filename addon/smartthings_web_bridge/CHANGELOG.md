@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.70
+
+- Preempt background detail discovery as soon as a foreground command arrives, so inventory enrichment cannot hold the command queue.
+- Recover a dismissed device dialog on the same warm page by reopening the exact room and device before any control lookup.
+- Bound and force only the exact visible navigation-only room button, while retaining exact device, dialog, and control identity checks.
+
 ## 0.1.69
 
 - Add fixed phase diagnostics for warm-page validation, verified-route reuse, room navigation, exact device selection, detail readiness, and toggle click completion.

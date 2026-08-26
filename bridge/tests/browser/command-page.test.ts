@@ -330,6 +330,8 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     await executor.executeSwitch({ deviceName: "Safe plug", locationId: "loc_001" });
 
     expect(diagnostics).toEqual([
+      "foreground_requested",
+      "foreground_ready",
       "warm_missing",
       "verified_route_missing",
       "fresh_page_opened",
@@ -391,6 +393,79 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(page.close).not.toHaveBeenCalled();
     expect(executor.hasWarmCommandPage()).toBe(true);
     expect(page.detailDialog.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 500 });
+  });
+
+  test("recovers a dismissed warm detail on the same exact room and device page", async () => {
+    const page = new FakeCommandPage();
+    const room = new FakeLocator(1);
+    const diagnostics: string[] = [];
+    const detailUrl =
+      "https://my.smartthings.com/location/loc_001/rooms/device/device_raw_001";
+    page.goto = vi.fn(async (url: string) => {
+      page.currentUrl = url;
+    });
+    const defaultGetByRole = page.getByRole.bind(page);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) =>
+      role === "button" && !options?.name ? room : defaultGetByRole(role, options)
+    );
+    page.card.click.mockImplementation(async () => {
+      page.currentUrl = detailUrl;
+      if (page.card.click.mock.calls.length === 2) {
+        const recoveredDialog = new FakeLocator(1);
+        recoveredDialog.getByRole = (role, options) => page.getByRole(role!, options);
+        recoveredDialog.getByText = (text, options) => page.getByText(text!, options);
+        recoveredDialog.locator = (selector) => page.locator(selector!);
+        page.detailDialog = recoveredDialog;
+      }
+    });
+    const manager = {
+      openCommandPage: vi.fn(async () => {
+        if (manager.openCommandPage.mock.calls.length > 1) {
+          throw new Error("unexpected_new_page");
+        }
+        return page;
+      })
+    };
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => manager,
+      undefined,
+      {
+        warmPageTtlMs: 30_000,
+        onDiagnostic: (stage) => diagnostics.push(stage)
+      }
+    );
+
+    await executor.executeSwitch({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      roomName: "Entry"
+    });
+    page.detailDialog = new FakeLocator(0, true);
+
+    await executor.executeDeviceAction({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      roomName: "Entry",
+      command: "off",
+      action: "off",
+      component: "main",
+      capability: "switch",
+      attribute: "switch",
+      arguments: []
+    });
+
+    expect(manager.openCommandPage).toHaveBeenCalledTimes(1);
+    expect(page.goto).toHaveBeenCalledWith(
+      "https://my.smartthings.com/location/loc_001/rooms",
+      { waitUntil: "domcontentloaded" }
+    );
+    expect(page.card.click).toHaveBeenCalledTimes(2);
+    expect(room.click).toHaveBeenCalledWith({ timeout: 1_500, force: true });
+    expect(page.toggle.click).toHaveBeenCalledTimes(2);
+    expect(page.close).not.toHaveBeenCalled();
+    expect(diagnostics).toContain("warm_dialog_missing");
+    expect(diagnostics).toContain("warm_recovery_start");
+    expect(diagnostics).toContain("warm_recovery_ready");
   });
 
   test("invalidates a warm page whose visible detail identity drifted", async () => {
@@ -755,10 +830,13 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
 
     expect(roomButtons.filter).toHaveBeenCalledWith({ has: roomText });
-    expect(roomButton.click).toHaveBeenCalledTimes(1);
+    expect(roomButton.waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 1_500 });
+    expect(roomButton.click).toHaveBeenCalledWith({ timeout: 1_500, force: true });
     expect(visibleDevice.click).toHaveBeenCalledTimes(1);
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
     expect(diagnostics).toEqual([
+      "foreground_requested",
+      "foreground_ready",
       "warm_missing",
       "verified_route_missing",
       "fresh_page_opened",
@@ -1741,6 +1819,8 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(page.card.click).toHaveBeenCalledTimes(1);
     expect(card.click).not.toHaveBeenCalled();
     expect(diagnostics).toEqual([
+      "foreground_requested",
+      "foreground_ready",
       "warm_missing",
       "verified_route_missing",
       "fresh_page_opened",
@@ -2137,6 +2217,10 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       deviceName: "Safe plug",
       locationId: "loc_001"
     });
+    const discoveryResult = discovery.then(
+      () => undefined,
+      (error: unknown) => error
+    );
     await vi.waitFor(() => {
       expect(discoveryPage.waitForTimeout).toHaveBeenCalledTimes(1);
     });
@@ -2147,8 +2231,12 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
     try {
       await vi.waitFor(() => expect(discoveryPage.close).toHaveBeenCalledTimes(1));
-      settle.resolve();
-      await expect(discovery).rejects.toThrow("detail_discovery_preempted");
+      await vi.waitFor(() => expect(commandPage.toggle.click).toHaveBeenCalledTimes(1), {
+        timeout: 500
+      });
+      await expect(discoveryResult).resolves.toMatchObject({
+        message: "detail_discovery_preempted"
+      });
       await command;
 
       expect(manager.openCommandPage).toHaveBeenCalledTimes(2);
