@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.101
+
+- Add a one-shot registry repair that renames this integration's frozen legacy entity IDs whose generated slug embeds the device's own SmartThings room-name prefix (for example `switch.deiteorum_status_home` becomes `switch.status_home`) once the corrected device name reaches Home Assistant; user-renamed entities and occupied target IDs are left untouched. Entity IDs were never auto-regenerated before, which kept stale room-prefixed IDs visible even after 0.1.99/0.1.100 fixed naming at generation time.
+
 ## 0.1.100
 
 - Replace the broad 0.1.99 room-name stripping with a single narrow rule: only devices whose SmartThings name exactly matches their own room name (SmartThings room clones such as a speaker named "거실" in the "거실" room) fall back to a room-free device-type label, ending duplicated slugs like geosil_geosil. Every other device name — including "거실 2", compounds, and names merely containing the room — stays untouched; inventory names are never rewritten.
