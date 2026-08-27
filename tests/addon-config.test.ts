@@ -22,9 +22,11 @@ describe("Home Assistant add-on metadata", () => {
     expect(protocolMetadata.bridge_version).toBe("0.1.94");
     expect(protocolMetadata.protocol_version).toBe(4);
     expect(runtime).toContain('const bridgeVersion = "0.1.94";');
+    expect(runtime).not.toContain("confirmationStabilityMs: 500");
     expect(changelog).toContain("## 0.1.94");
     expect(changelog).toContain("Socket.IO binary thumbnail");
     expect(changelog).toContain("powered-down laundry");
+    expect(changelog).toContain("fixed 500 ms hold");
     expect(changelog).toContain("distinct temperature, humidity, battery");
     expect(changelog).toContain("webpack module factory");
     expect(changelog).toContain("exact captured `patch` request");

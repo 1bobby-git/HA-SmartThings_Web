@@ -144,7 +144,6 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     status,
     executor: commandExecutor,
     timeoutMs: 15_000,
-    confirmationStabilityMs: 500,
     resync: async () => {
       const keeperManager = currentKeeperManager;
       if (!keeperManager) throw new Error("command_browser_unavailable");

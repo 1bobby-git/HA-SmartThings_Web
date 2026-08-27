@@ -7,6 +7,7 @@
 - Keep pushed powered-down laundry state readable while leaving device controls unavailable when the washer or dryer is offline.
 - Localize current SmartThings device types, remove trailing technical numeric suffixes, and migrate one repeated room prefix from generated entity IDs.
 - Distinguish repeated state rows with stable component, capability, or numeric qualifiers and remove raw sensor duplicates already represented by an observed select.
+- Complete a device command as soon as the post-dispatch authoritative push confirms the requested state, removing the fixed 500 ms hold that serialized consecutive controls.
 
 ## 0.1.93
 
