@@ -64,8 +64,8 @@ describe("HAOS live control benchmark", () => {
     const entityId = DEFAULT_LIVE_CONTROL_ENTITY_ID;
     const ha = recordingHaClient([
       haState(entityId, "off", "2026-08-27T00:00:00.000Z"),
-      haState(entityId, "on", "2026-08-27T00:00:01.000Z"),
-      haState(entityId, "off", "2026-08-27T00:00:02.000Z"),
+      haState(entityId, "on", "2026-08-27T00:00:00.260Z"),
+      haState(entityId, "off", "2026-08-27T00:00:00.460Z"),
       haState(entityId, "off", "2026-08-27T00:00:03.000Z"),
       haState(entityId, "off", "2026-08-27T00:00:04.000Z")
     ]);
@@ -90,8 +90,12 @@ describe("HAOS live control benchmark", () => {
       clock: fixedClock([
         "2026-08-27T00:00:00.100Z",
         "2026-08-27T00:00:00.200Z",
+        "2026-08-27T00:00:00.250Z",
         "2026-08-27T00:00:00.300Z",
-        "2026-08-27T00:00:00.400Z"
+        "2026-08-27T00:00:00.400Z",
+        "2026-08-27T00:00:00.450Z",
+        "2026-08-27T00:00:00.500Z",
+        "2026-08-27T00:00:00.600Z"
       ]),
       writeArtifact: async (fileName, value) => {
         artifacts.push({ fileName, value });
@@ -109,9 +113,13 @@ describe("HAOS live control benchmark", () => {
       cycle: 1,
       service: "turn_on",
       serviceRequestedAt: "2026-08-27T00:00:00.200Z",
+      serviceReturnedAt: "2026-08-27T00:00:00.250Z",
+      serviceDurationMs: 50,
+      haLastUpdatedAfterRequestMs: 60,
+      haObservedAfterRequestMs: 100,
       ha: {
         state: "on",
-        lastUpdated: "2026-08-27T00:00:01.000Z",
+        lastUpdated: "2026-08-27T00:00:00.260Z",
         observedAt: "2026-08-27T00:00:00.300Z"
       },
       bridge: {

@@ -72,6 +72,10 @@ export interface LiveControlTransition {
   targetState: "on" | "off";
   service: "turn_on" | "turn_off";
   serviceRequestedAt: string;
+  serviceReturnedAt: string;
+  serviceDurationMs: number;
+  haLastUpdatedAfterRequestMs: number;
+  haObservedAfterRequestMs: number;
   ha: SafeHaStateObservation;
   bridge: SafeBridgeObservation;
 }
@@ -178,6 +182,7 @@ async function executeTransition(
   await options.ha.callService(domainFromEntityId(options.entityId), service, {
     entity_id: options.entityId
   });
+  const serviceReturnedAt = clock.nowIso();
   const observed = await waitForState(
     options.ha,
     clock,
@@ -191,6 +196,16 @@ async function executeTransition(
     targetState,
     service,
     serviceRequestedAt,
+    serviceReturnedAt,
+    serviceDurationMs: elapsedMilliseconds(serviceRequestedAt, serviceReturnedAt),
+    haLastUpdatedAfterRequestMs: elapsedMilliseconds(
+      serviceRequestedAt,
+      observed.lastUpdated
+    ),
+    haObservedAfterRequestMs: elapsedMilliseconds(
+      serviceRequestedAt,
+      observed.observedAt ?? observed.lastUpdated
+    ),
     ha: observed,
     bridge: sanitizeBridgeHealth(await options.bridge.getHealth())
   };
@@ -299,6 +314,14 @@ function copySafeString(
 
 function isSafeTimestamp(value: string): boolean {
   return value.length <= 64 && !Number.isNaN(Date.parse(value));
+}
+
+function elapsedMilliseconds(start: string, end: string): number {
+  const elapsed = Date.parse(end) - Date.parse(start);
+  if (!Number.isSafeInteger(elapsed) || elapsed < 0) {
+    throw new Error("live_control_benchmark_timing_invalid");
+  }
+  return elapsed;
 }
 
 const systemClock: LiveControlBenchmarkClock = {
