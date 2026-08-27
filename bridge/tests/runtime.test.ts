@@ -768,6 +768,36 @@ describe("createBridgeRuntime", () => {
     expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(true);
   });
 
+  test("keeps waiting to open the advanced snapshot page after delayed readiness", async () => {
+    vi.useFakeTimers();
+    const root = createTempRoot();
+    const context = new FakeContext([
+      new FakePage("https://my.smartthings.com/location/loc-synthetic-001")
+    ]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        chromium: { launchPersistentContext: vi.fn(async () => context) }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+
+    await vi.advanceTimersByTimeAsync(125_000);
+    expect(context.existingPages.some((page) => page.url() === "https://my.smartthings.com/advanced")).toBe(
+      false
+    );
+
+    const socket = await attachRuntimeSocket(context);
+    await emitCompleteSnapshot(socket);
+    await emitFirstDeviceEvent(socket);
+    expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(context.existingPages.some((page) => page.url() === "https://my.smartthings.com/advanced")).toBe(
+      true
+    );
+  });
+
   test("serves the physical action probe from normal and protocol-load-failed runtimes", async () => {
     const normal = await startReadyRuntime();
 

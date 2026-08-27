@@ -87,8 +87,11 @@ export class KeeperPageManager {
     return keeper;
   }
 
-  async openAdvancedPage(): Promise<BrowserPageLike> {
+  async openAdvancedPage(
+    beforeGoto?: (page: BrowserPageLike) => Promise<void>
+  ): Promise<BrowserPageLike> {
     const page = await this.context.newPage();
+    await beforeGoto?.(page);
     await page.goto(ADVANCED_URL, { waitUntil: "domcontentloaded" });
     return page;
   }

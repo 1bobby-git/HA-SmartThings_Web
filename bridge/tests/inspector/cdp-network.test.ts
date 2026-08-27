@@ -376,6 +376,158 @@ describe("installCdpNetworkObserver", () => {
     );
   });
 
+  test("emits only same-origin advanced device snapshots through the explicit observer", async () => {
+    const session = new FakeSession();
+    const write = vi.fn();
+    const advanced = vi.fn();
+    const body = {
+      items: [
+        {
+          deviceId: "raw-device-001",
+          label: "Sensor",
+          presentationId: "motion_sensor_1"
+        }
+      ]
+    };
+    session.bodyResult = { body: JSON.stringify(body), base64Encoded: false };
+    const redact = vi.fn((value: unknown) =>
+      JSON.parse(JSON.stringify(value).replaceAll("raw-device-001", "dev_001"))
+    );
+
+    await installCdpNetworkObserver(session, { write }, redact, {
+      onSmartThingsAdvancedDeviceSnapshot: advanced
+    });
+    await session.emit("Network.requestWillBeSent", {
+      requestId: "advanced-devices",
+      request: { method: "GET" }
+    });
+    await session.emit("Network.responseReceived", {
+      requestId: "advanced-devices",
+      response: {
+        mimeType: "application/json",
+        url:
+          "https://my.smartthings.com/advanced/cupcake-api/api/devices?includeStatus=true&includeHealth=true"
+      },
+      type: "Fetch"
+    });
+    await session.emit("Network.loadingFinished", { requestId: "advanced-devices" });
+
+    expect(advanced).toHaveBeenCalledOnce();
+    expect(advanced).toHaveBeenCalledWith(
+      { items: [expect.objectContaining({ deviceId: "dev_001" })] },
+      "https://my.smartthings.com/advanced/cupcake-api/api/devices?includeStatus=true&includeHealth=true"
+    );
+    expect(JSON.stringify(advanced.mock.calls)).not.toContain("raw-device-001");
+  });
+
+  test("does not emit non-get advanced requests or non-SmartThings response bodies", async () => {
+    const session = new FakeSession();
+    const write = vi.fn();
+    const advanced = vi.fn();
+    session.bodyResult = {
+      body: JSON.stringify({ items: [{ deviceId: "dev_001" }] }),
+      base64Encoded: false
+    };
+
+    await installCdpNetworkObserver(session, { write }, (value) => value, {
+      onSmartThingsAdvancedDeviceSnapshot: advanced
+    });
+    for (const [requestId, method, url] of [
+      [
+        "post",
+        "POST",
+        "https://my.smartthings.com/advanced/cupcake-api/api/devices?type=HUB"
+      ],
+      ["other", "GET", "https://example.test/advanced/cupcake-api/api/devices"]
+    ] as const) {
+      await session.emit("Network.requestWillBeSent", {
+        requestId,
+        request: { method }
+      });
+      await session.emit("Network.responseReceived", {
+        requestId,
+        response: { mimeType: "application/json", url },
+        type: "Fetch"
+      });
+      await session.emit("Network.loadingFinished", { requestId });
+    }
+
+    expect(advanced).not.toHaveBeenCalled();
+  });
+
+  test("does not parse oversized advanced device snapshots", async () => {
+    const session = new FakeSession();
+    const write = vi.fn();
+    const advanced = vi.fn();
+    const payload = `${" ".repeat(16 * 1024 * 1024)}x`;
+    session.bodyResult = { body: payload, base64Encoded: false };
+
+    await installCdpNetworkObserver(session, { write }, (value) => value, {
+      onSmartThingsAdvancedDeviceSnapshot: advanced
+    });
+    await session.emit("Network.requestWillBeSent", {
+      requestId: "advanced-oversized",
+      request: { method: "GET" }
+    });
+    await session.emit("Network.responseReceived", {
+      requestId: "advanced-oversized",
+      response: {
+        mimeType: "application/json",
+        url: "https://my.smartthings.com/advanced/cupcake-api/api/devices?includeStatus=true"
+      },
+      type: "Fetch"
+    });
+    await session.emit("Network.loadingFinished", { requestId: "advanced-oversized" });
+
+    expect(advanced).not.toHaveBeenCalled();
+    expect(write).toHaveBeenCalledWith(expect.objectContaining({ source: "cdp-response-body" }));
+  });
+
+  test("does not reuse stale request methods from untracked or failed requests", async () => {
+    const session = new FakeSession();
+    const write = vi.fn();
+    const advanced = vi.fn();
+    session.bodyResult = {
+      body: JSON.stringify({ items: [{ deviceId: "dev_001" }] }),
+      base64Encoded: false
+    };
+
+    await installCdpNetworkObserver(session, { write }, (value) => value, {
+      onSmartThingsAdvancedDeviceSnapshot: advanced
+    });
+    await session.emit("Network.requestWillBeSent", {
+      requestId: "reused-id",
+      request: { method: "GET" }
+    });
+    await session.emit("Network.loadingFinished", { requestId: "reused-id" });
+    await session.emit("Network.responseReceived", {
+      requestId: "reused-id",
+      response: {
+        mimeType: "application/json",
+        url: "https://my.smartthings.com/advanced/cupcake-api/api/devices?includeStatus=true"
+      },
+      type: "Fetch"
+    });
+    await session.emit("Network.loadingFinished", { requestId: "reused-id" });
+
+    await session.emit("Network.requestWillBeSent", {
+      requestId: "failed-id",
+      request: { method: "GET" }
+    });
+    await session.emit("Network.loadingFailed", { requestId: "failed-id" });
+    await session.emit("Network.responseReceived", {
+      requestId: "failed-id",
+      response: {
+        mimeType: "application/json",
+        url: "https://my.smartthings.com/advanced/cupcake-api/api/devices?includeStatus=true"
+      },
+      type: "Fetch"
+    });
+    await session.emit("Network.loadingFinished", { requestId: "failed-id" });
+
+    expect(advanced).not.toHaveBeenCalled();
+  });
+
   test("redacts XHR and fetch bodies before byte bounding and persistence", async () => {
     await withPersistedCaptures(async (store, redact) => {
       const session = new FakeSession();

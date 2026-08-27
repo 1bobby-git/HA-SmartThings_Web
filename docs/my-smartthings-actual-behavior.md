@@ -63,6 +63,30 @@ actionable. A command is successful only after a newer authoritative push
 confirms the requested value. Missing controls fail closed instead of clicking
 a similarly shaped page element.
 
+## Advanced device bootstrap
+
+An authenticated inspection of `https://my.smartthings.com/advanced` confirmed
+that the page naturally loads same-origin
+`/advanced/cupcake-api/api/devices` JSON containing device identity,
+location/room, health, category/type, presentation/profile information,
+component capability status, and allowed-action metadata. The status tree is
+useful for initial and reconnect enrichment, especially for refrigerator
+compartments and appliance values that are distributed across components.
+
+Version 0.1.95 observes that naturally loaded response once per new Chromium
+context after installing the existing CDP network observer, redacts it, merges
+only metadata and state into DeviceStore, publishes one inventory transition,
+and closes the temporary Advanced page. Component and capability identifiers
+remain aliases; only a small allowlist of semantic roles such as cooler,
+freezer, pantry, ice maker, hub, setup, and Bixby is carried separately for
+localized Home Assistant labels. `updatedAt` ordering prevents the bootstrap
+from replacing newer push state.
+
+The Advanced `allowedActions` field is descriptive evidence only. It is not
+converted into a Bridge control, and the implementation does not send direct
+Cupcake commands, periodically fetch status, replay cookies, or treat Advanced
+JSON as a replacement for the authoritative SmartThings Web push stream.
+
 The supplied capture also contains four accepted device command exchanges.
 Cake sends them through its already authenticated Feathers client as
 `service("api/device").patch(deviceId, {query: {execute: true, commands}})`
@@ -175,6 +199,6 @@ The supplied capture was labelled safe but still contained account-related
 metadata inside a third-party feature-delivery URL. It was therefore treated as
 sensitive local evidence and was not added to the repository.
 
-`DECISION: LIMITED` remains in force until the 0.1.94 candidate is deployed and
-the cached camera bytes, 72-hour durability, host-reboot recovery, and remaining
-device-family gates are verified on HAOS.
+`DECISION: LIMITED` remains in force until the current candidate is deployed and
+the cached camera bytes, Advanced bootstrap, 72-hour durability, host-reboot
+recovery, and remaining device-family gates are verified on HAOS.

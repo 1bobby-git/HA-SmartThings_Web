@@ -7,6 +7,27 @@ const IDENTIFIER_ALIAS = /^identifier_[0-9A-Za-z_-]{3,64}$/u;
 const DEVICE_KEYS = new Set(["deviceId", "device_id"]);
 const COMPONENT_KEYS = new Set(["component", "componentId", "component_id"]);
 const CAPABILITY_KEYS = new Set(["capability", "capabilityId", "capability_id"]);
+const SEMANTIC_IDENTIFIER_ROLES = new Set([
+  "bixby",
+  "cooler",
+  "curdmaker",
+  "cvroom",
+  "freezer",
+  "hca.main",
+  "icemaker",
+  "icemaker-02",
+  "main",
+  "onedoor",
+  "pantry-01",
+  "pantry-02",
+  "setup",
+  "smartthings-findnode",
+  "smartthings-hub",
+  "switch2",
+  "switch3",
+  "switch4",
+  "switch5"
+]);
 const MAX_IDENTIFIER_LENGTH = 256;
 const MAX_WALK_DEPTH = 24;
 const MAX_WALK_NODES = 100_000;
@@ -40,6 +61,14 @@ export class VolatileIdentifierMap {
 
   rawIdentifier(alias: string): string | undefined {
     return IDENTIFIER_ALIAS.test(alias) ? this.#identifierAliases.get(alias) : undefined;
+  }
+
+  semanticIdentifierRole(alias: string): string | undefined {
+    const raw = this.rawIdentifier(alias) ?? alias;
+    if (!raw) return undefined;
+    const normalized = raw.trim().toLowerCase();
+    if (!SEMANTIC_IDENTIFIER_ROLES.has(normalized)) return undefined;
+    return normalized;
   }
 
   reset(): void {

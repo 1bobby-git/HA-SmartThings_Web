@@ -2,9 +2,11 @@
 
 ## 0.1.95
 
-- Require playback state, explicit media transport controls, or a SmartThings speaker-like device type before creating a Home Assistant `media_player`, so audio accessory devices such as Ari/SmartTag alarm controls stay on their correct entity surfaces.
-- Remove stale media_player registry entries created by this integration when the current inventory no longer classifies that device as media, while preserving real speakers and other integrations.
-- Keep appliance power states attached to their richer device domains instead of exposing them as standalone switch controls.
+- Keep Ari/SmartTag alarm volume and other audio accessory controls off `media_player`, while retaining real speakers only when the required pushed audio volume and mute evidence is present; remove stale media_player registry entries owned by this integration after reclassification.
+- Expose pushed speaker duration, position, repeat, shuffle, source, and source-list metadata, and enable their write features only when the exact corresponding SmartThings Web control was observed.
+- Observe the authenticated Advanced device-list JSON once for each new browser context, close its temporary page promptly, and atomically enrich the push inventory with status, health, presentation, type, room, and safe component-role metadata without SmartThings polling or direct Advanced commands.
+- Distinguish repeated refrigerator, freezer, pantry, ice-maker, hub, setup, Bixby, and multi-switch states with localized component-role labels while keeping stable aliased entity identities.
+- Keep official-style read-only appliance power categories as binary sensors, retain web-only states, and apply SmartThings presentation artwork only to primary device entities while preserving functional icons on individual sensors.
 
 ## 0.1.94
 

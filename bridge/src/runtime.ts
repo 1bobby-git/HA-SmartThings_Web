@@ -118,7 +118,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     sqlitePath: paths.sqlitePath,
     onPersistenceError: () => log.warn("device_store_persist_failed"),
     normalizeStateToken: (value) =>
-      aliases.alias("identifier", aliases.alias("identifier", value))
+      aliases.alias("identifier", aliases.alias("identifier", value)),
+    identifierRole: (value) => volatileIdentifiers.semanticIdentifierRole(value)
   });
   status.update({ observedDeviceCount: devices.snapshot().devices.length });
   const cameraImages = new CameraImageStore({
@@ -290,6 +291,20 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
                 isProbeBrowserIsolated(context, keeperManager)
               );
             }
+          },
+          () => {
+            const report = createHealthReport(status.getSnapshot());
+            return (
+              context === currentContext &&
+              keeperManager === currentKeeperManager &&
+              report.ready &&
+              !commandExecutor.hasWarmCommandPage() &&
+              isProbeBrowserIsolated(context, keeperManager) &&
+              physicalActionProbe.snapshot(getProbeEvidence()).state !== "armed"
+            );
+          },
+          (snapshot) => {
+            devices.observeAdvancedDeviceSnapshot(snapshot);
           }
         );
         currentContext = context;
@@ -443,7 +458,9 @@ async function attachContext(
   log: BridgeRuntimeLog,
   resetSnapshotSession: () => void,
   canRecoverSocket: () => boolean,
-  onNewPage: () => void
+  onNewPage: () => void,
+  canOpenAdvancedSnapshot: () => boolean,
+  onAdvancedDeviceSnapshot: (snapshot: unknown, url: string) => void
 ): Promise<void> {
   const observedCdpPages = new WeakSet<object>();
   const restoredSettledKeeperPresent = context
@@ -507,7 +524,8 @@ async function attachContext(
       log,
       cameraImages,
       volatileIdentifiers,
-      recoverSmartThingsWebSocket
+      recoverSmartThingsWebSocket,
+      onAdvancedDeviceSnapshot
     );
     onNewPage();
   });
@@ -519,7 +537,8 @@ async function attachContext(
     log,
     cameraImages,
     volatileIdentifiers,
-    recoverSmartThingsWebSocket
+    recoverSmartThingsWebSocket,
+    onAdvancedDeviceSnapshot
   );
 
   let keeper = await keeperManager.ensureKeeper();
@@ -531,6 +550,29 @@ async function attachContext(
     keeperPresent: true,
     ...statusForKeeperUrl(keeper.url())
   });
+  scheduleAdvancedSnapshotPage(
+    () =>
+      !canRecoverSocket() ||
+      classifySmartThingsUrl(keeperManager.currentKeeper()?.url() ?? "") !==
+        "smartthings_location"
+        ? "stop"
+        : canOpenAdvancedSnapshot()
+          ? "open"
+          : "wait",
+    () =>
+      observeAdvancedSnapshotPage(
+      context,
+      keeperManager,
+      sink,
+      redact,
+      observedCdpPages,
+      log,
+      cameraImages,
+      volatileIdentifiers,
+      recoverSmartThingsWebSocket,
+      onAdvancedDeviceSnapshot
+      )
+  );
 }
 
 function isSettledSmartThingsLocation(value: string): boolean {
@@ -542,6 +584,24 @@ function isSettledSmartThingsLocation(value: string): boolean {
   }
 }
 
+function scheduleAdvancedSnapshotPage(
+  state: () => "open" | "wait" | "stop",
+  open: () => Promise<void>,
+  firstAttempt = true
+): void {
+  const delayMs = firstAttempt ? 2_000 : 1_000;
+  const timer = setTimeout(() => {
+    const current = state();
+    if (current === "stop") return;
+    if (current === "open") {
+      void open();
+      return;
+    }
+    scheduleAdvancedSnapshotPage(state, open, false);
+  }, delayMs);
+  timer.unref();
+}
+
 async function installCdpForPages(
   context: ObservableContext,
   sink: CaptureSink,
@@ -550,7 +610,8 @@ async function installCdpForPages(
   log: BridgeRuntimeLog,
   cameraImages: CameraImageStore,
   volatileIdentifiers: VolatileIdentifierMap,
-  onSmartThingsWebSocketClose: () => void
+  onSmartThingsWebSocketClose: () => void,
+  onAdvancedDeviceSnapshot: (snapshot: unknown, url: string) => void
 ): Promise<void> {
   await Promise.all(
     context.pages().map((page) =>
@@ -563,7 +624,8 @@ async function installCdpForPages(
         log,
         cameraImages,
         volatileIdentifiers,
-        onSmartThingsWebSocketClose
+        onSmartThingsWebSocketClose,
+        onAdvancedDeviceSnapshot
       )
     )
   );
@@ -578,7 +640,8 @@ async function installCdpForPage(
   log: BridgeRuntimeLog,
   cameraImages: CameraImageStore,
   volatileIdentifiers: VolatileIdentifierMap,
-  onSmartThingsWebSocketClose: () => void
+  onSmartThingsWebSocketClose: () => void,
+  onAdvancedDeviceSnapshot: (snapshot: unknown, url: string) => void
 ): Promise<void> {
   if (observedCdpPages.has(page) || !context.newCDPSession) {
     return;
@@ -593,11 +656,79 @@ async function installCdpForPage(
       onRawWebSocketBinaryFrame: (direction, payload, connectionId) => {
         cameraImages.observeRawWebSocketBinaryFrame(direction, payload, connectionId);
       },
-      onSmartThingsWebSocketClose
+      onSmartThingsWebSocketClose,
+      onSmartThingsAdvancedDeviceSnapshot: (snapshot, url) => {
+        onAdvancedDeviceSnapshot(snapshot, url);
+      }
     });
     observedCdpPages.add(page);
   } catch {
     log.warn("cdp_observer_install_failed");
+  }
+}
+
+async function observeAdvancedSnapshotPage(
+  context: ObservableContext,
+  keeperManager: KeeperPageManager,
+  sink: CaptureSink,
+  redact: (value: unknown) => unknown,
+  observedCdpPages: WeakSet<object>,
+  log: BridgeRuntimeLog,
+  cameraImages: CameraImageStore,
+  volatileIdentifiers: VolatileIdentifierMap,
+  onSmartThingsWebSocketClose: () => void,
+  onAdvancedDeviceSnapshot: (snapshot: unknown, url: string) => void
+): Promise<void> {
+  let page: BrowserPageLike | undefined;
+  let resolveWholeSnapshot: (() => void) | undefined;
+  const wholeSnapshotObserved = new Promise<void>((resolve) => {
+    resolveWholeSnapshot = resolve;
+  });
+  try {
+    page = await keeperManager.openAdvancedPage((created) =>
+      installCdpForPage(
+        context,
+        created,
+        sink,
+        redact,
+        observedCdpPages,
+        log,
+        cameraImages,
+        volatileIdentifiers,
+        onSmartThingsWebSocketClose,
+        (snapshot, url) => {
+          onAdvancedDeviceSnapshot(snapshot, url);
+          if (isWholeAdvancedDevicesSnapshotUrl(url)) {
+            resolveWholeSnapshot?.();
+          }
+        }
+      )
+    );
+    await Promise.race([
+      wholeSnapshotObserved,
+      new Promise((resolve) => setTimeout(resolve, 5_000))
+    ]);
+  } catch {
+    log.warn("advanced_snapshot_observation_failed");
+  } finally {
+    await page?.close().catch(() => undefined);
+  }
+}
+
+function isWholeAdvancedDevicesSnapshotUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.origin === "https://my.smartthings.com" &&
+      url.pathname === "/advanced/cupcake-api/api/devices" &&
+      url.searchParams.get("type") !== "HUB" &&
+      url.searchParams.get("includeStatus") === "true" &&
+      !url.searchParams.has("max") &&
+      !url.searchParams.has("page") &&
+      !url.searchParams.has("isNext")
+    );
+  } catch {
+    return false;
   }
 }
 

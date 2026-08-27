@@ -73,6 +73,27 @@ describe("VolatileIdentifierMap", () => {
     expect(identifiers.rawIdentifier("identifier_switch")).toBeUndefined();
   });
 
+  test("returns only allowlisted semantic roles for aliased identifiers", () => {
+    const identifiers = new VolatileIdentifierMap((kind, raw) =>
+      kind === "device" ? `dev_${raw}` : `identifier_${raw.replace(".", "_")}`
+    );
+
+    identifiers.observeRawWebSocketFrame(
+      "received",
+      `431${JSON.stringify([
+        null,
+        [
+          { deviceId: "device-1", componentId: "freezer", capabilityId: "temperatureMeasurement" },
+          { deviceId: "device-2", componentId: "hca.main", capabilityId: "private-token-value" }
+        ]
+      ])}`
+    );
+
+    expect(identifiers.semanticIdentifierRole("identifier_freezer")).toBe("freezer");
+    expect(identifiers.semanticIdentifierRole("identifier_hca_main")).toBe("hca.main");
+    expect(identifiers.semanticIdentifierRole("identifier_private-token-value")).toBeUndefined();
+  });
+
   test("maps a device from a full snapshot larger than the diagnostic capture text limit", () => {
     const identifiers = new VolatileIdentifierMap((kind, raw) =>
       kind === "device" ? `dev_${raw}` : `identifier_${raw}`

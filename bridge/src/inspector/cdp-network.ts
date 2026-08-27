@@ -17,6 +17,7 @@ export interface CdpSessionLike {
 
 export interface CdpNetworkOptions {
   responseBodyLimitBytes?: number;
+  onSmartThingsAdvancedDeviceSnapshot?: (snapshot: unknown, url: string) => void;
   onRawWebSocketFrame?: (
     direction: "sent" | "received",
     payload: string,
@@ -34,8 +35,10 @@ interface TrackedResponse {
   url: string;
   mimeType: string;
   type: string;
+  method?: string;
 }
 
+const ADVANCED_DEVICE_SNAPSHOT_PARSE_LIMIT_BYTES = 16 * 1024 * 1024;
 let nextCdpSessionId = 1;
 
 export async function installCdpNetworkObserver(
@@ -46,10 +49,17 @@ export async function installCdpNetworkObserver(
 ): Promise<void> {
   const limit = options.responseBodyLimitBytes ?? DEFAULT_CAPTURE_TEXT_LIMIT_BYTES;
   const tracked = new Map<string, TrackedResponse>();
+  const requestMethods = new Map<string, string>();
   const trackedWebSockets = new Map<string, string>();
   const sessionScope = `cdp_session_${nextCdpSessionId++}`;
   await session.send("Network.enable");
 
+  session.on("Network.requestWillBeSent", (payload) => {
+    const requestId = readString(payload, "requestId");
+    const request = readObject(payload, "request");
+    const method = request ? readString(request, "method") : undefined;
+    if (requestId && method) requestMethods.set(requestId, method);
+  });
   session.on("Network.webSocketCreated", (payload) => {
     const requestId = readString(payload, "requestId");
     const url = readString(payload, "url");
@@ -96,14 +106,25 @@ export async function installCdpNetworkObserver(
     if (!requestId || !response || !["XHR", "Fetch"].includes(type)) {
       return;
     }
+    const method = requestMethods.get(requestId);
     tracked.set(requestId, {
       url: readString(response, "url") ?? "",
       mimeType: readString(response, "mimeType") ?? "",
-      type
+      type,
+      ...(method ? { method } : {})
     });
+  });
+  session.on("Network.loadingFailed", (payload) => {
+    const requestId = readString(payload, "requestId");
+    if (!requestId) return;
+    tracked.delete(requestId);
+    requestMethods.delete(requestId);
   });
   session.on("Network.loadingFinished", async (payload) => {
     const requestId = readString(payload, "requestId");
+    if (requestId) {
+      requestMethods.delete(requestId);
+    }
     if (!requestId || !tracked.has(requestId)) {
       return;
     }
@@ -113,6 +134,12 @@ export async function installCdpNetworkObserver(
       const body = (await session.send("Network.getResponseBody", { requestId })) as
         | { body?: string; base64Encoded?: boolean }
         | undefined;
+      observeAdvancedDeviceSnapshot(
+        response,
+        body,
+        redact,
+        options.onSmartThingsAdvancedDeviceSnapshot
+      );
       write(sink, redact, "cdp-response-body", normalizeBody(response, requestId, body, limit, redact));
     } catch {
       write(sink, redact, "cdp-response-body", {
@@ -123,6 +150,43 @@ export async function installCdpNetworkObserver(
       });
     }
   });
+}
+
+function observeAdvancedDeviceSnapshot(
+  response: TrackedResponse | undefined,
+  body: { body?: string; base64Encoded?: boolean } | undefined,
+  redact: Redact,
+  observer: CdpNetworkOptions["onSmartThingsAdvancedDeviceSnapshot"]
+): void {
+  if (
+    !observer ||
+    body?.base64Encoded === true ||
+    typeof body?.body !== "string" ||
+    response?.method !== "GET" ||
+    !isAdvancedDeviceSnapshotUrl(response?.url) ||
+    Buffer.byteLength(body.body, "utf8") > ADVANCED_DEVICE_SNAPSHOT_PARSE_LIMIT_BYTES
+  ) {
+    return;
+  }
+  try {
+    const parsed = JSON.parse(body.body) as unknown;
+    observer(redact(parsed), response?.url ?? "");
+  } catch {
+    // Advanced metadata is opportunistic enrichment; malformed JSON must not interrupt capture.
+  }
+}
+
+function isAdvancedDeviceSnapshotUrl(value: string | undefined): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return (
+      url.origin === "https://my.smartthings.com" &&
+      url.pathname === "/advanced/cupcake-api/api/devices"
+    );
+  } catch {
+    return false;
+  }
 }
 
 function observeRawBinaryFrame(

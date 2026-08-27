@@ -112,6 +112,55 @@ describe("DeviceStore", () => {
     );
   });
 
+  test("attaches allowlisted semantic roles to snapshot and push states", () => {
+    const aliases: Record<string, string> = {
+      main: "identifier_main",
+      freezer: "identifier_freezer",
+      temperatureMeasurement: "identifier_temperature",
+      contactSensor: "identifier_contact",
+    };
+    const roles: Record<string, string> = {
+      identifier_freezer: "freezer",
+      identifier_contact: "contact",
+    };
+    const store = new DeviceStore({
+      normalizeStateToken: (value) => aliases[value] ?? value,
+      identifierRole: (value) => roles[value],
+    });
+
+    observeSnapshotState(store, {
+      componentId: "identifier_freezer",
+      capabilityId: "identifier_temperature",
+      attributeName: "temperature",
+      value: -18,
+      unit: "C",
+      timestamp: "2026-08-24T21:00:00.000Z"
+    });
+    store.observe(
+      liveStateEvent({
+        component: "freezer",
+        capability: "contactSensor",
+        attribute: "contact",
+        value: "closed",
+        event_time: Date.parse("2026-08-24T21:01:00.000Z")
+      })
+    );
+
+    expect(store.snapshot().devices[0]?.states).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          attribute: "temperature",
+          componentRole: "freezer"
+        }),
+        expect.objectContaining({
+          attribute: "contact",
+          componentRole: "freezer",
+          capabilityRole: "contact"
+        })
+      ])
+    );
+  });
+
   test("rejects an older event so it cannot overwrite a newer snapshot value", () => {
     const store = new DeviceStore();
     observeSnapshotState(store, {
@@ -469,6 +518,237 @@ describe("DeviceStore", () => {
     });
 
     expect(store.snapshot().devices[0]).toMatchObject({ type: "NONE" });
+    expect(store.snapshot().devices[0]).not.toHaveProperty("presentation");
+  });
+
+  test("merges same-origin advanced device metadata without creating controls", () => {
+    const store = new DeviceStore();
+    observeDeviceSnapshot(store, {
+      deviceId: "dev_001",
+      locationId: "loc_001",
+      deviceName: "Old label",
+      roomId: "identifier_roomold",
+      deviceTypeData: { type: "accessory" }
+    });
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    store.observeAdvancedDeviceSnapshot({
+      items: [
+        {
+          deviceId: "dev_001",
+          locationId: "loc_001",
+          label: "아리",
+          roomId: "identifier_roomnew",
+          deviceTypeName: "bleD2D",
+          presentationId: "smart_tag_2",
+          healthState: { state: "ONLINE" },
+          allowedActions: [{ command: "setVolume" }]
+        }
+      ]
+    });
+
+    expect(store.snapshot().devices[0]).toMatchObject({
+      name: "아리",
+      roomId: "identifier_roomnew",
+      type: "bleD2D",
+      online: true,
+      presentation: { assetType: "smart_tag_2" }
+    });
+    expect(store.snapshot().devices[0]?.controls).toBeUndefined();
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ type: "inventory" }));
+  });
+
+  test("merges advanced status components as states and keeps newer values", () => {
+    const store = new DeviceStore({
+      identifierRole: (value) =>
+        ({
+          identifier_cooler: "cooler",
+          identifier_freezer: "freezer",
+        })[value],
+    });
+    observeSnapshotState(store, {
+      componentId: "identifier_freezer",
+      capabilityId: "identifier_temperatureMeasurement",
+      attributeName: "temperature",
+      value: -18,
+      unit: "C",
+      timestamp: "2026-08-24T21:10:00.000Z"
+    });
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    store.observeAdvancedDeviceSnapshot({
+      items: [
+        {
+          deviceId: "dev_001",
+          locationId: "loc_001",
+          label: "냉장고",
+          status: {
+            components: {
+              identifier_cooler: {
+                identifier_temperatureMeasurement: {
+                  temperature: {
+                    value: 3,
+                    unit: "C",
+                    timestamp: "2026-08-24T21:11:00.000Z"
+                  }
+                },
+                identifier_contactSensor: {
+                  contact: {
+                    value: "closed",
+                    timestamp: "2026-08-24T21:11:00.000Z"
+                  }
+                }
+              },
+              identifier_freezer: {
+                identifier_temperatureMeasurement: {
+                  temperature: {
+                    value: -20,
+                    unit: "C",
+                    timestamp: "2026-08-24T21:09:00.000Z"
+                  }
+                },
+                identifier_battery: {
+                  battery: {
+                    value: 88,
+                    unit: "%",
+                    timestamp: "2026-08-24T21:11:00.000Z"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    });
+
+    expect(store.snapshot().devices[0]?.states).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          component: "identifier_cooler",
+          attribute: "temperature",
+          value: 3,
+          componentRole: "cooler"
+        }),
+        expect.objectContaining({
+          component: "identifier_cooler",
+          attribute: "contact",
+          value: "closed",
+          componentRole: "cooler"
+        }),
+        expect.objectContaining({
+          component: "identifier_freezer",
+          attribute: "temperature",
+          value: -18,
+          componentRole: "freezer"
+        }),
+        expect.objectContaining({
+          component: "identifier_freezer",
+          attribute: "battery",
+          value: 88,
+          componentRole: "freezer"
+        })
+      ])
+    );
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  test("aliases raw advanced status keys before publishing semantic roles", () => {
+    const aliases: Record<string, string> = {
+      cooler: "identifier_cooler",
+      "hca.main": "identifier_hca_main",
+      temperatureMeasurement: "identifier_temperatureMeasurement",
+    };
+    const store = new DeviceStore({
+      normalizeStateToken: (value) => aliases[value] ?? value,
+      identifierRole: (value) =>
+        ({
+          cooler: "cooler",
+          "hca.main": "hca.main",
+          identifier_cooler: "cooler",
+          identifier_hca_main: "hca.main"
+        })[value],
+    });
+
+    store.observeAdvancedDeviceSnapshot({
+      items: [
+        {
+          deviceId: "dev_001",
+          locationId: "loc_001",
+          label: "냉장고",
+          status: {
+            components: {
+              cooler: {
+                temperatureMeasurement: {
+                  temperature: {
+                    value: 2,
+                    unit: "C",
+                    timestamp: "2026-08-24T21:11:00.000Z"
+                  }
+                }
+              },
+              "hca.main": {
+                temperatureMeasurement: {
+                  temperature: {
+                    value: 12,
+                    unit: "C",
+                    timestamp: "2026-08-24T21:12:00.000Z"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    });
+
+    expect(store.snapshot().devices[0]?.states).toEqual([
+      expect.objectContaining({
+        component: "identifier_cooler",
+        capability: "identifier_temperatureMeasurement",
+        attribute: "temperature",
+        value: 2,
+        componentRole: "cooler"
+      }),
+      expect.objectContaining({
+        component: "identifier_hca_main",
+        capability: "identifier_temperatureMeasurement",
+        attribute: "temperature",
+        value: 12,
+        componentRole: "hca.main"
+      })
+    ]);
+    expect(JSON.stringify(store.snapshot())).not.toContain('"component":"cooler"');
+    expect(JSON.stringify(store.snapshot())).not.toContain('"component":"hca.main"');
+    expect(JSON.stringify(store.snapshot())).not.toContain('"capability":"temperatureMeasurement"');
+  });
+
+  test("ignores malformed advanced rows and unsafe presentation ids", () => {
+    const store = new DeviceStore();
+
+    store.observeAdvancedDeviceSnapshot({
+      items: [
+        {
+          deviceId: "raw-device-id",
+          locationId: "loc_001",
+          label: "Ignored"
+        },
+        {
+          deviceId: "dev_001",
+          locationId: "loc_001",
+          label: "Safe device",
+          presentationId: "../unsafe"
+        }
+      ]
+    });
+
+    expect(store.snapshot().devices).toEqual([
+      expect.objectContaining({
+        id: "dev_001",
+        name: "Safe device"
+      })
+    ]);
     expect(store.snapshot().devices[0]).not.toHaveProperty("presentation");
   });
 
