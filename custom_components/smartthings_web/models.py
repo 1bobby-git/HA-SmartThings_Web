@@ -590,6 +590,45 @@ def location_unique_id(location_id: str, suffix: str) -> str:
     return f"{location_id}_{suffix}"
 
 
+_ROOM_NAME_SEPARATORS = " \t-_.·:~|"
+_KOREAN_POSSESSIVE = "의"
+
+
+def device_display_name_without_room(
+    name: str | None,
+    room_names: Iterable[str] | None,
+) -> str | None:
+    """Return a device display name with any leading or trailing room name removed."""
+    if not isinstance(name, str):
+        return name
+    cleaned = name.strip()
+    for room_name in room_names or ():
+        if not isinstance(room_name, str):
+            continue
+        candidate = room_name.strip().lower()
+        if len(candidate) < 2 or not candidate:
+            continue
+        cleaned = _strip_anchored_room_token(cleaned, candidate)
+    if cleaned == name.strip():
+        return name
+    return cleaned or name
+
+
+def _strip_anchored_room_token(text: str, token: str) -> str:
+    """Remove repeated room-name prefixes and suffixes with adjacent separators."""
+    while len(text) > len(token) and text[: len(token)].lower() == token:
+        rest = text[len(token):]
+        if rest.startswith(_KOREAN_POSSESSIVE):
+            rest = rest[len(_KOREAN_POSSESSIVE):]
+        text = rest.lstrip(_ROOM_NAME_SEPARATORS)
+    while len(text) > len(token) and text[-len(token):].lower() == token:
+        text = text[:-len(token)]
+        if text.endswith(_KOREAN_POSSESSIVE):
+            text = text[:-len(_KOREAN_POSSESSIVE)]
+        text = text.rstrip(_ROOM_NAME_SEPARATORS)
+    return text
+
+
 def scene_unique_id(scene_id: str) -> str:
     """Return a stable scene unique ID."""
     return f"{scene_id}_scene"

@@ -16,6 +16,7 @@ from .models import (
     BridgeCommandResult,
     BridgeDevice,
     BridgeInventory,
+    device_display_name_without_room,
     parse_control,
     parse_device_presentation,
     parse_location,
@@ -372,6 +373,7 @@ def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:
         and isinstance(item.get("locationId"), str)
         and isinstance(item.get("name"), str)
     }
+    room_display_names = [name for _location_id, name in rooms.values()]
     devices: dict[str, BridgeDevice] = {}
     for item in raw["devices"]:
         if not isinstance(item, dict):
@@ -397,7 +399,7 @@ def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:
             device_id=device_id,
             location_id=location_id,
             room_id=room_id if isinstance(room_id, str) else None,
-            name=name,
+            name=device_display_name_without_room(name, room_display_names),
             device_type=device_type if isinstance(device_type, str) else None,
             online=item.get("online") is True,
             presentation=presentation,
