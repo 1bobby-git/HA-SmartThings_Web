@@ -71,7 +71,7 @@ def _install_homeassistant_stubs() -> None:
             super().__init__(kwargs)
 
     device_registry.DeviceInfo = DeviceInfo  # type: ignore[attr-defined]
-    device_registry.async_get = lambda _hass: None  # type: ignore[attr-defined]
+    device_registry.async_get = lambda _hass: SimpleNamespace(devices=[])  # type: ignore[attr-defined]
     sys.modules["homeassistant.helpers.device_registry"] = device_registry
 
     entity = ModuleType("homeassistant.helpers.entity")
@@ -104,6 +104,17 @@ def _install_homeassistant_stubs() -> None:
 
     util.slugify = _stub_slugify  # type: ignore[attr-defined]
     sys.modules["homeassistant.util"] = util
+
+    area_registry_module = ModuleType("homeassistant.helpers.area_registry")
+
+    class FakeAreaRegistry:
+        areas = [
+            SimpleNamespace(id="deiteorum"),
+            SimpleNamespace(id="geosil"),
+        ]
+
+    area_registry_module.async_get = lambda _hass: FakeAreaRegistry()  # type: ignore[attr-defined]
+    sys.modules["homeassistant.helpers.area_registry"] = area_registry_module
 
 
 _install_homeassistant_stubs()
@@ -658,28 +669,43 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             [
                 self._registry_entry(
                     "switch.deiteorum_status_home",
-                    "dev_status",
-                    unique_id="dev_status_identifier_x",
+                    device_id="uuid_status",
+                    unique_id="dev_status_identifier_x_switch",
                 ),
                 self._registry_entry(
                     "switch.deiteorum_status_night",
-                    "dev_status2",
-                    unique_id="dev_status2_identifier_y",
+                    device_id="uuid_status2",
+                    unique_id="dev_status2_identifier_y_switch",
                     name="내 스위치",
                 ),
                 self._registry_entry(
                     "switch.taken_target",
-                    "dev_taken",
-                    unique_id="dev_taken_identifier_z",
+                    device_id="uuid_taken",
+                    unique_id="dev_taken_identifier_z_switch",
                 ),
                 self._registry_entry(
                     "switch.geosil_geosil_jomyeong",
-                    "dev_double",
-                    unique_id="dev_double_identifier_w",
+                    device_id="uuid_double",
+                    unique_id="dev_double_identifier_w_switch",
                 ),
             ]
         )
+        # The exact target is occupied by another integration, so the
+        # collision fallback keeps the remainder with a numbered suffix.
+        registry.entries.insert(
+            0,
+            entity("switch.status_away", "switch", "other_integration_uid", platform="other"),
+        )
+        extra = self._registry_entry("switch.deiteorum_status_away", device_id="uuid_away", unique_id="dev_away_identifier_v")
+        registry.entries.append(extra)
         self.patch_registry(registry)
+        integration.dr.async_get = lambda _hass: SimpleNamespace(
+            devices=[
+                SimpleNamespace(id="uuid_status", identifiers={(DOMAIN, "dev_status")}, area_id="deiteorum"),
+                SimpleNamespace(id="uuid_taken", identifiers={(DOMAIN, "dev_taken")}, area_id="deiteorum"),
+                SimpleNamespace(id="uuid_away", identifiers={(DOMAIN, "dev_away")}, area_id="deiteorum"),
+            ]
+        )
 
         _migrate_entity_registry(
             object(),
@@ -692,9 +718,10 @@ class EntityRegistryMigrationTests(unittest.TestCase):
                 locations={"loc_001": "Home"},
                 rooms={"room_d": ("loc_001", "Deiteorum"), "room_g": ("loc_001", "Geosil")},
                 devices={
-                    "dev_status": self._bridge_device("dev_status", "Status Home"),
-                    "dev_status2": self._bridge_device("dev_status2", "Status Night"),
-                    "dev_taken": self._bridge_device("dev_taken", "Taken Source"),
+                    "dev_status": self._bridge_device("dev_status", "Status Home", room=None),
+                    "dev_status2": self._bridge_device("dev_status2", "Status Night", room=None),
+                    "dev_away": self._bridge_device("dev_away", "Status Away", room=None),
+                    "dev_taken": self._bridge_device("dev_taken", "Taken Source", room=None),
                     "dev_double": self._bridge_device("dev_double", "조명", room="room_g"),
                     "dev_plain": level_only_device("dev_plain", "loc_001", "Plain Lamp"),
                 },
@@ -706,6 +733,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             [
                 ("switch.deiteorum_status_home", "switch.status_home"),
                 ("switch.geosil_geosil_jomyeong", "switch.geosil_jomyeong"),
+                ("switch.deiteorum_status_away", "switch.status_away_2"),
             ],
         )
         self.assertEqual(registry.updated, [])
@@ -728,6 +756,28 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             name=name,
             disabled_by=None,
             original_name=None,
+        )
+
+    @staticmethod
+    def _fake_device_registry() -> object:
+        return SimpleNamespace(
+            devices=[
+                SimpleNamespace(
+                    id="uuid_status",
+                    identifiers={(DOMAIN, "dev_status")},
+                    area_id="deiteorum",
+                ),
+                SimpleNamespace(
+                    id="uuid_double",
+                    identifiers={(DOMAIN, "dev_double")},
+                    area_id="geosil",
+                ),
+                SimpleNamespace(
+                    id="uuid_unmapped",
+                    identifiers={(DOMAIN, "dev_plain")},
+                    area_id=None,
+                ),
+            ]
         )
 
     @staticmethod
