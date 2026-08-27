@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.102
+
+- Harden the frozen entity-ID repair discovered on a live install: resolve owning devices through the device registry's identifier sets even when `DeviceRegistry.devices`/`AreaRegistry.areas` are live wrapper mappings rather than plain dicts, accept both the Bridge room-name slug and the user-assigned area ID (e.g. 데이터룸 vs deiteorum), and fall back to numbered IDs (`_2`...`_9`) when a cleaned target is occupied by another integration instead of skipping silently.
+
 ## 0.1.101
 
 - Add a one-shot registry repair that renames this integration's frozen legacy entity IDs whose generated slug embeds the device's own SmartThings room-name prefix (for example `switch.deiteorum_status_home` becomes `switch.status_home`) once the corrected device name reaches Home Assistant; user-renamed entities and occupied target IDs are left untouched. Entity IDs were never auto-regenerated before, which kept stale room-prefixed IDs visible even after 0.1.99/0.1.100 fixed naming at generation time.
