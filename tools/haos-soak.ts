@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { lstat, mkdir, open, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import {
@@ -10,11 +11,14 @@ import {
   createSoakSample,
   evaluateSoak,
   parseHealthGuestExec,
+  parseLocalBridgeInventory,
+  parseLocalBridgeSseEvent,
   parseStatsGuestExec,
   writeSanitizedObservation,
   type SoakErrorCode,
   type SoakErrorObservation,
   type SoakEvaluation,
+  type SoakHealthObservation,
   type SoakObservation
 } from "./haos-soak-core.js";
 import {
@@ -26,6 +30,7 @@ import {
   parseSoakCollectorLock,
   SOAK_COLLECTOR_CONFIG_NAME,
   SOAK_COLLECTOR_LOCK_NAME,
+  type SoakCollectorConfig,
   type SoakCollectorLock
 } from "./haos-soak-resume-core.js";
 import type { SoakRunMetadata } from "./haos-soak-deployment-gate-core.js";
@@ -35,7 +40,10 @@ const DEFAULT_DURATION_HOURS = 72;
 const DEFAULT_INTERVAL_SECONDS = 300;
 const DEFAULT_MAX_MEMORY_GROWTH_MIB = 256;
 const COMMAND_TIMEOUT_MS = 45_000;
+const LOCAL_BRIDGE_TIMEOUT_MS = 10_000;
 const MAX_COMMAND_OUTPUT_BYTES = 1_000_000;
+const DEFAULT_LOCAL_BRIDGE_URL = "http://127.0.0.1:8098";
+const DEFAULT_LOCAL_DATA_DIR = "/data";
 const RESUME_DIRECTORY_ENTRIES = new Set([
   SOAK_COLLECTOR_LOCK_NAME,
   SOAK_COLLECTOR_CONFIG_NAME,
@@ -46,16 +54,28 @@ const RESUME_DIRECTORY_ENTRIES = new Set([
   "final-summary.json.sha256"
 ]);
 
-interface CliOptions {
+export type CliOptions = QgaCliOptions | LocalBridgeCliOptions;
+
+interface BaseCliOptions {
   resume: boolean;
   durationMs: number;
   intervalMs: number;
   maxMemoryGrowthBytes: number;
   outputDirectory: string;
   repositoryRoot: string;
+}
+
+export interface QgaCliOptions extends BaseCliOptions {
+  mode: "qga";
   sshTarget: string;
   vmId: number;
   addonSlug: string;
+}
+
+export interface LocalBridgeCliOptions extends BaseCliOptions {
+  mode: "local_bridge";
+  bridgeUrl: string;
+  bridgeTokenFile: string;
 }
 
 let stopRequested = false;
@@ -94,12 +114,7 @@ async function runCollector(options: CliOptions, outputDirectory: string): Promi
       readBoundedRegularFile(configFile, 4_096)
     ]);
     const config = parseSoakCollectorConfig(configText);
-    if (
-      config.sshTarget !== options.sshTarget ||
-      config.vmId !== options.vmId ||
-      config.addonSlug !== options.addonSlug ||
-      config.maxMemoryGrowthBytes !== options.maxMemoryGrowthBytes
-    ) {
+    if (!collectorConfigMatchesOptions(config, options)) {
       throw new Error("soak_resume_config_mismatch");
     }
     const resume = createSoakResumeState({
@@ -145,12 +160,22 @@ async function runCollector(options: CliOptions, outputDirectory: string): Promi
     };
     await writeJson(
       configFile,
-      createSoakCollectorConfig({
-        sshTarget: options.sshTarget,
-        vmId: options.vmId,
-        addonSlug: options.addonSlug,
-        maxMemoryGrowthBytes: options.maxMemoryGrowthBytes
-      })
+      createSoakCollectorConfig(
+        options.mode === "qga"
+          ? {
+              mode: "qga",
+              sshTarget: options.sshTarget,
+              vmId: options.vmId,
+              addonSlug: options.addonSlug,
+              maxMemoryGrowthBytes: options.maxMemoryGrowthBytes
+            }
+          : {
+              mode: "local_bridge",
+              bridgeUrl: options.bridgeUrl,
+              bridgeTokenFile: options.bridgeTokenFile,
+              maxMemoryGrowthBytes: options.maxMemoryGrowthBytes
+            }
+      )
     );
     await writeJson(metadataFile, metadata);
     writeProgress({
@@ -204,6 +229,13 @@ async function runCollector(options: CliOptions, outputDirectory: string): Promi
 }
 
 async function collectObservation(options: CliOptions): Promise<SoakObservation> {
+  if (options.mode === "local_bridge") {
+    return collectLocalBridgeObservation(options);
+  }
+  return collectQgaObservation(options);
+}
+
+async function collectQgaObservation(options: QgaCliOptions): Promise<SoakObservation> {
   const sampledAt = new Date().toISOString();
   const [healthResult, statsResult] = await Promise.allSettled([
     runSsh(options.sshTarget, healthCommand(options)),
@@ -231,6 +263,41 @@ async function collectObservation(options: CliOptions): Promise<SoakObservation>
   }
 }
 
+async function collectLocalBridgeObservation(options: LocalBridgeCliOptions): Promise<SoakObservation> {
+  const sampledAt = new Date().toISOString();
+  const bridgeToken = await readLocalBridgeToken(options.bridgeTokenFile);
+  const [healthResult, inventoryResult, eventResult] = await Promise.allSettled([
+    fetchBridgeJson(`${options.bridgeUrl}/health/details`),
+    fetchBridgeJson(`${options.bridgeUrl}/api/v1/inventory`, bridgeToken),
+    fetchBridgeSseEvent(`${options.bridgeUrl}/api/v1/events`, bridgeToken)
+  ]);
+
+  if (healthResult.status === "rejected") {
+    return errorObservation(sampledAt, "health_command_failed");
+  }
+  if (inventoryResult.status === "rejected" || eventResult.status === "rejected") {
+    return errorObservation(sampledAt, "health_response_invalid");
+  }
+
+  try {
+    const health = parseLocalBridgeHealth(healthResult.value);
+    const inventory = parseLocalBridgeInventory(inventoryResult.value);
+    const event = parseLocalBridgeSseEvent(eventResult.value);
+    return createSoakSample({
+      sampledAt,
+      health: {
+        ...health,
+        inventoryDeviceCount: inventory.deviceCount,
+        inventorySequence: inventory.sequence,
+        eventSequence: event.sequence
+      },
+      resources: await collectLocalResources()
+    });
+  } catch {
+    return errorObservation(sampledAt, "health_response_invalid");
+  }
+}
+
 async function runSsh(target: string, remoteCommand: string): Promise<string> {
   const result = await execFileAsync(
     "ssh",
@@ -254,11 +321,115 @@ async function runSsh(target: string, remoteCommand: string): Promise<string> {
   return result.stdout;
 }
 
-function healthCommand(options: CliOptions): string {
+async function fetchBridgeJson(url: string, token?: string): Promise<unknown> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), LOCAL_BRIDGE_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      throw new Error("bridge_request_failed");
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchBridgeSseEvent(url: string, token: string): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), LOCAL_BRIDGE_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: controller.signal
+    });
+    if (!response.ok || !response.body) {
+      throw new Error("bridge_events_failed");
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    while (Buffer.byteLength(text, "utf8") <= 64 * 1_024) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+      if (text.includes("\n\n") || text.includes("\r\n\r\n")) {
+        return text;
+      }
+    }
+    throw new Error("bridge_events_failed");
+  } finally {
+    clearTimeout(timeout);
+    controller.abort();
+  }
+}
+
+async function readLocalBridgeToken(path: string): Promise<string> {
+  const token = (await readBoundedRegularFile(path, 1_024)).trim();
+  if (!/^[A-Za-z0-9_.:-]{32,512}$/u.test(token)) {
+    throw new Error("soak_local_bridge_token_invalid");
+  }
+  return token;
+}
+
+function parseLocalBridgeHealth(input: unknown): SoakHealthObservation {
+  const record = requireRecord(input);
+  const details = requireRecord(record.details);
+  if (typeof record.live !== "boolean" || typeof record.ready !== "boolean") {
+    throw new Error("health_response_invalid");
+  }
+  const health = {
+    ...details,
+    live: record.live,
+    ready: record.ready
+  } as unknown as SoakHealthObservation;
+  return createSoakSample({
+    sampledAt: new Date(0).toISOString(),
+    health,
+    resources: zeroResources()
+  }).health;
+}
+
+async function collectLocalResources() {
+  return zeroResources(await readCgroupMemoryUsage());
+}
+
+async function readCgroupMemoryUsage(): Promise<number> {
+  for (const path of ["/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory/memory.usage_in_bytes"]) {
+    try {
+      const text = await readBoundedRegularFile(path, 64);
+      const value = Number(text.trim());
+      if (Number.isSafeInteger(value) && value >= 0) {
+        return value;
+      }
+    } catch {
+      // Some HAOS/container runtimes expose different cgroup layouts; zero remains a sanitized fallback.
+    }
+  }
+  return 0;
+}
+
+function zeroResources(memoryUsageBytes = 0) {
+  return {
+    cpuPercent: 0,
+    memoryUsageBytes,
+    memoryLimitBytes: 0,
+    memoryPercent: 0,
+    networkRxBytes: 0,
+    networkTxBytes: 0,
+    blockReadBytes: 0,
+    blockWriteBytes: 0
+  };
+}
+
+function healthCommand(options: QgaCliOptions): string {
   return `qm guest exec ${String(options.vmId)} -- docker exec app_${options.addonSlug} curl -fsS http://127.0.0.1:8098/health/details`;
 }
 
-function statsCommand(options: CliOptions): string {
+function statsCommand(options: QgaCliOptions): string {
   return `qm guest exec ${String(options.vmId)} -- ha apps stats ${options.addonSlug} --raw-json`;
 }
 
@@ -400,7 +571,7 @@ function isMissingPathError(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
-function parseCliOptions(args: readonly string[]): CliOptions {
+export function parseCliOptions(args: readonly string[]): CliOptions {
   const allowedValueArguments = new Set([
     "--duration-hours",
     "--interval-seconds",
@@ -408,11 +579,14 @@ function parseCliOptions(args: readonly string[]): CliOptions {
     "--ssh-target",
     "--addon-slug",
     "--vm-id",
+    "--bridge-url",
+    "--bridge-token-file",
     "--repository-root",
     "--output-dir"
   ]);
   const values = new Map<string, string>();
   let resume = false;
+  let localBridge = false;
   for (let index = 0; index < args.length; ) {
     const key = args[index];
     if (key === "--resume") {
@@ -420,6 +594,14 @@ function parseCliOptions(args: readonly string[]): CliOptions {
         throw new Error("duplicate soak argument: --resume");
       }
       resume = true;
+      index += 1;
+      continue;
+    }
+    if (key === "--local-bridge") {
+      if (localBridge) {
+        throw new Error("duplicate soak argument: --local-bridge");
+      }
+      localBridge = true;
       index += 1;
       continue;
     }
@@ -462,26 +644,71 @@ function parseCliOptions(args: readonly string[]): CliOptions {
   );
   const vmId = positiveInteger(values.get("--vm-id") ?? "100", "vm-id");
   const repositoryRoot = resolve(values.get("--repository-root") ?? process.cwd());
+  if (
+    localBridge &&
+    (values.has("--ssh-target") ||
+      values.has("--addon-slug") ||
+      values.has("--vm-id") ||
+      values.has("--bridge-url") ||
+      values.has("--bridge-token-file"))
+  ) {
+    throw new Error("soak_local_bridge_arguments_invalid");
+  }
+  if (!localBridge && (values.has("--bridge-url") || values.has("--bridge-token-file"))) {
+    throw new Error("soak_qga_arguments_invalid");
+  }
+  const mode = localBridge ? "local_bridge" : "qga";
   const outputDirectory = resolve(
-    values.get("--output-dir") ?? defaultOutputDirectory(new Date())
+    values.get("--output-dir") ?? defaultOutputDirectory(new Date(), mode)
   );
-  return {
+  const base = {
     resume,
     durationMs: Math.max(1, Math.round(durationHours * 60 * 60 * 1000)),
     intervalMs: Math.max(1, Math.round(intervalSeconds * 1000)),
     maxMemoryGrowthBytes: Math.round(maximumMemoryGrowthMiB * 1024 * 1024),
     outputDirectory,
-    repositoryRoot,
+    repositoryRoot
+  };
+  if (mode === "local_bridge") {
+    return {
+      ...base,
+      mode,
+      bridgeUrl: safeLocalBridgeUrl(values.get("--bridge-url") ?? DEFAULT_LOCAL_BRIDGE_URL),
+      bridgeTokenFile: resolve(values.get("--bridge-token-file") ?? join(DEFAULT_LOCAL_DATA_DIR, "bridge-secret"))
+    };
+  }
+  return {
+    ...base,
+    mode,
     sshTarget,
     vmId,
     addonSlug
   };
 }
 
-function defaultOutputDirectory(now: Date): string {
-  const base = process.env.LOCALAPPDATA ?? tmpdir();
+function collectorConfigMatchesOptions(config: SoakCollectorConfig, options: CliOptions): boolean {
+  if (config.mode !== options.mode || config.maxMemoryGrowthBytes !== options.maxMemoryGrowthBytes) {
+    return false;
+  }
+  if (config.mode === "qga" && options.mode === "qga") {
+    return (
+      config.sshTarget === options.sshTarget &&
+      config.vmId === options.vmId &&
+      config.addonSlug === options.addonSlug
+    );
+  }
+  if (config.mode === "local_bridge" && options.mode === "local_bridge") {
+    return config.bridgeUrl === options.bridgeUrl && config.bridgeTokenFile === options.bridgeTokenFile;
+  }
+  return false;
+}
+
+function defaultOutputDirectory(now: Date, mode: CliOptions["mode"]): string {
+  const base = mode === "local_bridge" ? DEFAULT_LOCAL_DATA_DIR : process.env.LOCALAPPDATA ?? tmpdir();
   const runId = now.toISOString().replaceAll(":", "-").replace(".000Z", "Z");
-  return join(base, "HA-SmartThings-Web", "soak", runId);
+  return mode === "local_bridge"
+    ? join(base, "soak", runId)
+    : join(base, "HA-SmartThings-Web", "soak", runId);
 }
 
 function errorObservation(sampledAt: string, code: SoakErrorCode): SoakErrorObservation {
@@ -577,6 +804,33 @@ function safeIdentifier(value: string, name: string, allowDots = false): string 
   return value;
 }
 
+function safeLocalBridgeUrl(value: string): string {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("soak_local_bridge_arguments_invalid");
+  }
+  if (
+    url.protocol !== "http:" ||
+    (url.hostname !== "127.0.0.1" && url.hostname !== "localhost" && url.hostname !== "[::1]") ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.search !== "" ||
+    url.hash !== ""
+  ) {
+    throw new Error("soak_local_bridge_arguments_invalid");
+  }
+  return url.toString().replace(/\/$/u, "");
+}
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("expected object");
+  }
+  return value as Record<string, unknown>;
+}
+
 function requestStop(): void {
   stopRequested = true;
   wakePendingDelay?.();
@@ -594,7 +848,9 @@ async function delay(milliseconds: number): Promise<void> {
   });
 }
 
-void main().catch(() => {
-  process.stderr.write("haos_soak_failed\n");
-  process.exitCode = 1;
-});
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  void main().catch(() => {
+    process.stderr.write("haos_soak_failed\n");
+    process.exitCode = 1;
+  });
+}

@@ -12,9 +12,12 @@ const MAX_OBSERVATION_LINE_BYTES = 32 * 1_024;
 const LOCK_KEYS = new Set(["schemaVersion", "pid", "createdAt"]);
 const CONFIG_KEYS = new Set([
   "schemaVersion",
+  "mode",
   "sshTarget",
   "vmId",
   "addonSlug",
+  "bridgeUrl",
+  "bridgeTokenFile",
   "maxMemoryGrowthBytes"
 ]);
 
@@ -24,11 +27,22 @@ export interface SoakCollectorLock {
   createdAt: string;
 }
 
-export interface SoakCollectorConfig {
+export type SoakCollectorConfig = QgaSoakCollectorConfig | LocalBridgeSoakCollectorConfig;
+
+export interface QgaSoakCollectorConfig {
   schemaVersion: 1;
+  mode: "qga";
   sshTarget: string;
   vmId: number;
   addonSlug: string;
+  maxMemoryGrowthBytes: number;
+}
+
+export interface LocalBridgeSoakCollectorConfig {
+  schemaVersion: 1;
+  mode: "local_bridge";
+  bridgeUrl: string;
+  bridgeTokenFile: string;
   maxMemoryGrowthBytes: number;
 }
 
@@ -78,12 +92,18 @@ export function parseSoakCollectorLock(text: string): SoakCollectorLock {
 }
 
 export function createSoakCollectorConfig(input: {
+  mode?: "qga";
   sshTarget: string;
   vmId: number;
   addonSlug: string;
   maxMemoryGrowthBytes: number;
+} | {
+  mode: "local_bridge";
+  bridgeUrl: string;
+  bridgeTokenFile: string;
+  maxMemoryGrowthBytes: number;
 }): SoakCollectorConfig {
-  return parseSoakCollectorConfig(JSON.stringify({ schemaVersion: 1, ...input }));
+  return parseSoakCollectorConfig(JSON.stringify({ schemaVersion: 1, mode: "qga", ...input }));
 }
 
 export function parseSoakCollectorConfig(text: string): SoakCollectorConfig {
@@ -92,27 +112,55 @@ export function parseSoakCollectorConfig(text: string): SoakCollectorConfig {
   }
   try {
     const record = requireRecord(JSON.parse(text) as unknown);
-    assertExactKeys(record, CONFIG_KEYS);
+    assertAllowedKeys(record, CONFIG_KEYS);
+    const mode = record.mode ?? "qga";
     if (
       record.schemaVersion !== 1 ||
-      typeof record.sshTarget !== "string" ||
-      !/^[A-Za-z0-9_.-]{1,120}$/u.test(record.sshTarget) ||
-      !Number.isSafeInteger(record.vmId) ||
-      Number(record.vmId) <= 0 ||
-      typeof record.addonSlug !== "string" ||
-      !/^[A-Za-z0-9_-]{1,120}$/u.test(record.addonSlug) ||
       !Number.isSafeInteger(record.maxMemoryGrowthBytes) ||
       Number(record.maxMemoryGrowthBytes) < 0
     ) {
       throw new Error("invalid config");
     }
-    return {
-      schemaVersion: 1,
-      sshTarget: record.sshTarget,
-      vmId: Number(record.vmId),
-      addonSlug: record.addonSlug,
-      maxMemoryGrowthBytes: Number(record.maxMemoryGrowthBytes)
-    };
+    if (mode === "qga") {
+      assertExactKeys(record, new Set(["schemaVersion", "mode", "sshTarget", "vmId", "addonSlug", "maxMemoryGrowthBytes"]), true);
+      if (
+        typeof record.sshTarget !== "string" ||
+        !/^[A-Za-z0-9_.-]{1,120}$/u.test(record.sshTarget) ||
+        !Number.isSafeInteger(record.vmId) ||
+        Number(record.vmId) <= 0 ||
+        typeof record.addonSlug !== "string" ||
+        !/^[A-Za-z0-9_-]{1,120}$/u.test(record.addonSlug)
+      ) {
+        throw new Error("invalid config");
+      }
+      return {
+        schemaVersion: 1,
+        mode: "qga",
+        sshTarget: record.sshTarget,
+        vmId: Number(record.vmId),
+        addonSlug: record.addonSlug,
+        maxMemoryGrowthBytes: Number(record.maxMemoryGrowthBytes)
+      };
+    }
+    if (mode === "local_bridge") {
+      assertExactKeys(record, new Set(["schemaVersion", "mode", "bridgeUrl", "bridgeTokenFile", "maxMemoryGrowthBytes"]));
+      if (
+        typeof record.bridgeUrl !== "string" ||
+        !/^http:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/u.test(record.bridgeUrl) ||
+        typeof record.bridgeTokenFile !== "string" ||
+        !/^[/A-Za-z]:?[/\\A-Za-z0-9_. -]{1,260}$/u.test(record.bridgeTokenFile)
+      ) {
+        throw new Error("invalid config");
+      }
+      return {
+        schemaVersion: 1,
+        mode: "local_bridge",
+        bridgeUrl: record.bridgeUrl,
+        bridgeTokenFile: record.bridgeTokenFile,
+        maxMemoryGrowthBytes: Number(record.maxMemoryGrowthBytes)
+      };
+    }
+    throw new Error("invalid config");
   } catch {
     throw new Error("soak_collector_config_invalid");
   }
@@ -185,8 +233,20 @@ export function createSoakResumeState(input: {
   };
 }
 
-function assertExactKeys(record: Record<string, unknown>, allowed: ReadonlySet<string>): void {
-  if (Object.keys(record).some((key) => !allowed.has(key)) || Object.keys(record).length !== allowed.size) {
+function assertExactKeys(
+  record: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+  allowMissingMode = false
+): void {
+  const keys = Object.keys(record);
+  const expectedSize = allowMissingMode && record.mode === undefined ? allowed.size - 1 : allowed.size;
+  if (keys.some((key) => !allowed.has(key)) || keys.length !== expectedSize) {
+    throw new Error("unexpected keys");
+  }
+}
+
+function assertAllowedKeys(record: Record<string, unknown>, allowed: ReadonlySet<string>): void {
+  if (Object.keys(record).some((key) => !allowed.has(key))) {
     throw new Error("unexpected keys");
   }
 }

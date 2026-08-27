@@ -65,6 +65,9 @@ const HEALTH_OBSERVATION_KEYS = new Set([
   "protocolVersion",
   "heartbeatAgeMs",
   "snapshotAgeMs",
+  "inventoryDeviceCount",
+  "inventorySequence",
+  "eventSequence",
   ...OPTIONAL_HEALTH_AGE_FIELDS
 ]);
 const RESOURCE_OBSERVATION_KEYS = new Set([
@@ -95,6 +98,8 @@ export type SoakFailureCode =
   | "runtime_restarted"
   | "invalid_frame_increase"
   | "counter_regression"
+  | "inventory_changed"
+  | "sequence_regression"
   | "sample_gap"
   | "memory_growth"
   | "insufficient_samples";
@@ -120,6 +125,9 @@ export interface SoakHealthObservation {
   protocolVersion: string;
   heartbeatAgeMs: number;
   snapshotAgeMs: number;
+  inventoryDeviceCount?: number;
+  inventorySequence?: number;
+  eventSequence?: number;
   initialSnapshotAgeMs?: number;
   lastSnapshotAgeMs?: number;
   frameAgeMs?: number;
@@ -195,12 +203,25 @@ export interface SoakEvaluation {
 
 export interface SoakEvaluationCounters {
   observedDeviceCount: number;
+  inventoryDeviceCount?: number;
+  inventorySequence?: number;
+  eventSequence?: number;
   decodedDeviceEventCount: number;
   uniqueLogicalEventCount: number;
   duplicateEventCount: number;
   protocolInvalidFrameCount: number;
   protocolChangeCount: number;
   restartCount: number;
+}
+
+export interface LocalBridgeInventoryObservation {
+  sequence: number;
+  deviceCount: number;
+}
+
+export interface LocalBridgeEventObservation {
+  sequence: number;
+  type: "inventory" | "state";
 }
 
 export function parseHealthGuestExec(raw: string): SoakHealthObservation {
@@ -228,6 +249,44 @@ export function parseStatsGuestExec(raw: string): SoakResourceObservation {
     return sanitizeResources(requireRecord(response.data));
   } catch {
     throw new Error("stats_response_invalid");
+  }
+}
+
+export function parseLocalBridgeInventory(input: unknown): LocalBridgeInventoryObservation {
+  try {
+    const record = requireRecord(input);
+    if (record.schemaVersion !== 1 || !Array.isArray(record.devices)) {
+      throw new Error("invalid inventory");
+    }
+    return {
+      sequence: safeInteger(record.sequence),
+      deviceCount: record.devices.length
+    };
+  } catch {
+    throw new Error("inventory_response_invalid");
+  }
+}
+
+export function parseLocalBridgeSseEvent(input: string): LocalBridgeEventObservation {
+  if (Buffer.byteLength(input, "utf8") > 64 * 1_024) {
+    throw new Error("events_response_invalid");
+  }
+  const dataLine = input.split(/\r?\n/u).find((line) => line.startsWith("data:"));
+  if (!dataLine) {
+    throw new Error("events_response_invalid");
+  }
+  try {
+    const record = requireRecord(JSON.parse(dataLine.slice(5).trim()) as unknown);
+    const type = safeEnum(record.type, new Set(["inventory", "state"]));
+    if (record.schemaVersion !== 1) {
+      throw new Error("invalid event");
+    }
+    return {
+      sequence: safeInteger(record.sequence),
+      type: type as "inventory" | "state"
+    };
+  } catch {
+    throw new Error("events_response_invalid");
   }
 }
 
@@ -364,6 +423,12 @@ export function evaluateSoak(
     if (previousSample && countersRegressed(previousSample, sample)) {
       failures.add("counter_regression");
     }
+    if (previousSample && inventoryChanged(previousSample, sample)) {
+      failures.add("inventory_changed");
+    }
+    if (previousSample && sequenceRegressed(previousSample, sample)) {
+      failures.add("sequence_regression");
+    }
     if (previousSample && browserUptimeRegressed(previousSample, sample)) {
       failures.add("runtime_restarted");
     }
@@ -487,6 +552,11 @@ function sanitizeHealth(record: Record<string, unknown>): SoakHealthObservation 
     heartbeatAgeMs: safeInteger(record.heartbeatAgeMs),
     snapshotAgeMs: safeInteger(record.snapshotAgeMs)
   };
+  for (const field of ["inventoryDeviceCount", "inventorySequence", "eventSequence"] as const) {
+    if (record[field] !== undefined) {
+      result[field] = safeInteger(record[field]);
+    }
+  }
   for (const field of OPTIONAL_HEALTH_AGE_FIELDS) {
     if (record[field] !== undefined) {
       result[field] = safeInteger(record[field]);
@@ -559,9 +629,35 @@ function browserUptimeRegressed(previous: SoakSample, current: SoakSample): bool
   );
 }
 
+function inventoryChanged(previous: SoakSample, current: SoakSample): boolean {
+  return (
+    previous.health.inventoryDeviceCount !== undefined &&
+    current.health.inventoryDeviceCount !== undefined &&
+    current.health.inventoryDeviceCount !== previous.health.inventoryDeviceCount
+  );
+}
+
+function sequenceRegressed(previous: SoakSample, current: SoakSample): boolean {
+  return (
+    optionalCounterRegressed(previous.health.inventorySequence, current.health.inventorySequence) ||
+    optionalCounterRegressed(previous.health.eventSequence, current.health.eventSequence)
+  );
+}
+
+function optionalCounterRegressed(previous: number | undefined, current: number | undefined): boolean {
+  return previous !== undefined && current !== undefined && current < previous;
+}
+
 function evaluationCounters(sample: SoakSample): SoakEvaluationCounters {
   return {
     observedDeviceCount: sample.health.observedDeviceCount,
+    ...(sample.health.inventoryDeviceCount === undefined
+      ? {}
+      : { inventoryDeviceCount: sample.health.inventoryDeviceCount }),
+    ...(sample.health.inventorySequence === undefined
+      ? {}
+      : { inventorySequence: sample.health.inventorySequence }),
+    ...(sample.health.eventSequence === undefined ? {} : { eventSequence: sample.health.eventSequence }),
     decodedDeviceEventCount: sample.health.decodedDeviceEventCount,
     uniqueLogicalEventCount: sample.health.uniqueLogicalEventCount,
     duplicateEventCount: sample.health.duplicateEventCount,

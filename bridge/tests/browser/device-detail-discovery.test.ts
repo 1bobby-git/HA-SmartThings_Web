@@ -67,6 +67,23 @@ describe("DeviceDetailDiscovery", () => {
     });
   });
 
+  test("prioritizes complete contact battery signal metrics devices first", async () => {
+    const inspectDeviceDetails = vi.fn(async () => undefined);
+    const discovery = new DeviceDetailDiscovery({
+      inventory: () => tieredRefreshPriorityInventory(),
+      inspector: { inspectDeviceDetails },
+      canInspect: () => true
+    });
+
+    expect(await discovery.runOne()).toBe("inspected");
+    expect(inspectDeviceDetails).toHaveBeenCalledWith({
+      deviceName: "거실창문센서",
+      locationId: "loc_001",
+      locationNames: { loc_001: "Home" },
+      roomName: "거실"
+    });
+  });
+
   test("still inspects camera image devices after refresh-worthy value-only devices", async () => {
     const inspected: string[] = [];
     const inspectDeviceDetails = vi.fn(async ({ deviceName }: { deviceName: string }) => {
@@ -352,6 +369,72 @@ function mixedDiscoveryPriorityInventory(): BridgeInventory {
         type: null,
         online: true,
         states: []
+      },
+      ...valueOnly.devices
+    ]
+  };
+}
+
+function tieredRefreshPriorityInventory(): BridgeInventory {
+  const valueOnly = valueOnlyControlInventory();
+  return {
+    ...valueOnly,
+    devices: [
+      {
+        id: "dev_contact_only",
+        locationId: "loc_001",
+        roomId: null,
+        name: "Contact only",
+        type: "contact_sensor",
+        online: true,
+        states: [
+          {
+            component: "main",
+            capability: "contactSensor",
+            attribute: "contact",
+            value: "closed",
+            unit: null,
+            updatedAt: "2026-08-25T02:11:34Z"
+          }
+        ],
+        controls: [
+          {
+            id: "contact",
+            kind: "value",
+            label: "Contact sensor",
+            component: "main",
+            capability: "contactSensor",
+            attribute: "contact"
+          }
+        ]
+      },
+      {
+        id: "dev_signal_only",
+        locationId: "loc_001",
+        roomId: null,
+        name: "Signal only",
+        type: "signal_sensor",
+        online: true,
+        states: [
+          {
+            component: "legendabsolute60149",
+            capability: "legendabsolute60149.signalMetrics",
+            attribute: "signalMetrics",
+            value: "KST-9: 2026/04/01 11:28 LQI: 184  RSSI: -95dbm",
+            unit: null,
+            updatedAt: "2026-04-01T11:28:55Z"
+          }
+        ],
+        controls: [
+          {
+            id: "signalMetrics",
+            kind: "value",
+            label: "Received Signal Metrics",
+            component: "legendabsolute60149",
+            capability: "legendabsolute60149.signalMetrics",
+            attribute: "signalMetrics"
+          }
+        ]
       },
       ...valueOnly.devices
     ]

@@ -48,7 +48,10 @@ const MANIFEST_NAME = "addon-package-manifest.json";
 const ROOT_FILES = ["package.json", "package-lock.json", "tsconfig.json", "tsconfig.build.json"];
 const ROOT_TREES = ["bridge/src", `addon/${ADDON_NAME}`];
 const ROOT_TOOL_FILES = [
+  "tools/haos-soak.ts",
   "tools/haos-soak-core.ts",
+  "tools/haos-soak-resume-core.ts",
+  "tools/haos-soak-deployment-gate-core.ts",
   "tools/haos-live-control-event-benchmark.ts",
   "tools/haos-live-control-event-benchmark-core.ts",
 ];

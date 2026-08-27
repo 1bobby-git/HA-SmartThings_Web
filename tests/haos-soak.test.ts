@@ -8,10 +8,13 @@ import {
   createSoakSample,
   evaluateSoak,
   parseHealthGuestExec,
+  parseLocalBridgeInventory,
+  parseLocalBridgeSseEvent,
   parseStatsGuestExec,
   writeSanitizedObservation,
   type SoakObservation
 } from "../tools/haos-soak-core.js";
+import { parseCliOptions } from "../tools/haos-soak.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -24,6 +27,37 @@ afterEach(async () => {
 });
 
 describe("HAOS soak sampling", () => {
+  it("parses an explicit local Bridge mode for in-add-on collection", () => {
+    const options = parseCliOptions(["--local-bridge"]);
+
+    expect(options.mode).toBe("local_bridge");
+    if (options.mode !== "local_bridge") throw new Error("expected local Bridge mode");
+    expect(options.bridgeUrl).toBe("http://127.0.0.1:8098");
+    expect(options.bridgeTokenFile).toMatch(/(?:^|[/\\])data[/\\]bridge-secret$/u);
+    expect(options.outputDirectory).toMatch(/(?:^|[/\\])data[/\\]soak[/\\]/u);
+    expect(options.durationMs).toBe(72 * 60 * 60 * 1000);
+    expect(options.intervalMs).toBe(300 * 1000);
+  });
+
+  it("keeps the default QGA mode and rejects remote-only flags in local Bridge mode", () => {
+    const qga = parseCliOptions([]);
+
+    expect(qga.mode).toBe("qga");
+    if (qga.mode !== "qga") throw new Error("expected QGA mode");
+    expect(qga.sshTarget).toBe("pve-new-ts");
+    expect(qga.vmId).toBe(100);
+    expect(qga.addonSlug).toBe("local_smartthings_web_bridge");
+    expect(() => parseCliOptions(["--local-bridge", "--ssh-target", "pve"])).toThrowError(
+      "soak_local_bridge_arguments_invalid"
+    );
+    expect(() => parseCliOptions(["--local-bridge", "--vm-id", "100"])).toThrowError(
+      "soak_local_bridge_arguments_invalid"
+    );
+    expect(() =>
+      parseCliOptions(["--local-bridge", "--bridge-url", "https://example.com"])
+    ).toThrowError("soak_local_bridge_arguments_invalid");
+  });
+
   it("parses the nested guest-exec health response and keeps only allowlisted fields", () => {
     const health = parseHealthGuestExec(
       guestExec({
@@ -76,6 +110,63 @@ describe("HAOS soak sampling", () => {
       pushAgeMs: 500
     });
     expect(JSON.stringify(health)).not.toMatch(/must-not-persist|raw-device-id/i);
+  });
+
+  it("sanitizes local Bridge inventory and SSE sequence evidence", () => {
+    const inventory = parseLocalBridgeInventory({
+      schemaVersion: 1,
+      sequence: 41,
+      devices: [{ id: "raw-device-id" }, { id: "another-raw-id" }],
+      token: "must-not-persist"
+    });
+    const event = parseLocalBridgeSseEvent('data: {"schemaVersion":1,"sequence":42,"type":"inventory","deviceId":"raw"}\n\n');
+    const sample = createSoakSample({
+      sampledAt: "2026-08-24T00:00:00.000Z",
+      health: {
+        ...baseHealth(),
+        inventoryDeviceCount: inventory.deviceCount,
+        inventorySequence: inventory.sequence,
+        eventSequence: event.sequence
+      },
+      resources: baseResources()
+    });
+
+    expect(sample.health).toMatchObject({
+      observedDeviceCount: 213,
+      inventoryDeviceCount: 2,
+      inventorySequence: 41,
+      eventSequence: 42
+    });
+    expect(JSON.stringify(sample)).not.toMatch(/raw-device-id|another-raw-id|must-not-persist/i);
+  });
+
+  it("fails evaluation when local Bridge inventory count changes or sequence regresses", () => {
+    const verdict = evaluateSoak(
+      [
+        createSample("2026-08-24T00:00:00.000Z", {
+          inventoryDeviceCount: 213,
+          inventorySequence: 41,
+          eventSequence: 41
+        }),
+        createSample("2026-08-24T00:05:00.000Z", {
+          decoded: 102,
+          unique: 51,
+          inventoryDeviceCount: 212,
+          inventorySequence: 40,
+          eventSequence: 40
+        })
+      ],
+      {
+        runStartedAtMs: Date.parse("2026-08-24T00:00:00.000Z"),
+        expectedDurationMs: 5 * 60_000,
+        expectedIntervalMs: 5 * 60_000
+      }
+    );
+
+    expect(verdict.status).toBe("fail");
+    expect(verdict.failures).toEqual(
+      expect.arrayContaining(["inventory_changed", "sequence_regression"])
+    );
   });
 
   it("rejects unsuccessful or malformed guest-exec health responses without exposing command output", () => {
@@ -318,43 +409,74 @@ function createSample(
     restarts?: number;
     memory?: number;
     browserUptimeMs?: number;
+    inventoryDeviceCount?: number;
+    inventorySequence?: number;
+    eventSequence?: number;
   } = {}
 ): SoakObservation {
   return createSoakSample({
     sampledAt,
-    health: {
-      live: override.live ?? true,
-      ready: override.ready ?? true,
-      state: override.state ?? "CONNECTED",
-      urlCategory: "smartthings_location",
-      activeConnections: 0,
-      observedDeviceCount: 213,
-      decodedDeviceEventCount: override.decoded ?? 100,
-      uniqueLogicalEventCount: override.unique ?? 50,
-      duplicateEventCount: 50,
-      dedupeJournalSize: 50,
-      protocolInvalidFrameCount: override.invalidFrames ?? 1,
-      protocolChangeCount: override.protocolChanges ?? 0,
-      restartCount: override.restarts ?? 0,
-      bridgeVersion: "0.1.25",
-      browserVersion: "151.0.7922.34",
-      protocolVersion: "1:93ad956a7d0c0139",
-      heartbeatAgeMs: 1000,
-      snapshotAgeMs: 1000,
-      pushAgeMs: 500,
-      browserUptimeMs: override.browserUptimeMs ?? 3_600_000
-    },
-    resources: {
-      cpuPercent: 0.35,
-      memoryUsageBytes: override.memory ?? 400,
-      memoryLimitBytes: 10_000,
-      memoryPercent: 4,
-      networkRxBytes: 1000,
-      networkTxBytes: 100,
-      blockReadBytes: 0,
-      blockWriteBytes: 0
-    }
+    health: baseHealth(override),
+    resources: baseResources(override)
   });
+}
+
+function baseHealth(
+  override: {
+    live?: boolean;
+    ready?: boolean;
+    state?: string;
+    decoded?: number;
+    unique?: number;
+    invalidFrames?: number;
+    protocolChanges?: number;
+    restarts?: number;
+    browserUptimeMs?: number;
+    inventoryDeviceCount?: number;
+    inventorySequence?: number;
+    eventSequence?: number;
+  } = {}
+) {
+  return {
+    live: override.live ?? true,
+    ready: override.ready ?? true,
+    state: override.state ?? "CONNECTED",
+    urlCategory: "smartthings_location",
+    activeConnections: 0,
+    observedDeviceCount: 213,
+    decodedDeviceEventCount: override.decoded ?? 100,
+    uniqueLogicalEventCount: override.unique ?? 50,
+    duplicateEventCount: 50,
+    dedupeJournalSize: 50,
+    protocolInvalidFrameCount: override.invalidFrames ?? 1,
+    protocolChangeCount: override.protocolChanges ?? 0,
+    restartCount: override.restarts ?? 0,
+    bridgeVersion: "0.1.25",
+    browserVersion: "151.0.7922.34",
+    protocolVersion: "1:93ad956a7d0c0139",
+    heartbeatAgeMs: 1000,
+    snapshotAgeMs: 1000,
+    pushAgeMs: 500,
+    browserUptimeMs: override.browserUptimeMs ?? 3_600_000,
+    ...(override.inventoryDeviceCount === undefined
+      ? {}
+      : { inventoryDeviceCount: override.inventoryDeviceCount }),
+    ...(override.inventorySequence === undefined ? {} : { inventorySequence: override.inventorySequence }),
+    ...(override.eventSequence === undefined ? {} : { eventSequence: override.eventSequence })
+  };
+}
+
+function baseResources(override: { memory?: number } = {}) {
+  return {
+    cpuPercent: 0.35,
+    memoryUsageBytes: override.memory ?? 400,
+    memoryLimitBytes: 10_000,
+    memoryPercent: 4,
+    networkRxBytes: 1000,
+    networkTxBytes: 100,
+    blockReadBytes: 0,
+    blockWriteBytes: 0
+  };
 }
 
 async function temporaryRoot(): Promise<string> {

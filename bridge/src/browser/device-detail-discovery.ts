@@ -90,20 +90,35 @@ function hasActionableControl(device: BridgeDevice): boolean {
 const refreshDetailAttributes = new Set(["battery", "contact", "signalMetrics"]);
 
 function inspectionPriority(device: BridgeDevice): number {
-  if (!hasActionableControl(device) && hasRefreshDetailValueState(device)) {
-    return 0;
-  }
   if (!hasActionableControl(device)) {
-    return 1;
+    const valuePriority = refreshDetailValuePriority(device);
+    if (valuePriority !== undefined) {
+      return valuePriority;
+    }
+    return 3;
   }
   if (isCameraImageDevice(device)) {
-    return 2;
+    return 4;
   }
-  return 3;
+  return 5;
 }
 
-function hasRefreshDetailValueState(device: BridgeDevice): boolean {
-  return device.states.some((state) => refreshDetailAttributes.has(state.attribute));
+function refreshDetailValuePriority(device: BridgeDevice): number | undefined {
+  const attributes = new Set(device.states.map((state) => state.attribute));
+  if (
+    attributes.has("contact") &&
+    attributes.has("battery") &&
+    attributes.has("signalMetrics")
+  ) {
+    return 0;
+  }
+  if (attributes.has("signalMetrics")) {
+    return 1;
+  }
+  if ([...attributes].some((attribute) => refreshDetailAttributes.has(attribute))) {
+    return 2;
+  }
+  return undefined;
 }
 
 const cameraImageAttributes = new Set([

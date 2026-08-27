@@ -2,6 +2,7 @@
 
 ## 0.1.98
 
+- Package the HAOS soak collector in the add-on image and add an explicit local Bridge mode that writes 72-hour evidence under `/data/soak` from Bridge health, inventory, and SSE sequence routes.
 - Keep the inactive Chromium keeper and native command dispatcher responsive by launching with explicit background timer, occluded-window, and renderer throttling suppression flags.
 - Cache the recovered authenticated `api/device` service in the live SmartThings page so consecutive native commands do not rescan the webpack module cache.
 - Remove stale camera-image and image-transfer states from non-camera devices while preserving Home Camera image entities; still inspect value-only devices for real detail actions, restoring the living-room window sensor to Contact, Battery, Received Signal Metrics, and its observed Refresh button.

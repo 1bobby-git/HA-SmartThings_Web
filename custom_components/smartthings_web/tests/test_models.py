@@ -366,6 +366,40 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertCountEqual(calls, ["discovery", "device"])
 
+    def test_null_state_becoming_available_runs_discovery(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        firmware = BridgeState(
+            "main",
+            "firmwareUpdate",
+            "currentVersion",
+            None,
+            None,
+            "2026-08-24T21:10:00Z",
+        )
+        current.devices["dev_001"].states = {firmware.key: firmware}
+        runtime = SmartThingsWebRuntime(FakeClient(), "loc_001", current)
+        calls: list[str] = []
+        runtime.subscribe(lambda: calls.append("discovery"))
+        runtime.subscribe_device("dev_001", lambda: calls.append("device"))
+
+        changed = runtime.apply_state(
+            {
+                "type": "state",
+                "sequence": 11,
+                "deviceId": "dev_001",
+                "state": {
+                    "component": "main",
+                    "capability": "firmwareUpdate",
+                    "attribute": "currentVersion",
+                    "value": "1.0 (100)",
+                    "updatedAt": "2026-08-24T21:11:00Z",
+                },
+            }
+        )
+
+        self.assertTrue(changed)
+        self.assertCountEqual(calls, ["discovery", "device"])
+
     def test_inventory_merge_notifies_only_changed_device_subscribers(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")
         unchanged_state = BridgeState(

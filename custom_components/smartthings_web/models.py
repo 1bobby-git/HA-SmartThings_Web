@@ -282,6 +282,11 @@ class SmartThingsWebRuntime:
             return False
         current = device.states.get(state.key)
         new_state_key = current is None
+        value_became_available = (
+            current is not None
+            and not state_has_entity_value(current)
+            and state_has_entity_value(state)
+        )
         self.inventory.sequence = sequence
         repeated_event = (
             current is not None
@@ -295,7 +300,9 @@ class SmartThingsWebRuntime:
             device_ids={device_id},
             state_keys={(device_id, state.key)},
             notify_global=(
-                new_state_key or state.attribute in DEVICE_REGISTRY_ATTRIBUTES
+                new_state_key
+                or value_became_available
+                or state.attribute in DEVICE_REGISTRY_ATTRIBUTES
             ),
         )
         return True
