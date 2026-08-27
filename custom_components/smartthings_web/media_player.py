@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from homeassistant.components.media_player import MediaPlayerEntity, MediaPlayerEntityFeature
 from homeassistant.const import STATE_IDLE, STATE_OFF, STATE_PAUSED, STATE_PLAYING
 from homeassistant.core import HomeAssistant
@@ -92,6 +94,15 @@ class SmartThingsWebMediaPlayer(SmartThingsWebDeviceEntity, MediaPlayerEntity):
             features |= MediaPlayerEntityFeature.VOLUME_MUTE
         if _control_for(device, "playTrackAndResume") is not None:
             features |= MediaPlayerEntityFeature.PLAY_MEDIA
+        features |= _feature_if_available(
+            "REPEAT_SET", _control_for(device, "setRepeat") is not None
+        )
+        features |= _feature_if_available(
+            "SHUFFLE_SET", _control_for(device, "setShuffle") is not None
+        )
+        features |= _feature_if_available(
+            "SELECT_SOURCE", _control_for(device, "setInputSource") is not None
+        )
         return features
 
     @property
@@ -132,6 +143,145 @@ class SmartThingsWebMediaPlayer(SmartThingsWebDeviceEntity, MediaPlayerEntity):
         return None
 
     @property
+    def media_duration(self) -> int | None:
+        """Return current media duration in seconds when pushed by SmartThings."""
+        return _media_seconds(
+            self.bridge_device,
+            (
+                "duration",
+                "durationMs",
+                "mediaDuration",
+                "mediaDurationMs",
+                "totalTime",
+                "totalTimeMs",
+                "trackDuration",
+                "trackDurationMs",
+            ),
+        )
+
+    @property
+    def media_position(self) -> int | None:
+        """Return current media position in seconds when pushed by SmartThings."""
+        return _media_seconds(
+            self.bridge_device,
+            (
+                "elapsedTime",
+                "elapsedTimeMs",
+                "mediaPosition",
+                "mediaPositionMs",
+                "position",
+                "positionMs",
+                "trackPosition",
+                "trackPositionMs",
+            ),
+        )
+
+    @property
+    def media_position_updated_at(self) -> datetime | None:
+        """Return when the current media position was last updated."""
+        found = _media_lookup(
+            self.bridge_device,
+            (
+                "elapsedTime",
+                "elapsedTimeMs",
+                "mediaPosition",
+                "mediaPositionMs",
+                "position",
+                "positionMs",
+                "trackPosition",
+                "trackPositionMs",
+            ),
+        )
+        if found is None:
+            return None
+        _, _, state = found
+        if state is None or state.updated_at is None:
+            return None
+        try:
+            return datetime.fromisoformat(state.updated_at.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    @property
+    def repeat(self) -> str | None:
+        """Return current repeat mode when supplied by SmartThings."""
+        value = _media_value(
+            self.bridge_device,
+            (
+                "playbackRepeatMode",
+                "repeat",
+                "repeatMode",
+                "mediaRepeat",
+                "mediaRepeatMode",
+            ),
+        )
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip().lower().replace("_", " ").replace("-", " ")
+        if normalized in {"off", "none", "no repeat", "disabled", "false"}:
+            return "off"
+        if normalized in {"one", "repeat one", "single", "track"}:
+            return "one"
+        if normalized in {"all", "repeat all", "playlist", "list"}:
+            return "all"
+        return value
+
+    @property
+    def shuffle(self) -> bool | None:
+        """Return current shuffle mode when supplied by SmartThings."""
+        value = _media_value(
+            self.bridge_device,
+            (
+                "playbackShuffle",
+                "playbackShuffleMode",
+                "shuffle",
+                "shuffleMode",
+                "shuffleStatus",
+            ),
+        )
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"on", "shuffle", "shuffled", "enabled", "true"}:
+                return True
+            if normalized in {"off", "linear", "disabled", "false"}:
+                return False
+        return None
+
+    @property
+    def source(self) -> str | None:
+        """Return current media source when supplied by SmartThings."""
+        value = _media_value(
+            self.bridge_device,
+            (
+                "audioSource",
+                "inputSource",
+                "mediaSource",
+                "source",
+            ),
+        )
+        return value if isinstance(value, str) and value else None
+
+    @property
+    def source_list(self) -> list[str] | None:
+        """Return supported source names when supplied by SmartThings."""
+        values = _media_value(
+            self.bridge_device,
+            (
+                "audioSources",
+                "inputSources",
+                "mediaSources",
+                "sourceList",
+                "supportedAudioSources",
+                "supportedInputSources",
+                "supportedSources",
+            ),
+        )
+        sources = _string_list(values)
+        return sources or None
+
+    @property
     def extra_state_attributes(self) -> dict[str, object]:
         """Keep all pushed media content on the primary media entity."""
         device = self.bridge_device
@@ -143,9 +293,46 @@ class SmartThingsWebMediaPlayer(SmartThingsWebDeviceEntity, MediaPlayerEntity):
                 "audioTrackData",
                 "mute",
                 "playbackStatus",
+                "audioSource",
+                "audioSources",
+                "duration",
+                "durationMs",
+                "elapsedTime",
+                "elapsedTimeMs",
+                "inputSource",
+                "inputSources",
+                "mediaDuration",
+                "mediaDurationMs",
+                "mediaPosition",
+                "mediaPositionMs",
+                "mediaRepeat",
+                "mediaRepeatMode",
+                "mediaSource",
+                "mediaSources",
+                "playbackRepeatMode",
+                "playbackShuffle",
+                "playbackShuffleMode",
+                "position",
+                "positionMs",
+                "repeat",
+                "repeatMode",
+                "shuffle",
+                "shuffleMode",
+                "shuffleStatus",
+                "source",
+                "sourceList",
                 "switch",
                 "supportedPlaybackCommands",
+                "supportedAudioSources",
+                "supportedInputSources",
+                "supportedSources",
                 "supportedTrackControlCommands",
+                "totalTime",
+                "totalTimeMs",
+                "trackDuration",
+                "trackDurationMs",
+                "trackPosition",
+                "trackPositionMs",
                 "volume",
             },
         )
@@ -184,6 +371,18 @@ class SmartThingsWebMediaPlayer(SmartThingsWebDeviceEntity, MediaPlayerEntity):
     async def async_play_media(self, media_type: str, media_id: str, **kwargs: object) -> None:
         """Play a track and resume playback."""
         await self._async_command("playTrackAndResume", [media_id])
+
+    async def async_set_repeat(self, repeat: str) -> None:
+        """Set repeat mode through an observed SmartThings control."""
+        await self._async_command("setRepeat", [repeat])
+
+    async def async_set_shuffle(self, shuffle: bool) -> None:
+        """Set shuffle mode through an observed SmartThings control."""
+        await self._async_command("setShuffle", [shuffle])
+
+    async def async_select_source(self, source: str) -> None:
+        """Select a media source through an observed SmartThings control."""
+        await self._async_command("setInputSource", [source])
 
     async def _async_command(self, command: str, arguments: list[object]) -> None:
         control = _control_for(self.bridge_device, command)
@@ -239,6 +438,9 @@ def _state_for_command(device: BridgeDevice | None, command: str):
         "setVolume": ("volume",),
         "mute": ("mute",),
         "unmute": ("mute",),
+        "setInputSource": ("inputSource", "source", "mediaSource", "supportedInputSources"),
+        "setRepeat": ("repeat", "repeatMode", "playbackRepeatMode", "mediaRepeatMode"),
+        "setShuffle": ("shuffle", "shuffleMode", "playbackShuffleMode", "shuffleStatus"),
         "nextTrack": ("audioTrackData", "supportedTrackControlCommands"),
         "previousTrack": ("audioTrackData", "supportedTrackControlCommands"),
         "fastForward": ("playbackStatus", "supportedPlaybackCommands"),
@@ -248,7 +450,12 @@ def _state_for_command(device: BridgeDevice | None, command: str):
     if device is None:
         return None
     return next(
-        (state for attribute in attributes for state in device.states.values() if state.attribute == attribute),
+        (
+            state
+            for attribute in attributes
+            for state in device.states.values()
+            if state.attribute == attribute
+        ),
         None,
     )
 
@@ -269,6 +476,41 @@ def _control_for(device: BridgeDevice | None, command: str) -> BridgeControl | N
         elif command == "playTrackAndResume":
             matched = control.kind == "button" and control_supports_command(
                 control, command
+            )
+        elif command == "setInputSource":
+            matched = (
+                control.kind in {"button", "enumerated"}
+                and control.attribute in {
+                    "audioSource",
+                    "inputSource",
+                    "mediaSource",
+                    "source",
+                }
+                and control_supports_command(control, command)
+            )
+        elif command == "setRepeat":
+            matched = (
+                control.kind in {"button", "enumerated"}
+                and control.attribute in {
+                    "mediaRepeat",
+                    "mediaRepeatMode",
+                    "playbackRepeatMode",
+                    "repeat",
+                    "repeatMode",
+                }
+                and control_supports_command(control, command)
+            )
+        elif command == "setShuffle":
+            matched = (
+                control.kind in {"button", "enumerated", "toggle"}
+                and control.attribute in {
+                    "playbackShuffle",
+                    "playbackShuffleMode",
+                    "shuffle",
+                    "shuffleMode",
+                    "shuffleStatus",
+                }
+                and control_supports_command(control, command)
             )
         elif command in {
             "fastForward",
@@ -309,3 +551,84 @@ def _has_preferred_command(
         _control_for(device, primary) is not None
         or _control_for(device, official_fallback) is not None
     )
+
+
+def _feature_if_available(
+    name: str, condition: bool
+) -> MediaPlayerEntityFeature:
+    if not condition or not hasattr(MediaPlayerEntityFeature, name):
+        return MediaPlayerEntityFeature(0)
+    return getattr(MediaPlayerEntityFeature, name)
+
+
+def _media_lookup(
+    device: BridgeDevice | None, attributes: tuple[str, ...]
+):
+    if device is None:
+        return None
+    for attribute in attributes:
+        for state in device.states.values():
+            if state.attribute == attribute:
+                return state.value, attribute, state
+    track = _raw_state(device, "audioTrackData")
+    if isinstance(track, dict):
+        state = next(
+            (
+                state
+                for state in device.states.values()
+                if state.attribute == "audioTrackData"
+            ),
+            None,
+        )
+        for attribute in attributes:
+            if attribute in track:
+                return track[attribute], attribute, state
+    return None
+
+
+def _media_value(device: BridgeDevice | None, attributes: tuple[str, ...]) -> object | None:
+    found = _media_lookup(device, attributes)
+    return found[0] if found is not None else None
+
+
+def _media_seconds(device: BridgeDevice | None, attributes: tuple[str, ...]) -> int | None:
+    found = _media_lookup(device, attributes)
+    if found is None:
+        return None
+    value, attribute, _ = found
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number < 0:
+        return None
+    if attribute.lower().endswith("ms") and number > 1000:
+        number = number / 1000
+    elif number > 86_400:
+        number = number / 1000
+    return round(number)
+
+
+def _string_list(value: object | None) -> list[str]:
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, (list, tuple)):
+        result = []
+        for item in value:
+            if isinstance(item, str) and item:
+                result.append(item)
+            elif isinstance(item, dict):
+                for key in ("label", "name", "value", "id"):
+                    candidate = item.get(key)
+                    if isinstance(candidate, str) and candidate:
+                        result.append(candidate)
+                        break
+        return result
+    if isinstance(value, dict):
+        for key in ("values", "options", "sources", "supportedValues"):
+            result = _string_list(value.get(key))
+            if result:
+                return result
+    return []

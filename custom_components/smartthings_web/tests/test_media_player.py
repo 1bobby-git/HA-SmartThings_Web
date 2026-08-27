@@ -37,6 +37,9 @@ class MediaPlayerEntityFeature(IntFlag):
     VOLUME_SET = 128
     VOLUME_MUTE = 256
     PLAY_MEDIA = 512
+    REPEAT_SET = 1024
+    SHUFFLE_SET = 2048
+    SELECT_SOURCE = 4096
 
 
 media_module.MediaPlayerEntity = MediaPlayerEntity  # type: ignore[attr-defined]
@@ -96,7 +99,16 @@ class SmartThingsWebMediaPlayerTests(unittest.TestCase):
             "supportedTrackControlCommands": "nextTrack previousTrack",
             "volume": 10,
             "mute": "unmuted",
-            "audioTrackData": {"title": "Track"},
+            "audioTrackData": {
+                "title": "Track",
+                "artist": "Artist",
+                "totalTimeMs": 185000,
+                "positionMs": 23000,
+            },
+            "repeatMode": "repeat all",
+            "shuffle": "on",
+            "inputSource": "Bluetooth",
+            "supportedInputSources": ["Bluetooth", "Wi-Fi"],
         }
         states = [
             BridgeState(
@@ -120,7 +132,8 @@ class SmartThingsWebMediaPlayerTests(unittest.TestCase):
             controls=_media_controls(),
         )
 
-        features = SmartThingsWebMediaPlayer(object(), device).supported_features
+        player = SmartThingsWebMediaPlayer(object(), device)
+        features = player.supported_features
 
         for feature in (
             MediaPlayerEntityFeature.TURN_ON,
@@ -133,9 +146,33 @@ class SmartThingsWebMediaPlayerTests(unittest.TestCase):
             MediaPlayerEntityFeature.VOLUME_SET,
             MediaPlayerEntityFeature.VOLUME_MUTE,
             MediaPlayerEntityFeature.PLAY_MEDIA,
+            MediaPlayerEntityFeature.REPEAT_SET,
+            MediaPlayerEntityFeature.SHUFFLE_SET,
+            MediaPlayerEntityFeature.SELECT_SOURCE,
         ):
             with self.subTest(feature=feature):
                 self.assertTrue(features & feature)
+        self.assertEqual(player.media_title, "Track")
+        self.assertEqual(player.media_artist, "Artist")
+        self.assertEqual(player.media_duration, 185)
+        self.assertEqual(player.media_position, 23)
+        self.assertEqual(
+            player.media_position_updated_at.isoformat(),
+            "2026-08-25T00:00:00+00:00",
+        )
+        self.assertEqual(player.repeat, "all")
+        self.assertTrue(player.shuffle)
+        self.assertEqual(player.source, "Bluetooth")
+        self.assertEqual(player.source_list, ["Bluetooth", "Wi-Fi"])
+        self.assertEqual(
+            player.extra_state_attributes["audioTrackData"],
+            {
+                "title": "Track",
+                "artist": "Artist",
+                "totalTimeMs": 185000,
+                "positionMs": 23000,
+            },
+        )
 
     def test_track_data_alone_does_not_invent_a_play_track_control(self) -> None:
         track = BridgeState(
@@ -160,6 +197,9 @@ class SmartThingsWebMediaPlayerTests(unittest.TestCase):
         features = SmartThingsWebMediaPlayer(object(), device).supported_features
 
         self.assertFalse(features & MediaPlayerEntityFeature.PLAY_MEDIA)
+        self.assertFalse(features & MediaPlayerEntityFeature.REPEAT_SET)
+        self.assertFalse(features & MediaPlayerEntityFeature.SHUFFLE_SET)
+        self.assertFalse(features & MediaPlayerEntityFeature.SELECT_SOURCE)
 
     def test_track_command_uses_only_observed_actions(self) -> None:
         primary = BridgeControl(
@@ -242,6 +282,27 @@ class SmartThingsWebMediaPlayerTests(unittest.TestCase):
         with self.assertRaises(exceptions_module.HomeAssistantError):
             _preferred_command(unavailable_device, "nextTrack", "fastForward")
 
+    def test_second_duration_is_not_misread_as_milliseconds(self) -> None:
+        duration = BridgeState(
+            "main",
+            "mediaPlayback",
+            "duration",
+            3600,
+            "s",
+            "2026-08-25T00:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_seconds",
+            "loc_001",
+            None,
+            "Speaker",
+            None,
+            True,
+            states={duration.key: duration},
+        )
+
+        self.assertEqual(SmartThingsWebMediaPlayer(object(), device).media_duration, 3600)
+
     def test_unsafe_control_cannot_advertise_or_supply_media_fallback(self) -> None:
         unsafe = BridgeControl(
             "garageDoorControl",
@@ -323,6 +384,9 @@ class SmartThingsWebMediaPlayerTests(unittest.TestCase):
             await player.async_mute_volume(True)
             await player.async_mute_volume(False)
             await player.async_play_media("music", "track-123")
+            await player.async_set_repeat("all")
+            await player.async_set_shuffle(True)
+            await player.async_select_source("Bluetooth")
 
         asyncio.run(exercise())
 
@@ -340,10 +404,16 @@ class SmartThingsWebMediaPlayerTests(unittest.TestCase):
                 "mute",
                 "unmute",
                 "playTrackAndResume",
+                "setRepeat",
+                "setShuffle",
+                "setInputSource",
             ],
         )
         self.assertEqual(client.calls[7]["arguments"], [25])
         self.assertEqual(client.calls[10]["arguments"], ["track-123"])
+        self.assertEqual(client.calls[11]["arguments"], ["all"])
+        self.assertEqual(client.calls[12]["arguments"], [True])
+        self.assertEqual(client.calls[13]["arguments"], ["Bluetooth"])
         self.assertEqual(
             {key: state.value for key, state in device.states.items()},
             before,
@@ -421,6 +491,35 @@ def _media_controls() -> dict[str, BridgeControl]:
             capability="audioTrackData",
             attribute="audioTrackData",
             commands=("playTrackAndResume",),
+        ),
+        BridgeControl(
+            "repeat",
+            "enumerated",
+            "Repeat",
+            component="main",
+            capability="mediaPlaybackRepeat",
+            attribute="repeatMode",
+            options=("off", "one", "all"),
+            commands=("setRepeat",),
+        ),
+        BridgeControl(
+            "shuffle",
+            "toggle",
+            "Shuffle",
+            component="main",
+            capability="mediaPlaybackShuffle",
+            attribute="shuffle",
+            commands=("setShuffle",),
+        ),
+        BridgeControl(
+            "source",
+            "enumerated",
+            "Source",
+            component="main",
+            capability="mediaInputSource",
+            attribute="inputSource",
+            options=("Bluetooth", "Wi-Fi"),
+            commands=("setInputSource",),
         ),
     ]
     return {control.control_id: control for control in controls}
