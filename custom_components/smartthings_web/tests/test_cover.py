@@ -57,6 +57,7 @@ class SmartThingsWebDeviceEntity:
 
 
 entity_module.SmartThingsWebDeviceEntity = SmartThingsWebDeviceEntity  # type: ignore[attr-defined]
+entity_module.device_info_for = lambda *_args, **_kwargs: {}  # type: ignore[attr-defined]
 sys.modules["smartthings_web.entity"] = entity_module
 
 from smartthings_web.cover import _find_control, _position_control  # noqa: E402

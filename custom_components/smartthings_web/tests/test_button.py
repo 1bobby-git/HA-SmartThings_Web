@@ -56,6 +56,7 @@ class SmartThingsWebDeviceEntity:
 
 
 entity_module.SmartThingsWebDeviceEntity = SmartThingsWebDeviceEntity  # type: ignore[attr-defined]
+entity_module.device_info_for = lambda *_args, **_kwargs: {}  # type: ignore[attr-defined]
 sys.modules["smartthings_web.entity"] = entity_module
 
 bridge_client_module = ModuleType("smartthings_web.bridge_client")
@@ -65,11 +66,26 @@ class BridgeClientError(Exception):
     """Bridge command transport placeholder."""
 
 
+class BridgeAuthError(BridgeClientError):
+    """Bridge authentication placeholder."""
+
+
+class SmartThingsWebBridgeClient:
+    """Bridge client placeholder for later imports in unittest discovery."""
+
+
+class ReadOnlyBridgeClient:
+    """Read-only bridge client placeholder for later imports in unittest discovery."""
+
+
 def bridge_error_message(action: str, _err: Exception) -> str:
     return f"failed: {action}"
 
 
+bridge_client_module.BridgeAuthError = BridgeAuthError  # type: ignore[attr-defined]
 bridge_client_module.BridgeClientError = BridgeClientError  # type: ignore[attr-defined]
+bridge_client_module.SmartThingsWebBridgeClient = SmartThingsWebBridgeClient  # type: ignore[attr-defined]
+bridge_client_module.ReadOnlyBridgeClient = ReadOnlyBridgeClient  # type: ignore[attr-defined]
 bridge_client_module.bridge_error_message = bridge_error_message  # type: ignore[attr-defined]
 sys.modules["smartthings_web.bridge_client"] = bridge_client_module
 

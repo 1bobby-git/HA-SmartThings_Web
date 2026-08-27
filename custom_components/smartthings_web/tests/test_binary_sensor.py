@@ -79,6 +79,7 @@ class SmartThingsWebEntity:
 
 
 entity_module.SmartThingsWebEntity = SmartThingsWebEntity  # type: ignore[attr-defined]
+entity_module.device_info_for = lambda *_args, **_kwargs: {}  # type: ignore[attr-defined]
 sys.modules["smartthings_web.entity"] = entity_module
 
 from smartthings_web.binary_sensor import (  # noqa: E402

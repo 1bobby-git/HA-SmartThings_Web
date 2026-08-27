@@ -77,7 +77,27 @@ class BridgeClientError(Exception):
     """Minimal Bridge client failure."""
 
 
+class BridgeAuthError(BridgeClientError):
+    """Minimal Bridge auth failure."""
+
+
+class SmartThingsWebBridgeClient:
+    """Bridge client placeholder for later imports in unittest discovery."""
+
+
+class ReadOnlyBridgeClient:
+    """Read-only bridge client placeholder for later imports in unittest discovery."""
+
+
+def bridge_error_message(action: str, _err: Exception) -> str:
+    return f"failed: {action}"
+
+
+bridge_client.BridgeAuthError = BridgeAuthError  # type: ignore[attr-defined]
 bridge_client.BridgeClientError = BridgeClientError  # type: ignore[attr-defined]
+bridge_client.SmartThingsWebBridgeClient = SmartThingsWebBridgeClient  # type: ignore[attr-defined]
+bridge_client.ReadOnlyBridgeClient = ReadOnlyBridgeClient  # type: ignore[attr-defined]
+bridge_client.bridge_error_message = bridge_error_message  # type: ignore[attr-defined]
 sys.modules["smartthings_web.bridge_client"] = bridge_client
 
 from smartthings_web.models import (  # noqa: E402
