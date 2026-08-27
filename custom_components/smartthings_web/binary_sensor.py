@@ -16,6 +16,7 @@ from .models import (
     BridgeState,
     SmartThingsWebRuntime,
     disambiguated_state_names,
+    is_readonly_appliance_switch,
 )
 
 
@@ -72,6 +73,12 @@ BINARY_STATES = {
         "detected",
         BinarySensorDeviceClass.CO,
     ),
+    "switch": BinaryDescription(
+        "Power",
+        "power",
+        "on",
+        getattr(BinarySensorDeviceClass, "POWER", None),
+    ),
 }
 
 
@@ -89,11 +96,7 @@ async def async_setup_entry(
         for device in runtime.inventory.devices.values():
             if device.location_id != runtime.location_id:
                 continue
-            candidates = [
-                (state, description)
-                for state in device.states.values()
-                if (description := BINARY_STATES.get(state.attribute)) is not None
-            ]
+            candidates = _binary_sensor_candidates(device)
             name_overrides = disambiguated_state_names(
                 (state, description.name) for state, description in candidates
             )
@@ -143,6 +146,20 @@ class SmartThingsWebBinarySensor(SmartThingsWebEntity, BinarySensorEntity):
         if state is None:
             return None
         return str(state.value).lower() == self.description.on_value.lower()
+
+
+def _binary_sensor_candidates(
+    device: BridgeDevice,
+) -> list[tuple[BridgeState, BinaryDescription]]:
+    """Return pushed binary states, including read-only appliance power."""
+    candidates: list[tuple[BridgeState, BinaryDescription]] = []
+    for state in device.states.values():
+        description = BINARY_STATES.get(state.attribute)
+        if state.attribute == "switch" and not is_readonly_appliance_switch(device):
+            description = None
+        if description is not None:
+            candidates.append((state, description))
+    return candidates
 
 
 def _device_class(

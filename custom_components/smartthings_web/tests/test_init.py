@@ -189,6 +189,44 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         self.assertEqual(registry.removed, ["fan.mood_light"])
         self.assertEqual(registry.updated, [])
 
+    def test_removes_only_stale_media_player_entities_for_current_location_devices(self) -> None:
+        registry = FakeRegistry(
+            [
+                entity("media_player.ari", "media_player", "dev_ari_media_player"),
+                entity("media_player.speaker", "media_player", "dev_speaker_media_player"),
+                entity("media_player.other_location", "media_player", "dev_other_media_player"),
+                entity("media_player.custom", "media_player", "custom_unique_id"),
+                entity(
+                    "media_player.other_integration",
+                    "media_player",
+                    "dev_ari_media_player",
+                    platform="other",
+                ),
+            ]
+        )
+        self.patch_registry(registry)
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}),
+            BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.95",
+                protocol_version="4",
+                locations={"loc_001": "Home"},
+                rooms={},
+                devices={
+                    "dev_ari": audio_accessory_device("dev_ari", "loc_001", "아리"),
+                    "dev_speaker": media_device("dev_speaker", "loc_001", "거실 스피커"),
+                    "dev_other": audio_accessory_device("dev_other", "loc_002", "다른 아리"),
+                },
+            ),
+        )
+
+        self.assertEqual(registry.removed, ["media_player.ari"])
+        self.assertEqual(registry.updated, [])
+
     def test_removes_duplicate_control_number_when_state_number_exists(self) -> None:
         registry = FakeRegistry(
             [
@@ -701,6 +739,41 @@ def fan_device(device_id: str, location_id: str, name: str) -> BridgeDevice:
         device_type="Air Purifier",
         online=True,
         states={state.key: state},
+    )
+
+
+def audio_accessory_device(device_id: str, location_id: str, name: str) -> BridgeDevice:
+    volume = BridgeState("main", "audioVolume", "volume", 5, None, "2026-08-25T00:00:00Z")
+    return BridgeDevice(
+        device_id=device_id,
+        location_id=location_id,
+        room_id=None,
+        name=name,
+        device_type="accessory",
+        online=True,
+        states={volume.key: volume},
+    )
+
+
+def media_device(device_id: str, location_id: str, name: str) -> BridgeDevice:
+    playback = BridgeState(
+        "main",
+        "mediaPlayback",
+        "playbackStatus",
+        "paused",
+        None,
+        "2026-08-25T00:00:00Z",
+    )
+    volume = BridgeState("main", "audioVolume", "volume", 20, "%", "2026-08-25T00:00:00Z")
+    mute = BridgeState("main", "audioMute", "mute", "unmuted", None, "2026-08-25T00:00:00Z")
+    return BridgeDevice(
+        device_id=device_id,
+        location_id=location_id,
+        room_id=None,
+        name=name,
+        device_type="speaker",
+        online=True,
+        states={playback.key: playback, volume.key: volume, mute.key: mute},
     )
 
 

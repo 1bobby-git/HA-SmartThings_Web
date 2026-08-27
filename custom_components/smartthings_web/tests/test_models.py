@@ -33,6 +33,7 @@ from models import (  # noqa: E402
     is_image_device,
     is_media_device,
     is_refreshable_device,
+    is_readonly_appliance_switch,
     parse_device_presentation,
     refresh_controls,
     _safe_device_asset_url,
@@ -433,7 +434,40 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             unit=None,
             updated_at="2026-08-24T21:10:00Z",
         )
-        device.states = {switch.key: switch, playback.key: playback}
+        volume = BridgeState(
+            component="main",
+            capability="audioVolume",
+            attribute="volume",
+            value=20,
+            unit="%",
+            updated_at="2026-08-24T21:10:00Z",
+        )
+        mute = BridgeState(
+            component="main",
+            capability="audioMute",
+            attribute="mute",
+            value="unmuted",
+            unit=None,
+            updated_at="2026-08-24T21:10:00Z",
+        )
+        device.states = {switch.key: switch, playback.key: playback, volume.key: volume, mute.key: mute}
+
+        self.assertIsNone(control_kind(device, switch))
+
+    def test_control_kind_keeps_appliance_power_state_read_only(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        device.device_type = "dryer"
+        device.presentation = BridgeDevicePresentation(asset_type="dryer")
+        switch = BridgeState(
+            component="main",
+            capability="switch",
+            attribute="switch",
+            value="off",
+            unit=None,
+            updated_at="2026-08-24T21:10:00Z",
+        )
+        device.states = {switch.key: switch}
 
         self.assertIsNone(control_kind(device, switch))
 
@@ -519,6 +553,7 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             BridgeState("main", "signal", "signalMetrics", {"rssi": -61}, None, "2026-08-24T21:10:00Z"),
             BridgeState("main", "media", "playbackStatus", "playing", None, "2026-08-24T21:10:00Z"),
             BridgeState("main", "media", "volume", 20, "%", "2026-08-24T21:10:00Z"),
+            BridgeState("main", "media", "mute", "unmuted", None, "2026-08-24T21:10:00Z"),
             BridgeState("main", "fan", "fanMode", "auto", None, "2026-08-24T21:10:00Z"),
             BridgeState("main", "fan", "level", 50, "%", "2026-08-24T21:10:00Z"),
             BridgeState("main", "camera", "image", "data", None, "2026-08-24T21:10:00Z"),
@@ -534,6 +569,73 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertTrue(is_media_device(device))
         self.assertTrue(is_fan_device(device))
         self.assertTrue(is_image_device(device))
+
+    def test_audio_volume_without_mute_is_not_a_media_player(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        device.name = "아리"
+        device.device_type = "accessory"
+        device.presentation = BridgeDevicePresentation(
+            asset_type="accessory",
+            icon_url=None,
+            inactive_icon_url=None,
+            animation_url=None,
+        )
+        states = [
+            BridgeState("main", "audioVolume", "volume", 25, "%", "2026-08-24T21:10:00Z"),
+        ]
+        device.states = {state.key: state for state in states}
+        device.controls = {
+            "volume": BridgeControl(
+                "volume",
+                "slider",
+                "Volume",
+                component="main",
+                capability="audioVolume",
+                attribute="volume",
+                minimum=0,
+                maximum=100,
+            ),
+        }
+
+        self.assertFalse(is_media_device(device))
+        self.assertIsNone(control_kind(device, states[0]))
+
+    def test_mute_without_volume_is_not_a_media_player(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        device.name = "거실 가습기"
+        device.device_type = "humidifier"
+        states = [
+            BridgeState("main", "audioMute", "mute", "unmuted", None, "2026-08-24T21:10:00Z"),
+        ]
+        device.states = {state.key: state for state in states}
+        device.controls = {
+            "mute": BridgeControl(
+                "mute",
+                "toggle",
+                "Mute",
+                component="main",
+                capability="audioMute",
+                attribute="mute",
+                commands=("mute", "unmute"),
+            )
+        }
+
+        self.assertFalse(is_media_device(device))
+
+    def test_volume_and_mute_keep_speakers_as_media_players(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        device.name = "거실 스피커"
+        device.device_type = "speaker"
+        states = [
+            BridgeState("main", "audioMute", "mute", "unmuted", None, "2026-08-24T21:10:00Z"),
+            BridgeState("main", "audioVolume", "volume", 25, "%", "2026-08-24T21:10:00Z"),
+        ]
+        device.states = {state.key: state for state in states}
+
+        self.assertTrue(is_media_device(device))
 
     def test_refresh_controls_only_use_button_controls_with_refresh_mention(self) -> None:
         battery_state = BridgeState(
@@ -668,7 +770,15 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             "%",
             "2026-08-24T21:10:00Z",
         )
-        device.states = {playback.key: playback, volume.key: volume}
+        mute = BridgeState(
+            "main",
+            "audioMute",
+            "mute",
+            "unmuted",
+            None,
+            "2026-08-24T21:10:00Z",
+        )
+        device.states = {playback.key: playback, volume.key: volume, mute.key: mute}
         device.controls = {
             "volume": BridgeControl(
                 "volume",
@@ -683,6 +793,116 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             )
         }
 
+        self.assertEqual(number_controls(device), [])
+
+    def test_alarm_volume_controls_do_not_make_smarttag_a_media_player(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        device.name = "Ari"
+        device.device_type = "bleD2D"
+        device.presentation = BridgeDevicePresentation(asset_type="smart_tag_2")
+        volume = BridgeState(
+            "main",
+            "audioVolume",
+            "volume",
+            6,
+            None,
+            "2026-08-24T21:10:00Z",
+        )
+        device.states = {volume.key: volume}
+        device.controls = {
+            "alarm_volume": BridgeControl(
+                "alarm_volume",
+                "slider",
+                "Alarm volume",
+                component="main",
+                capability="audioVolume",
+                attribute="volume",
+                minimum=1,
+                maximum=10,
+                step=1,
+            ),
+        }
+
+        self.assertFalse(is_media_device(device))
+        self.assertEqual([control.control_id for control in number_controls(device)], ["alarm_volume"])
+        self.assertFalse(sensor_state_owned_by_primary_domain(device, volume))
+
+    def test_play_sound_button_does_not_make_accessory_a_media_player(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        device.name = "아리"
+        device.device_type = "accessory"
+        device.presentation = BridgeDevicePresentation(asset_type="smart_tag_2")
+        device.states = {}
+        device.controls = {
+            "play_sound": BridgeControl(
+                "play_sound",
+                "button",
+                "Play sound",
+                component="main",
+                capability="alarm",
+                attribute="sound",
+                commands=("play",),
+            )
+        }
+
+        self.assertFalse(is_media_device(device))
+
+    def test_playback_status_and_controls_make_speaker_a_media_player(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        device.name = "Living room speaker"
+        device.device_type = "speaker"
+        playback = BridgeState(
+            "main",
+            "mediaPlayback",
+            "playbackStatus",
+            "paused",
+            None,
+            "2026-08-24T21:10:00Z",
+        )
+        volume = BridgeState(
+            "main",
+            "audioVolume",
+            "volume",
+            20,
+            "%",
+            "2026-08-24T21:10:00Z",
+        )
+        mute = BridgeState(
+            "main",
+            "audioMute",
+            "mute",
+            "unmuted",
+            None,
+            "2026-08-24T21:10:00Z",
+        )
+        device.states = {playback.key: playback, volume.key: volume, mute.key: mute}
+        device.controls = {
+            "play": BridgeControl(
+                "play",
+                "button",
+                "Play",
+                component="main",
+                capability="mediaPlayback",
+                attribute="playbackStatus",
+                commands=("play",),
+            ),
+            "volume": BridgeControl(
+                "volume",
+                "slider",
+                "Volume",
+                component="main",
+                capability="audioVolume",
+                attribute="volume",
+                minimum=0,
+                maximum=100,
+                step=1,
+            ),
+        }
+
+        self.assertTrue(is_media_device(device))
         self.assertEqual(number_controls(device), [])
 
     def test_level_only_devices_are_not_fans_without_fan_identity(self) -> None:
@@ -1110,6 +1330,19 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
 
         self.assertEqual(device_model(device), "Future Sensor")
 
+    def test_generic_device_model_prefers_specific_presentation_asset_type(self) -> None:
+        device = BridgeDevice(
+            "dev_001",
+            "loc_001",
+            None,
+            "아리",
+            "bleD2D",
+            True,
+            presentation=BridgeDevicePresentation(asset_type="smart_tag_2"),
+        )
+
+        self.assertEqual(device_model(device), "스마트태그")
+
     def test_duplicate_state_names_get_stable_human_readable_qualifiers(self) -> None:
         first = BridgeState(
             "identifier_component",
@@ -1167,6 +1400,67 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertEqual(names[indoor.key], "Temperature (Indoor)")
         self.assertEqual(names[outdoor.key], "Temperature (Outdoor)")
         self.assertNotIn(battery.key, names)
+
+    def test_duplicate_state_names_prefer_safe_component_roles(self) -> None:
+        fridge = BridgeState(
+            "identifier_component_fridge",
+            "temperatureMeasurement",
+            "temperature",
+            3,
+            "C",
+            "2026-08-27T00:00:00Z",
+            component_role="fridge",
+        )
+        freezer = BridgeState(
+            "identifier_component_freezer",
+            "temperatureMeasurement",
+            "temperature",
+            -18,
+            "C",
+            "2026-08-27T00:00:00Z",
+            component_role="freezer",
+        )
+
+        names = models_module.disambiguated_state_names(
+            [(freezer, "Temperature"), (fridge, "Temperature")]
+        )
+
+        self.assertEqual(names[fridge.key], "Temperature (Fridge)")
+        self.assertEqual(names[freezer.key], "Temperature (Freezer)")
+
+    def test_primary_state_attributes_prefer_safe_roles_for_duplicate_keys(self) -> None:
+        device = BridgeDevice(
+            "fridge_001",
+            "loc_001",
+            None,
+            "냉장고",
+            "refrigerator",
+            True,
+        )
+        fridge = BridgeState(
+            "identifier_component_fridge",
+            "temperatureMeasurement",
+            "temperature",
+            3,
+            "C",
+            "2026-08-27T00:00:00Z",
+            component_role="fridge",
+        )
+        freezer = BridgeState(
+            "identifier_component_freezer",
+            "temperatureMeasurement",
+            "temperature",
+            -18,
+            "C",
+            "2026-08-27T00:00:00Z",
+            component_role="freezer",
+        )
+        device.states = {fridge.key: fridge, freezer.key: freezer}
+
+        self.assertEqual(
+            primary_state_attributes(device, {"temperature"}),
+            {"smartthings_fridge_temperature": 3, "smartthings_freezer_temperature": -18},
+        )
 
 
 def inventory(sequence: int, value: int, updated_at: str) -> BridgeInventory:

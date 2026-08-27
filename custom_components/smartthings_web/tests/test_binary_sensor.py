@@ -28,6 +28,7 @@ class BinarySensorDeviceClass:
     MOTION = "motion"
     MOVING = "moving"
     OPENING = "opening"
+    POWER = "power"
     PRESENCE = "presence"
     PROBLEM = "problem"
     SMOKE = "smoke"
@@ -83,6 +84,7 @@ sys.modules["smartthings_web.entity"] = entity_module
 from smartthings_web.binary_sensor import (  # noqa: E402
     BINARY_STATES,
     SmartThingsWebBinarySensor,
+    _binary_sensor_candidates,
 )
 from smartthings_web.models import (  # noqa: E402
     BridgeDevice,
@@ -128,6 +130,29 @@ class SmartThingsWebBinarySensorTests(unittest.TestCase):
 
         self.assertEqual(sensor._attr_name, "Presence (Room A)")
         self.assertIsNone(sensor._attr_translation_key)
+
+    def test_appliance_switch_state_is_exposed_as_read_only_power_binary_sensor(self) -> None:
+        power = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "on",
+            None,
+            "2026-08-27T00:00:00Z",
+        )
+        dryer = BridgeDevice(
+            "dryer_001",
+            "loc_001",
+            None,
+            "Dryer",
+            "dryer",
+            True,
+            states={power.key: power},
+        )
+
+        candidates = _binary_sensor_candidates(dryer)
+
+        self.assertEqual(candidates, [(power, BINARY_STATES["switch"])])
 
 
 if __name__ == "__main__":

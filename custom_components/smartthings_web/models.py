@@ -25,6 +25,8 @@ class BridgeState:
     value: Any
     unit: str | None
     updated_at: str | None
+    component_role: str | None = None
+    capability_role: str | None = None
 
     @property
     def key(self) -> tuple[str, str, str]:
@@ -394,6 +396,8 @@ def control_kind(device: BridgeDevice, switch_state: BridgeState) -> ControlKind
         return None
     if is_media_device(device) or is_fan_device(device):
         return None
+    if is_readonly_appliance_switch(device):
+        return None
     attributes = {
         state.attribute
         for state in device.states.values()
@@ -512,12 +516,21 @@ def _unique_state_qualifiers(
     states: list[BridgeState], field_name: Literal["component", "capability"]
 ) -> list[str] | None:
     qualifiers = [
-        _readable_state_token(getattr(state, field_name), field_name) for state in states
+        _readable_state_role(state, field_name)
+        or _readable_state_token(getattr(state, field_name), field_name)
+        for state in states
     ]
     if any(qualifier is None for qualifier in qualifiers):
         return None
     readable = [qualifier for qualifier in qualifiers if qualifier is not None]
     return readable if len(set(readable)) == len(states) else None
+
+
+def _readable_state_role(
+    state: BridgeState, field_name: Literal["component", "capability"]
+) -> str | None:
+    role = state.component_role if field_name == "component" else state.capability_role
+    return _readable_state_token(role, field_name) if role else None
 
 
 def _readable_state_token(value: str, field_name: str) -> str | None:
@@ -529,6 +542,19 @@ def _readable_state_token(value: str, field_name: str) -> str | None:
     normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", normalized)
     normalized = re.sub(r"[_-]+", " ", normalized).strip()
     return normalized.title() or None
+
+
+def _safe_role(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized or len(normalized) > 80:
+        return None
+    if normalized.lower().startswith("identifier_"):
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9가-힣 _-]+", normalized):
+        return None
+    return normalized
 
 
 def location_name(inventory: BridgeInventory, location_id: str) -> str:
@@ -587,6 +613,47 @@ MEDIA_ATTRIBUTES = {
     "supportedPlaybackCommands",
     "supportedTrackControlCommands",
     "volume",
+}
+
+MEDIA_PLAYBACK_ATTRIBUTES = {
+    "audioTrackData",
+    "playbackStatus",
+    "supportedPlaybackCommands",
+    "supportedTrackControlCommands",
+}
+
+MEDIA_TRANSPORT_COMMANDS = {
+    "fastforward",
+    "nexttrack",
+    "pause",
+    "play",
+    "playtrackandresume",
+    "previoustrack",
+    "rewind",
+    "stop",
+}
+
+MEDIA_DEVICE_TYPES = {
+    "ai_speaker_lux_one",
+    "audio",
+    "av_receiver",
+    "home_theater",
+    "media_player",
+    "soundbar",
+    "speaker",
+}
+
+READ_ONLY_POWER_DEVICE_TYPES = {
+    "camera_security",
+    "clothing_care",
+    "cooktop",
+    "dishwasher",
+    "dryer",
+    "microwave",
+    "oven",
+    "range",
+    "refrigerator",
+    "washer",
 }
 
 FAN_ATTRIBUTES = {
@@ -663,10 +730,23 @@ def is_image_device(device: BridgeDevice) -> bool:
 
 def is_media_device(device: BridgeDevice) -> bool:
     """Return whether a device has media-player state."""
-    return any(
-        _control_mentions(control, "play", "pause", "track", "mute", "volume")
+    if device_has_any_state(device, MEDIA_PLAYBACK_ATTRIBUTES):
+        return True
+    if any(
+        safe_observed_control(control)
+        and _control_has_explicit_media_semantics(control)
         for control in device.controls.values()
-    ) or device_has_any_state(device, MEDIA_ATTRIBUTES)
+    ):
+        return True
+    if not _device_has_media_device_type(device):
+        return False
+    if _device_has_audio_volume_evidence(device) or _device_has_audio_mute_evidence(device):
+        return True
+    return any(
+        safe_observed_control(control)
+        and _control_has_media_transport_semantics(control)
+        for control in device.controls.values()
+    )
 
 
 def is_fan_device(device: BridgeDevice) -> bool:
@@ -930,10 +1010,21 @@ def primary_state_attributes(
         (
             state.attribute
             if counts[state.attribute] == 1
-            else f"smartthings_{state.component}_{state.capability}_{state.attribute}"
+            else _state_attribute_key(state)
         ): state.value
         for state in selected
     }
+
+
+def _state_attribute_key(state: BridgeState) -> str:
+    qualifier = _readable_state_role(state, "component") or _readable_state_role(
+        state, "capability"
+    )
+    if qualifier is not None:
+        slug = re.sub(r"[^0-9a-zA-Z가-힣]+", "_", qualifier).strip("_").lower()
+        if slug:
+            return f"smartthings_{slug}_{state.attribute}"
+    return f"smartthings_{state.component}_{state.capability}_{state.attribute}"
 
 
 def sensor_state_allowed(
@@ -968,6 +1059,8 @@ def sensor_state_owned_by_primary_domain(
         "thermostatMode",
     }:
         return True
+    if attribute in {"mute", "volume"} and not is_media_device(device):
+        return False
     if number_control_for_state(device, state) is not None:
         return True
     if select_control_for_state(device, state) is not None:
@@ -1076,6 +1169,8 @@ _DEVICE_TYPE_MODELS_KO = {
     "smoke_sensor": "연기 감지기",
     "soundbar": "사운드바",
     "speaker": "스피커",
+    "smart_tag": "스마트태그",
+    "smart_tag_2": "스마트태그",
     "switch": "스위치",
     "temp_humidity_sensor": "온습도 센서",
     "thermostat": "온도조절기",
@@ -1087,6 +1182,17 @@ _DEVICE_TYPE_MODELS_KO = {
 
 def device_model(device: BridgeDevice) -> str | None:
     """Return a readable localized SmartThings device type for the registry."""
+    asset_type = device.presentation.asset_type if device.presentation else None
+    if asset_type and _normalized_device_type(device.device_type) in {
+        "",
+        "accessory",
+        "bled2d",
+        "none",
+        "unknown",
+    }:
+        mapped_asset = _DEVICE_TYPE_MODELS_KO.get(asset_type)
+        if mapped_asset is not None:
+            return mapped_asset
     if device.device_type:
         mapped = _DEVICE_TYPE_MODELS_KO.get(device.device_type)
         if mapped is not None:
@@ -1359,6 +1465,8 @@ def parse_state(raw: dict[str, Any]) -> BridgeState | None:
         value=raw.get("value"),
         unit=unit if isinstance(unit, str) else None,
         updated_at=updated_at,
+        component_role=_safe_role(raw.get("componentRole")),
+        capability_role=_safe_role(raw.get("capabilityRole")),
     )
 
 
@@ -1457,6 +1565,41 @@ def _control_mentions(control: BridgeControl, *needles: str) -> bool:
         )
     )
     return any(needle.lower() in haystack for needle in needles)
+
+
+def _device_has_audio_volume_evidence(device: BridgeDevice) -> bool:
+    if device_has_any_state(device, {"volume"}):
+        return True
+    return any(
+        safe_observed_control(control)
+        and (control.attribute == "volume" or control.capability == "audioVolume")
+        for control in device.controls.values()
+    )
+
+
+def _device_has_audio_mute_evidence(device: BridgeDevice) -> bool:
+    if device_has_any_state(device, {"mute"}):
+        return True
+    return any(
+        safe_observed_control(control)
+        and (control.attribute == "mute" or control.capability == "audioMute")
+        for control in device.controls.values()
+    )
+
+
+def is_readonly_appliance_switch(device: BridgeDevice) -> bool:
+    """Return whether appliance power must remain read-only state."""
+    device_type = _normalized_device_type(device.device_type)
+    asset_type = (
+        _normalized_device_type(device.presentation.asset_type)
+        if device.presentation
+        else ""
+    )
+    return device_type in READ_ONLY_POWER_DEVICE_TYPES or asset_type in READ_ONLY_POWER_DEVICE_TYPES
+
+
+def _normalized_device_type(value: str | None) -> str:
+    return (value or "").strip().lower().replace("-", "_")
 
 
 def _control_has_fan_semantics(control: BridgeControl) -> bool:

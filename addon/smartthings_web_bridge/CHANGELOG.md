@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.95
+
+- Require playback state, explicit media transport controls, or a SmartThings speaker-like device type before creating a Home Assistant `media_player`, so audio accessory devices such as Ari/SmartTag alarm controls stay on their correct entity surfaces.
+- Remove stale media_player registry entries created by this integration when the current inventory no longer classifies that device as media, while preserving real speakers and other integrations.
+- Keep appliance power states attached to their richer device domains instead of exposing them as standalone switch controls.
+
 ## 0.1.94
 
 - Correlate SmartThings Web camera image-state URLs with `api/camera/thumbnail` requests and persist the real Socket.IO binary thumbnail response for Home Assistant's authenticated image proxy.

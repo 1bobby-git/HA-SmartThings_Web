@@ -250,6 +250,7 @@ def _migrate_entity_registry(
     switch_ids: set[str] = set()
     primary_domain_switch_ids: set[str] = set()
     current_fan_ids: set[str] = set()
+    current_media_ids: set[str] = set()
     current_device_ids: set[str] = set()
     active_number_ids: set[str] = set()
     for device in inventory.devices.values():
@@ -269,6 +270,8 @@ def _migrate_entity_registry(
         }
         if is_fan_device(device):
             current_fan_ids.add(device.device_id)
+        if is_media_device(device):
+            current_media_ids.add(device.device_id)
         for state in device.states.values():
             new_unique_id = entity_unique_id(device.device_id, state)
             old_unique_id = f"{new_unique_id}_{state.attribute}"
@@ -361,6 +364,17 @@ def _migrate_entity_registry(
         ):
             registry.async_remove(entity_entry.entity_id)
             continue
+        if (
+            entity_entry.domain == Platform.MEDIA_PLAYER
+            and _stale_device_domain_unique_id(
+                entity_entry.unique_id,
+                "media_player",
+                current_device_ids,
+                current_media_ids,
+            )
+        ):
+            registry.async_remove(entity_entry.entity_id)
+            continue
         new_entity_id = _deduplicated_generated_entity_id(
             entity_entry,
             current_device_ids,
@@ -413,10 +427,25 @@ def _stale_fan_unique_id(
     current_fan_ids: set[str],
 ) -> bool:
     """Return whether an old device fan entity no longer matches inventory."""
-    if not unique_id.endswith("_fan"):
+    return _stale_device_domain_unique_id(
+        unique_id,
+        "fan",
+        current_device_ids,
+        current_fan_ids,
+    )
+
+
+def _stale_device_domain_unique_id(
+    unique_id: str,
+    suffix: str,
+    current_device_ids: set[str],
+    current_domain_device_ids: set[str],
+) -> bool:
+    """Return whether an old device-domain entity no longer matches inventory."""
+    if not unique_id.endswith(f"_{suffix}"):
         return False
-    device_id = unique_id.removesuffix("_fan")
-    return device_id in current_device_ids and device_id not in current_fan_ids
+    device_id = unique_id.removesuffix(f"_{suffix}")
+    return device_id in current_device_ids and device_id not in current_domain_device_ids
 
 
 def _unobserved_number_unique_id(
