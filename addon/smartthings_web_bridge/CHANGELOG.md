@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.99
+
+- Strip leading or trailing SmartThings room names from parsed device display names so generated Home Assistant entity and device names stop embedding the room (for example "디티오룸 Status" becomes "Status"); occurrences in the middle of a name, devices named exactly like their room, and user-renamed entities stay untouched.
+
 ## 0.1.98
 
 - Package the HAOS soak collector in the add-on image and add an explicit local Bridge mode that writes 72-hour evidence under `/data/soak` from Bridge health, inventory, and SSE sequence routes.
