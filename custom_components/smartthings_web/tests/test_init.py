@@ -281,6 +281,90 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         )
         self.assertEqual(registry.updated, [])
 
+    def test_removes_currently_null_sensor_and_update_entities(self) -> None:
+        registry = FakeRegistry(
+            [
+                entity("sensor.window_quantity", "sensor", "dev_window_main_metadata_quantity"),
+                entity("sensor.window_battery", "sensor", "dev_window_main_battery_battery"),
+                entity("update.window_firmware", "update", "dev_window_firmware_update"),
+                entity("sensor.other_quantity", "sensor", "dev_other_main_metadata_quantity"),
+                entity("update.other_firmware", "update", "dev_other_firmware_update"),
+            ]
+        )
+        self.patch_registry(registry)
+        contact = BridgeState(
+            "main",
+            "contactSensor",
+            "contact",
+            "closed",
+            None,
+            "2026-08-25T02:11:34Z",
+        )
+        battery = BridgeState(
+            "main", "battery", "battery", 91, "%", "2026-04-01T17:21:43Z"
+        )
+        quantity = BridgeState(
+            "main",
+            "metadata",
+            "quantity",
+            None,
+            None,
+            "2026-04-01T11:28:55Z",
+        )
+        current = BridgeState(
+            "main",
+            "firmwareUpdate",
+            "currentVersion",
+            None,
+            None,
+            "2026-04-01T11:28:55Z",
+        )
+        available = BridgeState(
+            "main",
+            "firmwareUpdate",
+            "availableVersion",
+            None,
+            None,
+            "2026-04-01T11:28:55Z",
+        )
+        window = BridgeDevice(
+            "dev_window",
+            "loc_001",
+            None,
+            "거실창문센서",
+            "custom_window_h",
+            True,
+            states={
+                state.key: state
+                for state in (contact, battery, quantity, current, available)
+            },
+        )
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}),
+            BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.98",
+                protocol_version="4",
+                locations={"loc_001": "Home"},
+                rooms={},
+                devices={
+                    "dev_window": window,
+                    "dev_other": window_sensor_with_image_artifacts(
+                        "dev_other", "loc_002", "다른 창문"
+                    ),
+                },
+            ),
+        )
+
+        self.assertEqual(
+            registry.removed,
+            ["sensor.window_quantity", "update.window_firmware"],
+        )
+        self.assertEqual(registry.updated, [])
+
     def test_removes_duplicate_control_number_when_state_number_exists(self) -> None:
         registry = FakeRegistry(
             [

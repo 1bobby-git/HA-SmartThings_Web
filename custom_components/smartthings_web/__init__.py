@@ -269,7 +269,7 @@ def _migrate_entity_registry(
         image_device = is_image_device(device)
         firmware = firmware_states(device)
         if not firmware and any(
-            state.attribute in FIRMWARE_ATTRIBUTES and not state_has_entity_value(state)
+            state.attribute in FIRMWARE_ATTRIBUTES
             for state in device.states.values()
         ):
             stale_null_update_ids.add(f"{device.device_id}_firmware_update")
