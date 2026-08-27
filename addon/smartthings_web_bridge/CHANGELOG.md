@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.100
+
+- Replace the broad 0.1.99 room-name stripping with a single narrow rule: only devices whose SmartThings name exactly matches their own room name (SmartThings room clones such as a speaker named "거실" in the "거실" room) fall back to a room-free device-type label, ending duplicated slugs like geosil_geosil. Every other device name — including "거실 2", compounds, and names merely containing the room — stays untouched; inventory names are never rewritten.
+
 ## 0.1.99
 
 - Strip leading or trailing SmartThings room names from parsed device display names so generated Home Assistant entity and device names stop embedding the room (for example "디티오룸 Status" becomes "Status"); occurrences in the middle of a name, devices named exactly like their room, and user-renamed entities stay untouched.
