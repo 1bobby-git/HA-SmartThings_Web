@@ -627,6 +627,12 @@ READ_ONLY_POWER_DEVICE_TYPES = {
     "washer",
 }
 
+NON_MEDIA_ACCESSORY_ASSET_TYPES = {
+    "car",
+    "smart_tag",
+    "smart_tag_2",
+}
+
 STATE_ROLE_DISPLAY_NAMES = {
     "bixby": "빅스비",
     "cooler": "냉장실",
@@ -723,6 +729,8 @@ def is_image_device(device: BridgeDevice) -> bool:
 
 def is_media_device(device: BridgeDevice) -> bool:
     """Return whether a device has media-player state."""
+    if _device_has_explicit_non_media_accessory_identity(device):
+        return False
     return _device_has_audio_volume_evidence(device) and _device_has_audio_mute_evidence(
         device
     )
@@ -1564,6 +1572,20 @@ def _device_has_audio_mute_evidence(device: BridgeDevice) -> bool:
         and (control.attribute == "mute" or control.capability == "audioMute")
         for control in device.controls.values()
     )
+
+
+def _device_has_explicit_non_media_accessory_identity(device: BridgeDevice) -> bool:
+    device_type = _normalized_device_type(device.device_type)
+    asset_type = (
+        _normalized_device_type(device.presentation.asset_type)
+        if device.presentation
+        else ""
+    )
+    if device_type in NON_MEDIA_ACCESSORY_ASSET_TYPES:
+        return True
+    if asset_type in NON_MEDIA_ACCESSORY_ASSET_TYPES:
+        return True
+    return device_type == "bled2d" and bool(asset_type)
 
 
 def is_readonly_appliance_switch(device: BridgeDevice) -> bool:

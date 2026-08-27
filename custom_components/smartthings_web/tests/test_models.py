@@ -637,6 +637,56 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
 
         self.assertTrue(is_media_device(device))
 
+    def test_accessory_with_alarm_volume_and_mute_is_not_media_player(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        device.name = "아리"
+        device.device_type = "accessory"
+        device.presentation = BridgeDevicePresentation(asset_type="smart_tag_2")
+        volume = BridgeState(
+            "main",
+            "audioVolume",
+            "volume",
+            6,
+            None,
+            "2026-08-24T21:10:00Z",
+        )
+        mute = BridgeState(
+            "main",
+            "audioMute",
+            "mute",
+            "unmuted",
+            None,
+            "2026-08-24T21:10:00Z",
+        )
+        device.states = {volume.key: volume, mute.key: mute}
+        device.controls = {
+            "alarm_volume": BridgeControl(
+                "alarm_volume",
+                "slider",
+                "Alarm volume",
+                component="main",
+                capability="audioVolume",
+                attribute="volume",
+                minimum=1,
+                maximum=10,
+                step=1,
+            ),
+            "alarm_mute": BridgeControl(
+                "alarm_mute",
+                "toggle",
+                "Alarm mute",
+                component="main",
+                capability="audioMute",
+                attribute="mute",
+                commands=("mute", "unmute"),
+            ),
+        }
+
+        self.assertFalse(is_media_device(device))
+        self.assertEqual([control.control_id for control in number_controls(device)], ["alarm_volume"])
+        self.assertFalse(sensor_state_owned_by_primary_domain(device, volume))
+
     def test_refresh_controls_only_use_button_controls_with_refresh_mention(self) -> None:
         battery_state = BridgeState(
             "main",
