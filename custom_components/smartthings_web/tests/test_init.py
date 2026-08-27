@@ -764,7 +764,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             devices=[
                 SimpleNamespace(
                     id="uuid_status",
-                    identifiers={(DOMAIN, "dev_status")},
+                    identifiers={(DOMAIN, "dev_status", "subentry_1")},
                     area_id="deiteorum",
                 ),
                 SimpleNamespace(
@@ -774,7 +774,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
                 ),
                 SimpleNamespace(
                     id="uuid_unmapped",
-                    identifiers={(DOMAIN, "dev_plain")},
+                    identifiers={(DOMAIN, "dev_plain", "subentry_2")},
                     area_id=None,
                 ),
             ]

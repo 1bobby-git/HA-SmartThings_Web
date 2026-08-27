@@ -577,9 +577,15 @@ def _registry_uuid_room_slugs(
         else:
             device_rows = [row for row in raw_devices if hasattr(row, "identifiers")]
     for row in device_rows:
+        # Newer Home Assistant builds attach more than two elements to each
+        # device identifier (e.g. a config-subentry part); only the first
+        # two ever matter here.
         identifiers = getattr(row, "identifiers", None) or set()
         row_area = getattr(row, "area_id", None)
-        for domain, bridge_device_id in identifiers:
+        for entry_identifier in identifiers:
+            if not isinstance(entry_identifier, tuple) or len(entry_identifier) < 2:
+                continue
+            domain, bridge_device_id = entry_identifier[0], entry_identifier[1]
             if domain != DOMAIN:
                 continue
             slugs: list[str] = []
