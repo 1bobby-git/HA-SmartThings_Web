@@ -46,6 +46,7 @@ const createMinimalRepo = async () => {
   await writeFixture(repoRoot, "bridge/src/nested/runtime.ts", "export const runtime = 1;\n");
   await writeFixture(repoRoot, "tools/haos-live-control-event-benchmark.ts", "export const cli = 1;\n");
   await writeFixture(repoRoot, "tools/haos-live-control-event-benchmark-core.ts", "export const core = 1;\n");
+  await writeFixture(repoRoot, "tools/haos-soak-core.ts", "export const soak = 1;\n");
   await writeFixture(repoRoot, "tools/haos-live-control-benchmark.ts", "must not copy");
   await writeFixture(repoRoot, "tools/fixtures/secret.json", "must not copy");
   await writeFixture(repoRoot, "bridge/tests/main.test.ts", "must not copy");
@@ -131,6 +132,7 @@ describe("packageAddon", { timeout: 30_000 }, () => {
     expect(paths).toContain("bridge/src/nested/runtime.ts");
     expect(paths).toContain("tools/haos-live-control-event-benchmark.ts");
     expect(paths).toContain("tools/haos-live-control-event-benchmark-core.ts");
+    expect(paths).toContain("tools/haos-soak-core.ts");
     expect(paths).not.toContain("tools/haos-live-control-benchmark.ts");
     expect(paths).not.toContain("tools/fixtures/secret.json");
     expect(paths).toContain("bridge/src/secret/kept.ts");

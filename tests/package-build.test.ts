@@ -28,6 +28,7 @@ describe("package build contract", () => {
     expect(tsconfig.compilerOptions?.noEmit).not.toBe(true);
     expect(tsconfig.include).toEqual([
       "bridge/src/**/*.ts",
+      "tools/haos-soak-core.ts",
       "tools/haos-live-control-event-benchmark.ts",
       "tools/haos-live-control-event-benchmark-core.ts",
     ]);
