@@ -1425,8 +1425,51 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             [(freezer, "Temperature"), (fridge, "Temperature")]
         )
 
-        self.assertEqual(names[fridge.key], "Temperature (Fridge)")
-        self.assertEqual(names[freezer.key], "Temperature (Freezer)")
+        self.assertEqual(names[fridge.key], "Temperature (냉장실)")
+        self.assertEqual(names[freezer.key], "Temperature (냉동실)")
+
+    def test_duplicate_state_names_localize_known_component_roles(self) -> None:
+        roles = {
+            "cooler": "냉장실",
+            "freezer": "냉동실",
+            "cvroom": "맞춤보관실",
+            "onedoor": "단일 도어",
+            "curdmaker": "숙성실",
+            "icemaker": "제빙기",
+            "icemaker-02": "보조 제빙기",
+            "pantry-01": "팬트리 1",
+            "pantry-02": "팬트리 2",
+            "bixby": "빅스비",
+            "smartthings-hub": "스마트싱스 허브",
+            "smartthings-findNode": "찾기 노드",
+            "setup": "설정",
+            "hca.main": "HCA",
+            "switch2": "스위치 2",
+            "switch3": "스위치 3",
+            "switch4": "스위치 4",
+            "switch5": "스위치 5",
+        }
+        states = [
+            BridgeState(
+                role,
+                "custom",
+                "value",
+                index,
+                None,
+                "2026-08-27T00:00:00Z",
+                component_role=role,
+            )
+            for index, role in enumerate(roles)
+        ]
+
+        names = models_module.disambiguated_state_names(
+            [(state, "Value") for state in states]
+        )
+
+        self.assertEqual(
+            {state.component_role: names[state.key] for state in states},
+            {role: f"Value ({label})" for role, label in roles.items()},
+        )
 
     def test_primary_state_attributes_prefer_safe_roles_for_duplicate_keys(self) -> None:
         device = BridgeDevice(
@@ -1459,7 +1502,7 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
 
         self.assertEqual(
             primary_state_attributes(device, {"temperature"}),
-            {"smartthings_fridge_temperature": 3, "smartthings_freezer_temperature": -18},
+            {"smartthings_냉장실_temperature": 3, "smartthings_냉동실_temperature": -18},
         )
 
 

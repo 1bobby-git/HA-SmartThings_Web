@@ -539,6 +539,9 @@ def _readable_state_token(value: str, field_name: str) -> str | None:
         return None
     if field_name == "component" and normalized.lower() == "main":
         return None
+    role_name = STATE_ROLE_DISPLAY_NAMES.get(normalized.lower())
+    if role_name is not None:
+        return role_name
     normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", normalized)
     normalized = re.sub(r"[_-]+", " ", normalized).strip()
     return normalized.title() or None
@@ -552,7 +555,7 @@ def _safe_role(value: Any) -> str | None:
         return None
     if normalized.lower().startswith("identifier_"):
         return None
-    if not re.fullmatch(r"[A-Za-z0-9가-힣 _-]+", normalized):
+    if not re.fullmatch(r"[A-Za-z0-9가-힣 ._-]+", normalized):
         return None
     return normalized
 
@@ -622,6 +625,28 @@ READ_ONLY_POWER_DEVICE_TYPES = {
     "dryer",
     "microwave",
     "washer",
+}
+
+STATE_ROLE_DISPLAY_NAMES = {
+    "bixby": "빅스비",
+    "cooler": "냉장실",
+    "curdmaker": "숙성실",
+    "cvroom": "맞춤보관실",
+    "freezer": "냉동실",
+    "fridge": "냉장실",
+    "hca.main": "HCA",
+    "icemaker": "제빙기",
+    "icemaker-02": "보조 제빙기",
+    "onedoor": "단일 도어",
+    "pantry-01": "팬트리 1",
+    "pantry-02": "팬트리 2",
+    "setup": "설정",
+    "smartthings-findnode": "찾기 노드",
+    "smartthings-hub": "스마트싱스 허브",
+    "switch2": "스위치 2",
+    "switch3": "스위치 3",
+    "switch4": "스위치 4",
+    "switch5": "스위치 5",
 }
 
 FAN_ATTRIBUTES = {
