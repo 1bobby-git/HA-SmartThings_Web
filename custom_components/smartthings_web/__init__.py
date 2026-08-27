@@ -366,6 +366,8 @@ def _migrate_entity_registry(
             current_device_ids,
             current_entity_ids,
         )
+        if new_entity_id is not None and registry.async_get(new_entity_id) is not None:
+            new_entity_id = None
         if new_entity_id is not None:
             registry.async_update_entity(
                 registry_entity_id,

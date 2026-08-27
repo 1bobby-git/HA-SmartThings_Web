@@ -133,6 +133,12 @@ class FakeRegistry:
                 return entry.entity_id
         return None
 
+    def async_get(self, entity_id: str) -> SimpleNamespace | None:
+        return next(
+            (entry for entry in self.entries if entry.entity_id == entity_id),
+            None,
+        )
+
     def async_update_entity(
         self,
         entity_id: str,
@@ -369,6 +375,39 @@ class EntityRegistryMigrationTests(unittest.TestCase):
 
         self.assertEqual(registry.renamed, [])
 
+    def test_keeps_repeated_prefix_when_target_belongs_to_another_entry(self) -> None:
+        duplicate = entity(
+            "climate.geosil_geosil_eeokeon",
+            "climate",
+            "dev_ac_climate",
+        )
+        official = entity(
+            "climate.geosil_eeokeon",
+            "climate",
+            "official_dev_ac_climate",
+            platform="smartthings",
+        )
+        registry = FakeRegistry([duplicate, official])
+        self.patch_registry(registry, [duplicate])
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}),
+            BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.94",
+                protocol_version="4",
+                locations={"loc_001": "Home"},
+                rooms={},
+                devices={
+                    "dev_ac": level_only_device("dev_ac", "loc_001", "거실 에어컨")
+                },
+            ),
+        )
+
+        self.assertEqual(registry.renamed, [])
+
     def test_entity_id_and_legacy_unique_id_migrate_in_one_pass(self) -> None:
         registry = FakeRegistry(
             [
@@ -426,9 +465,17 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             [("sensor.geosil_eeokeon_power", "dev_ac_main_powerMeter_power")],
         )
 
-    def patch_registry(self, registry: FakeRegistry) -> None:
+    def patch_registry(
+        self,
+        registry: FakeRegistry,
+        config_entries: list[SimpleNamespace] | None = None,
+    ) -> None:
         integration.er.async_get = lambda _hass: registry
-        integration.er.async_entries_for_config_entry = lambda _registry, _entry_id: registry.entries
+        integration.er.async_entries_for_config_entry = (
+            lambda _registry, _entry_id: registry.entries
+            if config_entries is None
+            else config_entries
+        )
 
 
 class ControlPlaneTests(unittest.IsolatedAsyncioTestCase):
