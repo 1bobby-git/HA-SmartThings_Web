@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.104
+
+- Attach the device's my.smartthings.com presentation artwork (or a matching type icon) to every entity, including individual sensors and binary sensors, instead of only primary device entities.
+- Registry repair now also reclaims clean entity IDs once collisions disappear (e.g. `status_home_2` → `status_home`) and removes legacy duplicate rows whose unique IDs no longer match the current inventory, so one physical device keeps one card and one set of entities.
+
 ## 0.1.103
 
 - Fix a startup crash introduced by the 0.1.102 repair on current Home Assistant builds: device identifiers can now carry more than two elements (a config-subentry part), so the slug mapping no longer unpacks them as fixed two-tuples.
