@@ -47,6 +47,9 @@ type DeviceActionCommand =
   | "mute"
   | "unmute"
   | "playTrackAndResume"
+  | "setInputSource"
+  | "setRepeat"
+  | "setShuffle"
   | "setFanMode"
   | "setOption"
   | "open"
@@ -364,8 +367,22 @@ function normalizeRequest(targetType: SafeCommandRequest["targetType"], targetId
     if (input.arguments.length !== 1 || typeof input.arguments[0] !== "number" || !Number.isFinite(input.arguments[0])) throw new SafeCommandError("invalid_arguments");
   } else if (input.command === "setFanMode") {
     if (input.arguments.length !== 1 || typeof input.arguments[0] !== "string" || !tokenPattern.test(input.arguments[0])) throw new SafeCommandError("invalid_arguments");
-  } else if (input.command === "setOption") {
-    if (input.arguments.length !== 1 || typeof input.arguments[0] !== "string" || !safeControlLabel(input.arguments[0])) throw new SafeCommandError("invalid_arguments");
+  } else if (
+    input.command === "setOption" ||
+    input.command === "setInputSource" ||
+    input.command === "setRepeat"
+  ) {
+    if (
+      input.arguments.length !== 1 ||
+      typeof input.arguments[0] !== "string" ||
+      !safeControlLabel(input.arguments[0])
+    ) {
+      throw new SafeCommandError("invalid_arguments");
+    }
+  } else if (input.command === "setShuffle") {
+    if (input.arguments.length !== 1 || typeof input.arguments[0] !== "boolean") {
+      throw new SafeCommandError("invalid_arguments");
+    }
   } else if (input.command === "setPosition") {
     if (input.arguments.length !== 1 || typeof input.arguments[0] !== "number" || !Number.isFinite(input.arguments[0])) throw new SafeCommandError("invalid_arguments");
   } else if (input.command === "playTrackAndResume") {
@@ -577,7 +594,36 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
 }
 
 function isSupportedDeviceCommand(command: string): boolean {
-  return ["on", "off", "press", "setNumber", "setVolume", "mute", "unmute", "setFanMode", "setOption", "open", "close", "stop", "pause", "openShade", "closeShade", "setPosition", "fanSpeed", "volume", "play", "nextTrack", "previousTrack", "fastForward", "rewind", "refresh", "playTrackAndResume"].includes(command);
+  return [
+    "on",
+    "off",
+    "press",
+    "setNumber",
+    "setVolume",
+    "mute",
+    "unmute",
+    "setFanMode",
+    "setOption",
+    "setInputSource",
+    "setRepeat",
+    "setShuffle",
+    "open",
+    "close",
+    "stop",
+    "pause",
+    "openShade",
+    "closeShade",
+    "setPosition",
+    "fanSpeed",
+    "volume",
+    "play",
+    "nextTrack",
+    "previousTrack",
+    "fastForward",
+    "rewind",
+    "refresh",
+    "playTrackAndResume"
+  ].includes(command);
 }
 
 function confirmsAnyNewDeviceState(request: SafeCommandRequest): boolean {
@@ -620,7 +666,15 @@ function desiredValueFor(command: string, args: BridgeJsonValue[], state: Bridge
   if ((command === "close" || command === "closeShade") && args.length === 0) return "closed";
   if (args.length !== 1) return undefined;
   const value = args[0];
-  if (command === "setOption" && typeof value === "string") return value;
+  if (
+    (command === "setOption" ||
+      command === "setInputSource" ||
+      command === "setRepeat") &&
+    typeof value === "string"
+  ) {
+    return value;
+  }
+  if (command === "setShuffle" && typeof value === "boolean") return value;
   if (command === "setPosition" && typeof value === "number") return value;
   if (state && typeof state.value === "number" && typeof value !== "number") return undefined;
   if (state && typeof state.value === "string" && typeof value !== "string") return undefined;
@@ -734,7 +788,14 @@ function nativeCommandFor(
   control: NonNullable<BridgeDevice["controls"]>[number],
   requested: string
 ): string | undefined {
-  if ((requested === "setOption" || requested === "setFanMode") && control.command) {
+  if (
+    (requested === "setOption" ||
+      requested === "setFanMode" ||
+      requested === "setInputSource" ||
+      requested === "setRepeat" ||
+      requested === "setShuffle") &&
+    control.command
+  ) {
     return control.command;
   }
   if (["press", "setNumber", "setVolume", "setPosition"].includes(requested) && control.command) {
@@ -758,6 +819,15 @@ function validateCommandAttribute(
     throw new SafeCommandError("unsupported_command");
   }
   if (command === "setOption" && !safeOptionAttribute(attribute)) {
+    throw new SafeCommandError("unsupported_command");
+  }
+  if (command === "setInputSource" && !SOURCE_ATTRIBUTES.has(attribute)) {
+    throw new SafeCommandError("unsupported_command");
+  }
+  if (command === "setRepeat" && !REPEAT_ATTRIBUTES.has(attribute)) {
+    throw new SafeCommandError("unsupported_command");
+  }
+  if (command === "setShuffle" && !SHUFFLE_ATTRIBUTES.has(attribute)) {
     throw new SafeCommandError("unsupported_command");
   }
   if (
@@ -787,6 +857,29 @@ const COVER_ATTRIBUTES = new Set([
   "windowShade"
 ]);
 
+const SOURCE_ATTRIBUTES = new Set([
+  "audioSource",
+  "inputSource",
+  "mediaSource",
+  "source"
+]);
+
+const REPEAT_ATTRIBUTES = new Set([
+  "mediaRepeat",
+  "mediaRepeatMode",
+  "playbackRepeatMode",
+  "repeat",
+  "repeatMode"
+]);
+
+const SHUFFLE_ATTRIBUTES = new Set([
+  "playbackShuffle",
+  "playbackShuffleMode",
+  "shuffle",
+  "shuffleMode",
+  "shuffleStatus"
+]);
+
 function isControlBoundCommand(command: string): boolean {
   return (
     requiresObservedControl(command) ||
@@ -809,7 +902,14 @@ function isEnumeratedMediaCommand(command: string): boolean {
 function isMediaControlCommand(command: string): boolean {
   return (
     isPlaybackOptionCommand(command) ||
-    ["nextTrack", "previousTrack", "playTrackAndResume"].includes(command)
+    [
+      "nextTrack",
+      "previousTrack",
+      "playTrackAndResume",
+      "setInputSource",
+      "setRepeat",
+      "setShuffle"
+    ].includes(command)
   );
 }
 
@@ -873,6 +973,56 @@ function validateObservedControlCommand(
       throw new SafeCommandError("capability_not_found");
     }
     if (!controlSupportsCommand(control, command, false)) {
+      throw new SafeCommandError("unsupported_command");
+    }
+    return undefined;
+  }
+  if (
+    command === "setInputSource" ||
+    command === "setRepeat" ||
+    command === "setShuffle"
+  ) {
+    const value = args[0];
+    if (
+      command === "setShuffle"
+        ? typeof value !== "boolean"
+        : typeof value !== "string" || !safeControlLabel(value)
+    ) {
+      throw new SafeCommandError("invalid_arguments");
+    }
+    if (
+      command === "setInputSource" &&
+      !SOURCE_ATTRIBUTES.has(control.attribute)
+    ) {
+      throw new SafeCommandError("unsupported_command");
+    }
+    if (command === "setRepeat" && !REPEAT_ATTRIBUTES.has(control.attribute)) {
+      throw new SafeCommandError("unsupported_command");
+    }
+    if (command === "setShuffle" && !SHUFFLE_ATTRIBUTES.has(control.attribute)) {
+      throw new SafeCommandError("unsupported_command");
+    }
+    if (
+      control.kind !== "button" &&
+      control.kind !== "enumerated" &&
+      control.kind !== "toggle"
+    ) {
+      throw new SafeCommandError("capability_not_found");
+    }
+    if (typeof value === "string" && (control.options ?? []).length > 0) {
+      if (!control.options?.includes(value)) {
+        throw new SafeCommandError("invalid_arguments");
+      }
+      return {
+        ...(control.optionLabels?.[value]
+          ? { label: control.optionLabels[value] }
+          : {}),
+        ...(control.optionCommands?.[value]
+          ? { command: control.optionCommands[value] }
+          : {})
+      };
+    }
+    if (!controlSupportsCommand(control, command, true)) {
       throw new SafeCommandError("unsupported_command");
     }
     return undefined;
@@ -985,6 +1135,9 @@ function commandAliases(command: string): string[] {
     stop: ["stop", "pause"],
     mute: ["mute", "unmute"],
     unmute: ["unmute", "mute"],
+    setInputSource: ["setinputsource", "inputsource", "selectsource"],
+    setRepeat: ["setrepeat", "repeat", "repeatmode"],
+    setShuffle: ["setshuffle", "shuffle", "shufflemode"],
     setPosition: ["setposition", "position", "shadelevel"],
     setOption: ["setoption"]
   };

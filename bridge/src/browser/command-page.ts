@@ -207,6 +207,9 @@ export class SmartThingsWebUiCommandExecutor {
       | "mute"
       | "unmute"
       | "playTrackAndResume"
+      | "setInputSource"
+      | "setRepeat"
+      | "setShuffle"
       | "setFanMode"
       | "setOption"
       | "open"
@@ -268,6 +271,9 @@ export class SmartThingsWebUiCommandExecutor {
       | "mute"
       | "unmute"
       | "playTrackAndResume"
+      | "setInputSource"
+      | "setRepeat"
+      | "setShuffle"
       | "setFanMode"
       | "setOption"
       | "open"
@@ -1113,14 +1119,22 @@ async function executeDeviceControl(
     await setNumericControlValue(slider, value);
     return;
   }
-  if (input.command === "setFanMode" || input.command === "setOption") {
+  if (
+    input.command === "setFanMode" ||
+    input.command === "setOption" ||
+    input.command === "setInputSource" ||
+    input.command === "setRepeat"
+  ) {
     const value = input.arguments[0];
     if (typeof value !== "string" || value.length === 0) {
       throw new Error("command_execution_failed");
     }
     const label = input.controlLabel ?? controlLabelFor(input.attribute);
     if (
-      (input.command === "setOption" || input.command === "setFanMode") &&
+      (input.command === "setOption" ||
+        input.command === "setFanMode" ||
+        input.command === "setInputSource" ||
+        input.command === "setRepeat") &&
       input.optionCommand &&
       label
     ) {
@@ -1150,8 +1164,23 @@ async function executeDeviceControl(
     }
     return;
   }
-  if (["play", "pause", "stop", "fastForward", "rewind", "nextTrack", "previousTrack", "playTrackAndResume"].includes(input.command)) {
+  if (
+    [
+      "play",
+      "pause",
+      "stop",
+      "fastForward",
+      "rewind",
+      "nextTrack",
+      "previousTrack",
+      "playTrackAndResume",
+      "setShuffle"
+    ].includes(input.command)
+  ) {
     if (!input.controlLabel) throw new Error("command_control_not_found");
+    if (input.command === "setShuffle") {
+      throw new Error("command_execution_failed");
+    }
     if (input.optionCommand) {
       await clickObservedEnumeratedOption(
         scope,

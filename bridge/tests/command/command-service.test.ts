@@ -540,6 +540,145 @@ describe("SafeCommandService", () => {
     }))).rejects.toMatchObject({ code: "invalid_control_id" });
   });
 
+  test("executes observed media source repeat and shuffle controls with exact confirmation", async () => {
+    const store = readyDeviceStore();
+    observeDeviceDetails(store, [
+      detailSwatch("ENUMERATED", "enumerated", {
+        swatchId: "identifier_source",
+        label: "Source",
+        capabilityId: "identifier_mediaInputSource",
+        attributeName: "inputSource",
+        command: "setInputSource",
+        options: ["Bluetooth", "Wi-Fi"],
+        optionLabels: { Bluetooth: "Bluetooth", "Wi-Fi": "Wi-Fi" }
+      }),
+      detailSwatch("ENUMERATED", "enumerated", {
+        swatchId: "identifier_repeat",
+        label: "Repeat",
+        capabilityId: "identifier_mediaPlaybackRepeat",
+        attributeName: "repeatMode",
+        command: "setRepeat",
+        options: ["off", "all"],
+        optionLabels: { off: "Off", all: "All" }
+      }),
+      detailSwatch("TOGGLE", "toggle", {
+        swatchId: "identifier_shuffle",
+        label: "Shuffle",
+        capabilityId: "identifier_mediaPlaybackShuffle",
+        attributeName: "shuffle",
+        commands: ["setShuffle"]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async (input) => {
+        if (input.command === "setInputSource") {
+          expect(input.nativeCommand).toBe("setInputSource");
+          expect(input.optionLabel).toBe("Bluetooth");
+          store.observe(received(deviceEventFrame(
+            "Bluetooth",
+            "2026-08-25T00:00:01Z",
+            "inputSource",
+            "dev_001",
+            "identifier_mediaInputSource"
+          )));
+        }
+        if (input.command === "setRepeat") {
+          expect(input.nativeCommand).toBe("setRepeat");
+          expect(input.optionLabel).toBe("All");
+          store.observe(received(deviceEventFrame(
+            "all",
+            "2026-08-25T00:00:02Z",
+            "repeatMode",
+            "dev_001",
+            "identifier_mediaPlaybackRepeat"
+          )));
+        }
+        if (input.command === "setShuffle") {
+          expect(input.nativeCommand).toBe("setShuffle");
+          store.observe(received(deviceEventFrame(
+            true,
+            "2026-08-25T00:00:03Z",
+            "shuffle",
+            "dev_001",
+            "identifier_mediaPlaybackShuffle"
+          )));
+        }
+      })
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 1_000,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute(deviceCommand("setInputSource", "request_source_001", {
+      attribute: "inputSource",
+      arguments: ["Bluetooth"],
+      capability: "identifier_mediaInputSource",
+      controlId: "identifier_source"
+    }))).resolves.toMatchObject({ status: "confirmed" });
+    await expect(service.execute(deviceCommand("setRepeat", "request_repeat_001", {
+      attribute: "repeatMode",
+      arguments: ["all"],
+      capability: "identifier_mediaPlaybackRepeat",
+      controlId: "identifier_repeat"
+    }))).resolves.toMatchObject({ status: "confirmed" });
+    await expect(service.execute(deviceCommand("setShuffle", "request_shuffle_001", {
+      attribute: "shuffle",
+      arguments: [true],
+      capability: "identifier_mediaPlaybackShuffle",
+      controlId: "identifier_shuffle"
+    }))).resolves.toMatchObject({ status: "confirmed" });
+  });
+
+  test("rejects unobserved or invalid media source repeat and shuffle commands", async () => {
+    const store = readyDeviceStore();
+    observeDeviceDetails(store, [
+      detailSwatch("ENUMERATED", "enumerated", {
+        swatchId: "identifier_source",
+        label: "Source",
+        capabilityId: "identifier_mediaInputSource",
+        attributeName: "inputSource",
+        options: ["Bluetooth"],
+        command: "setInputSource"
+      }),
+      detailSwatch("TOGGLE", "toggle", {
+        swatchId: "identifier_shuffle",
+        label: "Shuffle",
+        capabilityId: "identifier_mediaPlaybackShuffle",
+        attributeName: "shuffle",
+        commands: ["setShuffle"]
+      })
+    ]);
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: { executeDeviceAction: vi.fn(async () => undefined) },
+      timeoutMs: 1_000,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute(deviceCommand("setInputSource", "request_source_bad", {
+      attribute: "inputSource",
+      arguments: ["HDMI"],
+      capability: "identifier_mediaInputSource",
+      controlId: "identifier_source"
+    }))).rejects.toMatchObject({ code: "invalid_arguments" });
+    await expect(service.execute(deviceCommand("setRepeat", "request_repeat_missing", {
+      attribute: "repeatMode",
+      arguments: ["all"],
+      capability: "identifier_mediaPlaybackRepeat"
+    }))).rejects.toMatchObject({ code: "invalid_control_id" });
+    await expect(service.execute(deviceCommand("setShuffle", "request_shuffle_bad", {
+      attribute: "shuffle",
+      arguments: ["true"],
+      capability: "identifier_mediaPlaybackShuffle",
+      controlId: "identifier_shuffle"
+    }))).rejects.toMatchObject({ code: "invalid_arguments" });
+  });
+
   test("never substitutes inverse observed commands on the native path", async () => {
     const store = readyDeviceStore();
     observeDeviceDetails(store, [
