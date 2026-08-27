@@ -138,6 +138,7 @@ class SmartThingsWebEntity(Entity):
             device,
             display_name=room_free_display_name(runtime, device),
         )
+        _attach_visuals(self, device)
 
     @property
     def available(self) -> bool:
@@ -194,13 +195,7 @@ class SmartThingsWebDeviceEntity(Entity):
             device,
             display_name=room_free_display_name(runtime, device),
         )
-        entity_picture = _entity_picture_for(device)
-        if entity_picture is not None:
-            self._attr_entity_picture = entity_picture
-        else:
-            icon = _device_icon_for(device)
-            if icon is not None:
-                self._attr_icon = icon
+        _attach_visuals(self, device)
 
     @property
     def available(self) -> bool:
@@ -218,6 +213,21 @@ class SmartThingsWebDeviceEntity(Entity):
         self.async_on_remove(
             self.runtime.subscribe_device(self.device_id, self.async_write_ha_state)
         )
+
+
+def _attach_visuals(entity: Entity, device: BridgeDevice) -> None:
+    """Attach the SmartThings presentation artwork (or a type icon) to an entity.
+
+    Every entity of the device — including individual sensors — carries the
+    same unique artwork the my.smartthings.com list shows for the device.
+    """
+    entity_picture = _entity_picture_for(device)
+    if entity_picture is not None:
+        entity._attr_entity_picture = entity_picture
+    else:
+        icon = _device_icon_for(device)
+        if icon is not None:
+            entity._attr_icon = icon
 
 
 def _offline_laundry_state_is_readable(device: BridgeDevice) -> bool:

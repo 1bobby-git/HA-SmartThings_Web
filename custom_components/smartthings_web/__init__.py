@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -353,6 +354,54 @@ def _migrate_entity_registry(
             for slug in slugs
         ]
         room_slug_prefixes.extend(uuid_prefix_pairs)
+
+    # Every unique_id the current inventory can produce for its devices; rows
+    # that no longer match (legacy duplicate creations from earlier builds)
+    # are stale and are removed so a single device keeps a single card.
+    expected_uids: set[str] = set()
+    for device in inventory.devices.values():
+        if device.location_id != entry.data[CONF_LOCATION_ID]:
+            continue
+        for state in device.states.values():
+            expected_uids.add(entity_unique_id(device.device_id, state))
+        expected_uids.add(f"{device.device_id}_refresh")
+        for control in number_controls(device):
+            expected_uids.add(f"{device.device_id}_number_{control.control_id}")
+        if is_fan_device(device):
+            expected_uids.add(f"{device.device_id}_fan")
+        if is_media_device(device):
+            expected_uids.add(f"{device.device_id}_media_player")
+        if is_image_device(device):
+            expected_uids.add(f"{device.device_id}_image")
+        if firmware_states(device):
+            expected_uids.add(f"{device.device_id}_firmware_update")
+
+    stale_duplicate_rows: list[object] = []
+    for entity_entry in registry_entries:
+        if entity_entry.platform != DOMAIN:
+            continue
+        entity_uid = entity_entry.unique_id
+        owner_device = next(
+            (
+                d
+                for d in inventory.devices.values()
+                if d.location_id == entry.data[CONF_LOCATION_ID]
+                and (entity_uid == d.device_id or entity_uid.startswith(d.device_id + "_"))
+            ),
+            None,
+        )
+        if (
+            owner_device is not None
+            and entity_uid not in expected_uids
+            and getattr(entity_entry, "name", None) is None
+            and not entity_uid.endswith(("_fan", "_media_player", "_image", "_firmware_update", "_refresh"))
+            and "_number_" not in entity_uid
+        ):
+            stale_duplicate_rows.append(entity_entry)
+    for entity_entry in stale_duplicate_rows:
+        registry.async_remove(entity_entry.entity_id)
+        current_entity_ids.discard(entity_entry.entity_id)
+
     for entity_entry in registry_entries:
         if entity_entry.platform != DOMAIN:
             continue
@@ -641,6 +690,13 @@ def _room_prefixed_generated_entity_ids(
     object_id = getattr(entity_entry, "entity_id", "").partition(".")[2]
     original_entity_id = getattr(entity_entry, "entity_id", "")
     candidates: list[str] = []
+    # Also collapse a stale numeric suffix now that its base name may be free
+    # again (e.g. status_home_2 -> status_home) after duplicate rows vanished.
+    number_match = re.fullmatch(r"([a-z0-9_]+?)_(\d)", object_id)
+    if number_match and number_match.group(1):
+        base = number_match.group(1)
+        candidates.append(f"{domain_part}.{base}")
+        candidates.extend(f"{domain_part}.{base}_{i}" for i in range(2, 10) if i != int(number_match.group(2)))
     for room_slug in candidate_slugs:
         room_prefix = f"{room_slug}_"
         if room_prefix == "_" or not object_id.startswith(room_prefix):

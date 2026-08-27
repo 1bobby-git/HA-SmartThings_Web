@@ -670,23 +670,23 @@ class EntityRegistryMigrationTests(unittest.TestCase):
                 self._registry_entry(
                     "switch.deiteorum_status_home",
                     device_id="uuid_status",
-                    unique_id="dev_status_identifier_x_switch",
+                    unique_id="dev_status_main_switch_switch",
                 ),
                 self._registry_entry(
                     "switch.deiteorum_status_night",
                     device_id="uuid_status2",
-                    unique_id="dev_status2_identifier_y_switch",
+                    unique_id="dev_status2_main_switch_switch",
                     name="내 스위치",
                 ),
                 self._registry_entry(
                     "switch.taken_target",
                     device_id="uuid_taken",
-                    unique_id="dev_taken_identifier_z_switch",
+                    unique_id="dev_taken_main_switch_switch",
                 ),
                 self._registry_entry(
                     "switch.geosil_geosil_jomyeong",
                     device_id="uuid_double",
-                    unique_id="dev_double_identifier_w_switch",
+                    unique_id="dev_double_main_switch_switch",
                 ),
             ]
         )
@@ -696,7 +696,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             0,
             entity("switch.status_away", "switch", "other_integration_uid", platform="other"),
         )
-        extra = self._registry_entry("switch.deiteorum_status_away", device_id="uuid_away", unique_id="dev_away_identifier_v")
+        extra = self._registry_entry("switch.deiteorum_status_away", device_id="uuid_away", unique_id="dev_away_main_switch_switch")
         registry.entries.append(extra)
         self.patch_registry(registry)
         integration.dr.async_get = lambda _hass: SimpleNamespace(
