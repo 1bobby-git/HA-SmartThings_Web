@@ -1,6 +1,11 @@
 import { describe, expect, test, vi } from "vitest";
 
-import { KEEPER_URL, KeeperPageManager } from "../../src/browser/keeper-page.js";
+import {
+  ADVANCED_DEVICE_SNAPSHOT_URLS,
+  KEEPER_URL,
+  KeeperPageManager,
+  fetchAdvancedDeviceSnapshots
+} from "../../src/browser/keeper-page.js";
 
 class FakePage {
   readonly bringToFront = vi.fn(async () => undefined);
@@ -10,6 +15,7 @@ class FakePage {
   readonly goto = vi.fn(async (url: string) => {
     this.currentUrl = url;
   });
+  readonly evaluateCalls: unknown[][] = [];
 
   constructor(public currentUrl: string, public closed = false) {}
 
@@ -19,6 +25,18 @@ class FakePage {
 
   isClosed(): boolean {
     return this.closed;
+  }
+
+  async evaluate<Result, Argument>(
+    pageFunction: (argument: Argument) => Result | Promise<Result>,
+    argument: Argument
+  ): Promise<Result> {
+    this.evaluateCalls.push([pageFunction, argument]);
+    const urls = argument as string[];
+    return urls.map((url, index) => ({
+      url,
+      items: [{ deviceId: `device-${index}` }]
+    })) as Result;
   }
 }
 
@@ -39,6 +57,20 @@ class FakeContext {
 }
 
 describe("KeeperPageManager", () => {
+  test("loads a bounded same-origin Advanced snapshot fallback without mutations", async () => {
+    const page = new FakePage("https://my.smartthings.com/advanced");
+
+    const snapshots = await fetchAdvancedDeviceSnapshots(page);
+
+    expect(page.evaluateCalls).toHaveLength(1);
+    expect(page.evaluateCalls[0]?.[1]).toEqual(ADVANCED_DEVICE_SNAPSHOT_URLS);
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots[0]).toEqual({
+      url: ADVANCED_DEVICE_SNAPSHOT_URLS[0],
+      items: [{ deviceId: "device-0" }]
+    });
+  });
+
   test("prunes unrelated restored tabs before choosing one keeper", async () => {
     const location = new FakePage("https://my.smartthings.com/location/restored-home");
     const login = new FakePage("https://account.samsung.com/accounts/v1/ST/signInGate");

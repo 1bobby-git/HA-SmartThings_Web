@@ -1,5 +1,9 @@
 export const KEEPER_URL = "https://my.smartthings.com/location";
 export const ADVANCED_URL = "https://my.smartthings.com/advanced";
+export const ADVANCED_DEVICE_SNAPSHOT_URLS = [
+  "/advanced/cupcake-api/api/devices?includeHealth=true&includeStatus=true&includeGroups=true&includeUserDevices=true&includeAllowedActions=true&includeRestricted=true",
+  "/advanced/cupcake-api/api/devices?max=200&page=1&includeStatus=true&includeUserDevices=true&includeHealth=true&includeGroups=true&includeAllowedActions=true&isNext=true"
+] as const;
 
 export interface BrowserPageLike {
   url(): string;
@@ -16,6 +20,34 @@ export interface BrowserPageLike {
 export interface BrowserContextLike {
   pages(): BrowserPageLike[];
   newPage(): Promise<BrowserPageLike>;
+}
+
+export async function fetchAdvancedDeviceSnapshots(
+  page: BrowserPageLike
+): Promise<unknown[]> {
+  if (!page.evaluate) return [];
+  try {
+    const snapshots = await page.evaluate(
+      async (urls) => {
+        const result: unknown[] = [];
+        for (const url of urls) {
+          // api-free-audit: authenticated-page-same-origin-read-only-get
+          const response = await fetch(url, {
+            credentials: "same-origin",
+            method: "GET",
+            cache: "no-store"
+          });
+          if (!response.ok) continue;
+          result.push(await response.json());
+        }
+        return result;
+      },
+      [...ADVANCED_DEVICE_SNAPSHOT_URLS]
+    );
+    return Array.isArray(snapshots) ? snapshots : [];
+  } catch {
+    return [];
+  }
 }
 
 export class KeeperPageManager {

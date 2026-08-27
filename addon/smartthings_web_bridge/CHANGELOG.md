@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.96
+
+- Fall back to two bounded same-origin Advanced device-list GETs when the authenticated page does not naturally finish its snapshot request within five seconds; responses are redacted and merged only as bootstrap metadata/state, never used for direct Cupcake commands or polling.
+- Keep the temporary Advanced page alive briefly after the first complete response so its observed continuation page can enrich devices beyond the initial batch.
+- Refine existing generated sensor and binary-sensor registry names when newly observed component roles replace numeric qualifiers, while preserving every user-supplied entity name.
+
 ## 0.1.95
 
 - Keep Ari/SmartTag alarm volume and other audio accessory controls off `media_player`, while retaining real speakers only when the required pushed audio volume and mute evidence is present; remove stale media_player registry entries owned by this integration after reclassification.

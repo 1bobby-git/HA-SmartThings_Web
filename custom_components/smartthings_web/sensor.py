@@ -21,7 +21,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SmartThingsWebConfigEntry
-from .entity import SmartThingsWebEntity
+from .entity import SmartThingsWebEntity, migrate_entity_original_name
 from .models import (
     BridgeDevice,
     BridgeState,
@@ -236,6 +236,13 @@ async def async_setup_entry(
             )
             for state, description in candidates:
                 unique_id = "_".join((device.device_id, *state.key))
+                name_override = name_overrides.get(state.key)
+                migrate_entity_original_name(
+                    hass,
+                    "sensor",
+                    unique_id,
+                    name_override,
+                )
                 if unique_id not in known:
                     known.add(unique_id)
                     entities.append(
@@ -244,7 +251,7 @@ async def async_setup_entry(
                             device,
                             state,
                             description,
-                            name_override=name_overrides.get(state.key),
+                            name_override=name_override,
                         )
                     )
         if entities:

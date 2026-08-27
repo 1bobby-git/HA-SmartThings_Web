@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
 
@@ -88,6 +89,25 @@ def _device_icon_for(device: BridgeDevice) -> str | None:
 
 def _normalized_device_type(value: str | None) -> str:
     return (value or "").strip().lower().replace("-", "_")
+
+
+def migrate_entity_original_name(
+    hass: object,
+    domain: str,
+    unique_id: str,
+    original_name: str | None,
+) -> None:
+    """Refine an existing generated name while preserving user overrides."""
+    if original_name is None:
+        return
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id(domain, DOMAIN, unique_id)
+    if entity_id is None:
+        return
+    entry = registry.async_get(entity_id)
+    if entry is None or entry.original_name == original_name:
+        return
+    registry.async_update_entity(entity_id, original_name=original_name)
 
 
 class SmartThingsWebEntity(Entity):

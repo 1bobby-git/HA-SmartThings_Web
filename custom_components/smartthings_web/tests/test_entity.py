@@ -29,6 +29,10 @@ class DeviceInfo(dict[str, object]):
 device_registry.DeviceInfo = DeviceInfo  # type: ignore[attr-defined]
 sys.modules["homeassistant.helpers.device_registry"] = device_registry
 
+entity_registry = ModuleType("homeassistant.helpers.entity_registry")
+entity_registry.async_get = lambda _hass: None  # type: ignore[attr-defined]
+sys.modules["homeassistant.helpers.entity_registry"] = entity_registry
+
 entity_helper = ModuleType("homeassistant.helpers.entity")
 
 
@@ -67,10 +71,70 @@ sys.modules[entity_spec.name] = entity_under_test
 entity_spec.loader.exec_module(entity_under_test)
 SmartThingsWebEntity = entity_under_test.SmartThingsWebEntity
 SmartThingsWebDeviceEntity = entity_under_test.SmartThingsWebDeviceEntity
+migrate_entity_original_name = entity_under_test.migrate_entity_original_name
+
+
+class FakeEntityRegistry:
+    """Minimal registry used to prove existing entity display-name migration."""
+
+    def __init__(self) -> None:
+        self.entry = type(
+            "RegistryEntry",
+            (),
+            {
+                "entity_id": "sensor.kitchen_refrigerator_temperature",
+                "original_name": "Temperature (1)",
+                "name": None,
+            },
+        )()
+        self.updated: list[tuple[str, str]] = []
+
+    def async_get_entity_id(self, domain: str, platform: str, unique_id: str) -> str | None:
+        if (domain, platform, unique_id) == (
+            "sensor",
+            "smartthings_web",
+            "dev_001_freezer_temperatureMeasurement_temperature",
+        ):
+            return self.entry.entity_id
+        return None
+
+    def async_get(self, entity_id: str) -> object | None:
+        return self.entry if entity_id == self.entry.entity_id else None
+
+    def async_update_entity(self, entity_id: str, *, original_name: str) -> None:
+        self.updated.append((entity_id, original_name))
+        self.entry.original_name = original_name
 
 
 class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
     """Prove a Bridge state push reaches Home Assistant state writing."""
+
+    def test_existing_generated_name_is_refined_without_overwriting_user_name(self) -> None:
+        registry = FakeEntityRegistry()
+        entity_under_test.er.async_get = lambda _hass: registry
+
+        migrate_entity_original_name(
+            object(),
+            "sensor",
+            "dev_001_freezer_temperatureMeasurement_temperature",
+            "Temperature (냉동실)",
+        )
+        migrate_entity_original_name(
+            object(),
+            "sensor",
+            "dev_001_freezer_temperatureMeasurement_temperature",
+            "Temperature (냉동실)",
+        )
+
+        self.assertEqual(
+            registry.updated,
+            [
+                (
+                    "sensor.kitchen_refrigerator_temperature",
+                    "Temperature (냉동실)",
+                )
+            ],
+        )
 
     async def test_runtime_push_writes_entity_state_and_unsubscribes_on_remove(self) -> None:
         initial = BridgeState(

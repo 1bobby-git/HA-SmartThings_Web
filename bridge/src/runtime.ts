@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 
 import type { BrowserContextLike, BrowserPageLike } from "./browser/keeper-page.js";
 import { installCakeClientCapture } from "./browser/cake-client-capture.js";
-import { KeeperPageManager } from "./browser/keeper-page.js";
+import {
+  KeeperPageManager,
+  fetchAdvancedDeviceSnapshots
+} from "./browser/keeper-page.js";
 import { BrowserSupervisor } from "./browser/browser-supervisor.js";
 import { SmartThingsWebUiCommandExecutor } from "./browser/command-page.js";
 import { DeviceDetailDiscovery } from "./browser/device-detail-discovery.js";
@@ -64,7 +67,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.95";
+const bridgeVersion = "0.1.96";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -681,6 +684,7 @@ async function observeAdvancedSnapshotPage(
   onAdvancedDeviceSnapshot: (snapshot: unknown, url: string) => void
 ): Promise<void> {
   let page: BrowserPageLike | undefined;
+  let wholeSnapshotSeen = false;
   let resolveWholeSnapshot: (() => void) | undefined;
   const wholeSnapshotObserved = new Promise<void>((resolve) => {
     resolveWholeSnapshot = resolve;
@@ -700,6 +704,7 @@ async function observeAdvancedSnapshotPage(
         (snapshot, url) => {
           onAdvancedDeviceSnapshot(snapshot, url);
           if (isWholeAdvancedDevicesSnapshotUrl(url)) {
+            wholeSnapshotSeen = true;
             resolveWholeSnapshot?.();
           }
         }
@@ -709,6 +714,22 @@ async function observeAdvancedSnapshotPage(
       wholeSnapshotObserved,
       new Promise((resolve) => setTimeout(resolve, 5_000))
     ]);
+    if (wholeSnapshotSeen) {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    } else if (page) {
+      const snapshots = await fetchAdvancedDeviceSnapshots(page);
+      for (const snapshot of snapshots) {
+        onAdvancedDeviceSnapshot(
+          redact(snapshot),
+          "https://my.smartthings.com/advanced/cupcake-api/api/devices"
+        );
+      }
+      if (snapshots.length === 0) {
+        log.warn("advanced_snapshot_fallback_empty");
+      } else {
+        log.info(`advanced_snapshot_fallback_loaded:${snapshots.length}`);
+      }
+    }
   } catch {
     log.warn("advanced_snapshot_observation_failed");
   } finally {

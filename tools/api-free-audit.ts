@@ -65,7 +65,16 @@ export function auditSmartThingsApiFree(options: AuditOptions = {}): AuditFindin
       const lines = text.split(/\r?\n/);
       for (const [index, line] of lines.entries()) {
         for (const { rule, pattern } of rules) {
-          if (pattern.test(line) && isApiFinding(rule, line, lines, index)) {
+          if (
+            pattern.test(line) &&
+            isApiFinding(
+              rule,
+              line,
+              lines,
+              index,
+              relative(cwd, path).replace(/\\/g, "/")
+            )
+          ) {
             findings.push({
               path: relative(cwd, path).replace(/\\/g, "/"),
               rule,
@@ -95,10 +104,25 @@ function sanitizeAuditExcerpt(value: string): string {
     );
 }
 
-function isApiFinding(rule: ApiFreeRule, line: string, lines: string[], index: number): boolean {
+function isApiFinding(
+  rule: ApiFreeRule,
+  line: string,
+  lines: string[],
+  index: number,
+  relativePath: string
+): boolean {
   if (
     rule === "direct-http-client" &&
     /\bfetch\s*\(\s*["'`]\/?api\/v1\/[A-Za-z0-9._/-]+["'`]/u.test(line)
+  ) {
+    return false;
+  }
+  if (
+    rule === "direct-http-client" &&
+    relativePath === "bridge/src/browser/keeper-page.ts" &&
+    /authenticated-page-same-origin-read-only-get/u.test(nearby(lines, index)) &&
+    /credentials:\s*"same-origin"/u.test(nearby(lines, index)) &&
+    /method:\s*"GET"/u.test(nearby(lines, index))
   ) {
     return false;
   }

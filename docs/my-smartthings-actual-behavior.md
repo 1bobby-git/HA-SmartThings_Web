@@ -73,10 +73,15 @@ component capability status, and allowed-action metadata. The status tree is
 useful for initial and reconnect enrichment, especially for refrigerator
 compartments and appliance values that are distributed across components.
 
-Version 0.1.95 observes that naturally loaded response once per new Chromium
+Version 0.1.96 observes that naturally loaded response once per new Chromium
 context after installing the existing CDP network observer, redacts it, merges
 only metadata and state into DeviceStore, publishes each accepted snapshot as
-one atomic inventory transition, and closes the temporary Advanced page. The
+one atomic inventory transition, and closes the temporary Advanced page. If
+that page does not complete the expected device response within five seconds,
+the page performs the two observed same-origin device-list GETs once as a
+bounded bootstrap fallback. This uses the active page session directly, never
+exports or replays cookies, never mutates Cupcake data, and is not a status
+poller. The
 single-redaction Advanced aliases are normalized to the existing inventory
 aliases before merge, and the array-shaped component labels/categories are
 used to restore refrigerator, freezer, cooler, custom-zone, and similar roles

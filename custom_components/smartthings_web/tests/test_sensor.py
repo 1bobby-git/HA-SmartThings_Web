@@ -106,6 +106,7 @@ class SmartThingsWebEntity:
 
 entity_module.SmartThingsWebEntity = SmartThingsWebEntity  # type: ignore[attr-defined]
 entity_module.device_info_for = lambda *_args, **_kwargs: {}  # type: ignore[attr-defined]
+entity_module.migrate_entity_original_name = lambda *_args, **_kwargs: None  # type: ignore[attr-defined]
 sys.modules["smartthings_web.entity"] = entity_module
 
 from smartthings_web.models import (  # noqa: E402
