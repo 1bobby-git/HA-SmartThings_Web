@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.103
+
+- Fix a startup crash introduced by the 0.1.102 repair on current Home Assistant builds: device identifiers can now carry more than two elements (a config-subentry part), so the slug mapping no longer unpacks them as fixed two-tuples.
+
 ## 0.1.102
 
 - Harden the frozen entity-ID repair discovered on a live install: resolve owning devices through the device registry's identifier sets even when `DeviceRegistry.devices`/`AreaRegistry.areas` are live wrapper mappings rather than plain dicts, accept both the Bridge room-name slug and the user-assigned area ID (e.g. 데이터룸 vs deiteorum), and fall back to numbered IDs (`_2`...`_9`) when a cleaned target is occupied by another integration instead of skipping silently.
