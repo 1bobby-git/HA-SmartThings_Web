@@ -33,6 +33,7 @@ from .models import (
     sensor_native_value,
     sensor_state_allowed,
     sensor_state_owned_by_primary_domain,
+    state_has_entity_value,
     signal_metrics_native_value,
 )
 
@@ -222,6 +223,8 @@ async def async_setup_entry(
             firmware_keys = {item.key for item in firmware_states(device).values()}
             candidates: list[tuple[BridgeState, SensorDescription]] = []
             for state in device.states.values():
+                if not state_has_entity_value(state):
+                    continue
                 if not sensor_state_allowed(
                     state.attribute,
                     firmware=state.key in firmware_keys,

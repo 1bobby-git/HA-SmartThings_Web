@@ -4,7 +4,7 @@
 
 - Keep the inactive Chromium keeper and native command dispatcher responsive by launching with explicit background timer, occluded-window, and renderer throttling suppression flags.
 - Cache the recovered authenticated `api/device` service in the live SmartThings page so consecutive native commands do not rescan the webpack module cache.
-- Remove stale camera-image and image-transfer states from non-camera devices while preserving Home Camera image entities; this restores the living-room window sensor to Contact, Battery, Received Signal Metrics, and its observed Refresh button.
+- Remove stale camera-image and image-transfer states from non-camera devices while preserving Home Camera image entities; still inspect value-only devices for real detail actions, restoring the living-room window sensor to Contact, Battery, Received Signal Metrics, and its observed Refresh button.
 - Preserve the 0.1.97 Advanced HUB enrichment behavior while keeping Cupcake endpoints read-only and excluded from command execution.
 
 ## 0.1.97

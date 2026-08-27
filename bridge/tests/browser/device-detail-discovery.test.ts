@@ -21,6 +21,35 @@ describe("DeviceDetailDiscovery", () => {
     });
   });
 
+  test("inspects devices that only have observed value controls", async () => {
+    const inspectDeviceDetails = vi.fn(async () => undefined);
+    const discovery = new DeviceDetailDiscovery({
+      inventory: () => valueOnlyControlInventory(),
+      inspector: { inspectDeviceDetails },
+      canInspect: () => true
+    });
+
+    expect(await discovery.runOne()).toBe("inspected");
+    expect(inspectDeviceDetails).toHaveBeenCalledWith({
+      deviceName: "거실창문센서",
+      locationId: "loc_001",
+      locationNames: { loc_001: "Home" },
+      roomName: "거실"
+    });
+  });
+
+  test("skips devices that already have actionable detail controls", async () => {
+    const inspectDeviceDetails = vi.fn(async () => undefined);
+    const discovery = new DeviceDetailDiscovery({
+      inventory: () => actionableControlInventory(),
+      inspector: { inspectDeviceDetails },
+      canInspect: () => true
+    });
+
+    expect(await discovery.runOne()).toBe("idle");
+    expect(inspectDeviceDetails).not.toHaveBeenCalled();
+  });
+
   test("pauses while runtime or the physical-action probe forbids extra pages", async () => {
     const inspectDeviceDetails = vi.fn(async () => undefined);
     const discovery = new DeviceDetailDiscovery({
@@ -178,6 +207,101 @@ function cameraInventory(): BridgeInventory {
       }
     ],
     scenes: []
+  };
+}
+
+function valueOnlyControlInventory(): BridgeInventory {
+  return {
+    schemaVersion: 1,
+    sequence: 1,
+    locations: [{ id: "loc_001", name: "Home" }],
+    rooms: [{ id: "identifier_living", locationId: "loc_001", name: "거실" }],
+    devices: [
+      {
+        id: "dev_window",
+        locationId: "loc_001",
+        roomId: "identifier_living",
+        name: "거실창문센서",
+        type: "custom_window_h",
+        online: true,
+        presentation: { assetType: "custom_window_h" },
+        states: [
+          {
+            component: "main",
+            capability: "contactSensor",
+            attribute: "contact",
+            value: "closed",
+            unit: null,
+            updatedAt: "2026-08-25T02:11:34Z"
+          },
+          {
+            component: "main",
+            capability: "battery",
+            attribute: "battery",
+            value: 91,
+            unit: "%",
+            updatedAt: "2026-04-01T17:21:43Z"
+          },
+          {
+            component: "legendabsolute60149",
+            capability: "legendabsolute60149.signalMetrics",
+            attribute: "signalMetrics",
+            value: "KST-9: 2026/04/01 11:28 LQI: 184  RSSI: -95dbm",
+            unit: null,
+            updatedAt: "2026-04-01T11:28:55Z"
+          }
+        ],
+        controls: [
+          {
+            id: "contact",
+            kind: "value",
+            label: "Contact sensor",
+            component: "main",
+            capability: "contactSensor",
+            attribute: "contact"
+          },
+          {
+            id: "battery",
+            kind: "value",
+            label: "Battery",
+            component: "main",
+            capability: "battery",
+            attribute: "battery"
+          },
+          {
+            id: "signalMetrics",
+            kind: "value",
+            label: "Received Signal Metrics",
+            component: "legendabsolute60149",
+            capability: "legendabsolute60149.signalMetrics",
+            attribute: "signalMetrics"
+          }
+        ]
+      }
+    ],
+    scenes: []
+  };
+}
+
+function actionableControlInventory(): BridgeInventory {
+  const inventory = valueOnlyControlInventory();
+  return {
+    ...inventory,
+    devices: inventory.devices.map((device) => ({
+      ...device,
+      controls: [
+        ...(device.controls ?? []),
+        {
+          id: "refresh",
+          kind: "button" as const,
+          label: "Refresh",
+          component: "main",
+          capability: "refresh",
+          attribute: "refresh",
+          command: "refresh"
+        }
+      ]
+    }))
   };
 }
 

@@ -27,6 +27,7 @@ from models import (  # noqa: E402
     cover_controls,
     device_model,
     entity_unique_id,
+    firmware_states,
     is_climate_device,
     is_cover_device,
     is_fan_device,
@@ -51,6 +52,7 @@ from models import (  # noqa: E402
     sensor_state_allowed,
     sensor_state_owned_by_primary_domain,
     signal_metrics_native_value,
+    state_has_entity_value,
     token_values,
 )
 
@@ -611,10 +613,48 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertFalse(sensor_state_allowed("imageTransferProgress", image_device=False))
         self.assertTrue(sensor_state_allowed("battery", image_device=False))
         self.assertTrue(sensor_state_allowed("signalMetrics", image_device=False))
+        self.assertTrue(state_has_entity_value(states[0]))
+        self.assertFalse(
+            state_has_entity_value(
+                BridgeState(
+                    "main",
+                    "firmwareUpdate",
+                    "currentVersion",
+                    None,
+                    None,
+                    "2026-04-01T11:28:55Z",
+                )
+            )
+        )
         self.assertEqual(
             sensor_native_value(states[2].value),
             "KST-9: 2026/04/01 11:28 LQI: 184  RSSI: -95dbm",
         )
+
+    def test_null_firmware_states_do_not_create_update_capability(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        states = [
+            BridgeState(
+                "main",
+                "firmwareUpdate",
+                "currentVersion",
+                None,
+                None,
+                "2026-04-01T11:28:55Z",
+            ),
+            BridgeState(
+                "main",
+                "firmwareUpdate",
+                "availableVersion",
+                None,
+                None,
+                "2026-04-01T11:28:55Z",
+            ),
+        ]
+        device.states = {state.key: state for state in states}
+
+        self.assertEqual(firmware_states(device), {})
 
     def test_camera_identity_preserves_single_image_state(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")

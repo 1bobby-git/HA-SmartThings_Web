@@ -75,10 +75,14 @@ export class DeviceDetailDiscovery {
 
   #needsInspection(device: BridgeDevice): boolean {
     return (
-      ((device.controls?.length ?? 0) === 0 || isCameraImageDevice(device)) &&
+      (!hasActionableControl(device) || isCameraImageDevice(device)) &&
       (this.#attempts.get(device.id) ?? 0) < this.#maxAttempts
     );
   }
+}
+
+function hasActionableControl(device: BridgeDevice): boolean {
+  return (device.controls ?? []).some((control) => control.kind !== "value");
 }
 
 const cameraImageAttributes = new Set([

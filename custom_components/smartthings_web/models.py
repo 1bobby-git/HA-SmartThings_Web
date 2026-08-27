@@ -1058,6 +1058,11 @@ def sensor_state_allowed(
     )
 
 
+def state_has_entity_value(state: BridgeState) -> bool:
+    """Return whether a normalized state contains content worth exposing."""
+    return state.value is not None
+
+
 def sensor_state_owned_by_primary_domain(
     device: BridgeDevice, state: BridgeState
 ) -> bool:
@@ -1112,7 +1117,7 @@ def firmware_states(device: BridgeDevice) -> dict[str, BridgeState]:
     """Return one coherent firmware capability instead of raw duplicate sensors."""
     by_capability: dict[tuple[str, str], dict[str, BridgeState]] = {}
     for state in device.states.values():
-        if state.attribute in FIRMWARE_ATTRIBUTES:
+        if state.attribute in FIRMWARE_ATTRIBUTES and state_has_entity_value(state):
             by_capability.setdefault((state.component, state.capability), {})[
                 state.attribute
             ] = state

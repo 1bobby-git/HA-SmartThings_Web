@@ -33,6 +33,7 @@ from .const import (
 from .entity import device_info_for
 from .models import (
     BridgeInventory,
+    FIRMWARE_ATTRIBUTES,
     IMAGE_ATTRIBUTES,
     SmartThingsWebRuntime,
     entity_unique_id,
@@ -41,7 +42,9 @@ from .models import (
     is_image_device,
     is_media_device,
     number_controls,
+    sensor_state_allowed,
     sensor_state_owned_by_primary_domain,
+    state_has_entity_value,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -246,6 +249,8 @@ def _migrate_entity_registry(
     duplicate_number_ids: set[str] = set()
     stale_firmware_sensor_ids: set[str] = set()
     stale_event_sensor_ids: set[str] = set()
+    stale_null_sensor_ids: set[str] = set()
+    stale_null_update_ids: set[str] = set()
     stale_primary_sensor_ids: set[str] = set()
     synthetic_refresh_ids: set[str] = set()
     number_state_ids_by_device: dict[str, set[str]] = {}
@@ -261,13 +266,32 @@ def _migrate_entity_registry(
             continue
         current_device_ids.add(device.device_id)
         synthetic_refresh_ids.add(f"{device.device_id}_refresh")
-        for state in firmware_states(device).values():
+        image_device = is_image_device(device)
+        firmware = firmware_states(device)
+        if not firmware and any(
+            state.attribute in FIRMWARE_ATTRIBUTES and not state_has_entity_value(state)
+            for state in device.states.values()
+        ):
+            stale_null_update_ids.add(f"{device.device_id}_firmware_update")
+        for state in firmware.values():
             stale_firmware_sensor_ids.add(entity_unique_id(device.device_id, state))
         for state in device.states.values():
+            if state.attribute in FIRMWARE_ATTRIBUTES:
+                stale_firmware_sensor_ids.add(entity_unique_id(device.device_id, state))
             if state.attribute == "button":
                 stale_event_sensor_ids.add(entity_unique_id(device.device_id, state))
             if sensor_state_owned_by_primary_domain(device, state):
                 stale_primary_sensor_ids.add(entity_unique_id(device.device_id, state))
+            if (
+                not state_has_entity_value(state)
+                and sensor_state_allowed(
+                    state.attribute,
+                    firmware=state.attribute in FIRMWARE_ATTRIBUTES,
+                    image_device=image_device,
+                    primary_domain=sensor_state_owned_by_primary_domain(device, state),
+                )
+            ):
+                stale_null_sensor_ids.add(entity_unique_id(device.device_id, state))
         number_state_ids_by_device[device.device_id] = {
             entity_unique_id(device.device_id, state) for state in device.states.values()
         }
@@ -314,6 +338,18 @@ def _migrate_entity_registry(
         if (
             entity_entry.domain == Platform.SENSOR
             and entity_entry.unique_id in stale_event_sensor_ids
+        ):
+            registry.async_remove(entity_entry.entity_id)
+            continue
+        if (
+            entity_entry.domain == Platform.SENSOR
+            and entity_entry.unique_id in stale_null_sensor_ids
+        ):
+            registry.async_remove(entity_entry.entity_id)
+            continue
+        if (
+            entity_entry.domain == Platform.UPDATE
+            and entity_entry.unique_id in stale_null_update_ids
         ):
             registry.async_remove(entity_entry.entity_id)
             continue
