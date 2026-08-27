@@ -93,6 +93,18 @@ def _install_homeassistant_stubs() -> None:
     aiohttp_client.async_get_clientsession = lambda _hass: None  # type: ignore[attr-defined]
     sys.modules["homeassistant.helpers.aiohttp_client"] = aiohttp_client
 
+    util = ModuleType("homeassistant.util")
+
+    def _stub_slugify(value: object) -> str:
+        import re as _re
+
+        text = str(value).strip().lower()
+        text = _re.sub(r"(?u)[^\w\s-]", "", text)
+        return _re.sub(r"[\s_-]+", "_", text)
+
+    util.slugify = _stub_slugify  # type: ignore[attr-defined]
+    sys.modules["homeassistant.util"] = util
+
 
 _install_homeassistant_stubs()
 
@@ -639,6 +651,102 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         self.assertEqual(
             registry.updated,
             [("sensor.geosil_eeokeon_power", "dev_ac_main_powerMeter_power")],
+        )
+
+    def test_renames_frozen_room_prefixed_ids_once_device_names_are_clean(self) -> None:
+        registry = FakeRegistry(
+            [
+                self._registry_entry(
+                    "switch.deiteorum_status_home",
+                    "dev_status",
+                    unique_id="dev_status_identifier_x",
+                ),
+                self._registry_entry(
+                    "switch.deiteorum_status_night",
+                    "dev_status2",
+                    unique_id="dev_status2_identifier_y",
+                    name="내 스위치",
+                ),
+                self._registry_entry(
+                    "switch.taken_target",
+                    "dev_taken",
+                    unique_id="dev_taken_identifier_z",
+                ),
+                self._registry_entry(
+                    "switch.geosil_geosil_jomyeong",
+                    "dev_double",
+                    unique_id="dev_double_identifier_w",
+                ),
+            ]
+        )
+        self.patch_registry(registry)
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}),
+            BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.100",
+                protocol_version="4",
+                locations={"loc_001": "Home"},
+                rooms={"room_d": ("loc_001", "Deiteorum"), "room_g": ("loc_001", "Geosil")},
+                devices={
+                    "dev_status": self._bridge_device("dev_status", "Status Home"),
+                    "dev_status2": self._bridge_device("dev_status2", "Status Night"),
+                    "dev_taken": self._bridge_device("dev_taken", "Taken Source"),
+                    "dev_double": self._bridge_device("dev_double", "조명", room="room_g"),
+                    "dev_plain": level_only_device("dev_plain", "loc_001", "Plain Lamp"),
+                },
+            ),
+        )
+
+        self.assertEqual(
+            registry.renamed,
+            [
+                ("switch.deiteorum_status_home", "switch.status_home"),
+                ("switch.geosil_geosil_jomyeong", "switch.geosil_jomyeong"),
+            ],
+        )
+        self.assertEqual(registry.updated, [])
+
+    @staticmethod
+    def _registry_entry(
+        entity_id: str,
+        device_id: str,
+        *,
+        domain: str = "switch",
+        unique_id: str | None = None,
+        name: str | None = None,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            entity_id=entity_id,
+            domain=domain,
+            platform=DOMAIN,
+            unique_id=unique_id or f"{device_id}_identifier",
+            device_id=device_id,
+            name=name,
+            disabled_by=None,
+            original_name=None,
+        )
+
+    @staticmethod
+    def _bridge_device(
+        device_id: str,
+        name: str,
+        *,
+        location_id: str = "loc_001",
+        room: str | None = "room_d",
+    ) -> BridgeDevice:
+        state = BridgeState("main", "switch", "switch", "on", None, "2026-08-27T00:00:00Z")
+        return BridgeDevice(
+            device_id=device_id,
+            location_id=location_id,
+            room_id=room,
+            name=name,
+            device_type="Switch",
+            online=True,
+            states={state.key: state},
         )
 
     def patch_registry(

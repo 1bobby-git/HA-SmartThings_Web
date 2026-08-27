@@ -13,6 +13,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.util import slugify
 
 from .bridge_client import (
     BridgeAuthError,
@@ -327,6 +328,17 @@ def _migrate_entity_registry(
         number_state_ids_by_device,
     )
 
+    device_room_slugs: dict[str, str | None] = {}
+    location_id = entry.data[CONF_LOCATION_ID]
+    for device_id, device in inventory.devices.items():
+        if device.location_id != location_id or not device.room_id:
+            continue
+        room = inventory.rooms.get(device.room_id)
+        if room is None or room[0] != location_id:
+            device_room_slugs[device_id] = None
+            continue
+        device_room_slugs[device_id] = slugify(room[1]) or None
+
     for entity_entry in registry_entries:
         if entity_entry.platform != DOMAIN:
             continue
@@ -454,6 +466,24 @@ def _migrate_entity_registry(
             current_entity_ids.discard(registry_entity_id)
             current_entity_ids.add(new_entity_id)
             registry_entity_id = new_entity_id
+        room_free_entity_id = _room_prefixed_generated_entity_id(
+            entity_entry,
+            current_device_ids,
+            device_room_slugs,
+            current_entity_ids,
+        )
+        if (
+            room_free_entity_id is not None
+            and room_free_entity_id != registry_entity_id
+            and registry.async_get(room_free_entity_id) is None
+        ):
+            registry.async_update_entity(
+                registry_entity_id,
+                new_entity_id=room_free_entity_id,
+            )
+            current_entity_ids.discard(registry_entity_id)
+            current_entity_ids.add(room_free_entity_id)
+            registry_entity_id = room_free_entity_id
         new_unique_id = old_to_new.get(entity_entry.unique_id)
         if new_unique_id is None:
             continue
@@ -483,6 +513,49 @@ def _deduplicated_generated_entity_id(
         return None
     candidate = f"{domain}.{'_'.join(parts[1:])}"
     return candidate if candidate not in current_entity_ids else None
+
+
+def _room_prefixed_generated_entity_id(
+    entity_entry: object,
+    current_device_ids: set[str],
+    device_room_slugs: dict[str, str | None],
+    current_entity_ids: set[str],
+) -> str | None:
+    """Drop a frozen leading room-name slug from a scoped automatic entity ID.
+
+    Entity IDs never regenerate on their own, so devices whose SmartThings
+    name once carried the room prefix keep stale IDs like
+    switch.deiteorum_status_home even after inventory names are corrected.
+    This only rewrites this integration's own entities that belong to a known
+    device of this location, when the entity was not renamed by the user, and
+    only when the remaining object ID stays non-empty and unique.
+    """
+    unique_id = getattr(entity_entry, "unique_id", "")
+    if not any(
+        unique_id == device_id or unique_id.startswith(f"{device_id}_")
+        for device_id in current_device_ids
+    ):
+        return None
+    if getattr(entity_entry, "name", None) is not None:
+        return None
+    device_id_owner = getattr(entity_entry, "device_id", None)
+    room_slug = device_room_slugs.get(device_id_owner)
+    if not room_slug:
+        return None
+    domain_part = getattr(entity_entry, "domain", "") or ""
+    object_id = getattr(entity_entry, "entity_id", "").partition(".")[2]
+    room_prefix = f"{room_slug}_"
+    if not object_id.startswith(room_prefix):
+        return None
+    rest = object_id[len(room_prefix):]
+    if not rest:
+        return None
+    candidate = f"{domain_part}.{rest}"
+    if candidate == getattr(entity_entry, "entity_id", ""):
+        return None
+    if candidate in current_entity_ids:
+        return None
+    return candidate
 
 
 def _stale_fan_unique_id(
