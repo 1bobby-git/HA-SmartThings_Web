@@ -44,6 +44,10 @@ const createMinimalRepo = async () => {
   await writeFixture(repoRoot, "tsconfig.build.json", "{}\n");
   await writeFixture(repoRoot, "bridge/src/main.ts", "export const main = 1;\n");
   await writeFixture(repoRoot, "bridge/src/nested/runtime.ts", "export const runtime = 1;\n");
+  await writeFixture(repoRoot, "tools/haos-live-control-event-benchmark.ts", "export const cli = 1;\n");
+  await writeFixture(repoRoot, "tools/haos-live-control-event-benchmark-core.ts", "export const core = 1;\n");
+  await writeFixture(repoRoot, "tools/haos-live-control-benchmark.ts", "must not copy");
+  await writeFixture(repoRoot, "tools/fixtures/secret.json", "must not copy");
   await writeFixture(repoRoot, "bridge/tests/main.test.ts", "must not copy");
   await writeFixture(repoRoot, "bridge/src/fixtures/secret.json", "must not copy");
   await writeFixture(repoRoot, "bridge/src/dist/generated.js", "must not copy");
@@ -60,7 +64,7 @@ const createMinimalRepo = async () => {
   await writeFixture(
     repoRoot,
     "addon/smartthings_web_bridge/Dockerfile",
-    "FROM scratch\nCOPY package.json package-lock.json tsconfig.json ./\nCOPY tsconfig.build.json ./\nCOPY bridge ./bridge\nCOPY rootfs /\n",
+    "FROM scratch\nCOPY package.json package-lock.json tsconfig.json ./\nCOPY tsconfig.build.json ./\nCOPY bridge ./bridge\nCOPY tools ./tools\nCOPY rootfs /\n",
   );
   await writeFixture(repoRoot, "addon/smartthings_web_bridge/DOCS.md", "# Docs\n");
   await writeFixture(repoRoot, "addon/smartthings_web_bridge/rootfs/etc/service/run", "#!/bin/sh\n");
@@ -125,6 +129,10 @@ describe("packageAddon", { timeout: 30_000 }, () => {
     expect(paths).toContain("tsconfig.build.json");
     expect(paths).toContain("bridge/src/main.ts");
     expect(paths).toContain("bridge/src/nested/runtime.ts");
+    expect(paths).toContain("tools/haos-live-control-event-benchmark.ts");
+    expect(paths).toContain("tools/haos-live-control-event-benchmark-core.ts");
+    expect(paths).not.toContain("tools/haos-live-control-benchmark.ts");
+    expect(paths).not.toContain("tools/fixtures/secret.json");
     expect(paths).toContain("bridge/src/secret/kept.ts");
     expect(paths).toContain("bridge/src/profile/kept.ts");
     expect(paths).toContain("bridge/src/runtime-data/kept.ts");

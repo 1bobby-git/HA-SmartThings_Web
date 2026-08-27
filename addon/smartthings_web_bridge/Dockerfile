@@ -70,6 +70,7 @@ COPY tsconfig.build.json ./
 COPY addon-package-manifest.json ./
 RUN npm ci
 COPY bridge ./bridge
+COPY tools ./tools
 RUN npm run build
 RUN npm prune --omit=dev
 

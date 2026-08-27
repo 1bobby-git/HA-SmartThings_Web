@@ -6,6 +6,10 @@
     "noEmit": false,
     "types": ["node"]
   },
-  "include": ["bridge/src/**/*.ts"],
+  "include": [
+    "bridge/src/**/*.ts",
+    "tools/haos-live-control-event-benchmark.ts",
+    "tools/haos-live-control-event-benchmark-core.ts"
+  ],
   "exclude": ["bridge/tests/**/*.ts", "tests/**/*.ts", "dist", "node_modules"]
 }

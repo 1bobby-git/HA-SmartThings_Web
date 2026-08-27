@@ -47,6 +47,10 @@ const ADDON_NAME = "smartthings_web_bridge";
 const MANIFEST_NAME = "addon-package-manifest.json";
 const ROOT_FILES = ["package.json", "package-lock.json", "tsconfig.json", "tsconfig.build.json"];
 const ROOT_TREES = ["bridge/src", `addon/${ADDON_NAME}`];
+const ROOT_TOOL_FILES = [
+  "tools/haos-live-control-event-benchmark.ts",
+  "tools/haos-live-control-event-benchmark-core.ts",
+];
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 const EXCLUDED_SEGMENTS = new Set([
   ".git",
@@ -186,6 +190,15 @@ const collectSources = async (repoRoot: string) => {
     files.push(await sourceFileFromStats(sourcePath, relativePath, stats));
   }
 
+  for (const relativePath of ROOT_TOOL_FILES) {
+    const sourcePath = join(repoRoot, relativePath);
+    const stats = await assertRegularSource(sourcePath, relativePath);
+    if (!stats.isFile()) {
+      throw new Error(`Required source is not a file: ${relativePath}`);
+    }
+    files.push(await sourceFileFromStats(sourcePath, relativePath, stats));
+  }
+
   files.push(...(await collectTree(repoRoot, "bridge/src")));
   files.push(...(await collectTree(repoRoot, `addon/${ADDON_NAME}`, "")));
 
@@ -301,6 +314,7 @@ const canonicalPackageBytes = (relativePath: string, sourceBytes: Buffer): Buffe
 
 const isPackageTextPath = (relativePath: string) =>
   ROOT_FILES.includes(relativePath) ||
+  ROOT_TOOL_FILES.includes(relativePath) ||
   relativePath.startsWith("bridge/src/") ||
   relativePath.startsWith("rootfs/") ||
   relativePath === "CHANGELOG.md" ||
@@ -355,6 +369,7 @@ export async function packageAddon(options: PackageAddonOptions): Promise<Packag
   assertNoDestinationCollisions(sources);
   assertNoDestinationSourceOverlap(paths.canonicalPackageDir, [
     ...ROOT_FILES.map((sourcePath) => join(repoRoot, sourcePath)),
+    ...ROOT_TOOL_FILES.map((sourcePath) => join(repoRoot, sourcePath)),
     ...ROOT_TREES.map((sourcePath) => join(repoRoot, sourcePath)),
     ...sources.map((source) => source.sourcePath),
     ...sources.map((source) => source.realPath),

@@ -14,7 +14,7 @@ describe("package build contract", () => {
     expect(packageJson.scripts?.build).not.toContain("--noEmit");
   });
 
-  test("build tsconfig emits only bridge source into dist", () => {
+  test("build tsconfig emits bridge runtime and live event benchmark into dist", () => {
     expect(existsSync("tsconfig.build.json")).toBe(true);
 
     const tsconfig = readJson("tsconfig.build.json") as {
@@ -26,7 +26,11 @@ describe("package build contract", () => {
     expect(tsconfig.compilerOptions?.rootDir).toBe(".");
     expect(tsconfig.compilerOptions?.outDir).toBe("dist");
     expect(tsconfig.compilerOptions?.noEmit).not.toBe(true);
-    expect(tsconfig.include).toEqual(["bridge/src/**/*.ts"]);
+    expect(tsconfig.include).toEqual([
+      "bridge/src/**/*.ts",
+      "tools/haos-live-control-event-benchmark.ts",
+      "tools/haos-live-control-event-benchmark-core.ts",
+    ]);
     expect(tsconfig.exclude).toContain("bridge/tests/**/*.ts");
     expect(tsconfig.exclude).toContain("tests/**/*.ts");
   });
