@@ -216,6 +216,89 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(manager.openCommandPage).not.toHaveBeenCalled();
   });
 
+  test("treats rejected native device commands as failed without falling back to UI clicks", async () => {
+    const keeper = new FakeCommandPage() as FakeCommandPage & {
+      evaluate: <Result, Argument>(
+        pageFunction: (argument: Argument) => Result | Promise<Result>,
+        argument: Argument
+      ) => Promise<Result>;
+    };
+    keeper.evaluate = nativeClientEvaluate(vi.fn(async () => {
+      throw new Error("smartthings_patch_rejected");
+    }));
+    const diagnostics: string[] = [];
+    const manager = {
+      currentKeeper: vi.fn(() => keeper),
+      openCommandPage: vi.fn(async () => new FakeCommandPage())
+    };
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => manager,
+      undefined,
+      {
+        onDiagnostic: (stage) => diagnostics.push(stage),
+        resolveRawDeviceId: () => "raw-device",
+        resolveRawIdentifier: (alias) => ({ identifier_main: "main", identifier_switch: "switch" })[alias]
+      }
+    );
+
+    await expect(executor.executeDeviceAction({
+      action: "on",
+      arguments: [],
+      attribute: "switch",
+      capability: "identifier_switch",
+      command: "on",
+      component: "identifier_main",
+      controlId: "identifier_toggle",
+      deviceId: "dev_001",
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      nativeCommand: "on"
+    })).rejects.toThrowError("command_execution_failed");
+
+    expect(diagnostics).toEqual(["foreground_requested", "native_command_failed"]);
+    expect(manager.openCommandPage).not.toHaveBeenCalled();
+  });
+
+  test("treats negative native device command results as failed", async () => {
+    const keeper = new FakeCommandPage() as FakeCommandPage & {
+      evaluate: <Result, Argument>(
+        pageFunction: (argument: Argument) => Result | Promise<Result>,
+        argument: Argument
+      ) => Promise<Result>;
+    };
+    keeper.evaluate = nativeClientEvaluate(
+      vi.fn(async () => ({ data: { results: [{ status: "FAILURE" }] } }))
+    );
+    const manager = {
+      currentKeeper: vi.fn(() => keeper),
+      openCommandPage: vi.fn(async () => new FakeCommandPage())
+    };
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => manager,
+      undefined,
+      {
+        resolveRawDeviceId: () => "raw-device",
+        resolveRawIdentifier: (alias) => ({ identifier_main: "main", identifier_switch: "switch" })[alias]
+      }
+    );
+
+    await expect(executor.executeDeviceAction({
+      action: "on",
+      arguments: [],
+      attribute: "switch",
+      capability: "identifier_switch",
+      command: "on",
+      component: "identifier_main",
+      controlId: "identifier_toggle",
+      deviceId: "dev_001",
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      nativeCommand: "on"
+    })).rejects.toThrowError("command_execution_failed");
+
+    expect(manager.openCommandPage).not.toHaveBeenCalled();
+  });
+
   test("uses a client reference captured when the SmartThings app initialized it", async () => {
     const keeper = new FakeCommandPage() as FakeCommandPage & {
       evaluate: <Result, Argument>(
@@ -500,7 +583,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     }
   });
 
-  test("returns after native patch invocation without waiting for the async response", async () => {
+  test("waits for native dispatch confirmation before marking a command sent", async () => {
     const keeper = new FakeCommandPage() as FakeCommandPage & {
       evaluate: <Result, Argument>(
         pageFunction: (argument: Argument) => Result | Promise<Result>,
@@ -545,11 +628,14 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     });
     try {
       await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
-      await vi.waitFor(() => expect(resolved).toBe(true), { timeout: 250 });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(resolved).toBe(false);
     } finally {
       response.resolve();
       await command;
     }
+    expect(resolved).toBe(true);
   });
 
   test("uses exact UI control without probing native dispatch when no web command metadata was observed", async () => {

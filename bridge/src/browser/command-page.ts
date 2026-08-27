@@ -684,10 +684,15 @@ export class SmartThingsWebUiCommandExecutor {
             ...(command.arguments.length > 0 ? { arguments: command.arguments } : {})
           };
           try {
-            const response = service.patch(command.deviceId, {
-              query: { execute: true, commands: [nativeCommand] }
-            });
-            void Promise.resolve(response).catch(() => undefined);
+            const response = await withTimeout(
+              Promise.resolve(
+                service.patch(command.deviceId, {
+                  query: { execute: true, commands: [nativeCommand] }
+                })
+              ),
+              5_000
+            );
+            if (patchFailed(response)) return "failed";
           } catch {
             return "failed";
           }
@@ -724,6 +729,44 @@ export class SmartThingsWebUiCommandExecutor {
 
           function isPageRecord(value: unknown): value is Record<string, unknown> {
             return typeof value === "object" && value !== null && !Array.isArray(value);
+          }
+
+          function patchFailed(response: unknown): boolean {
+            if (!isPageRecord(response)) return false;
+            const status = response.status;
+            if (typeof status === "string" && /(?:fail|error|reject|denied)/iu.test(status)) {
+              return true;
+            }
+            const statusCode = response.statusCode ?? response.code;
+            if (typeof statusCode === "number" && statusCode >= 400) return true;
+            const ok = response.ok;
+            if (typeof ok === "boolean" && !ok) return true;
+            const data = isPageRecord(response.data) ? response.data : undefined;
+            const results = Array.isArray(data?.results) ? data.results : [];
+            return results.some((result) => {
+              if (!isPageRecord(result)) return false;
+              const resultStatus = result.status;
+              return (
+                typeof resultStatus === "string" &&
+                !/^(?:success|accepted|complete|completed)$/iu.test(resultStatus)
+              );
+            });
+          }
+
+          async function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
+            return await new Promise<T>((resolve, reject) => {
+              const timeout = setTimeout(() => reject(new Error("timeout")), milliseconds);
+              promise.then(
+                (value) => {
+                  clearTimeout(timeout);
+                  resolve(value);
+                },
+                (error: unknown) => {
+                  clearTimeout(timeout);
+                  reject(error);
+                }
+              );
+            });
           }
         },
         {
