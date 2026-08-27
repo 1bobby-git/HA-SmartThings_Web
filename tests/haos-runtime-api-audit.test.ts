@@ -7,6 +7,7 @@ import {
   parseProcTcpTable,
   parseRuntimeProcessTable,
   parseSocketFdListings,
+  retryVolatileRuntimeRead,
   selectRuntimeProcesses,
   summarizeRuntimeApiAudit
 } from "../tools/haos-runtime-api-audit-core.js";
@@ -128,6 +129,28 @@ describe("HAOS runtime API-free audit", () => {
         "runtime_response_invalid"
       )
     ).toThrowError("runtime_response_invalid");
+  });
+
+  test("retries a volatile process snapshot without weakening the final result", async () => {
+    let attempts = 0;
+    await expect(
+      retryVolatileRuntimeRead(async () => {
+        attempts += 1;
+        if (attempts < 3) {
+          throw new Error("process_disappeared");
+        }
+        return "stable";
+      })
+    ).resolves.toBe("stable");
+    expect(attempts).toBe(3);
+  });
+
+  test("fails after the bounded volatile process retries are exhausted", async () => {
+    await expect(
+      retryVolatileRuntimeRead(async () => {
+        throw new Error("process_disappeared");
+      }, 2)
+    ).rejects.toThrowError("process_disappeared");
   });
 
   test("rejects malformed process and TCP tables", () => {

@@ -13,6 +13,7 @@ import {
   parseProcTcpTable,
   parseRuntimeProcessTable,
   parseSocketFdListings,
+  retryVolatileRuntimeRead,
   selectRuntimeProcesses,
   summarizeRuntimeApiAudit,
   type RuntimeSocketSample
@@ -98,6 +99,10 @@ async function main(): Promise<void> {
 }
 
 async function collectSample(options: CliOptions): Promise<RuntimeSocketSample> {
+  return retryVolatileRuntimeRead(() => collectSampleOnce(options));
+}
+
+async function collectSampleOnce(options: CliOptions): Promise<RuntimeSocketSample> {
   const processTable = parseRuntimeProcessTable(
     parseGuestExecText(
       await runSsh(options.sshTarget, processCommand(options)),

@@ -84,6 +84,24 @@ export function haosAddonContainerName(addonSlug: string): string {
   return `app_${addonSlug}`;
 }
 
+export async function retryVolatileRuntimeRead<T>(
+  read: () => Promise<T>,
+  attempts = 3
+): Promise<T> {
+  if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 10) {
+    throw new Error("runtime_retry_attempts_invalid");
+  }
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await read();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
 export function parseGuestExecText(
   raw: string,
   commandFailure: string,
