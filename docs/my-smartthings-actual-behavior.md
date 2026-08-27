@@ -75,8 +75,9 @@ compartments and appliance values that are distributed across components.
 
 Version 0.1.95 observes that naturally loaded response once per new Chromium
 context after installing the existing CDP network observer, redacts it, merges
-only metadata and state into DeviceStore, publishes one inventory transition,
-and closes the temporary Advanced page. Component and capability identifiers
+only metadata and state into DeviceStore, publishes each accepted snapshot as
+one atomic inventory transition, and closes the temporary Advanced page.
+Component and capability identifiers
 remain aliases; only a small allowlist of semantic roles such as cooler,
 freezer, pantry, ice maker, hub, setup, and Bixby is carried separately for
 localized Home Assistant labels. `updatedAt` ordering prevents the bootstrap
