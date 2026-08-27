@@ -136,6 +136,13 @@ const ID_PATTERN = /^(?:loc|dev|identifier)_[A-Za-z0-9]{3,64}$/u;
 const TOKEN_PATTERN = /^[A-Za-z0-9_.:-]{1,160}$/u;
 const INVENTORY_PERSIST_COALESCE_MS = 25;
 const INVENTORY_PERSIST_RETRY_MS = 250;
+const CAMERA_IMAGE_ATTRIBUTES = new Set([
+  "captureTime",
+  "clip",
+  "image",
+  "imageTransferProgress",
+  "stream"
+]);
 
 export class DeviceStore {
   readonly #locations = new Map<string, BridgeLocation>();
@@ -247,7 +254,7 @@ export class DeviceStore {
         type: device.type,
         online: device.online,
         ...(device.presentation ? { presentation: { ...device.presentation } } : {}),
-        states: [...device.states.values()].sort(byState).map(cloneState),
+        states: snapshotDeviceStates(device).sort(byState).map(cloneState),
         ...(device.controls.size > 0
           ? { controls: [...device.controls.values()].sort(byId).map(cloneControl) }
           : {})
@@ -706,6 +713,27 @@ export class DeviceStore {
       .run(JSON.stringify(this.snapshot()), new Date().toISOString());
     this.#persistPending = false;
   }
+}
+
+function snapshotDeviceStates(device: MutableDevice): BridgeDeviceState[] {
+  const states = [...device.states.values()];
+  const attributes = new Set(states.map((state) => state.attribute));
+  if (cameraImageIdentity(device)) return states;
+  if (
+    (["clip", "stream"] as const).some((attribute) => attributes.has(attribute)) &&
+    (["captureTime", "image"] as const).some((attribute) => attributes.has(attribute))
+  ) {
+    return states;
+  }
+  return states.filter((state) => !CAMERA_IMAGE_ATTRIBUTES.has(state.attribute));
+}
+
+function cameraImageIdentity(device: MutableDevice): boolean {
+  const identity = `${device.name} ${device.type ?? ""} ${device.presentation?.assetType ?? ""}`.toLowerCase();
+  return (
+    /\b(?:camera|cam|cctv|homecam)\b/u.test(identity) ||
+    /(?:보안 카메라|카메라|홈캠)/u.test(identity)
+  );
 }
 
 function parsePersistedInventory(value: unknown): BridgeInventory | undefined {

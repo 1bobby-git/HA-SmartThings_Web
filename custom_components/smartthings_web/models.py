@@ -609,6 +609,23 @@ REFRESH_ATTRIBUTES = {
 
 IMAGE_ATTRIBUTES = {"captureTime", "clip", "image", "imageTransferProgress", "stream"}
 
+CAMERA_DEVICE_TYPES = {
+    "camera",
+    "camera_security",
+    "cctv",
+    "security_camera",
+}
+
+CAMERA_IDENTITY_TERMS = {
+    "camera",
+    "cctv",
+    "homecam",
+    "security cam",
+    "보안 카메라",
+    "카메라",
+    "홈캠",
+}
+
 MEDIA_ATTRIBUTES = {
     "audioTrackData",
     "mute",
@@ -724,8 +741,16 @@ def _is_observed_refresh_control(control: BridgeControl) -> bool:
 
 
 def is_image_device(device: BridgeDevice) -> bool:
-    """Return whether a device has camera/image-shaped state."""
-    return device_has_any_state(device, IMAGE_ATTRIBUTES)
+    """Return whether pushed image state belongs to an actual camera device."""
+    attributes = {state.attribute for state in device.states.values()}
+    if not attributes & IMAGE_ATTRIBUTES:
+        return False
+    if _device_has_camera_identity(device):
+        return True
+    return bool(
+        attributes & {"clip", "stream"}
+        and attributes & {"captureTime", "image"}
+    )
 
 
 def is_media_device(device: BridgeDevice) -> bool:
@@ -1016,13 +1041,18 @@ def _state_attribute_key(state: BridgeState) -> str:
 
 
 def sensor_state_allowed(
-    attribute: str, *, firmware: bool = False, primary_domain: bool = False
+    attribute: str,
+    *,
+    firmware: bool = False,
+    primary_domain: bool = False,
+    image_device: bool = True,
 ) -> bool:
     """Return whether a normalized state needs a sensor representation."""
     return (
         attribute != "switch"
         and attribute not in BINARY_ATTRIBUTES
         and attribute not in EVENT_ATTRIBUTES
+        and (image_device or attribute not in IMAGE_ATTRIBUTES)
         and not firmware
         and not primary_domain
     )
@@ -1216,6 +1246,28 @@ def _device_metadata_value(state: BridgeState | None) -> str | None:
     return value if 0 < len(value) <= 255 else None
 
 
+def signal_metrics_native_value(value: Any, updated_at: str | None = None) -> Any:
+    """Return the SmartThings Web display string for received signal metrics."""
+    if isinstance(value, str):
+        return value if len(value) <= 255 else "data"
+    if not isinstance(value, dict):
+        return sensor_native_value(value)
+    lqi = _number_from_keys(value, "lqi", "LQI")
+    rssi = _number_from_keys(value, "rssi", "RSSI")
+    if lqi is None and rssi is None:
+        return "data"
+    parts: list[str] = []
+    timestamp = _signal_metrics_timestamp(value, updated_at)
+    if timestamp:
+        parts.append(f"KST-9: {timestamp}")
+    if lqi is not None:
+        parts.append(f"LQI: {_compact_number(lqi)}")
+    if rssi is not None:
+        parts.append(f"RSSI: {_compact_number(rssi)}dbm")
+    result = " ".join(parts)
+    return result if len(result) <= 255 else "data"
+
+
 def sensor_native_value(value: Any) -> Any:
     """Return a HA-safe primary sensor value without dropping structured content."""
     if isinstance(value, bool):
@@ -1229,6 +1281,21 @@ def sensor_native_value(value: Any) -> Any:
     if isinstance(value, dict):
         return "data"
     return None
+
+
+def _signal_metrics_timestamp(value: dict[str, Any], fallback: str | None) -> str | None:
+    for key in ("timestamp", "updatedAt", "time"):
+        candidate = value.get(key)
+        if isinstance(candidate, str):
+            parsed = _timestamp(candidate)
+            if parsed is not None:
+                return parsed.strftime("%Y/%m/%d %H:%M")
+    parsed = _timestamp(fallback)
+    return parsed.strftime("%Y/%m/%d %H:%M") if parsed is not None else None
+
+
+def _compact_number(value: float) -> str:
+    return str(int(value)) if value.is_integer() else f"{value:g}"
 
 
 def sensor_extra_attributes(value: Any) -> dict[str, Any]:
@@ -1618,6 +1685,23 @@ def _control_has_fan_semantics(control: BridgeControl) -> bool:
 
 def _device_has_fan_identity(device: BridgeDevice) -> bool:
     return _text_has_fan_identity(device.name, device.device_type)
+
+
+def _device_has_camera_identity(device: BridgeDevice) -> bool:
+    device_type = _normalized_device_type(device.device_type)
+    asset_type = (
+        _normalized_device_type(device.presentation.asset_type)
+        if device.presentation
+        else ""
+    )
+    if device_type in CAMERA_DEVICE_TYPES or asset_type in CAMERA_DEVICE_TYPES:
+        return True
+    haystack = " ".join(
+        value.lower()
+        for value in (device.name, device.device_type, asset_type)
+        if isinstance(value, str)
+    )
+    return any(term in haystack for term in CAMERA_IDENTITY_TERMS)
 
 
 def _text_has_fan_identity(*values: str | None) -> bool:

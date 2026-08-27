@@ -1351,6 +1351,101 @@ describe("DeviceStore", () => {
     expect(store.snapshot().devices).toHaveLength(0);
   });
 
+  test("exports the living-room window sensor without stale camera states", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-window-sensor-shape-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const seeded = new DeviceStore({ sqlitePath });
+      seeded.close();
+      const db = new DatabaseSync(sqlitePath);
+      db.prepare(
+        "INSERT INTO normalized_inventory (schema_version, inventory_json, persisted_at) VALUES (1, ?, ?)"
+      ).run(
+        JSON.stringify({
+          schemaVersion: 1,
+          sequence: 7,
+          locations: [{ id: "loc_001", name: "Home" }],
+          rooms: [],
+          scenes: [],
+          devices: [
+            {
+              id: "dev_window001",
+              locationId: "loc_001",
+              roomId: null,
+              name: "거실창문센서",
+              type: "custom_window_h",
+              online: true,
+              states: [
+                persistedState("contactSensor", "contact", "closed", null, "2026-08-25T02:11:34Z"),
+                persistedState("battery", "battery", 91, "%", "2026-04-01T17:21:43Z"),
+                persistedState(
+                  "legendabsolute60149.signalMetrics",
+                  "signalMetrics",
+                  "KST-9: 2026/04/01 11:28 LQI: 184  RSSI: -95dbm",
+                  null,
+                  "2026-04-01T11:28:55Z"
+                ),
+                persistedState("imageCapture", "image", "stale", null, "2026-04-01T11:28:55Z"),
+                persistedState("imageCapture", "imageTransferProgress", 100, "%", "2026-04-01T11:28:55Z")
+              ],
+              controls: [
+                {
+                  id: "identifier_refresh",
+                  kind: "button",
+                  label: "Refresh",
+                  component: "main",
+                  capability: "refresh",
+                  attribute: "refresh",
+                  command: "refresh",
+                  commands: ["refresh"]
+                }
+              ]
+            },
+            {
+              id: "dev_camera001",
+              locationId: "loc_001",
+              roomId: null,
+              name: "홈카메라 360",
+              type: "camera_security",
+              online: true,
+              states: [
+                persistedState("imageCapture", "image", "metadata", null, "2026-08-25T03:16:00Z"),
+                persistedState("imageCapture", "imageTransferProgress", 100, "%", "2026-08-25T03:16:00Z")
+              ]
+            }
+          ]
+        }),
+        "2026-08-27T00:00:00.000Z"
+      );
+      db.close();
+
+      const restored = new DeviceStore({ sqlitePath });
+      const snapshot = restored.snapshot();
+      const window = snapshot.devices.find((device) => device.id === "dev_window001");
+      const camera = snapshot.devices.find((device) => device.id === "dev_camera001");
+
+      expect(window?.states.map((state) => [state.attribute, state.value, state.unit])).toEqual([
+        ["battery", 91, "%"],
+        ["contact", "closed", null],
+        ["signalMetrics", "KST-9: 2026/04/01 11:28 LQI: 184  RSSI: -95dbm", null]
+      ]);
+      expect(window?.controls).toEqual([
+        expect.objectContaining({ kind: "button", label: "Refresh", command: "refresh" })
+      ]);
+      expect(camera?.states.map((state) => state.attribute)).toEqual([
+        "image",
+        "imageTransferProgress"
+      ]);
+      restored.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
   test("restores old schemaVersion 1 inventory without scenes or controls", () => {
     const root = mkdtempSync(join(tmpdir(), "stw-device-store-old-"));
     try {
@@ -1396,6 +1491,23 @@ describe("DeviceStore", () => {
     }
   });
 });
+
+function persistedState(
+  capability: string,
+  attribute: string,
+  value: null | number | string,
+  unit: string | null,
+  updatedAt: string
+): Record<string, unknown> {
+  return {
+    component: "main",
+    capability,
+    attribute,
+    value,
+    unit,
+    updatedAt
+  };
+}
 
 function advancedComponent(
   id: string,

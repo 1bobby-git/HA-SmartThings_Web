@@ -81,12 +81,18 @@ class SmartThingsWebButton(SmartThingsWebDeviceEntity, ButtonEntity):
     ) -> None:
         self.control = control
         suffix = f"button_{control.control_id}"
+        refresh = any(
+            candidate.control_id == control.control_id
+            for candidate in refresh_controls(device)
+        )
         super().__init__(
             runtime,
             device,
             suffix,
-            control_label(control, "Button"),
+            None if refresh else control_label(control, "Button"),
         )
+        if refresh:
+            self._attr_translation_key = "refresh"
 
     @property
     def available(self) -> bool:

@@ -43,6 +43,10 @@ sys.modules["homeassistant.core"] = core
 helpers = sys.modules.setdefault("homeassistant.helpers", ModuleType("homeassistant.helpers"))
 helpers.__path__ = []  # type: ignore[attr-defined]
 
+entity_registry = ModuleType("homeassistant.helpers.entity_registry")
+entity_registry.async_get = lambda _hass: None  # type: ignore[attr-defined]
+sys.modules["homeassistant.helpers.entity_registry"] = entity_registry
+
 device_registry = ModuleType("homeassistant.helpers.device_registry")
 
 

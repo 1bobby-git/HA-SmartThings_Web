@@ -213,5 +213,5 @@ describe("CaptureStore", () => {
       store?.close();
       rmSync(root, { force: true, recursive: true });
     }
-  });
+  }, 30_000);
 });

@@ -104,6 +104,9 @@
       "smoke": { "name": "연기" },
       "carbon_monoxide": { "name": "일산화탄소" }
     },
+    "button": {
+      "refresh": { "name": "새로고침" }
+    },
     "update": {
       "firmware": { "name": "펌웨어" }
     },

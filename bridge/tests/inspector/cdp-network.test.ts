@@ -420,6 +420,39 @@ describe("installCdpNetworkObserver", () => {
     expect(JSON.stringify(advanced.mock.calls)).not.toContain("raw-device-001");
   });
 
+  test("emits same-origin Advanced hub device snapshots for read-only enrichment", async () => {
+    const session = new FakeSession();
+    const write = vi.fn();
+    const advanced = vi.fn();
+    session.bodyResult = {
+      body: JSON.stringify({ items: [{ deviceId: "dev_001", type: "HUB" }] }),
+      base64Encoded: false
+    };
+
+    await installCdpNetworkObserver(session, { write }, (value) => value, {
+      onSmartThingsAdvancedDeviceSnapshot: advanced
+    });
+    await session.emit("Network.requestWillBeSent", {
+      requestId: "advanced-hub-devices",
+      request: { method: "GET" }
+    });
+    await session.emit("Network.responseReceived", {
+      requestId: "advanced-hub-devices",
+      response: {
+        mimeType: "application/json",
+        url: "https://my.smartthings.com/advanced/cupcake-api/api/devices?type=HUB"
+      },
+      type: "Fetch"
+    });
+    await session.emit("Network.loadingFinished", { requestId: "advanced-hub-devices" });
+
+    expect(advanced).toHaveBeenCalledOnce();
+    expect(advanced).toHaveBeenCalledWith(
+      { items: [{ deviceId: "dev_001", type: "HUB" }] },
+      "https://my.smartthings.com/advanced/cupcake-api/api/devices?type=HUB"
+    );
+  });
+
   test("does not emit non-get advanced requests or non-SmartThings response bodies", async () => {
     const session = new FakeSession();
     const write = vi.fn();

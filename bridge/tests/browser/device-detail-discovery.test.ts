@@ -83,6 +83,22 @@ describe("DeviceDetailDiscovery", () => {
       detailSettleMs: 5_000
     });
   });
+
+  test("does not treat stray image attributes on a window sensor as a camera", async () => {
+    const inspectDeviceDetails = vi.fn(async () => undefined);
+    const discovery = new DeviceDetailDiscovery({
+      inventory: () => windowSensorInventory(),
+      inspector: { inspectDeviceDetails },
+      canInspect: () => true
+    });
+
+    expect(await discovery.runOne()).toBe("inspected");
+    expect(inspectDeviceDetails).toHaveBeenCalledWith({
+      deviceName: "거실창문센서",
+      locationId: "loc_001",
+      locationNames: { loc_001: "Home" }
+    });
+  });
 });
 
 function inventory(): BridgeInventory {
@@ -157,6 +173,45 @@ function cameraInventory(): BridgeInventory {
             component: "main",
             capability: "soundDetection",
             attribute: "sound"
+          }
+        ]
+      }
+    ],
+    scenes: []
+  };
+}
+
+function windowSensorInventory(): BridgeInventory {
+  return {
+    schemaVersion: 1,
+    sequence: 1,
+    locations: [{ id: "loc_001", name: "Home" }],
+    rooms: [],
+    devices: [
+      {
+        id: "dev_window",
+        locationId: "loc_001",
+        roomId: null,
+        name: "거실창문센서",
+        type: "custom_window_h",
+        online: true,
+        presentation: { assetType: "custom_window_h" },
+        states: [
+          {
+            component: "main",
+            capability: "contactSensor",
+            attribute: "contact",
+            value: "closed",
+            unit: null,
+            updatedAt: "2026-08-25T02:11:34Z"
+          },
+          {
+            component: "main",
+            capability: "imageCapture",
+            attribute: "imageTransferProgress",
+            value: 100,
+            unit: "%",
+            updatedAt: "2026-04-01T11:28:55Z"
           }
         ]
       }

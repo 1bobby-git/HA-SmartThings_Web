@@ -90,9 +90,16 @@ const cameraImageAttributes = new Set([
 ]);
 
 function isCameraImageDevice(device: BridgeDevice): boolean {
-  if (device.states.some((state) => cameraImageAttributes.has(state.attribute))) {
+  const attributes = new Set(device.states.map((state) => state.attribute));
+  if (![...attributes].some((attribute) => cameraImageAttributes.has(attribute))) {
+    return false;
+  }
+  const identity = `${device.name} ${device.type ?? ""} ${device.presentation?.assetType ?? ""}`.toLowerCase();
+  if (/\b(?:camera|cam|cctv|homecam)\b/u.test(identity) || /(?:보안 카메라|카메라|홈캠)/u.test(identity)) {
     return true;
   }
-  const identity = `${device.name} ${device.type ?? ""}`.toLowerCase();
-  return /\b(?:camera|cam)\b/u.test(identity) || /카메라/u.test(identity);
+  return (
+    (["clip", "stream"] as const).some((attribute) => attributes.has(attribute)) &&
+    (["captureTime", "image"] as const).some((attribute) => attributes.has(attribute))
+  );
 }

@@ -73,7 +73,10 @@ export function createPersistentContextLaunch(paths: PersistentContextPaths): Pe
         "--no-first-run",
         "--no-default-browser-check",
         "--restore-last-session",
-        "--hide-crash-restore-bubble"
+        "--hide-crash-restore-bubble",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding"
       ]
     }
   };

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.98
+
+- Keep the inactive Chromium keeper and native command dispatcher responsive by launching with explicit background timer, occluded-window, and renderer throttling suppression flags.
+- Cache the recovered authenticated `api/device` service in the live SmartThings page so consecutive native commands do not rescan the webpack module cache.
+- Remove stale camera-image and image-transfer states from non-camera devices while preserving Home Camera image entities; this restores the living-room window sensor to Contact, Battery, Received Signal Metrics, and its observed Refresh button.
+- Preserve the 0.1.97 Advanced HUB enrichment behavior while keeping Cupcake endpoints read-only and excluded from command execution.
+
+## 0.1.97
+
+- Include the Advanced `type=HUB` same-origin device-list GET in the one-shot bootstrap fallback so SmartThings hub metadata can enrich the normalized inventory when the Advanced page does not naturally finish that request.
+- Keep Advanced responses read-only enrichment only; `allowedActions` and Cupcake endpoints remain excluded from command execution and polling.
+
 ## 0.1.96
 
 - Fall back to two bounded same-origin Advanced device-list GETs when the authenticated page does not naturally finish its snapshot request within five seconds; responses are redacted and merged only as bootstrap metadata/state, never used for direct Cupcake commands or polling.

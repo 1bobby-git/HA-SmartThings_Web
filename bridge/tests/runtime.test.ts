@@ -310,7 +310,11 @@ describe("createBridgeRuntime", () => {
       status: 200,
       body: { status: "confirmed", confirmation: "device_event" }
     });
-    expect(context.existingPages.filter((page) => !page.closed)).toHaveLength(2);
+    expect(
+      context.existingPages.filter(
+        (page) => !page.closed && page.url() !== "https://my.smartthings.com/advanced"
+      )
+    ).toHaveLength(2);
   });
 
   test("emits path-free startup stage markers in order", async () => {

@@ -28,10 +28,12 @@ from .models import (
     SmartThingsWebRuntime,
     disambiguated_state_names,
     firmware_states,
+    is_image_device,
     sensor_extra_attributes,
     sensor_native_value,
     sensor_state_allowed,
     sensor_state_owned_by_primary_domain,
+    signal_metrics_native_value,
 )
 
 
@@ -216,12 +218,14 @@ async def async_setup_entry(
         for device in runtime.inventory.devices.values():
             if device.location_id != runtime.location_id:
                 continue
+            image_device = is_image_device(device)
             firmware_keys = {item.key for item in firmware_states(device).values()}
             candidates: list[tuple[BridgeState, SensorDescription]] = []
             for state in device.states.values():
                 if not sensor_state_allowed(
                     state.attribute,
                     firmware=state.key in firmware_keys,
+                    image_device=image_device,
                     primary_domain=sensor_state_owned_by_primary_domain(device, state),
                 ):
                     continue
@@ -314,7 +318,11 @@ class SmartThingsWebSensor(SmartThingsWebEntity, SensorEntity):
     def native_value(self) -> Any:
         """Return the current scalar value."""
         state = self.bridge_state
-        return sensor_native_value(state.value) if state else None
+        if state is None:
+            return None
+        if state.attribute == "signalMetrics":
+            return signal_metrics_native_value(state.value, state.updated_at)
+        return sensor_native_value(state.value)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

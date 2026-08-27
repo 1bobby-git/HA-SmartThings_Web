@@ -33,10 +33,12 @@ from .const import (
 from .entity import device_info_for
 from .models import (
     BridgeInventory,
+    IMAGE_ATTRIBUTES,
     SmartThingsWebRuntime,
     entity_unique_id,
     firmware_states,
     is_fan_device,
+    is_image_device,
     is_media_device,
     number_controls,
     sensor_state_owned_by_primary_domain,
@@ -250,6 +252,7 @@ def _migrate_entity_registry(
     switch_ids: set[str] = set()
     primary_domain_switch_ids: set[str] = set()
     current_fan_ids: set[str] = set()
+    current_image_ids: set[str] = set()
     current_media_ids: set[str] = set()
     current_device_ids: set[str] = set()
     active_number_ids: set[str] = set()
@@ -270,6 +273,8 @@ def _migrate_entity_registry(
         }
         if is_fan_device(device):
             current_fan_ids.add(device.device_id)
+        if is_image_device(device):
+            current_image_ids.add(device.device_id)
         if is_media_device(device):
             current_media_ids.add(device.device_id)
         for state in device.states.values():
@@ -375,6 +380,27 @@ def _migrate_entity_registry(
         ):
             registry.async_remove(entity_entry.entity_id)
             continue
+        if (
+            entity_entry.domain == Platform.IMAGE
+            and _stale_device_domain_unique_id(
+                entity_entry.unique_id,
+                "image",
+                current_device_ids,
+                current_image_ids,
+            )
+        ):
+            registry.async_remove(entity_entry.entity_id)
+            continue
+        if (
+            entity_entry.domain == Platform.SENSOR
+            and _stale_non_image_sensor_unique_id(
+                entity_entry.unique_id,
+                current_device_ids,
+                current_image_ids,
+            )
+        ):
+            registry.async_remove(entity_entry.entity_id)
+            continue
         new_entity_id = _deduplicated_generated_entity_id(
             entity_entry,
             current_device_ids,
@@ -456,6 +482,19 @@ def _unobserved_number_unique_id(
     """Remove old writable numbers that no longer have an observed web slider."""
     return unique_id not in active_number_ids and any(
         unique_id.startswith(f"{device_id}_") for device_id in current_device_ids
+    )
+
+
+def _stale_non_image_sensor_unique_id(
+    unique_id: str,
+    current_device_ids: set[str],
+    current_image_ids: set[str],
+) -> bool:
+    """Remove old image-metadata sensors from devices that are not cameras."""
+    image_suffixes = tuple(f"_{attribute}" for attribute in IMAGE_ATTRIBUTES)
+    return unique_id.endswith(image_suffixes) and any(
+        unique_id.startswith(f"{device_id}_")
+        for device_id in current_device_ids - current_image_ids
     )
 
 

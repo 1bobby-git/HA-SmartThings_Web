@@ -44,6 +44,7 @@ type CommandDiagnosticStage =
   | "native_component_identifier_missing"
   | "native_capability_identifier_missing"
   | "native_command_sent"
+  | "native_command_unavailable"
   | "native_command_failed"
   | "warm_missing"
   | "warm_context_mismatch"
@@ -242,6 +243,7 @@ export class SmartThingsWebUiCommandExecutor {
       this.#diagnostic("native_command_failed");
       throw new Error("command_execution_failed");
     }
+    this.#diagnostic("native_command_unavailable");
     await this.#runForeground(() => {
       this.#diagnostic("foreground_ready");
       return this.#executeDeviceActionFallback(manager, input);
@@ -641,7 +643,9 @@ export class SmartThingsWebUiCommandExecutor {
             Record<PropertyKey, unknown> & {
               webpackChunk_smartthings_cake?: Array<unknown>;
             };
-          let service = findNativeService(
+          const serviceSymbol = Symbol.for("smartthings_web_bridge.api_device_service");
+          let service = nativeService(pageWindow[serviceSymbol]);
+          service ??= findNativeService(
             pageWindow[Symbol.for("smartthings_web_bridge.cake_client")]
           );
           if (!service) {
@@ -665,6 +669,14 @@ export class SmartThingsWebUiCommandExecutor {
             }
           }
           if (!service?.patch) return "unavailable";
+          try {
+            Object.defineProperty(pageWindow, serviceSymbol, {
+              configurable: true,
+              value: service
+            });
+          } catch {
+            // A cache miss only affects speed; command dispatch remains available.
+          }
           const nativeCommand = {
             capability: command.capability,
             command: command.command,
@@ -672,11 +684,10 @@ export class SmartThingsWebUiCommandExecutor {
             ...(command.arguments.length > 0 ? { arguments: command.arguments } : {})
           };
           try {
-            void Promise.resolve(
-              service.patch(command.deviceId, {
-                query: { execute: true, commands: [nativeCommand] }
-              })
-            ).catch(() => undefined);
+            const response = service.patch(command.deviceId, {
+              query: { execute: true, commands: [nativeCommand] }
+            });
+            void Promise.resolve(response).catch(() => undefined);
           } catch {
             return "failed";
           }
@@ -703,6 +714,12 @@ export class SmartThingsWebUiCommandExecutor {
               }
             }
             return undefined;
+          }
+
+          function nativeService(value: unknown): NativeService | undefined {
+            return isPageRecord(value) && typeof value.patch === "function"
+              ? (value as NativeService)
+              : undefined;
           }
 
           function isPageRecord(value: unknown): value is Record<string, unknown> {

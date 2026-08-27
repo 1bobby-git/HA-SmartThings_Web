@@ -64,7 +64,10 @@ describe("KeeperPageManager", () => {
 
     expect(page.evaluateCalls).toHaveLength(1);
     expect(page.evaluateCalls[0]?.[1]).toEqual(ADVANCED_DEVICE_SNAPSHOT_URLS);
-    expect(snapshots).toHaveLength(2);
+    expect(snapshots).toHaveLength(3);
+    expect(ADVANCED_DEVICE_SNAPSHOT_URLS[0]).toBe(
+      "/advanced/cupcake-api/api/devices?type=HUB"
+    );
     expect(snapshots[0]).toEqual({
       url: ADVANCED_DEVICE_SNAPSHOT_URLS[0],
       items: [{ deviceId: "device-0" }]

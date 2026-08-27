@@ -50,6 +50,7 @@ from models import (  # noqa: E402
     sensor_native_value,
     sensor_state_allowed,
     sensor_state_owned_by_primary_domain,
+    signal_metrics_native_value,
     token_values,
 )
 
@@ -512,6 +513,10 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertEqual(sensor_native_value("rssi: -61, lqi: 99"), "rssi: -61, lqi: 99")
         structured = {"rssi": -61, "lqi": 99}
         self.assertEqual(sensor_native_value(structured), "data")
+        self.assertEqual(
+            signal_metrics_native_value(structured, "2026-04-01T11:28:55Z"),
+            "KST-9: 2026/04/01 11:28 LQI: 99 RSSI: -61dbm",
+        )
         self.assertEqual(sensor_extra_attributes(structured), {"value": structured})
 
     def test_play_track_control_label_does_not_match_plain_play(self) -> None:
@@ -549,6 +554,8 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
     def test_capability_helpers_identify_added_platform_surfaces(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")
         device = current.devices["dev_001"]
+        device.name = "Home Camera 360"
+        device.device_type = "camera_security"
         states = [
             BridgeState("main", "signal", "signalMetrics", {"rssi": -61}, None, "2026-08-24T21:10:00Z"),
             BridgeState("main", "media", "playbackStatus", "playing", None, "2026-08-24T21:10:00Z"),
@@ -569,6 +576,58 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertTrue(is_media_device(device))
         self.assertTrue(is_fan_device(device))
         self.assertTrue(is_image_device(device))
+
+    def test_window_sensor_image_artifacts_do_not_create_camera_or_metadata_sensors(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        device.name = "거실창문센서"
+        device.device_type = "NONE"
+        device.presentation = BridgeDevicePresentation(asset_type="custom_window_h")
+        states = [
+            BridgeState("main", "contactSensor", "contact", "closed", None, "2026-08-25T02:11:34Z"),
+            BridgeState("main", "battery", "battery", 91, "%", "2026-04-01T17:21:43Z"),
+            BridgeState(
+                "main",
+                "legendabsolute60149.signalMetrics",
+                "signalMetrics",
+                "KST-9: 2026/04/01 11:28 LQI: 184  RSSI: -95dbm",
+                None,
+                "2026-04-01T11:28:55Z",
+            ),
+            BridgeState("main", "imageCapture", "image", "stale", None, "2026-04-01T11:28:55Z"),
+            BridgeState(
+                "main",
+                "imageCapture",
+                "imageTransferProgress",
+                100,
+                "%",
+                "2026-04-01T11:28:55Z",
+            ),
+        ]
+        device.states = {state.key: state for state in states}
+
+        self.assertFalse(is_image_device(device))
+        self.assertFalse(sensor_state_allowed("image", image_device=False))
+        self.assertFalse(sensor_state_allowed("imageTransferProgress", image_device=False))
+        self.assertTrue(sensor_state_allowed("battery", image_device=False))
+        self.assertTrue(sensor_state_allowed("signalMetrics", image_device=False))
+        self.assertEqual(
+            sensor_native_value(states[2].value),
+            "KST-9: 2026/04/01 11:28 LQI: 184  RSSI: -95dbm",
+        )
+
+    def test_camera_identity_preserves_single_image_state(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        device.name = "홈카메라 360"
+        device.device_type = "NONE"
+        image = BridgeState(
+            "main", "imageCapture", "image", "metadata", None, "2026-08-25T03:16:00Z"
+        )
+        device.states = {image.key: image}
+
+        self.assertTrue(is_image_device(device))
+        self.assertTrue(sensor_state_allowed("image", image_device=True))
 
     def test_audio_volume_without_mute_is_not_a_media_player(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")

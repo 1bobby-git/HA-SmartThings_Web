@@ -227,6 +227,60 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         self.assertEqual(registry.removed, ["media_player.ari"])
         self.assertEqual(registry.updated, [])
 
+    def test_removes_image_artifacts_only_from_non_camera_devices(self) -> None:
+        registry = FakeRegistry(
+            [
+                entity("image.living_room_window", "image", "dev_window_image"),
+                entity(
+                    "sensor.living_room_window_image",
+                    "sensor",
+                    "dev_window_main_imageCapture_image",
+                ),
+                entity(
+                    "sensor.living_room_window_image_transfer_progress",
+                    "sensor",
+                    "dev_window_main_imageCapture_imageTransferProgress",
+                ),
+                entity("sensor.living_room_window_battery", "sensor", "dev_window_main_battery_battery"),
+                entity("image.home_camera", "image", "dev_camera_image"),
+                entity(
+                    "sensor.home_camera_image_transfer_progress",
+                    "sensor",
+                    "dev_camera_main_imageCapture_imageTransferProgress",
+                ),
+            ]
+        )
+        self.patch_registry(registry)
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}),
+            BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.98",
+                protocol_version="4",
+                locations={"loc_001": "Home"},
+                rooms={},
+                devices={
+                    "dev_window": window_sensor_with_image_artifacts(
+                        "dev_window", "loc_001", "거실창문센서"
+                    ),
+                    "dev_camera": camera_device("dev_camera", "loc_001", "홈카메라 360"),
+                },
+            ),
+        )
+
+        self.assertEqual(
+            registry.removed,
+            [
+                "image.living_room_window",
+                "sensor.living_room_window_image",
+                "sensor.living_room_window_image_transfer_progress",
+            ],
+        )
+        self.assertEqual(registry.updated, [])
+
     def test_removes_duplicate_control_number_when_state_number_exists(self) -> None:
         registry = FakeRegistry(
             [
@@ -774,6 +828,61 @@ def media_device(device_id: str, location_id: str, name: str) -> BridgeDevice:
         device_type="speaker",
         online=True,
         states={playback.key: playback, volume.key: volume, mute.key: mute},
+    )
+
+
+def window_sensor_with_image_artifacts(
+    device_id: str, location_id: str, name: str
+) -> BridgeDevice:
+    contact = BridgeState("main", "contactSensor", "contact", "closed", None, "2026-08-25T02:11:34Z")
+    battery = BridgeState("main", "battery", "battery", 91, "%", "2026-04-01T17:21:43Z")
+    signal = BridgeState(
+        "main",
+        "legendabsolute60149.signalMetrics",
+        "signalMetrics",
+        "KST-9: 2026/04/01 11:28 LQI: 184  RSSI: -95dbm",
+        None,
+        "2026-04-01T11:28:55Z",
+    )
+    image = BridgeState("main", "imageCapture", "image", "stale", None, "2026-04-01T11:28:55Z")
+    progress = BridgeState(
+        "main", "imageCapture", "imageTransferProgress", 100, "%", "2026-04-01T11:28:55Z"
+    )
+    states = {state.key: state for state in (contact, battery, signal, image, progress)}
+    return BridgeDevice(
+        device_id=device_id,
+        location_id=location_id,
+        room_id=None,
+        name=name,
+        device_type="custom_window_h",
+        online=True,
+        states=states,
+        controls={
+            "identifier_refresh": BridgeControl(
+                "identifier_refresh",
+                "button",
+                "Refresh",
+                capability="refresh",
+                attribute="refresh",
+                commands=("refresh",),
+            )
+        },
+    )
+
+
+def camera_device(device_id: str, location_id: str, name: str) -> BridgeDevice:
+    image = BridgeState("main", "imageCapture", "image", "metadata", None, "2026-08-25T03:16:00Z")
+    progress = BridgeState(
+        "main", "imageCapture", "imageTransferProgress", 100, "%", "2026-08-25T03:16:00Z"
+    )
+    return BridgeDevice(
+        device_id=device_id,
+        location_id=location_id,
+        room_id=None,
+        name=name,
+        device_type="camera_security",
+        online=True,
+        states={image.key: image, progress.key: progress},
     )
 
 

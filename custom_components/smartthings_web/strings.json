@@ -104,6 +104,9 @@
       "smoke": { "name": "Smoke" },
       "carbon_monoxide": { "name": "Carbon monoxide" }
     },
+    "button": {
+      "refresh": { "name": "Refresh" }
+    },
     "update": {
       "firmware": { "name": "Firmware" }
     },

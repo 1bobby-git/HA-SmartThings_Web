@@ -164,6 +164,7 @@ class ButtonDiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(added), 1)
         self.assertEqual(added[0].control.control_id, "refresh")
+        self.assertEqual(added[0]._attr_translation_key, "refresh")
 
     async def test_observed_refresh_button_sends_refresh_command(self) -> None:
         control = BridgeControl(

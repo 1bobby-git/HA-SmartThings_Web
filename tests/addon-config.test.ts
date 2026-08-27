@@ -10,19 +10,24 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("publishes bounded Advanced enrichment repairs as version 0.1.96", () => {
+  test("publishes bounded Advanced hub enrichment fallback as version 0.1.98", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.96");
-    expect(packageMetadata.version).toBe("0.1.96");
-    expect(protocolMetadata.bridge_version).toBe("0.1.96");
+    expect(config.version).toBe("0.1.98");
+    expect(packageMetadata.version).toBe("0.1.98");
+    expect(protocolMetadata.bridge_version).toBe("0.1.98");
     expect(protocolMetadata.protocol_version).toBe(4);
-    expect(runtime).toContain('const bridgeVersion = "0.1.96";');
+    expect(runtime).toContain('const bridgeVersion = "0.1.98";');
     expect(runtime).not.toContain("confirmationStabilityMs: 500");
+    expect(changelog).toContain("## 0.1.98");
+    expect(changelog).toContain("inactive Chromium keeper");
+    expect(changelog).toContain("## 0.1.97");
+    expect(changelog).toContain("Advanced `type=HUB` same-origin device-list GET");
+    expect(changelog).toContain("Cupcake endpoints remain excluded from command execution");
     expect(changelog).toContain("## 0.1.96");
     expect(changelog).toContain("bounded same-origin Advanced device-list GETs");
     expect(changelog).toContain("preserving every user-supplied entity name");

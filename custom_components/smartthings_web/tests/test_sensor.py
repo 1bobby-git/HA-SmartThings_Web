@@ -196,6 +196,36 @@ class SmartThingsWebSensorTests(unittest.TestCase):
         self.assertEqual(sensor._attr_name, "Temperature (Outdoor)")
         self.assertIsNone(sensor._attr_translation_key)
 
+    def test_signal_metrics_dict_uses_web_display_value(self) -> None:
+        state = BridgeState(
+            "main",
+            "legendabsolute60149.signalMetrics",
+            "signalMetrics",
+            {"lqi": 184, "rssi": -95},
+            None,
+            "2026-04-01T11:28:55Z",
+        )
+        device = BridgeDevice(
+            "dev_window",
+            "loc_001",
+            None,
+            "거실창문센서",
+            "custom_window_h",
+            True,
+            states={state.key: state},
+        )
+        inventory = BridgeInventory(
+            1, True, "0.1.98", "4:test", {}, {}, {device.device_id: device}
+        )
+        runtime = SmartThingsWebRuntime(object(), "loc_001", inventory)
+        sensor = SmartThingsWebSensor(runtime, device, state, SENSOR_STATES["signalMetrics"])
+
+        self.assertEqual(
+            sensor.native_value,
+            "KST-9: 2026/04/01 11:28 LQI: 184 RSSI: -95dbm",
+        )
+        self.assertEqual(sensor.extra_state_attributes, {"value": {"lqi": 184, "rssi": -95}})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -165,6 +165,57 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(keeper.close).not.toHaveBeenCalled();
   });
 
+  test("caches the recovered api device service across native commands", async () => {
+    const keeper = new FakeCommandPage() as FakeCommandPage & {
+      evaluate: <Result, Argument>(
+        pageFunction: (argument: Argument) => Result | Promise<Result>,
+        argument: Argument
+      ) => Promise<Result>;
+    };
+    const patch = vi.fn(async () => ({ data: { results: [{ status: "SUCCESS" }] } }));
+    const webpackPush = vi.fn();
+    keeper.evaluate = cachedNativeServiceEvaluate(patch, webpackPush);
+    const manager = {
+      currentKeeper: vi.fn(() => keeper),
+      openCommandPage: vi.fn(async () => new FakeCommandPage())
+    };
+    const executor = new SmartThingsWebUiCommandExecutor(
+      () => manager,
+      undefined,
+      {
+        resolveRawDeviceId: () => "raw-device",
+        resolveRawIdentifier: (alias) => ({ identifier_main: "main", identifier_switch: "switch" })[alias]
+      }
+    );
+    const base = {
+      arguments: [] as unknown[],
+      attribute: "switch",
+      capability: "identifier_switch",
+      component: "identifier_main",
+      controlId: "identifier_toggle",
+      deviceId: "dev_001",
+      deviceName: "Safe plug",
+      locationId: "loc_001"
+    };
+
+    await executor.executeDeviceAction({
+      ...base,
+      action: "on",
+      command: "on",
+      nativeCommand: "on"
+    });
+    await executor.executeDeviceAction({
+      ...base,
+      action: "off",
+      command: "off",
+      nativeCommand: "off"
+    });
+
+    expect(patch).toHaveBeenCalledTimes(2);
+    expect(webpackPush).toHaveBeenCalledTimes(1);
+    expect(manager.openCommandPage).not.toHaveBeenCalled();
+  });
+
   test("uses a client reference captured when the SmartThings app initialized it", async () => {
     const keeper = new FakeCommandPage() as FakeCommandPage & {
       evaluate: <Result, Argument>(
@@ -449,7 +500,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     }
   });
 
-  test("returns from native dispatch after patch invocation without waiting for its response", async () => {
+  test("returns after native patch invocation without waiting for the async response", async () => {
     const keeper = new FakeCommandPage() as FakeCommandPage & {
       evaluate: <Result, Argument>(
         pageFunction: (argument: Argument) => Result | Promise<Result>,
@@ -778,6 +829,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
 
     expect(diagnostics).toEqual([
       "foreground_requested",
+      "native_command_unavailable",
       "foreground_ready",
       "warm_missing",
       "verified_route_missing",
@@ -1596,6 +1648,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(page.toggle.click).toHaveBeenCalledTimes(1);
     expect(diagnostics).toEqual([
       "foreground_requested",
+      "native_command_unavailable",
       "foreground_ready",
       "warm_missing",
       "verified_route_missing",
@@ -2779,6 +2832,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(card.click).not.toHaveBeenCalled();
     expect(diagnostics).toEqual([
       "foreground_requested",
+      "native_command_unavailable",
       "foreground_ready",
       "warm_missing",
       "verified_route_missing",
@@ -3437,6 +3491,42 @@ function nativeClientFactoryEvaluate(
     (globalThis as { window?: unknown }).window = {
       webpackChunk_smartthings_cake: chunks
     };
+    try {
+      return await pageFunction(argument);
+    } finally {
+      (globalThis as { window?: unknown }).window = previousWindow;
+    }
+  };
+}
+
+function cachedNativeServiceEvaluate(
+  patch: ReturnType<typeof vi.fn>,
+  webpackPush: () => void
+): <Result, Argument>(
+  pageFunction: (argument: Argument) => Result | Promise<Result>,
+  argument: Argument
+) => Promise<Result> {
+  const client = {
+    service: vi.fn(() => ({ patch }))
+  };
+  const runtimeRequire = {
+    c: {
+      feathers: { exports: { A: client } }
+    }
+  };
+  const chunks: unknown[] = [];
+  chunks.push = ((entry: unknown[]) => {
+    webpackPush();
+    const runtime = entry[2] as ((require: typeof runtimeRequire) => void) | undefined;
+    runtime?.(runtimeRequire);
+    return 1;
+  }) as typeof chunks.push;
+  const pageWindow: Record<PropertyKey, unknown> = {
+    webpackChunk_smartthings_cake: chunks
+  };
+  return async (pageFunction, argument) => {
+    const previousWindow = (globalThis as { window?: unknown }).window;
+    (globalThis as { window?: unknown }).window = pageWindow;
     try {
       return await pageFunction(argument);
     } finally {
