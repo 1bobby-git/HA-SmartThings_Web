@@ -149,6 +149,7 @@ class FakeRegistry:
 
     def async_remove(self, entity_id: str) -> None:
         self.removed.append(entity_id)
+        self.entries = [e for e in self.entries if e.entity_id != entity_id]
 
     def async_get_entity_id(self, domain: str, platform: str, unique_id: str) -> str | None:
         for entry in self.entries:
@@ -169,9 +170,14 @@ class FakeRegistry:
         new_unique_id: str | None = None,
         new_entity_id: str | None = None,
     ) -> None:
+        entry = next((e for e in self.entries if e.entity_id == entity_id), None)
+        if entry is None:
+            raise KeyError(entity_id)
         if new_unique_id is not None:
+            entry.unique_id = new_unique_id
             self.updated.append((entity_id, new_unique_id))
         if new_entity_id is not None:
+            entry.entity_id = new_entity_id
             self.renamed.append((entity_id, new_entity_id))
 
 

@@ -377,6 +377,7 @@ def _migrate_entity_registry(
             expected_uids.add(f"{device.device_id}_firmware_update")
 
     stale_duplicate_rows: list[object] = []
+    removed_entity_ids: set[str] = set()
     for entity_entry in registry_entries:
         if entity_entry.platform != DOMAIN:
             continue
@@ -393,17 +394,33 @@ def _migrate_entity_registry(
         if (
             owner_device is not None
             and entity_uid not in expected_uids
+            and entity_uid not in old_to_new
             and getattr(entity_entry, "name", None) is None
-            and not entity_uid.endswith(("_fan", "_media_player", "_image", "_firmware_update", "_refresh"))
+            and not entity_uid.endswith(
+                (
+                    "_fan",
+                    "_media_player",
+                    "_image",
+                    "_firmware_update",
+                    "_refresh",
+                    "_climate",
+                    "_cover",
+                )
+            )
             and "_number_" not in entity_uid
         ):
             stale_duplicate_rows.append(entity_entry)
+            removed_entity_ids.add(entity_entry.entity_id)
     for entity_entry in stale_duplicate_rows:
         registry.async_remove(entity_entry.entity_id)
         current_entity_ids.discard(entity_entry.entity_id)
 
     for entity_entry in registry_entries:
         if entity_entry.platform != DOMAIN:
+            continue
+        if entity_entry.entity_id in removed_entity_ids:
+            # Already removed by the stale-duplicate pre-pass; the snapshot
+            # list still carries it, and updating a removed row would crash.
             continue
         registry_entity_id = entity_entry.entity_id
         if (
@@ -522,7 +539,10 @@ def _migrate_entity_registry(
         renamed_this_entry = False
         if new_entity_id is not None and registry.async_get(new_entity_id) is not None:
             new_entity_id = None
-        if new_entity_id is not None:
+        if (
+            new_entity_id is not None
+            and registry.async_get(registry_entity_id) is not None
+        ):
             registry.async_update_entity(
                 registry_entity_id,
                 new_entity_id=new_entity_id,
@@ -543,6 +563,7 @@ def _migrate_entity_registry(
                     room_free_entity_id != registry_entity_id
                     and registry.async_get(room_free_entity_id) is None
                     and room_free_entity_id not in current_entity_ids
+                    and registry.async_get(registry_entity_id) is not None
                 ):
                     registry.async_update_entity(
                         registry_entity_id,
@@ -556,7 +577,7 @@ def _migrate_entity_registry(
         if new_unique_id is None:
             continue
         existing = registry.async_get_entity_id(entity_entry.domain, DOMAIN, new_unique_id)
-        if existing is None:
+        if existing is None and registry.async_get(registry_entity_id) is not None:
             registry.async_update_entity(registry_entity_id, new_unique_id=new_unique_id)
 
 

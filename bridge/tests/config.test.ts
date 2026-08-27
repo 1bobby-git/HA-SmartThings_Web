@@ -10,7 +10,8 @@ describe("readBridgeConfig", () => {
       port: 8098,
       heartbeatIntervalMs: 10_000,
       browserMaxRestarts: 3,
-      browserRetryDelayMs: 1_000
+      browserRetryDelayMs: 1_000,
+      advancedPollSeconds: 0
     });
   });
 
@@ -43,6 +44,22 @@ describe("readBridgeConfig", () => {
       { STW_BROWSER_MAX_RESTARTS: "1.5" },
       { STW_BROWSER_RETRY_DELAY_MS: "99" },
       { STW_BROWSER_RETRY_DELAY_MS: "10001" }
+    ]) {
+      expect(() => readBridgeConfig(env)).toThrow(/invalid bridge config/i);
+    }
+  });
+
+  test("accepts additive-on-demand advanced polling windows from env", () => {
+    expect(readBridgeConfig({ ADVANCED_POLL_SECONDS: "60" }).advancedPollSeconds).toBe(60);
+    expect(readBridgeConfig({ STW_ADVANCED_POLL_SECONDS: "15" }).advancedPollSeconds).toBe(15);
+    expect(readBridgeConfig({ STW_ADVANCED_POLL_SECONDS: "3600" }).advancedPollSeconds).toBe(3_600);
+    expect(readBridgeConfig({ STW_ADVANCED_POLL_SECONDS: "0" }).advancedPollSeconds).toBe(0);
+
+    for (const env of [
+      { ADVANCED_POLL_SECONDS: "14" },
+      { ADVANCED_POLL_SECONDS: "3601" },
+      { STW_ADVANCED_POLL_SECONDS: "2.5" },
+      { STW_ADVANCED_POLL_SECONDS: "soon" }
     ]) {
       expect(() => readBridgeConfig(env)).toThrow(/invalid bridge config/i);
     }
