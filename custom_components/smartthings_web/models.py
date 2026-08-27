@@ -615,41 +615,12 @@ MEDIA_ATTRIBUTES = {
     "volume",
 }
 
-MEDIA_PLAYBACK_ATTRIBUTES = {
-    "audioTrackData",
-    "playbackStatus",
-    "supportedPlaybackCommands",
-    "supportedTrackControlCommands",
-}
-
-MEDIA_TRANSPORT_COMMANDS = {
-    "fastforward",
-    "nexttrack",
-    "pause",
-    "play",
-    "playtrackandresume",
-    "previoustrack",
-    "rewind",
-    "stop",
-}
-
-MEDIA_DEVICE_TYPES = {
-    "av_receiver",
-    "home_theater",
-    "soundbar",
-    "speaker",
-}
-
 READ_ONLY_POWER_DEVICE_TYPES = {
-    "camera_security",
     "clothing_care",
     "cooktop",
     "dishwasher",
     "dryer",
     "microwave",
-    "oven",
-    "range",
-    "refrigerator",
     "washer",
 }
 
@@ -727,9 +698,9 @@ def is_image_device(device: BridgeDevice) -> bool:
 
 def is_media_device(device: BridgeDevice) -> bool:
     """Return whether a device has media-player state."""
-    return _device_has_audio_volume_evidence(
+    return _device_has_audio_volume_evidence(device) and _device_has_audio_mute_evidence(
         device
-    ) and _device_has_audio_mute_evidence(device)
+    )
 
 
 def is_fan_device(device: BridgeDevice) -> bool:
@@ -1550,53 +1521,6 @@ def _control_mentions(control: BridgeControl, *needles: str) -> bool:
     return any(needle.lower() in haystack for needle in needles)
 
 
-def _control_has_media_transport_semantics(control: BridgeControl) -> bool:
-    if control.attribute in MEDIA_PLAYBACK_ATTRIBUTES or control.capability in MEDIA_PLAYBACK_ATTRIBUTES:
-        return True
-    commands = {_normalized_command_token(command) for command in control.commands}
-    return bool(commands & MEDIA_TRANSPORT_COMMANDS)
-
-
-def _control_has_explicit_media_semantics(control: BridgeControl) -> bool:
-    if control.attribute in MEDIA_PLAYBACK_ATTRIBUTES or control.capability in MEDIA_PLAYBACK_ATTRIBUTES:
-        return True
-    identity = " ".join(
-        value
-        for value in (
-            control.control_id,
-            control.capability,
-            control.attribute,
-            control.label,
-            *control.commands,
-            *control.option_commands.values(),
-        )
-        if value
-    ).lower()
-    return any(
-        term in identity
-        for term in (
-            "playback",
-            "track",
-            "next track",
-            "previoustrack",
-            "previous track",
-            "fastforward",
-            "fast forward",
-            "rewind",
-        )
-    )
-
-
-def _device_has_media_device_type(device: BridgeDevice) -> bool:
-    device_type = _normalized_device_type(device.device_type)
-    asset_type = (
-        _normalized_device_type(device.presentation.asset_type)
-        if device.presentation
-        else ""
-    )
-    return device_type in MEDIA_DEVICE_TYPES or asset_type in MEDIA_DEVICE_TYPES
-
-
 def _device_has_audio_volume_evidence(device: BridgeDevice) -> bool:
     if device_has_any_state(device, {"volume"}):
         return True
@@ -1619,8 +1543,6 @@ def _device_has_audio_mute_evidence(device: BridgeDevice) -> bool:
 
 def is_readonly_appliance_switch(device: BridgeDevice) -> bool:
     """Return whether appliance power must remain read-only state."""
-    if is_media_device(device) or is_fan_device(device):
-        return True
     device_type = _normalized_device_type(device.device_type)
     asset_type = (
         _normalized_device_type(device.presentation.asset_type)
