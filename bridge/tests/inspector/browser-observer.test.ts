@@ -164,8 +164,10 @@ describe("installBrowserObserver", () => {
     const context = new Emitter();
     const write = vi.fn();
     const onRawWebSocketFrame = vi.fn();
+    const onRawWebSocketBinaryFrame = vi.fn();
     installBrowserObserver(context, { write }, () => ({ redacted: true }), {
-      onRawWebSocketFrame
+      onRawWebSocketFrame,
+      onRawWebSocketBinaryFrame
     });
     const socket = new Emitter() as Emitter & { url: () => string };
     socket.url = () => "wss://example.test/socket";
@@ -178,6 +180,12 @@ describe("installBrowserObserver", () => {
     expect(onRawWebSocketFrame).toHaveBeenCalledWith(
       "received",
       "raw-session-only",
+      "pw_ws_1"
+    );
+    expect(onRawWebSocketBinaryFrame).toHaveBeenCalledOnce();
+    expect(onRawWebSocketBinaryFrame).toHaveBeenCalledWith(
+      "sent",
+      expect.objectContaining({ byteLength: 3 }),
       "pw_ws_1"
     );
     expect(JSON.stringify(write.mock.calls)).not.toContain("raw-session-only");

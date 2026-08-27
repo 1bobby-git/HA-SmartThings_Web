@@ -64,7 +64,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.93";
+const bridgeVersion = "0.1.94";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -493,6 +493,9 @@ async function attachContext(
       volatileIdentifiers.observeRawWebSocketFrame(direction, payload);
       cameraImages.observeRawWebSocketFrame(direction, payload, connectionId);
     },
+    onRawWebSocketBinaryFrame: (direction, payload, connectionId) => {
+      cameraImages.observeRawWebSocketBinaryFrame(direction, payload, connectionId);
+    },
     onSmartThingsWebSocketClose: recoverSmartThingsWebSocket
   });
   context.on?.("page", (page) => {
@@ -587,6 +590,9 @@ async function installCdpForPage(
       onRawWebSocketFrame: (direction, payload, connectionId) => {
         volatileIdentifiers.observeRawWebSocketFrame(direction, payload);
         cameraImages.observeRawWebSocketFrame(direction, payload, connectionId);
+      },
+      onRawWebSocketBinaryFrame: (direction, payload, connectionId) => {
+        cameraImages.observeRawWebSocketBinaryFrame(direction, payload, connectionId);
       },
       onSmartThingsWebSocketClose
     });

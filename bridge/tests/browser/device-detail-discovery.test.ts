@@ -148,6 +148,16 @@ function cameraInventory(): BridgeInventory {
             unit: null,
             updatedAt: null
           }
+        ],
+        controls: [
+          {
+            id: "sound",
+            kind: "toggle",
+            label: "Sound",
+            component: "main",
+            capability: "soundDetection",
+            attribute: "sound"
+          }
         ]
       }
     ],

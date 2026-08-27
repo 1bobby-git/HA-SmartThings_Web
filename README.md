@@ -86,7 +86,7 @@ smartthings_web 커스텀 통합
 - 장면, SmartThings Home Monitor 경보 패널
 - 캐시된 카메라 스틸 이미지
 
-기기나 SmartThings Web 화면에서 제공하지 않는 기능은 생성되지 않을 수 있습니다. 카메라는 실시간 스트리밍이 아니라 관찰된 서명 URL에서 제한된 크기의 이미지 바이트만 받아 로컬 캐시에 저장합니다.
+기기나 SmartThings Web 화면에서 제공하지 않는 기능은 생성되지 않을 수 있습니다. 카메라는 실시간 스트리밍이 아니라 관찰된 서명 URL 또는 같은 WebSocket 연결의 Socket.IO 바이너리 썸네일 응답에서 제한된 크기의 JPEG/PNG/WebP 바이트만 받아 로컬 캐시에 저장합니다.
 
 ## 보안 원칙
 

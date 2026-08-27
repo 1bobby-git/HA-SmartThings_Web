@@ -10,6 +10,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import models as models_module  # noqa: E402
+
 from models import (  # noqa: E402
     BridgeControl,
     BridgeDevice,
@@ -23,6 +25,7 @@ from models import (  # noqa: E402
     control_kind,
     control_supports_command,
     cover_controls,
+    device_model,
     entity_unique_id,
     is_climate_device,
     is_cover_device,
@@ -45,6 +48,7 @@ from models import (  # noqa: E402
     sensor_extra_attributes,
     sensor_native_value,
     sensor_state_allowed,
+    sensor_state_owned_by_primary_domain,
     token_values,
 )
 
@@ -901,6 +905,32 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
 
         self.assertEqual([control.control_id for control in select_controls(device)], ["sound"])
 
+    def test_observed_select_owns_its_mirrored_state_instead_of_a_duplicate_sensor(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        state = BridgeState(
+            "main",
+            "motionSensitivity",
+            "sensitivityAdjustment",
+            "high",
+            None,
+            "2026-08-24T21:10:00Z",
+        )
+        device.states = {state.key: state}
+        device.controls = {
+            "sensitivity": BridgeControl(
+                "sensitivity",
+                "enumerated",
+                "Sensitivity adjustment",
+                component="main",
+                capability="motionSensitivity",
+                attribute="sensitivityAdjustment",
+                options=("low", "medium", "high"),
+            )
+        }
+
+        self.assertTrue(sensor_state_owned_by_primary_domain(device, state))
+
     def test_primary_attributes_preserve_duplicate_components_without_overwrite(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")
         device = current.devices["dev_001"]
@@ -1011,6 +1041,132 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         result = parse_command_result(raw, "request_12345678", "location")
         self.assertIsNotNone(result)
         self.assertEqual(result.confirmation, "security_arm_state_event")
+
+    def test_device_models_use_korean_names_for_observed_smartthings_types(self) -> None:
+        expected = {
+            "accessory": "액세서리",
+            "ai_speaker_lux_one": "AI 스피커",
+            "air_purifier": "공기청정기",
+            "air_quality_sensor": "공기질 센서",
+            "bleD2D": "블루투스 기기",
+            "button_1": "버튼",
+            "camera_security": "보안 카메라",
+            "charger_hub": "충전 허브",
+            "coffee_machine": "커피 머신",
+            "contact_sensor": "문열림 센서",
+            "custom_door": "도어",
+            "custom_floor_ac_rac": "에어컨",
+            "custom_light_mood": "무드등",
+            "custom_light_pendant": "펜던트 조명",
+            "custom_light_strip": "스트립 조명",
+            "custom_light_tube": "튜브 조명",
+            "custom_window_h": "창문",
+            "dishwasher": "식기세척기",
+            "dryer": "건조기",
+            "elevator": "엘리베이터",
+            "energy_monitoring": "에너지 모니터",
+            "fan": "선풍기",
+            "floor_ac": "에어컨",
+            "garage_door": "차고문",
+            "general_display": "디스플레이",
+            "home_theater": "홈시어터",
+            "hub": "허브",
+            "humidifier": "가습기",
+            "illuminance_sensor": "조도 센서",
+            "light_bulb": "전구",
+            "light_ceiling": "천장등",
+            "moisture_sensor_1": "누수 센서",
+            "motion_sensor_1": "모션 센서",
+            "multipurpose_sensor_1": "다목적 센서",
+            "outlet_1": "콘센트",
+            "presence_sensor": "재실 센서",
+            "qooker": "쿠커",
+            "range_extender": "신호 확장기",
+            "refrigerator": "냉장고",
+            "remote": "리모컨",
+            "shade": "블라인드",
+            "smoke_sensor": "연기 감지기",
+            "soundbar": "사운드바",
+            "speaker": "스피커",
+            "switch": "스위치",
+            "temp_humidity_sensor": "온습도 센서",
+            "thermostat": "온도조절기",
+            "unknown": "스마트 기기",
+            "washer": "세탁기",
+            "wifi_hub_1": "Wi-Fi 허브",
+        }
+
+        for device_type, model in expected.items():
+            with self.subTest(device_type=device_type):
+                device = BridgeDevice(
+                    "dev_001", "loc_001", None, "Device", device_type, True
+                )
+                self.assertEqual(device_model(device), model)
+
+    def test_unknown_device_model_removes_only_trailing_numeric_suffix(self) -> None:
+        device = BridgeDevice(
+            "dev_001", "loc_001", None, "Device", "future_sensor_1", True
+        )
+
+        self.assertEqual(device_model(device), "Future Sensor")
+
+    def test_duplicate_state_names_get_stable_human_readable_qualifiers(self) -> None:
+        first = BridgeState(
+            "identifier_component",
+            "identifier_capability_a",
+            "referenceTable",
+            {},
+            None,
+            "2026-08-27T00:00:00Z",
+        )
+        second = BridgeState(
+            "identifier_component",
+            "identifier_capability_b",
+            "referenceTable",
+            {},
+            None,
+            "2026-08-27T00:00:00Z",
+        )
+        indoor = BridgeState(
+            "indoor",
+            "temperatureMeasurement",
+            "temperature",
+            24,
+            "C",
+            "2026-08-27T00:00:00Z",
+        )
+        outdoor = BridgeState(
+            "outdoor",
+            "temperatureMeasurement",
+            "temperature",
+            31,
+            "C",
+            "2026-08-27T00:00:00Z",
+        )
+        battery = BridgeState(
+            "main",
+            "battery",
+            "battery",
+            80,
+            "%",
+            "2026-08-27T00:00:00Z",
+        )
+
+        names = models_module.disambiguated_state_names(
+            [
+                (second, "Reference Table"),
+                (first, "Reference Table"),
+                (outdoor, "Temperature"),
+                (indoor, "Temperature"),
+                (battery, "Battery"),
+            ]
+        )
+
+        self.assertEqual(names[first.key], "Reference Table (1)")
+        self.assertEqual(names[second.key], "Reference Table (2)")
+        self.assertEqual(names[indoor.key], "Temperature (Indoor)")
+        self.assertEqual(names[outdoor.key], "Temperature (Outdoor)")
+        self.assertNotIn(battery.key, names)
 
 
 def inventory(sequence: int, value: int, updated_at: str) -> BridgeInventory:

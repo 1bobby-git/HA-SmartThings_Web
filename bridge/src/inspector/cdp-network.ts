@@ -22,6 +22,11 @@ export interface CdpNetworkOptions {
     payload: string,
     connectionId: string
   ) => void;
+  onRawWebSocketBinaryFrame?: (
+    direction: "sent" | "received",
+    payload: ArrayBuffer | ArrayBufferView,
+    connectionId: string
+  ) => void;
   onSmartThingsWebSocketClose?: (url: string, connectionId: string) => void;
 }
 
@@ -65,6 +70,7 @@ export async function installCdpNetworkObserver(
 
   session.on("Network.webSocketFrameSent", (payload) => {
     observeRawTextFrame(options.onRawWebSocketFrame, "sent", payload, sessionScope);
+    observeRawBinaryFrame(options.onRawWebSocketBinaryFrame, "sent", payload, sessionScope);
     write(sink, redact, "cdp-websocket-frame", {
       direction: "sent",
       ...connectionMetadata(payload, sessionScope),
@@ -73,6 +79,7 @@ export async function installCdpNetworkObserver(
   });
   session.on("Network.webSocketFrameReceived", (payload) => {
     observeRawTextFrame(options.onRawWebSocketFrame, "received", payload, sessionScope);
+    observeRawBinaryFrame(options.onRawWebSocketBinaryFrame, "received", payload, sessionScope);
     write(sink, redact, "cdp-websocket-frame", {
       direction: "received",
       ...connectionMetadata(payload, sessionScope),
@@ -116,6 +123,25 @@ export async function installCdpNetworkObserver(
       });
     }
   });
+}
+
+function observeRawBinaryFrame(
+  observer: CdpNetworkOptions["onRawWebSocketBinaryFrame"],
+  direction: "sent" | "received",
+  payload: unknown,
+  sessionScope: string
+): void {
+  if (!observer) return;
+  const requestId = readString(payload, "requestId");
+  const response = readObject(payload, "response");
+  const payloadData = response ? readString(response, "payloadData") : undefined;
+  const opcode = response ? readNumber(response, "opcode") : undefined;
+  if (!requestId || opcode === 1 || typeof payloadData !== "string") return;
+  try {
+    observer(direction, Buffer.from(payloadData, "base64"), `${sessionScope}:${requestId}`);
+  } catch {
+    // Image extraction must never interrupt the sanitized capture pipeline.
+  }
 }
 
 function write(sink: CaptureSink, redact: Redact, source: CaptureSource, payload: unknown): void {

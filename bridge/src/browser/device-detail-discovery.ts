@@ -75,7 +75,7 @@ export class DeviceDetailDiscovery {
 
   #needsInspection(device: BridgeDevice): boolean {
     return (
-      (device.controls?.length ?? 0) === 0 &&
+      ((device.controls?.length ?? 0) === 0 || isCameraImageDevice(device)) &&
       (this.#attempts.get(device.id) ?? 0) < this.#maxAttempts
     );
   }

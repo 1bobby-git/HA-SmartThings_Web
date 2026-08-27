@@ -19,6 +19,9 @@ from .models import (
 )
 
 
+_LAUNDRY_APPLIANCE_TYPES = {"dryer", "washer"}
+
+
 def device_info_for(device: BridgeDevice) -> DeviceInfo:
     """Return official-style registry metadata available from the web snapshot."""
     return DeviceInfo(
@@ -75,7 +78,14 @@ class SmartThingsWebEntity(Entity):
     def available(self) -> bool:
         """Return device availability."""
         device = self.runtime.inventory.devices.get(self.device_id)
-        return device is not None and device.online
+        if device is None:
+            return False
+        if device.online:
+            return True
+        return (
+            device.states.get(self.state_key) is not None
+            and _offline_laundry_state_is_readable(device)
+        )
 
     @property
     def bridge_state(self) -> BridgeState | None:
@@ -134,3 +144,18 @@ class SmartThingsWebDeviceEntity(Entity):
         self.async_on_remove(
             self.runtime.subscribe_device(self.device_id, self.async_write_ha_state)
         )
+
+
+def _offline_laundry_state_is_readable(device: BridgeDevice) -> bool:
+    """Keep pushed laundry values visible while the appliance is powered down."""
+    if (device.device_type or "").strip().lower() not in _LAUNDRY_APPLIANCE_TYPES:
+        return False
+    for state in device.states.values():
+        value = str(state.value).strip().lower()
+        if state.attribute == "switch" and value == "off":
+            return True
+        if state.attribute == "machineState" and value in {"none", "stop"}:
+            return True
+        if state.attribute == "operatingState" and value == "ready":
+            return True
+    return False

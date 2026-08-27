@@ -122,6 +122,7 @@ class FakeRegistry:
         self.entries = entries
         self.removed: list[str] = []
         self.updated: list[tuple[str, str]] = []
+        self.renamed: list[tuple[str, str]] = []
 
     def async_remove(self, entity_id: str) -> None:
         self.removed.append(entity_id)
@@ -132,8 +133,17 @@ class FakeRegistry:
                 return entry.entity_id
         return None
 
-    def async_update_entity(self, entity_id: str, *, new_unique_id: str) -> None:
-        self.updated.append((entity_id, new_unique_id))
+    def async_update_entity(
+        self,
+        entity_id: str,
+        *,
+        new_unique_id: str | None = None,
+        new_entity_id: str | None = None,
+    ) -> None:
+        if new_unique_id is not None:
+            self.updated.append((entity_id, new_unique_id))
+        if new_entity_id is not None:
+            self.renamed.append((entity_id, new_entity_id))
 
 
 class EntityRegistryMigrationTests(unittest.TestCase):
@@ -268,6 +278,152 @@ class EntityRegistryMigrationTests(unittest.TestCase):
                     "dev_motion_main_motion_detectionFrequency",
                 )
             ],
+        )
+
+    def test_removes_one_repeated_room_prefix_from_generated_entity_ids(self) -> None:
+        registry = FakeRegistry(
+            [
+                entity("climate.geosil_geosil_eeokeon", "climate", "dev_ac_climate"),
+                entity(
+                    "sensor.geosil_geosil_eeokeon_power",
+                    "sensor",
+                    "dev_ac_main_powerMeter_power",
+                ),
+                entity("sensor.room_room_custom", "sensor", "custom_unique_id"),
+                entity(
+                    "fan.geosil_geosil_eeokeon",
+                    "fan",
+                    "dev_ac_fan",
+                    platform="other",
+                ),
+            ]
+        )
+        self.patch_registry(registry)
+        state = BridgeState(
+            "main",
+            "powerMeter",
+            "power",
+            0,
+            "W",
+            "2026-08-27T00:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_ac",
+            "loc_001",
+            "room_living",
+            "거실 에어컨",
+            "floor_ac",
+            True,
+            states={state.key: state},
+        )
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}),
+            BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.93",
+                protocol_version="4",
+                locations={"loc_001": "Home"},
+                rooms={"room_living": ("loc_001", "거실")},
+                devices={device.device_id: device},
+            ),
+        )
+
+        self.assertEqual(
+            registry.renamed,
+            [
+                ("climate.geosil_geosil_eeokeon", "climate.geosil_eeokeon"),
+                (
+                    "sensor.geosil_geosil_eeokeon_power",
+                    "sensor.geosil_eeokeon_power",
+                ),
+            ],
+        )
+
+    def test_keeps_repeated_prefix_when_target_entity_id_already_exists(self) -> None:
+        registry = FakeRegistry(
+            [
+                entity("climate.geosil_geosil_eeokeon", "climate", "dev_ac_climate"),
+                entity("climate.geosil_eeokeon", "climate", "dev_other_climate"),
+            ]
+        )
+        self.patch_registry(registry)
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}),
+            BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.93",
+                protocol_version="4",
+                locations={"loc_001": "Home"},
+                rooms={},
+                devices={
+                    "dev_ac": level_only_device("dev_ac", "loc_001", "거실 에어컨")
+                },
+            ),
+        )
+
+        self.assertEqual(registry.renamed, [])
+
+    def test_entity_id_and_legacy_unique_id_migrate_in_one_pass(self) -> None:
+        registry = FakeRegistry(
+            [
+                entity(
+                    "sensor.geosil_geosil_eeokeon_power",
+                    "sensor",
+                    "dev_ac_main_powerMeter_power_power",
+                )
+            ]
+        )
+        self.patch_registry(registry)
+        state = BridgeState(
+            "main",
+            "powerMeter",
+            "power",
+            0,
+            "W",
+            "2026-08-27T00:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_ac",
+            "loc_001",
+            "room_living",
+            "거실 에어컨",
+            "floor_ac",
+            True,
+            states={state.key: state},
+        )
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}),
+            BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.93",
+                protocol_version="4",
+                locations={"loc_001": "Home"},
+                rooms={"room_living": ("loc_001", "거실")},
+                devices={device.device_id: device},
+            ),
+        )
+
+        self.assertEqual(
+            registry.renamed,
+            [
+                (
+                    "sensor.geosil_geosil_eeokeon_power",
+                    "sensor.geosil_eeokeon_power",
+                )
+            ],
+        )
+        self.assertEqual(
+            registry.updated,
+            [("sensor.geosil_eeokeon_power", "dev_ac_main_powerMeter_power")],
         )
 
     def patch_registry(self, registry: FakeRegistry) -> None:

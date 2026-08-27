@@ -264,6 +264,64 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
             "https://client.smartthings.com/icons/oneui/contact/off",
         )
 
+    def test_offline_laundry_appliance_keeps_pushed_state_entities_available(self) -> None:
+        state = BridgeState(
+            "main",
+            "dryerOperatingState",
+            "machineState",
+            "stop",
+            None,
+            "2026-08-26T13:01:14.077Z",
+        )
+        dryer = BridgeDevice(
+            "dryer_001",
+            "loc_001",
+            None,
+            "Dryer",
+            "dryer",
+            False,
+            states={state.key: state},
+        )
+        runtime = SmartThingsWebRuntime(
+            object(),
+            "loc_001",
+            BridgeInventory(1, True, "0.1.93", "4", {}, {}, {dryer.device_id: dryer}),
+        )
+
+        state_entity = SmartThingsWebEntity(runtime, dryer, state, "Machine State")
+        control_entity = SmartThingsWebDeviceEntity(runtime, dryer, "switch", "Power")
+
+        self.assertTrue(state_entity.available)
+        self.assertFalse(control_entity.available)
+
+    def test_offline_safety_sensor_does_not_reuse_stale_state_as_available(self) -> None:
+        state = BridgeState(
+            "main",
+            "contactSensor",
+            "contact",
+            "closed",
+            None,
+            "2026-08-26T13:01:14.077Z",
+        )
+        contact = BridgeDevice(
+            "contact_001",
+            "loc_001",
+            None,
+            "Window sensor",
+            "contact_sensor",
+            False,
+            states={state.key: state},
+        )
+        runtime = SmartThingsWebRuntime(
+            object(),
+            "loc_001",
+            BridgeInventory(1, True, "0.1.93", "4", {}, {}, {contact.device_id: contact}),
+        )
+
+        state_entity = SmartThingsWebEntity(runtime, contact, state, "Contact")
+
+        self.assertFalse(state_entity.available)
+
     def test_entity_picture_ignores_unsafe_inactive_icon_when_online(self) -> None:
         state = BridgeState(
             "main",

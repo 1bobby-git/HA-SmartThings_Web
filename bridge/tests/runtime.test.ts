@@ -912,6 +912,47 @@ describe("createBridgeRuntime", () => {
     }
   });
 
+  test("serves the Socket.IO binary thumbnail format used by the SmartThings camera page", async () => {
+    const { baseUrl, context } = await startReadyRuntime();
+    const token = await exchangeBridgeToken(baseUrl);
+    const headers = { authorization: `Bearer ${token}` };
+    const imageUrl =
+      "https://mediaserv.media1208.ec2.st-av.net/image?source_id=camera-source&image_id=still-001";
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 11, 12, 13, 0xff, 0xd9]);
+
+    await context.cdpSessions[0]?.emit("Network.webSocketFrameReceived", {
+      requestId: "cdp-socket-camera-binary",
+      response: {
+        opcode: 1,
+        payloadData: `435[null,[{"deviceId":"raw-camera-binary","componentId":"main","capabilityId":"imageCapture","attributeName":"image","value":"${imageUrl}"}]]`
+      }
+    });
+    await context.cdpSessions[0]?.emit("Network.webSocketFrameSent", {
+      requestId: "cdp-socket-camera-binary",
+      response: {
+        opcode: 1,
+        payloadData: `421["get","api/camera/thumbnail","${imageUrl}",{}]`
+      }
+    });
+    await context.cdpSessions[0]?.emit("Network.webSocketFrameReceived", {
+      requestId: "cdp-socket-camera-binary",
+      response: {
+        opcode: 1,
+        payloadData: '461-1[null,{"_placeholder":true,"num":0}]'
+      }
+    });
+    await context.cdpSessions[0]?.emit("Network.webSocketFrameReceived", {
+      requestId: "cdp-socket-camera-binary",
+      response: { opcode: 2, payloadData: jpeg.toString("base64") }
+    });
+
+    const response = await fetchFirstImage(baseUrl, headers);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/jpeg");
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(jpeg);
+  });
+
   test("keeps an armed probe active for a component-less contact event", async () => {
     const { baseUrl, socket } = await startReadyRuntime();
     const arm = await postProbeArm(baseUrl, { actionType: "contact_open" });

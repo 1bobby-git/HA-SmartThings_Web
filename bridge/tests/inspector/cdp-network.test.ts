@@ -83,7 +83,10 @@ describe("installCdpNetworkObserver", () => {
   test("records CDP binary websocket frames as decoded metadata without raw payload", async () => {
     const session = new FakeSession();
     const write = vi.fn();
-    await installCdpNetworkObserver(session, { write }, (value) => value);
+    const onRawWebSocketBinaryFrame = vi.fn();
+    await installCdpNetworkObserver(session, { write }, (value) => value, {
+      onRawWebSocketBinaryFrame
+    });
     const bytes = Uint8Array.from([0, 1, 2, 3, 4]);
     const payloadData = Buffer.from(bytes).toString("base64");
 
@@ -103,6 +106,12 @@ describe("installCdpNetworkObserver", () => {
       }
     });
     expect(JSON.stringify(frameRecord.payload)).not.toContain(payloadData);
+    expect(onRawWebSocketBinaryFrame).toHaveBeenCalledOnce();
+    expect(onRawWebSocketBinaryFrame).toHaveBeenCalledWith(
+      "received",
+      expect.objectContaining({ byteLength: bytes.byteLength }),
+      expect.stringMatching(/:1$/u)
+    );
   });
 
   test("bounds CDP opcode-1 websocket payloadData by UTF-8 bytes", async () => {

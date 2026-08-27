@@ -13,7 +13,7 @@ domain, browser-session transport, identifiers, and limited-alpha safety gates.
 | Polling | Entities set `should_poll = False`. | Entities set `should_poll = False`; SmartThings state polling is not used. |
 | Entity update | Capability listeners update attributes and call `async_write_ha_state()`. | Runtime listeners read the latest immutable inventory and call `async_write_ha_state()`. |
 | Device identity | `(smartthings, device_id)`. | `(smartthings_web, device_id)`; official entities are never adopted or renamed. |
-| Availability | Device availability plus integration connectivity. | Pushed device health plus Bridge disconnect grace/stale timeout. |
+| Availability | Device availability plus integration connectivity. | Pushed device health plus Bridge disconnect grace/stale timeout. Cached washer/dryer state remains readable while a powered-down appliance reports offline, but its controls remain unavailable. |
 | Commands | SmartThings SDK commands and scene execution. | Logged-in SmartThings Web UI actions on a separate command page, confirmed only by a newer push event. |
 
 ## Platform status
@@ -60,6 +60,10 @@ shape is observed; value-only swatches remain read-only.
 - Official-style firmware aggregation, translated entity names, diagnostic
   categories, and device configuration URLs without adopting official registry
   identifiers.
+- SmartThings presentation artwork is limited to primary device entities;
+  state-backed sensors keep their Home Assistant device-class icons. Home
+  Assistant's device-registry list icon itself is not configurable through
+  `DeviceInfo`, so that generic list glyph cannot be replaced by an integration.
 - No optimistic state mutation: command completion requires a newer
   authoritative event or returns an error and requests a full resynchronization.
 

@@ -204,6 +204,39 @@ describe("CameraImageStore", () => {
     });
     expect(restored.get("dev_001")?.body).toEqual(Buffer.from([4, 5, 6]));
   });
+
+  test("associates a Socket.IO binary thumbnail with the camera from snapshot image state", async () => {
+    const fetchImage = vi.fn<typeof fetch>();
+    const store = createStore(fetchImage);
+    const imageUrl =
+      "https://mediaserv.media1208.ec2.st-av.net/image?source_id=camera-source&image_id=still-001";
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 0xff, 0xd9]);
+
+    store.observeRawWebSocketFrame(
+      "received",
+      `435[null,[{"deviceId":"raw-camera-uuid","componentId":"main","capabilityId":"imageCapture","attributeName":"image","value":"${imageUrl}","timestamp":"2026-08-25T02:00:00Z"}]]`,
+      "socket-camera"
+    );
+    store.observeRawWebSocketFrame(
+      "sent",
+      `421["get","api/camera/thumbnail","${imageUrl}",{}]`,
+      "socket-camera"
+    );
+    store.observeRawWebSocketFrame(
+      "received",
+      '461-1[null,{"_placeholder":true,"num":0}]',
+      "socket-camera"
+    );
+    store.observeRawWebSocketBinaryFrame("received", jpeg, "socket-camera");
+    await store.whenIdle();
+
+    expect(fetchImage).not.toHaveBeenCalled();
+    expect(store.get("dev_001")).toMatchObject({
+      body: jpeg,
+      contentType: "image/jpeg",
+      capturedAt: "2026-08-25T02:00:00.000Z"
+    });
+  });
 });
 
 function createStore(

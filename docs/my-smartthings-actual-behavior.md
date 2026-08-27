@@ -138,17 +138,23 @@ transient stream authentication/connection failures without polling SmartThings.
 
 ## Camera behavior
 
-The supplied capture contained two thumbnail requests and no corresponding ACK
-or image-media response. A later live refresh attempt likewise found no exact
-observed refresh control and safely refused the command. Version 0.1.34 scopes
-WebSocket request correlation per CDP observer session so a delayed camera ACK
-cannot be attached to a reused request identifier, and it accepts a signed
-thumbnail URL only after the existing HTTPS host, credential, redirect, MIME,
-and size checks.
+An earlier supplied capture contained two thumbnail requests and no
+corresponding response. A later user-supplied wire capture exposed the complete
+path used by the current site: a pushed `image` state contains an allowlisted
+signed media URL, the page sends `get api/camera/thumbnail` with that URL, the
+server answers with a Socket.IO binary ACK placeholder, and the next WebSocket
+binary frame contains the still-image bytes. The bytes are not an ordinary URL
+ACK and were therefore invisible to the original URL-only cache.
 
-The Home Assistant image entities and refreshable private image cache are
-implemented. They remain empty when SmartThings Web or the device supplies no
-thumbnail ACK or bytes; DOM pixels are never used as a fallback state source.
+Version 0.1.94 correlates the image-state URL, request ACK identifier, WebSocket
+connection, binary placeholder count, and following image frame in memory. It
+accepts only JPEG, PNG, or WebP magic bytes within the existing size limit,
+persists only private image bytes plus non-secret metadata, and serves them
+through the authenticated Bridge image route. Camera detail discovery is also
+attempted a bounded number of times even when the camera already exposes other
+controls, allowing the web application to issue its natural thumbnail request.
+No SmartThings status polling, DOM pixel fallback, signed-URL persistence, or
+cookie replay is added.
 
 ## Login persistence and privacy
 
@@ -169,6 +175,6 @@ The supplied capture was labelled safe but still contained account-related
 metadata inside a third-party feature-delivery URL. It was therefore treated as
 sensitive local evidence and was not added to the repository.
 
-`DECISION: LIMITED` remains in force because this bounded evidence does not
-prove 72-hour durability, host-reboot recovery, every device family, or camera
-image availability.
+`DECISION: LIMITED` remains in force until the 0.1.94 candidate is deployed and
+the cached camera bytes, 72-hour durability, host-reboot recovery, and remaining
+device-family gates are verified on HAOS.

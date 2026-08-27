@@ -26,6 +26,7 @@ from .models import (
     BridgeDevice,
     BridgeState,
     SmartThingsWebRuntime,
+    disambiguated_state_names,
     firmware_states,
     sensor_extra_attributes,
     sensor_native_value,
@@ -216,6 +217,7 @@ async def async_setup_entry(
             if device.location_id != runtime.location_id:
                 continue
             firmware_keys = {item.key for item in firmware_states(device).values()}
+            candidates: list[tuple[BridgeState, SensorDescription]] = []
             for state in device.states.values():
                 if not sensor_state_allowed(
                     state.attribute,
@@ -228,10 +230,23 @@ async def async_setup_entry(
                     state_class=None,
                     entity_category=EntityCategory.DIAGNOSTIC,
                 )
+                candidates.append((state, description))
+            name_overrides = disambiguated_state_names(
+                (state, description.name) for state, description in candidates
+            )
+            for state, description in candidates:
                 unique_id = "_".join((device.device_id, *state.key))
                 if unique_id not in known:
                     known.add(unique_id)
-                    entities.append(SmartThingsWebSensor(runtime, device, state, description))
+                    entities.append(
+                        SmartThingsWebSensor(
+                            runtime,
+                            device,
+                            state,
+                            description,
+                            name_override=name_overrides.get(state.key),
+                        )
+                    )
         if entities:
             async_add_entities(entities)
 
@@ -248,15 +263,23 @@ class SmartThingsWebSensor(SmartThingsWebEntity, SensorEntity):
         device: BridgeDevice,
         state: BridgeState,
         description: SensorDescription,
+        name_override: str | None = None,
     ) -> None:
+        name = (
+            name_override
+            if name_override is not None
+            else None if description.translation_key else description.name
+        )
         super().__init__(
             runtime,
             device,
             state,
-            None if description.translation_key else description.name,
+            name,
         )
         self.description = description
-        self._attr_translation_key = description.translation_key
+        self._attr_translation_key = (
+            None if name_override is not None else description.translation_key
+        )
         self._attr_entity_category = description.entity_category
         self._attr_entity_registry_enabled_default = description.enabled_default
 

@@ -41,6 +41,11 @@ export class CameraImageStore {
   readonly #now: () => Date;
   readonly #maxBytes: number;
   readonly #pendingThumbnails = new Map<string, string>();
+  readonly #pendingBinaryThumbnails = new Map<
+    string,
+    Array<{ deviceId: string; remaining: number }>
+  >();
+  readonly #imageUrlDevices = new Map<string, string>();
   readonly #inFlight = new Set<Promise<void>>();
 
   constructor(options: CameraImageStoreOptions) {
@@ -66,12 +71,30 @@ export class CameraImageStore {
         decoded.ackId !== undefined &&
         typeof decoded.args[1] === "string"
       ) {
-        const alias = this.#safeAlias(decoded.args[1]);
+        const imageUrl = safeImageUrl(decoded.args[1]);
+        const alias = imageUrl
+          ? this.#imageUrlDevices.get(imageUrl)
+          : this.#safeAlias(decoded.args[1]);
         if (alias) this.#pendingThumbnails.set(pendingKey(connectionId, decoded.ackId), alias);
       }
       return;
     }
     if (direction !== "received") return;
+    for (const reference of findImageReferences(decoded)) {
+      const alias = this.#safeAlias(reference.rawDeviceId);
+      const url = safeImageUrl(reference.url);
+      if (alias && url) this.#imageUrlDevices.set(url, alias);
+    }
+    if (decoded.kind === "binary_ack" && decoded.ackId !== undefined) {
+      const key = pendingKey(connectionId, decoded.ackId);
+      const alias = this.#pendingThumbnails.get(key);
+      this.#pendingThumbnails.delete(key);
+      if (!alias || decoded.attachments < 1) return;
+      const pending = this.#pendingBinaryThumbnails.get(connectionId) ?? [];
+      pending.push({ deviceId: alias, remaining: decoded.attachments });
+      this.#pendingBinaryThumbnails.set(connectionId, pending);
+      return;
+    }
     if (decoded.kind === "ack" && decoded.ackId !== undefined) {
       const key = pendingKey(connectionId, decoded.ackId);
       const alias = this.#pendingThumbnails.get(key);
@@ -96,6 +119,25 @@ export class CameraImageStore {
     if (alias) this.#download(alias, url);
   }
 
+  observeRawWebSocketBinaryFrame(
+    direction: "sent" | "received",
+    raw: ArrayBuffer | ArrayBufferView,
+    connectionId = "legacy"
+  ): void {
+    if (direction !== "received") return;
+    const pending = this.#pendingBinaryThumbnails.get(connectionId);
+    const current = pending?.[0];
+    if (!pending || !current) return;
+    current.remaining -= 1;
+    if (current.remaining <= 0) pending.shift();
+    if (pending.length === 0) this.#pendingBinaryThumbnails.delete(connectionId);
+
+    const body = toBuffer(raw);
+    const contentType = imageContentType(body);
+    if (!contentType || body.length === 0 || body.length > this.#maxBytes) return;
+    this.#persist(current.deviceId, body, contentType, this.#now().toISOString());
+  }
+
   get(deviceId: string): BridgeCameraImage | undefined {
     if (!DEVICE_ALIAS.test(deviceId)) return undefined;
     try {
@@ -117,6 +159,8 @@ export class CameraImageStore {
 
   reset(): void {
     this.#pendingThumbnails.clear();
+    this.#pendingBinaryThumbnails.clear();
+    this.#imageUrlDevices.clear();
   }
 
   #safeAlias(rawDeviceId: string): string | undefined {
@@ -154,7 +198,15 @@ export class CameraImageStore {
     }
     const body = await readBoundedResponseBody(response, this.#maxBytes);
     if (!body) return;
-    const capturedAt = this.#now().toISOString();
+    this.#persist(deviceId, body, contentType, this.#now().toISOString());
+  }
+
+  #persist(
+    deviceId: string,
+    body: Buffer,
+    contentType: BridgeCameraImage["contentType"],
+    capturedAt: string
+  ): void {
     const bodyPath = join(this.#root, `${deviceId}.bin`);
     const metadataPath = join(this.#root, `${deviceId}.json`);
     const tempBody = `${bodyPath}.tmp`;
@@ -171,6 +223,31 @@ export class CameraImageStore {
     chmodSync(bodyPath, 0o600);
     chmodSync(metadataPath, 0o600);
   }
+}
+
+function toBuffer(value: ArrayBuffer | ArrayBufferView): Buffer {
+  if (value instanceof ArrayBuffer) return Buffer.from(value);
+  return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+}
+
+function imageContentType(body: Buffer): BridgeCameraImage["contentType"] | undefined {
+  if (body.length >= 3 && body[0] === 0xff && body[1] === 0xd8 && body[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (
+    body.length >= 8 &&
+    body.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  ) {
+    return "image/png";
+  }
+  if (
+    body.length >= 12 &&
+    body.subarray(0, 4).toString("ascii") === "RIFF" &&
+    body.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  return undefined;
 }
 
 async function readBoundedResponseBody(response: Response, maxBytes: number): Promise<Buffer | undefined> {
@@ -265,4 +342,28 @@ function findImageUrl(value: unknown, depth = 0): string | undefined {
     if (nested) return nested;
   }
   return undefined;
+}
+
+function findImageReferences(
+  value: unknown,
+  depth = 0,
+  references: Array<{ rawDeviceId: string; url: string }> = []
+): Array<{ rawDeviceId: string; url: string }> {
+  if (depth > 8 || value === null || typeof value !== "object") return references;
+  if (Array.isArray(value)) {
+    for (const item of value) findImageReferences(item, depth + 1, references);
+    return references;
+  }
+
+  const record = value as Record<string, unknown>;
+  const attribute = readString(record.attributeName ?? record.attribute);
+  const rawDeviceId = readString(record.deviceId ?? record.device_id);
+  const url = readString(record.value);
+  if (attribute === "image" && rawDeviceId && url) {
+    references.push({ rawDeviceId, url });
+  }
+  for (const nested of Object.values(record)) {
+    findImageReferences(nested, depth + 1, references);
+  }
+  return references;
 }

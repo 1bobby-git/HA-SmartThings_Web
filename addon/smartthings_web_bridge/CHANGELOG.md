@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.94
+
+- Correlate SmartThings Web camera image-state URLs with `api/camera/thumbnail` requests and persist the real Socket.IO binary thumbnail response for Home Assistant's authenticated image proxy.
+- Open camera detail pages for bounded initial image discovery even when other observed controls already exist, without adding SmartThings state polling.
+- Keep pushed powered-down laundry state readable while leaving device controls unavailable when the washer or dryer is offline.
+- Localize current SmartThings device types, remove trailing technical numeric suffixes, and migrate one repeated room prefix from generated entity IDs.
+- Distinguish repeated state rows with stable component, capability, or numeric qualifiers and remove raw sensor duplicates already represented by an observed select.
+
 ## 0.1.93
 
 - Keep SmartThings presentation artwork off state-backed sensor rows so Home Assistant can show distinct temperature, humidity, battery, and other device-class icons.

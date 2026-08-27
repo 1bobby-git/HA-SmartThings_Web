@@ -237,6 +237,9 @@ def _migrate_entity_registry(
     """Repair only this integration's old unique IDs and binary switch artifacts."""
     registry = er.async_get(hass)
     registry_entries = list(er.async_entries_for_config_entry(registry, entry.entry_id))
+    current_entity_ids = {
+        getattr(entity_entry, "entity_id", "") for entity_entry in registry_entries
+    }
     old_to_new: dict[str, str] = {}
     duplicate_number_ids: set[str] = set()
     stale_firmware_sensor_ids: set[str] = set()
@@ -293,6 +296,7 @@ def _migrate_entity_registry(
     for entity_entry in registry_entries:
         if entity_entry.platform != DOMAIN:
             continue
+        registry_entity_id = entity_entry.entity_id
         if (
             entity_entry.domain == Platform.SENSOR
             and entity_entry.unique_id in stale_firmware_sensor_ids
@@ -357,12 +361,48 @@ def _migrate_entity_registry(
         ):
             registry.async_remove(entity_entry.entity_id)
             continue
+        new_entity_id = _deduplicated_generated_entity_id(
+            entity_entry,
+            current_device_ids,
+            current_entity_ids,
+        )
+        if new_entity_id is not None:
+            registry.async_update_entity(
+                registry_entity_id,
+                new_entity_id=new_entity_id,
+            )
+            current_entity_ids.discard(registry_entity_id)
+            current_entity_ids.add(new_entity_id)
+            registry_entity_id = new_entity_id
         new_unique_id = old_to_new.get(entity_entry.unique_id)
         if new_unique_id is None:
             continue
         existing = registry.async_get_entity_id(entity_entry.domain, DOMAIN, new_unique_id)
         if existing is None:
-            registry.async_update_entity(entity_entry.entity_id, new_unique_id=new_unique_id)
+            registry.async_update_entity(registry_entity_id, new_unique_id=new_unique_id)
+
+
+def _deduplicated_generated_entity_id(
+    entity_entry: object,
+    current_device_ids: set[str],
+    current_entity_ids: set[str],
+) -> str | None:
+    """Remove one repeated leading token from scoped automatic entity IDs."""
+    unique_id = getattr(entity_entry, "unique_id", "")
+    if not any(
+        unique_id == device_id or unique_id.startswith(f"{device_id}_")
+        for device_id in current_device_ids
+    ):
+        return None
+    entity_id = getattr(entity_entry, "entity_id", "")
+    domain, separator, object_id = entity_id.partition(".")
+    if not separator:
+        return None
+    parts = object_id.split("_")
+    if len(parts) < 3 or parts[0] != parts[1]:
+        return None
+    candidate = f"{domain}.{'_'.join(parts[1:])}"
+    return candidate if candidate not in current_entity_ids else None
 
 
 def _stale_fan_unique_id(

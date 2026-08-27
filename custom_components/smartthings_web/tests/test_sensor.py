@@ -96,6 +96,7 @@ class SmartThingsWebEntity:
         self.runtime = runtime
         self.device_id = device.device_id  # type: ignore[attr-defined]
         self.state_key = state.key  # type: ignore[attr-defined]
+        self._attr_name = _name
 
     @property
     def bridge_state(self) -> object | None:
@@ -158,6 +159,40 @@ class SmartThingsWebSensorTests(unittest.TestCase):
         self.assertEqual(sensor.device_class, SensorDeviceClass.BATTERY)
         self.assertEqual(sensor.state_class, SensorStateClass.MEASUREMENT)
         self.assertEqual(sensor.native_unit_of_measurement, "%")
+
+    def test_explicit_duplicate_name_overrides_translation_key(self) -> None:
+        state = BridgeState(
+            "outdoor",
+            "temperatureMeasurement",
+            "temperature",
+            31,
+            "C",
+            "2026-08-27T00:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_001",
+            "loc_001",
+            None,
+            "Thermometer",
+            None,
+            True,
+            states={state.key: state},
+        )
+        inventory = BridgeInventory(
+            1, True, "0.1.93", "4:test", {}, {}, {device.device_id: device}
+        )
+        runtime = SmartThingsWebRuntime(object(), "loc_001", inventory)
+
+        sensor = SmartThingsWebSensor(
+            runtime,
+            device,
+            state,
+            SENSOR_STATES["temperature"],
+            name_override="Temperature (Outdoor)",
+        )
+
+        self.assertEqual(sensor._attr_name, "Temperature (Outdoor)")
+        self.assertIsNone(sensor._attr_translation_key)
 
 
 if __name__ == "__main__":

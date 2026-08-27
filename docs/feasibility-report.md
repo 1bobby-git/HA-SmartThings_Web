@@ -47,6 +47,8 @@ Version 0.1.38 restored the logged-in location after that manual browser reauthe
 
 A user-supplied local SmartThings Web capture provided a second real-behavior sample. Its 121 DEVICE_EVENT deliveries represented 42 unique logical events and 79 duplicates. Deliberate contact and switch transitions separated by roughly one second stayed distinct and ordered, validating the event-identity dedupe boundary. The capture also showed a volume slider and enumerated alarm control, supporting the typed number/media/select mappings. Two camera-thumbnail requests produced no ACK or image response, so current camera-image availability remains unproven even though the safe image entity/cache path is implemented. The source capture remains outside the repository because it contained account-related metadata despite being labelled safe.
 
+A later local wire capture exposed the complete current camera exchange: an image-state URL, `get api/camera/thumbnail`, a Socket.IO binary ACK placeholder, and a following 202,058-byte binary image frame on the same WebSocket connection. Version 0.1.94 adds in-memory correlation for that exchange, bounded image-signature validation, private byte persistence, and HA image-proxy use. This is protocol evidence and passing local regression coverage; live 0.1.94 HAOS image rendering remains a deployment gate rather than a completed claim.
+
 Phase 2 remains closed until sanitized real captures prove the remaining host-reboot/long-idle durability, broader command-family, camera-image, and API-independence requirements.
 
 DECISION: LIMITED

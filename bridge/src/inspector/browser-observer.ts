@@ -23,6 +23,11 @@ export interface BrowserObserverOptions {
     payload: string,
     connectionId: string
   ) => void;
+  onRawWebSocketBinaryFrame?: (
+    direction: "sent" | "received",
+    payload: ArrayBuffer | ArrayBufferView,
+    connectionId: string
+  ) => void;
   onSmartThingsWebSocketClose?: (url: string, connectionId: string) => void;
 }
 
@@ -60,6 +65,7 @@ export function installBrowserObserver(
     if (hasOn(socket)) {
       socket.on("framesent", (frame) => {
         observeRawTextFrame(options.onRawWebSocketFrame, "sent", frame, connectionId);
+        observeRawBinaryFrame(options.onRawWebSocketBinaryFrame, "sent", frame, connectionId);
         write(sink, redact, "playwright-websocket-frame", {
           direction: "sent",
           connectionId,
@@ -68,6 +74,7 @@ export function installBrowserObserver(
       });
       socket.on("framereceived", (frame) => {
         observeRawTextFrame(options.onRawWebSocketFrame, "received", frame, connectionId);
+        observeRawBinaryFrame(options.onRawWebSocketBinaryFrame, "received", frame, connectionId);
         write(sink, redact, "playwright-websocket-frame", {
           direction: "received",
           connectionId,
@@ -101,6 +108,27 @@ export function installBrowserObserver(
   }
 
   context.on("page", (page) => attachPage(page, sink, redact, observedPages));
+}
+
+function observeRawBinaryFrame(
+  observer: BrowserObserverOptions["onRawWebSocketBinaryFrame"],
+  direction: "sent" | "received",
+  frame: unknown,
+  connectionId: string
+): void {
+  if (!observer) return;
+  const payload =
+    isBinary(frame)
+      ? frame
+      : typeof frame === "object" && frame !== null
+        ? (frame as Record<string, unknown>).payload
+        : undefined;
+  if (!isBinary(payload)) return;
+  try {
+    observer(direction, payload, connectionId);
+  } catch {
+    // Image extraction must never interrupt the sanitized capture pipeline.
+  }
 }
 
 export function isSmartThingsSocketIoUrl(value: string | undefined): value is string {

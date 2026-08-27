@@ -47,6 +47,7 @@ class SmartThingsWebImage(SmartThingsWebDeviceEntity, ImageEntity):
     ) -> None:
         ImageEntity.__init__(self, hass)
         SmartThingsWebDeviceEntity.__init__(self, runtime, device, "image", "Image")
+        self.__dict__.pop("_attr_entity_picture", None)
         self._last_image_updated = self.image_last_updated
 
     @property

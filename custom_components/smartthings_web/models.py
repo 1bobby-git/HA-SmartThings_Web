@@ -485,6 +485,52 @@ def entity_unique_id(device_id: str, state: BridgeState) -> str:
     return "_".join((device_id, *state.key))
 
 
+def disambiguated_state_names(
+    items: Iterable[tuple[BridgeState, str]],
+) -> dict[tuple[str, str, str], str]:
+    """Return explicit names only for states sharing the same display name."""
+    grouped: dict[str, list[BridgeState]] = {}
+    for state, name in items:
+        grouped.setdefault(name, []).append(state)
+
+    names: dict[tuple[str, str, str], str] = {}
+    for base_name, states in grouped.items():
+        if len(states) < 2:
+            continue
+        ordered = sorted(states, key=lambda state: state.key)
+        qualifiers = _unique_state_qualifiers(ordered, "component")
+        if qualifiers is None:
+            qualifiers = _unique_state_qualifiers(ordered, "capability")
+        if qualifiers is None:
+            qualifiers = [str(index) for index in range(1, len(ordered) + 1)]
+        for state, qualifier in zip(ordered, qualifiers, strict=True):
+            names[state.key] = f"{base_name} ({qualifier})"
+    return names
+
+
+def _unique_state_qualifiers(
+    states: list[BridgeState], field_name: Literal["component", "capability"]
+) -> list[str] | None:
+    qualifiers = [
+        _readable_state_token(getattr(state, field_name), field_name) for state in states
+    ]
+    if any(qualifier is None for qualifier in qualifiers):
+        return None
+    readable = [qualifier for qualifier in qualifiers if qualifier is not None]
+    return readable if len(set(readable)) == len(states) else None
+
+
+def _readable_state_token(value: str, field_name: str) -> str | None:
+    normalized = value.strip()
+    if not normalized or normalized.lower().startswith("identifier_"):
+        return None
+    if field_name == "component" and normalized.lower() == "main":
+        return None
+    normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", normalized)
+    normalized = re.sub(r"[_-]+", " ", normalized).strip()
+    return normalized.title() or None
+
+
 def location_name(inventory: BridgeInventory, location_id: str) -> str:
     """Return a user-facing location name for old and new inventory shapes."""
     location = inventory.locations.get(location_id)
@@ -746,6 +792,20 @@ def select_controls(device: BridgeDevice) -> list[BridgeControl]:
     ]
 
 
+def select_control_for_state(
+    device: BridgeDevice, state: BridgeState
+) -> BridgeControl | None:
+    """Return the unique observed select that mirrors one pushed state."""
+    matches = [
+        control
+        for control in select_controls(device)
+        if (control.component is None or control.component == state.component)
+        and (control.capability is None or control.capability == state.capability)
+        and control.attribute == state.attribute
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def refresh_controls(device: BridgeDevice) -> list[BridgeControl]:
     """Return refresh button controls discovered from detail swatches."""
     return [
@@ -910,6 +970,8 @@ def sensor_state_owned_by_primary_domain(
         return True
     if number_control_for_state(device, state) is not None:
         return True
+    if select_control_for_state(device, state) is not None:
+        return True
     if attribute in {
         "colorTemperature",
         "colorTemperatureRange",
@@ -969,9 +1031,70 @@ def device_manufacturer(device: BridgeDevice) -> str | None:
     return _first_device_metadata_value(device, "mnmn")
 
 
+_DEVICE_TYPE_MODELS_KO = {
+    "accessory": "액세서리",
+    "ai_speaker_lux_one": "AI 스피커",
+    "air_purifier": "공기청정기",
+    "air_quality_sensor": "공기질 센서",
+    "bleD2D": "블루투스 기기",
+    "button_1": "버튼",
+    "camera_security": "보안 카메라",
+    "charger_hub": "충전 허브",
+    "coffee_machine": "커피 머신",
+    "contact_sensor": "문열림 센서",
+    "custom_door": "도어",
+    "custom_floor_ac_rac": "에어컨",
+    "custom_light_mood": "무드등",
+    "custom_light_pendant": "펜던트 조명",
+    "custom_light_strip": "스트립 조명",
+    "custom_light_tube": "튜브 조명",
+    "custom_window_h": "창문",
+    "dishwasher": "식기세척기",
+    "dryer": "건조기",
+    "elevator": "엘리베이터",
+    "energy_monitoring": "에너지 모니터",
+    "fan": "선풍기",
+    "floor_ac": "에어컨",
+    "garage_door": "차고문",
+    "general_display": "디스플레이",
+    "home_theater": "홈시어터",
+    "hub": "허브",
+    "humidifier": "가습기",
+    "illuminance_sensor": "조도 센서",
+    "light_bulb": "전구",
+    "light_ceiling": "천장등",
+    "moisture_sensor_1": "누수 센서",
+    "motion_sensor_1": "모션 센서",
+    "multipurpose_sensor_1": "다목적 센서",
+    "outlet_1": "콘센트",
+    "presence_sensor": "재실 센서",
+    "qooker": "쿠커",
+    "range_extender": "신호 확장기",
+    "refrigerator": "냉장고",
+    "remote": "리모컨",
+    "shade": "블라인드",
+    "smoke_sensor": "연기 감지기",
+    "soundbar": "사운드바",
+    "speaker": "스피커",
+    "switch": "스위치",
+    "temp_humidity_sensor": "온습도 센서",
+    "thermostat": "온도조절기",
+    "unknown": "스마트 기기",
+    "washer": "세탁기",
+    "wifi_hub_1": "Wi-Fi 허브",
+}
+
+
 def device_model(device: BridgeDevice) -> str | None:
-    """Prefer the pushed manufacturer model over the generic presentation type."""
-    return _first_device_metadata_value(device, "mnmo", "model", "modelCode") or device.device_type
+    """Return a readable localized SmartThings device type for the registry."""
+    if device.device_type:
+        mapped = _DEVICE_TYPE_MODELS_KO.get(device.device_type)
+        if mapped is not None:
+            return mapped
+        normalized = re.sub(r"_\d+$", "", device.device_type.strip())
+        normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", normalized)
+        return normalized.replace("_", " ").strip().title() or None
+    return _first_device_metadata_value(device, "mnmo", "model", "modelCode")
 
 
 def device_hardware_version(device: BridgeDevice) -> str | None:

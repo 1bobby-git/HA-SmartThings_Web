@@ -11,7 +11,12 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SmartThingsWebConfigEntry
 from .entity import SmartThingsWebEntity
-from .models import BridgeDevice, BridgeState, SmartThingsWebRuntime
+from .models import (
+    BridgeDevice,
+    BridgeState,
+    SmartThingsWebRuntime,
+    disambiguated_state_names,
+)
 
 
 @dataclass(frozen=True)
@@ -84,13 +89,26 @@ async def async_setup_entry(
         for device in runtime.inventory.devices.values():
             if device.location_id != runtime.location_id:
                 continue
-            for state in device.states.values():
-                description = BINARY_STATES.get(state.attribute)
+            candidates = [
+                (state, description)
+                for state in device.states.values()
+                if (description := BINARY_STATES.get(state.attribute)) is not None
+            ]
+            name_overrides = disambiguated_state_names(
+                (state, description.name) for state, description in candidates
+            )
+            for state, description in candidates:
                 unique_id = "_".join((device.device_id, *state.key))
-                if description is not None and unique_id not in known:
+                if unique_id not in known:
                     known.add(unique_id)
                     entities.append(
-                        SmartThingsWebBinarySensor(runtime, device, state, description)
+                        SmartThingsWebBinarySensor(
+                            runtime,
+                            device,
+                            state,
+                            description,
+                            name_override=name_overrides.get(state.key),
+                        )
                     )
         if entities:
             async_add_entities(entities)
@@ -108,10 +126,13 @@ class SmartThingsWebBinarySensor(SmartThingsWebEntity, BinarySensorEntity):
         device: BridgeDevice,
         state: BridgeState,
         description: BinaryDescription,
+        name_override: str | None = None,
     ) -> None:
-        super().__init__(runtime, device, state, None)
+        super().__init__(runtime, device, state, name_override)
         self.description = description
-        self._attr_translation_key = description.translation_key
+        self._attr_translation_key = (
+            None if name_override is not None else description.translation_key
+        )
         self._attr_entity_category = description.entity_category
         self._attr_device_class = _device_class(device, state, description)
 
