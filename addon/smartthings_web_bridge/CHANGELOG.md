@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.105
+
+- Fix a startup crash in the registry repair: rows already removed by the stale-duplicate pre-pass are now skipped, and every rename/update verifies the row still exists before writing (KeyError on removed IDs, e.g. climate.boilreo_2).
+- Add an additive-on-demand same-origin Advanced refresh poll: the Bridge can periodically re-read the same authenticated device-list GET the web UI uses (read-only, redacted, serialized; never command endpoints) and merge it into the push inventory, so states converge faster without leaving the api-free boundary. Enabled via add-on option `advanced_poll_seconds` (0 = off, default 60; standalone docker env `ADVANCED_POLL_SECONDS`/`STW_ADVANCED_POLL_SECONDS`).
+
 ## 0.1.104
 
 - Attach the device's my.smartthings.com presentation artwork (or a matching type icon) to every entity, including individual sensors and binary sensors, instead of only primary device entities.
