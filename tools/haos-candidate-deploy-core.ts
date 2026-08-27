@@ -1,10 +1,10 @@
 import type { HaosAppInfo, HaosCandidatePreflightResult } from "./haos-candidate-preflight-core.js";
 import { parseGuestExecText } from "./haos-runtime-api-audit-core.js";
 
-export const HAOS_ROLLBACK_COMMIT_SHA = "11b6417861a63c5aa942be816232a13d7f4d16ee";
-export const HAOS_ROLLBACK_VERSION = "0.1.92";
+export const HAOS_ROLLBACK_COMMIT_SHA = "eee8ebe3312a0f9935edd7ae3a13a1c1e50ff208";
+export const HAOS_ROLLBACK_VERSION = "0.1.93";
 export const HAOS_ROLLBACK_MANIFEST_SHA256 =
-  "18f4b41d573bfa2bae1beb13ea6ae710f7a43c2c9f1f3baa5cd38341088f5f89";
+  "eea6eec161685b0ee5f04e0d848f0148f7fc8be1d95a0c3ab0d6f584daf3003c";
 export const HAOS_ROLLBACK_RUNTIME_PATH =
   "/app/dist/bridge/src/browser/command-page.js";
 export const HAOS_ROLLBACK_RUNTIME_SHA256 =
