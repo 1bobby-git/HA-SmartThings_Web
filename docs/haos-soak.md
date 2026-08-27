@@ -15,6 +15,20 @@ The defaults target the current HAOS validation environment through the existing
 
 The output directory must resolve outside this Git repository. The collector refuses an in-repository path, uses SSH batch mode with a bounded timeout, and never persists SSH stdout, stderr, the complete Supervisor app record, an Ingress path, or a browser/network capture.
 
+Inside the production-pruned add-on container, use the compiled local collector:
+
+```sh
+node dist/tools/haos-soak.js --local-bridge
+```
+
+The equivalent package script is:
+
+```sh
+npm run soak:haos:addon
+```
+
+Local Bridge mode defaults to `http://127.0.0.1:8098` and `/data/bridge-secret`. It also accepts loopback-only `--bridge-url` overrides and explicit `--bridge-token-file` paths for controlled add-on tests. Non-loopback URLs remain rejected. Inventory request, inventory response, SSE request, SSE response, and Bridge auth failures are preserved as distinct sanitized sample error codes. Unknown cgroup memory is not reported as zero; absence or unreadable cgroup memory records a fail-closed sample error, while an actual cgroup value of `0` remains valid.
+
 ## Resume an interrupted run
 
 Each new run writes `collector-config.json` and holds `.collector.lock` for its lifetime. The lock allows exactly one collector to append to a run directory. A second collector fails closed; after an abnormal exit, the dead process lock is removed automatically by the next resume attempt.
@@ -33,7 +47,7 @@ npm run soak:haos -- --resume --duration-hours 72 --interval-seconds 300 --outpu
 
 - sample timestamp;
 - live, ready, runtime state, safe URL category, and aggregate connection/device counts;
-- decoded, unique, duplicate, dedupe-journal, invalid-frame, protocol-change, and restart counts;
+- decoded, unique, duplicate, dedupe-journal, invalid-frame, protocol-change, restart, inventory-count, and inventory/SSE sequence counts;
 - bridge, browser, and protocol versions;
 - heartbeat/snapshot/frame/event/parser/push ages and browser uptime;
 - CPU, memory, network-byte, and block-I/O aggregates from Supervisor stats.
@@ -48,6 +62,7 @@ The run fails if any sample:
 - increases the protocol-change or restart counter above the first sample, or rolls browser uptime backward and thereby proves a browser/context restart during this run;
 - raises the invalid-frame count above the first sample;
 - regresses decoded, unique, or duplicate event counters;
+- changes local inventory count or regresses local inventory/SSE sequence counters when those local counters are present;
 - is missing for more than twice the configured interval;
 - records a sanitized collection error; or
 - shows sustained first-window to last-window memory growth above 256 MiB by default.
@@ -70,6 +85,7 @@ Deployment is eligible only when all of these independent checks pass:
 - duration is at least 72 hours, interval is at most 300 seconds, and at least 865 successful samples exist with no errors;
 - the final sample reaches the declared end time, sample gaps stay within the evaluator limit, and failures are empty;
 - memory and monotonic protocol counters remain within the Phase 1 durability rules;
+- both baseline and final evidence contain the local Bridge inventory count plus inventory/SSE sequences, with a stable device count and non-regressing sequences;
 - `final-summary.json` is strict allowlisted data and its exact bytes match `final-summary.json.sha256`.
 
 Exit code `0` and `deploymentEligible=true` are both required. Every other result is fail-closed. In particular, a healthy `pending` result still returns a nonzero exit code and does not release the candidate.

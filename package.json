@@ -29,7 +29,8 @@
     "probe:physical-action:haos": "tsx tools/haos-physical-action-probe.ts",
     "snapshot:replay": "tsx tools/replay-snapshot-fixture.ts",
     "soak:deployment-gate": "tsx tools/haos-soak-deployment-gate.ts",
-    "soak:haos": "tsx tools/haos-soak.ts"
+    "soak:haos": "tsx tools/haos-soak.ts",
+    "soak:haos:addon": "node dist/tools/haos-soak.js --local-bridge"
   },
   "dependencies": {
     "playwright-core": "1.62.1"

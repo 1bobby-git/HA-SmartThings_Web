@@ -38,7 +38,11 @@ const rewriteTreeWithCrlf = async (root: string) => {
 const createMinimalRepo = async () => {
   const repoRoot = await makeTempRoot();
 
-  await writeFixture(repoRoot, "package.json", "{\"name\":\"fixture\"}\n");
+  await writeFixture(
+    repoRoot,
+    "package.json",
+    "{\"name\":\"fixture\",\"scripts\":{\"soak:haos:addon\":\"node dist/tools/haos-soak.js --local-bridge\"}}\n"
+  );
   await writeFixture(repoRoot, "package-lock.json", "{\"lockfileVersion\":3}\n");
   await writeFixture(repoRoot, "tsconfig.json", "{}\n");
   await writeFixture(repoRoot, "tsconfig.build.json", "{}\n");
@@ -181,6 +185,13 @@ describe("packageAddon", { timeout: 30_000 }, () => {
     for (const source of copySources) {
       await expectPathExists(join(second.packageDir, ...source.split("/")));
     }
+
+    const packagedPackage = JSON.parse(
+      await readFile(join(second.packageDir, "package.json"), "utf8")
+    ) as { scripts?: Record<string, string> };
+    expect(packagedPackage.scripts?.["soak:haos:addon"]).toBe(
+      "node dist/tools/haos-soak.js --local-bridge"
+    );
   });
 
   test("produces the same LF package manifest from LF and CRLF checkouts", async () => {

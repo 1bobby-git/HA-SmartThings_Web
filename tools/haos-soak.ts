@@ -13,6 +13,7 @@ import {
   parseHealthGuestExec,
   parseLocalBridgeInventory,
   parseLocalBridgeSseEvent,
+  readCgroupMemoryUsage,
   parseStatsGuestExec,
   writeSanitizedObservation,
   type SoakErrorCode,
@@ -263,9 +264,14 @@ async function collectQgaObservation(options: QgaCliOptions): Promise<SoakObserv
   }
 }
 
-async function collectLocalBridgeObservation(options: LocalBridgeCliOptions): Promise<SoakObservation> {
+export async function collectLocalBridgeObservation(options: LocalBridgeCliOptions): Promise<SoakObservation> {
   const sampledAt = new Date().toISOString();
-  const bridgeToken = await readLocalBridgeToken(options.bridgeTokenFile);
+  let bridgeToken;
+  try {
+    bridgeToken = await readLocalBridgeToken(options.bridgeTokenFile);
+  } catch {
+    return errorObservation(sampledAt, "bridge_auth_failed");
+  }
   const [healthResult, inventoryResult, eventResult] = await Promise.allSettled([
     fetchBridgeJson(`${options.bridgeUrl}/health/details`),
     fetchBridgeJson(`${options.bridgeUrl}/api/v1/inventory`, bridgeToken),
@@ -273,16 +279,44 @@ async function collectLocalBridgeObservation(options: LocalBridgeCliOptions): Pr
   ]);
 
   if (healthResult.status === "rejected") {
-    return errorObservation(sampledAt, "health_command_failed");
+    return errorObservation(
+      sampledAt,
+      isErrorMessage(healthResult.reason, "bridge_response_invalid")
+        ? "health_response_invalid"
+        : "health_command_failed"
+    );
   }
-  if (inventoryResult.status === "rejected" || eventResult.status === "rejected") {
-    return errorObservation(sampledAt, "health_response_invalid");
+  if (inventoryResult.status === "rejected") {
+    return errorObservation(
+      sampledAt,
+      isErrorMessage(inventoryResult.reason, "bridge_response_invalid")
+        ? "inventory_response_invalid"
+        : errorCode(inventoryResult.reason, "inventory_request_failed")
+    );
+  }
+  if (eventResult.status === "rejected") {
+    return errorObservation(sampledAt, errorCode(eventResult.reason, "events_request_failed"));
   }
 
+  let health;
+  let inventory;
+  let event;
   try {
-    const health = parseLocalBridgeHealth(healthResult.value);
-    const inventory = parseLocalBridgeInventory(inventoryResult.value);
-    const event = parseLocalBridgeSseEvent(eventResult.value);
+    health = parseLocalBridgeHealth(healthResult.value);
+  } catch {
+    return errorObservation(sampledAt, "health_response_invalid");
+  }
+  try {
+    inventory = parseLocalBridgeInventory(inventoryResult.value);
+  } catch {
+    return errorObservation(sampledAt, "inventory_response_invalid");
+  }
+  try {
+    event = parseLocalBridgeSseEvent(eventResult.value);
+  } catch {
+    return errorObservation(sampledAt, "events_response_invalid");
+  }
+  try {
     return createSoakSample({
       sampledAt,
       health: {
@@ -293,8 +327,8 @@ async function collectLocalBridgeObservation(options: LocalBridgeCliOptions): Pr
       },
       resources: await collectLocalResources()
     });
-  } catch {
-    return errorObservation(sampledAt, "health_response_invalid");
+  } catch (error) {
+    return errorObservation(sampledAt, errorCode(error, "stats_response_invalid"));
   }
 }
 
@@ -330,9 +364,16 @@ async function fetchBridgeJson(url: string, token?: string): Promise<unknown> {
       signal: controller.signal
     });
     if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        throw new Error("bridge_auth_failed");
+      }
       throw new Error("bridge_request_failed");
     }
-    return await response.json();
+    try {
+      return await response.json();
+    } catch {
+      throw new Error("bridge_response_invalid");
+    }
   } finally {
     clearTimeout(timeout);
   }
@@ -347,6 +388,9 @@ async function fetchBridgeSseEvent(url: string, token: string): Promise<string> 
       signal: controller.signal
     });
     if (!response.ok || !response.body) {
+      if (response.status === 401 || response.status === 403) {
+        throw new Error("bridge_auth_failed");
+      }
       throw new Error("bridge_events_failed");
     }
     const reader = response.body.getReader();
@@ -395,21 +439,6 @@ function parseLocalBridgeHealth(input: unknown): SoakHealthObservation {
 
 async function collectLocalResources() {
   return zeroResources(await readCgroupMemoryUsage());
-}
-
-async function readCgroupMemoryUsage(): Promise<number> {
-  for (const path of ["/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory/memory.usage_in_bytes"]) {
-    try {
-      const text = await readBoundedRegularFile(path, 64);
-      const value = Number(text.trim());
-      if (Number.isSafeInteger(value) && value >= 0) {
-        return value;
-      }
-    } catch {
-      // Some HAOS/container runtimes expose different cgroup layouts; zero remains a sanitized fallback.
-    }
-  }
-  return 0;
 }
 
 function zeroResources(memoryUsageBytes = 0) {
@@ -571,6 +600,10 @@ function isMissingPathError(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
+function isErrorMessage(error: unknown, message: string): boolean {
+  return error instanceof Error && error.message === message;
+}
+
 export function parseCliOptions(args: readonly string[]): CliOptions {
   const allowedValueArguments = new Set([
     "--duration-hours",
@@ -648,9 +681,7 @@ export function parseCliOptions(args: readonly string[]): CliOptions {
     localBridge &&
     (values.has("--ssh-target") ||
       values.has("--addon-slug") ||
-      values.has("--vm-id") ||
-      values.has("--bridge-url") ||
-      values.has("--bridge-token-file"))
+      values.has("--vm-id"))
   ) {
     throw new Error("soak_local_bridge_arguments_invalid");
   }
@@ -718,8 +749,13 @@ function errorObservation(sampledAt: string, code: SoakErrorCode): SoakErrorObse
 function errorCode(error: unknown, fallback: SoakErrorCode): SoakErrorCode {
   if (
     error instanceof Error &&
-    (error.message === "health_command_failed" ||
+    (error.message === "bridge_auth_failed" ||
+      error.message === "health_command_failed" ||
       error.message === "health_response_invalid" ||
+      error.message === "inventory_request_failed" ||
+      error.message === "inventory_response_invalid" ||
+      error.message === "events_request_failed" ||
+      error.message === "events_response_invalid" ||
       error.message === "stats_command_failed" ||
       error.message === "stats_response_invalid")
   ) {

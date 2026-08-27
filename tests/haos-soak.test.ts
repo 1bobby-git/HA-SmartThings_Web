@@ -1,4 +1,5 @@
-import { access, mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,11 +11,14 @@ import {
   parseHealthGuestExec,
   parseLocalBridgeInventory,
   parseLocalBridgeSseEvent,
+  parseSoakObservation,
+  readCgroupMemoryUsage,
   parseStatsGuestExec,
   writeSanitizedObservation,
   type SoakObservation
 } from "../tools/haos-soak-core.js";
 import { parseCliOptions } from "../tools/haos-soak.js";
+import { collectLocalBridgeObservation } from "../tools/haos-soak.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -39,7 +43,7 @@ describe("HAOS soak sampling", () => {
     expect(options.intervalMs).toBe(300 * 1000);
   });
 
-  it("keeps the default QGA mode and rejects remote-only flags in local Bridge mode", () => {
+  it("keeps the default QGA mode and allows only loopback-safe local Bridge overrides", () => {
     const qga = parseCliOptions([]);
 
     expect(qga.mode).toBe("qga");
@@ -53,9 +57,22 @@ describe("HAOS soak sampling", () => {
     expect(() => parseCliOptions(["--local-bridge", "--vm-id", "100"])).toThrowError(
       "soak_local_bridge_arguments_invalid"
     );
-    expect(() =>
-      parseCliOptions(["--local-bridge", "--bridge-url", "https://example.com"])
-    ).toThrowError("soak_local_bridge_arguments_invalid");
+    const local = parseCliOptions([
+      "--local-bridge",
+      "--bridge-url",
+      "http://localhost:18098",
+      "--bridge-token-file",
+      "/tmp/stw-bridge-token"
+    ]);
+    expect(local.mode).toBe("local_bridge");
+    if (local.mode !== "local_bridge") throw new Error("expected local Bridge mode");
+    expect(local.bridgeUrl).toBe("http://localhost:18098");
+    expect(local.bridgeTokenFile).toMatch(/tmp[/\\]stw-bridge-token$/u);
+
+    expect(() => parseCliOptions(["--local-bridge", "--bridge-url", "https://example.com"]))
+      .toThrowError("soak_local_bridge_arguments_invalid");
+    expect(() => parseCliOptions(["--local-bridge", "--bridge-url", "http://example.com"]))
+      .toThrowError("soak_local_bridge_arguments_invalid");
   });
 
   it("parses the nested guest-exec health response and keeps only allowlisted fields", () => {
@@ -140,6 +157,59 @@ describe("HAOS soak sampling", () => {
     expect(JSON.stringify(sample)).not.toMatch(/raw-device-id|another-raw-id|must-not-persist/i);
   });
 
+  it("preserves local Bridge inventory, SSE, and auth failures as specific sanitized error codes", () => {
+    expect(() => parseLocalBridgeInventory({ schemaVersion: 1, sequence: 1 }))
+      .toThrowError("inventory_response_invalid");
+    expect(() => parseLocalBridgeSseEvent("event: keepalive\n\n"))
+      .toThrowError("events_response_invalid");
+    expect(parseSoakObservation({
+      schemaVersion: 1,
+      kind: "error",
+      sampledAt: "2026-08-24T00:00:00.000Z",
+      code: "inventory_request_failed"
+    })).toMatchObject({ code: "inventory_request_failed" });
+    expect(parseSoakObservation({
+      schemaVersion: 1,
+      kind: "error",
+      sampledAt: "2026-08-24T00:00:00.000Z",
+      code: "events_response_invalid"
+    })).toMatchObject({ code: "events_response_invalid" });
+    expect(parseSoakObservation({
+      schemaVersion: 1,
+      kind: "error",
+      sampledAt: "2026-08-24T00:00:00.000Z",
+      code: "bridge_auth_failed"
+    })).toMatchObject({ code: "bridge_auth_failed" });
+  });
+
+  it("classifies local Bridge malformed JSON bodies as endpoint response failures", async () => {
+    const root = await temporaryRoot();
+    const tokenFile = join(root, "bridge-token");
+    await writeFile(tokenFile, "abcdefghijklmnopqrstuvwxyz0123456789\n");
+
+    const healthJsonFailure = await withLocalBridgeServer(
+      (request, response) => {
+        if (request.url === "/health/details") return text(response, 200, "{");
+        if (request.url === "/api/v1/inventory") return json(response, inventoryBody());
+        if (request.url === "/api/v1/events") return sse(response);
+        response.writeHead(404).end();
+      },
+      async (bridgeUrl) => collectLocalBridgeObservation(localBridgeOptions(bridgeUrl, tokenFile))
+    );
+    expect(healthJsonFailure).toMatchObject({ kind: "error", code: "health_response_invalid" });
+
+    const inventoryJsonFailure = await withLocalBridgeServer(
+      (request, response) => {
+        if (request.url === "/health/details") return json(response, healthBody());
+        if (request.url === "/api/v1/inventory") return text(response, 200, "{");
+        if (request.url === "/api/v1/events") return sse(response);
+        response.writeHead(404).end();
+      },
+      async (bridgeUrl) => collectLocalBridgeObservation(localBridgeOptions(bridgeUrl, tokenFile))
+    );
+    expect(inventoryJsonFailure).toMatchObject({ kind: "error", code: "inventory_response_invalid" });
+  });
+
   it("fails evaluation when local Bridge inventory count changes or sequence regresses", () => {
     const verdict = evaluateSoak(
       [
@@ -209,6 +279,16 @@ describe("HAOS soak sampling", () => {
       blockWriteBytes: 0
     });
     expect(JSON.stringify(stats)).not.toContain("must-not-persist");
+  });
+
+  it("does not disguise unknown cgroup memory as zero while keeping real zero valid", async () => {
+    const root = await temporaryRoot();
+    const zeroMemoryFile = join(root, "memory.current");
+    await writeFile(zeroMemoryFile, "0\n");
+
+    await expect(readCgroupMemoryUsage([join(root, "missing")]))
+      .rejects.toThrowError("stats_response_invalid");
+    await expect(readCgroupMemoryUsage([zeroMemoryFile])).resolves.toBe(0);
   });
 
   it("writes only the constructed sanitized observation outside the repository", async () => {
@@ -483,4 +563,63 @@ async function temporaryRoot(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "stw-soak-test-"));
   temporaryDirectories.push(directory);
   return directory;
+}
+
+function localBridgeOptions(bridgeUrl: string, bridgeTokenFile: string) {
+  return {
+    mode: "local_bridge" as const,
+    resume: false,
+    durationMs: 300_000,
+    intervalMs: 300_000,
+    maxMemoryGrowthBytes: 256 * 1024 * 1024,
+    outputDirectory: "/data/soak/test",
+    repositoryRoot: process.cwd(),
+    bridgeUrl,
+    bridgeTokenFile
+  };
+}
+
+async function withLocalBridgeServer<T>(
+  handler: (request: IncomingMessage, response: ServerResponse) => void,
+  callback: (bridgeUrl: string) => Promise<T>
+): Promise<T> {
+  const server = createServer(handler);
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  const address = server.address();
+  if (typeof address !== "object" || address === null) {
+    throw new Error("local test server did not bind");
+  }
+  try {
+    return await callback(`http://127.0.0.1:${address.port}`);
+  } finally {
+    await new Promise<void>((resolveClose, rejectClose) =>
+      server.close((error) => (error ? rejectClose(error) : resolveClose()))
+    );
+  }
+}
+
+function json(response: ServerResponse, body: unknown): void {
+  text(response, 200, JSON.stringify(body));
+}
+
+function text(response: ServerResponse, status: number, body: string): void {
+  response.writeHead(status, { "content-type": "application/json" }).end(body);
+}
+
+function sse(response: ServerResponse): void {
+  response
+    .writeHead(200, { "content-type": "text/event-stream" })
+    .end('data: {"schemaVersion":1,"sequence":1,"type":"state"}\n\n');
+}
+
+function inventoryBody() {
+  return { schemaVersion: 1, sequence: 1, devices: [] };
+}
+
+function healthBody() {
+  return {
+    live: true,
+    ready: true,
+    details: baseHealth()
+  };
 }

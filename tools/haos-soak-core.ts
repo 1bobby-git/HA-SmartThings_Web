@@ -1,4 +1,4 @@
-import { appendFile, lstat, mkdir, realpath } from "node:fs/promises";
+import { appendFile, lstat, mkdir, readFile, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 const RUNTIME_STATES = new Set([
@@ -82,8 +82,13 @@ const RESOURCE_OBSERVATION_KEYS = new Set([
 ]);
 
 export type SoakErrorCode =
+  | "bridge_auth_failed"
   | "health_command_failed"
   | "health_response_invalid"
+  | "inventory_request_failed"
+  | "inventory_response_invalid"
+  | "events_request_failed"
+  | "events_response_invalid"
   | "stats_command_failed"
   | "stats_response_invalid";
 
@@ -355,6 +360,23 @@ export async function writeSanitizedObservation(
   });
 }
 
+export async function readCgroupMemoryUsage(
+  paths = ["/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory/memory.usage_in_bytes"]
+): Promise<number> {
+  for (const path of paths) {
+    try {
+      const text = await readBoundedRegularFile(path, 64);
+      const value = Number(text.trim());
+      if (Number.isSafeInteger(value) && value >= 0) {
+        return value;
+      }
+    } catch {
+      // Try the next known cgroup location; absence is not evidence of zero usage.
+    }
+  }
+  throw new Error("stats_response_invalid");
+}
+
 export function evaluateSoak(
   observations: readonly SoakObservation[],
   options: EvaluateSoakOptions
@@ -527,6 +549,18 @@ function parseGuestExec(raw: string, commandCode: SoakErrorCode, responseCode: S
     }
     throw new Error(responseCode);
   }
+}
+
+async function readBoundedRegularFile(path: string, maximumBytes: number): Promise<string> {
+  const fileStats = await lstat(path);
+  if (fileStats.isSymbolicLink() || !fileStats.isFile() || fileStats.size > maximumBytes) {
+    throw new Error("stats_response_invalid");
+  }
+  const text = await readFile(path, "utf8");
+  if (Buffer.byteLength(text, "utf8") > maximumBytes) {
+    throw new Error("stats_response_invalid");
+  }
+  return text;
 }
 
 function sanitizeHealth(record: Record<string, unknown>): SoakHealthObservation {
@@ -764,8 +798,13 @@ function requireRecord(value: unknown): Record<string, unknown> {
 
 function isSoakErrorCode(value: unknown): value is SoakErrorCode {
   return (
+    value === "bridge_auth_failed" ||
     value === "health_command_failed" ||
     value === "health_response_invalid" ||
+    value === "inventory_request_failed" ||
+    value === "inventory_response_invalid" ||
+    value === "events_request_failed" ||
+    value === "events_response_invalid" ||
     value === "stats_command_failed" ||
     value === "stats_response_invalid"
   );

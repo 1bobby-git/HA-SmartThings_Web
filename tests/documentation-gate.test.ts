@@ -132,6 +132,8 @@ describe("Phase 1 documentation gate", () => {
     expect(soakDocs).toContain("The preflight has no execute mode");
     expect(soakDocs).toContain("It drops the Ingress URL, IP address, options");
     expect(soakDocs).toContain("npm run soak:haos -- --resume");
+    expect(soakDocs).toContain("node dist/tools/haos-soak.js --local-bridge");
+    expect(soakDocs).toContain("npm run soak:haos:addon");
     expect(soakDocs).toContain("allows exactly one collector");
     expect(soakDocs).toContain("does not hide downtime");
     expect(manual).toContain("It does not copy files, reload Supervisor, rebuild");

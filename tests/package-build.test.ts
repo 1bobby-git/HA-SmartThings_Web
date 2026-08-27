@@ -38,4 +38,14 @@ describe("package build contract", () => {
     expect(tsconfig.exclude).toContain("bridge/tests/**/*.ts");
     expect(tsconfig.exclude).toContain("tests/**/*.ts");
   });
+
+  test("package scripts expose a production-pruned in-addon soak command", () => {
+    const packageJson = readJson("package.json") as {
+      scripts?: Record<string, string>;
+    };
+
+    expect(packageJson.scripts?.["soak:haos:addon"]).toBe(
+      "node dist/tools/haos-soak.js --local-bridge"
+    );
+  });
 });

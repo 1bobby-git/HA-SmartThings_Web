@@ -50,6 +50,9 @@ const SUMMARY_KEYS = new Set([
 ]);
 const COUNTER_KEYS = new Set([
   "observedDeviceCount",
+  "inventoryDeviceCount",
+  "inventorySequence",
+  "eventSequence",
   "decodedDeviceEventCount",
   "uniqueLogicalEventCount",
   "duplicateEventCount",
@@ -70,6 +73,8 @@ const FAILURE_CODES = new Set<SoakFailureCode>([
   "runtime_restarted",
   "invalid_frame_increase",
   "counter_regression",
+  "inventory_changed",
+  "sequence_regression",
   "sample_gap",
   "memory_growth",
   "insufficient_samples"
@@ -499,9 +504,17 @@ function counterEvidenceIsValid(
   return (
     baseline.observedDeviceCount > 0 &&
     final.observedDeviceCount > 0 &&
+    baseline.inventoryDeviceCount !== undefined &&
+    final.inventoryDeviceCount !== undefined &&
+    final.inventoryDeviceCount === baseline.inventoryDeviceCount &&
+    baseline.inventorySequence !== undefined &&
+    final.inventorySequence !== undefined &&
+    final.inventorySequence >= baseline.inventorySequence &&
+    baseline.eventSequence !== undefined &&
+    final.eventSequence !== undefined &&
+    final.eventSequence >= baseline.eventSequence &&
     final.protocolChangeCount === baseline.protocolChangeCount &&
-    baseline.restartCount === 0 &&
-    final.restartCount === 0 &&
+    final.restartCount === baseline.restartCount &&
     final.protocolInvalidFrameCount === baseline.protocolInvalidFrameCount &&
     baseline.uniqueLogicalEventCount + baseline.duplicateEventCount ===
       baseline.decodedDeviceEventCount &&
@@ -518,6 +531,15 @@ function sanitizeCounters(value: unknown): SoakEvaluationCounters {
   assertAllowedKeys(record, COUNTER_KEYS);
   return {
     observedDeviceCount: safeNonNegativeInteger(record.observedDeviceCount),
+    ...(record.inventoryDeviceCount === undefined
+      ? {}
+      : { inventoryDeviceCount: safeNonNegativeInteger(record.inventoryDeviceCount) }),
+    ...(record.inventorySequence === undefined
+      ? {}
+      : { inventorySequence: safeNonNegativeInteger(record.inventorySequence) }),
+    ...(record.eventSequence === undefined
+      ? {}
+      : { eventSequence: safeNonNegativeInteger(record.eventSequence) }),
     decodedDeviceEventCount: safeNonNegativeInteger(record.decodedDeviceEventCount),
     uniqueLogicalEventCount: safeNonNegativeInteger(record.uniqueLogicalEventCount),
     duplicateEventCount: safeNonNegativeInteger(record.duplicateEventCount),

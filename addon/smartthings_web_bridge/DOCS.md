@@ -17,6 +17,14 @@ Generated text is canonical UTF-8/LF. Equivalent Windows and Linux checkouts the
 
 Keep backup copies outside `/addons`. Supervisor scans child folders there as local apps, so a backup containing the same slug can make an older version appear current.
 
+For a passive soak from inside the production-pruned add-on container, use the compiled local collector:
+
+```sh
+node dist/tools/haos-soak.js --local-bridge
+```
+
+The equivalent package script is `npm run soak:haos:addon`.
+
 Open the add-on Ingress panel, use the noVNC browser view, and sign in to Samsung manually. The bridge keeps `https://my.smartthings.com/location` open and stores that login only in its dedicated `/data/chromium-profile`. Never copy cookies, CSRF values, user IDs, or other browser session material into the integration.
 
 After the Bridge reaches `CONNECTED`, generate a ten-minute pairing code on its status page and add the `SmartThings Web` integration. Select the SmartThings location to add. As of 0.1.79, the limited alpha exposes all normalized pushed attributes plus binary sensors, switches, lights, buttons, numeric controls, fans, media players, updates, events, covers, climate entities, scenes, SmartThings Home Monitor, and refreshed camera stills. SmartThings Web-only state that the official integration does not model is kept as diagnostic sensors instead of being deleted. Clear domain values are grouped under their primary Home Assistant entities, while raw SmartThings Web content remains available as attributes. It never polls SmartThings state and never changes Home Assistant state optimistically; a command completes only after a newer SmartThings Web push confirms it. Synthetic refresh controls are not created unless a real observed SmartThings Web button control exists.

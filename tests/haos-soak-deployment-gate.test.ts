@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
-import type { SoakEvaluation } from "../tools/haos-soak-core.js";
+import { createSoakSample, evaluateSoak, type SoakEvaluation } from "../tools/haos-soak-core.js";
 import {
   evaluateSoakDeploymentGate,
   inspectSoakDeploymentGate,
@@ -86,6 +86,77 @@ describe("HAOS soak deployment gate", () => {
 
     expect(result.deploymentEligible).toBe(true);
     expect(result.reasons).toEqual([]);
+  });
+
+  test("accepts the real local Bridge summary shape produced by evaluateSoak", () => {
+    const startedAtMs = Date.parse("2026-08-24T00:00:00.000Z");
+    const summary = evaluateSoak(
+      Array.from({ length: MINIMUM_SOAK_SAMPLE_COUNT }, (_, index) =>
+        localBridgeSample(startedAtMs + index * 300_000, index)
+      ),
+      {
+        runStartedAtMs: startedAtMs,
+        expectedDurationMs: MINIMUM_SOAK_DURATION_MS,
+        expectedIntervalMs: 300_000
+      }
+    );
+
+    const result = evaluateSoakDeploymentGate(validMetadata(), summary, {
+      summarySha256: "a".repeat(64),
+      summaryHashMatches: true
+    });
+
+    expect(result.deploymentEligible).toBe(true);
+    expect(result.reasons).toEqual([]);
+  });
+
+  test("fails closed when optional local counter evidence exists on only one side", () => {
+    const summary = validSummary();
+    delete summary.baseline!.inventoryDeviceCount;
+
+    const result = evaluateSoakDeploymentGate(validMetadata(), summary, {
+      summarySha256: "a".repeat(64),
+      summaryHashMatches: true
+    });
+
+    expect(result.deploymentEligible).toBe(false);
+    expect(result.reasons).toContain("counter_evidence_invalid");
+  });
+
+  test("fails closed when local Bridge inventory and SSE evidence is absent", () => {
+    const summary = validSummary();
+    delete summary.baseline!.inventoryDeviceCount;
+    delete summary.baseline!.inventorySequence;
+    delete summary.baseline!.eventSequence;
+    delete summary.final!.inventoryDeviceCount;
+    delete summary.final!.inventorySequence;
+    delete summary.final!.eventSequence;
+
+    const result = evaluateSoakDeploymentGate(validMetadata(), summary, {
+      summarySha256: "a".repeat(64),
+      summaryHashMatches: true
+    });
+
+    expect(result.deploymentEligible).toBe(false);
+    expect(result.reasons).toContain("counter_evidence_invalid");
+  });
+
+  test("parses new local evaluator failure codes and blocks failed summaries without artifact rejection", () => {
+    const summary = validSummary({
+      status: "fail",
+      failures: ["inventory_changed", "sequence_regression"]
+    });
+
+    const parsed = parseSoakEvaluation(JSON.stringify(summary));
+    const result = evaluateSoakDeploymentGate(validMetadata(), parsed, {
+      summarySha256: "a".repeat(64),
+      summaryHashMatches: true
+    });
+
+    expect(parsed.failures).toEqual(["inventory_changed", "sequence_regression"]);
+    expect(result.deploymentEligible).toBe(false);
+    expect(result.reasons).toContain("soak_not_passed");
+    expect(result.reasons).toContain("failures_present");
   });
 
   test("fails closed on hash, duration, interval, sample, error, and failure defects", () => {
@@ -275,6 +346,9 @@ function counters(
 ) {
   return {
     observedDeviceCount: 213,
+    inventoryDeviceCount: 213,
+    inventorySequence: 100,
+    eventSequence: 100,
     decodedDeviceEventCount,
     uniqueLogicalEventCount,
     duplicateEventCount,
@@ -282,6 +356,44 @@ function counters(
     protocolChangeCount: 0,
     restartCount: 0
   };
+}
+
+function resources(memoryUsageBytes: number) {
+  return {
+    cpuPercent: 0,
+    memoryUsageBytes,
+    memoryLimitBytes: 0,
+    memoryPercent: 0,
+    networkRxBytes: 0,
+    networkTxBytes: 0,
+    blockReadBytes: 0,
+    blockWriteBytes: 0
+  };
+}
+
+function localBridgeSample(sampledAtMs: number, index: number) {
+  return createSoakSample({
+    sampledAt: new Date(sampledAtMs).toISOString(),
+    health: {
+      ...counters(1_000 + index * 2, 500 + index, 500 + index),
+      inventoryDeviceCount: 213,
+      inventorySequence: 100 + index,
+      eventSequence: 100 + index,
+      live: true,
+      ready: true,
+      state: "CONNECTED",
+      urlCategory: "smartthings_location",
+      activeConnections: 0,
+      dedupeJournalSize: 500 + index,
+      bridgeVersion: "0.1.98",
+      browserVersion: "151.0.7922.34",
+      protocolVersion: "1:93ad956a7d0c0139",
+      heartbeatAgeMs: 1000,
+      snapshotAgeMs: 1000,
+      restartCount: 4
+    },
+    resources: resources(440_000_000 + index)
+  });
 }
 
 async function makeTemporaryDirectory(): Promise<string> {
