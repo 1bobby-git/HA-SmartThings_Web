@@ -41,7 +41,9 @@ export class DeviceDetailDiscovery {
     if (this.#running) return "busy";
     if (!this.options.canInspect()) return "blocked";
     const inventory = this.options.inventory();
-    const device = inventory.devices.find((candidate) => this.#needsInspection(candidate));
+    const device = inventory.devices
+      .filter((candidate) => this.#needsInspection(candidate))
+      .sort((a, b) => inspectionPriority(a) - inspectionPriority(b))[0];
     if (!device) return "idle";
     this.#attempts.set(device.id, (this.#attempts.get(device.id) ?? 0) + 1);
     this.#running = true;
@@ -83,6 +85,25 @@ export class DeviceDetailDiscovery {
 
 function hasActionableControl(device: BridgeDevice): boolean {
   return (device.controls ?? []).some((control) => control.kind !== "value");
+}
+
+const refreshDetailAttributes = new Set(["battery", "contact", "signalMetrics"]);
+
+function inspectionPriority(device: BridgeDevice): number {
+  if (!hasActionableControl(device) && hasRefreshDetailValueState(device)) {
+    return 0;
+  }
+  if (!hasActionableControl(device)) {
+    return 1;
+  }
+  if (isCameraImageDevice(device)) {
+    return 2;
+  }
+  return 3;
+}
+
+function hasRefreshDetailValueState(device: BridgeDevice): boolean {
+  return device.states.some((state) => refreshDetailAttributes.has(state.attribute));
 }
 
 const cameraImageAttributes = new Set([

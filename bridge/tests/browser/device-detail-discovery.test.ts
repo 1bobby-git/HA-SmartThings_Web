@@ -50,6 +50,40 @@ describe("DeviceDetailDiscovery", () => {
     expect(inspectDeviceDetails).not.toHaveBeenCalled();
   });
 
+  test("prioritizes refresh-worthy value-only devices over generic undiscovered devices", async () => {
+    const inspectDeviceDetails = vi.fn(async () => undefined);
+    const discovery = new DeviceDetailDiscovery({
+      inventory: () => mixedDiscoveryPriorityInventory(),
+      inspector: { inspectDeviceDetails },
+      canInspect: () => true
+    });
+
+    expect(await discovery.runOne()).toBe("inspected");
+    expect(inspectDeviceDetails).toHaveBeenCalledWith({
+      deviceName: "거실창문센서",
+      locationId: "loc_001",
+      locationNames: { loc_001: "Home" },
+      roomName: "거실"
+    });
+  });
+
+  test("still inspects camera image devices after refresh-worthy value-only devices", async () => {
+    const inspected: string[] = [];
+    const inspectDeviceDetails = vi.fn(async ({ deviceName }: { deviceName: string }) => {
+      inspected.push(deviceName);
+    });
+    const discovery = new DeviceDetailDiscovery({
+      inventory: () => valueThenCameraInventory(),
+      inspector: { inspectDeviceDetails },
+      canInspect: () => true,
+      maxAttempts: 1
+    });
+
+    expect(await discovery.runOne()).toBe("inspected");
+    expect(await discovery.runOne()).toBe("inspected");
+    expect(inspected).toEqual(["거실창문센서", "Home camera"]);
+  });
+
   test("pauses while runtime or the physical-action probe forbids extra pages", async () => {
     const inspectDeviceDetails = vi.fn(async () => undefined);
     const discovery = new DeviceDetailDiscovery({
@@ -302,6 +336,34 @@ function actionableControlInventory(): BridgeInventory {
         }
       ]
     }))
+  };
+}
+
+function mixedDiscoveryPriorityInventory(): BridgeInventory {
+  const valueOnly = valueOnlyControlInventory();
+  return {
+    ...valueOnly,
+    devices: [
+      {
+        id: "dev_generic",
+        locationId: "loc_001",
+        roomId: null,
+        name: "Generic undiscovered",
+        type: null,
+        online: true,
+        states: []
+      },
+      ...valueOnly.devices
+    ]
+  };
+}
+
+function valueThenCameraInventory(): BridgeInventory {
+  const valueOnly = valueOnlyControlInventory();
+  const camera = cameraInventory();
+  return {
+    ...valueOnly,
+    devices: [...camera.devices, ...valueOnly.devices]
   };
 }
 
