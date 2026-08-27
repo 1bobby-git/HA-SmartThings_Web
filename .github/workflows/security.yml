@@ -73,7 +73,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install HTTP client test dependencies
-        run: python -m pip install --disable-pip-version-check "aiohttp>=3.10,<4" "yarl>=1.9,<2"
+        run: python -m pip install --disable-pip-version-check "aiohttp>=3.10,<4" "yarl>=1.9,<2" "voluptuous>=0.15,<1"
 
       - name: Compile integration
         run: python -m compileall -q custom_components/smartthings_web
