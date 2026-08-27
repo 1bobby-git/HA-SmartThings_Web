@@ -264,6 +264,42 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
             "https://client.smartthings.com/icons/oneui/contact/off",
         )
 
+    def test_device_entity_uses_type_icon_when_only_animation_asset_exists(self) -> None:
+        state = BridgeState(
+            "main",
+            "bridge",
+            "status",
+            "online",
+            None,
+            "2026-08-26T06:00:00.000Z",
+        )
+        device = BridgeDevice(
+            "hub_001",
+            "loc_001",
+            None,
+            "SmartThings Hub",
+            "unknown",
+            True,
+            presentation=BridgeDevicePresentation(
+                asset_type="hub",
+                animation_url="https://app-asset.samsungiotcloud.com/assets/icons/published/hub/hub.json",
+            ),
+            states={state.key: state},
+        )
+        runtime = SmartThingsWebRuntime(
+            object(), "loc_001", BridgeInventory(1, True, "0.1.95", "4", {}, {}, {device.device_id: device})
+        )
+
+        entity = SmartThingsWebDeviceEntity(runtime, device, "status", None)
+        state_entity = SmartThingsWebEntity(runtime, device, state, None)
+        Entity.__init__(entity)
+        Entity.__init__(state_entity)
+
+        self.assertNotIn("_attr_entity_picture", entity.__dict__)
+        self.assertEqual(entity._attr_icon, "mdi:hub")
+        self.assertNotIn("_attr_icon", state_entity.__dict__)
+        self.assertNotIn("_attr_entity_picture", state_entity.__dict__)
+
     def test_offline_laundry_appliance_keeps_pushed_state_entities_available(self) -> None:
         state = BridgeState(
             "main",

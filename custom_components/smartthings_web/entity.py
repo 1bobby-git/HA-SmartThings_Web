@@ -21,6 +21,25 @@ from .models import (
 
 _LAUNDRY_APPLIANCE_TYPES = {"dryer", "washer"}
 
+_DEVICE_TYPE_ICONS = {
+    "air_conditioner": "mdi:air-conditioner",
+    "air_purifier": "mdi:air-purifier",
+    "camera": "mdi:cctv",
+    "camera_security": "mdi:cctv",
+    "contact_sensor": "mdi:door",
+    "dishwasher": "mdi:dishwasher",
+    "dryer": "mdi:tumble-dryer",
+    "fan": "mdi:fan",
+    "hub": "mdi:hub",
+    "light": "mdi:lightbulb",
+    "motion_sensor": "mdi:motion-sensor",
+    "refrigerator": "mdi:fridge",
+    "speaker": "mdi:speaker",
+    "switch": "mdi:toggle-switch",
+    "temp_humidity_sensor": "mdi:thermometer-water",
+    "washer": "mdi:washing-machine",
+}
+
 
 def device_info_for(device: BridgeDevice) -> DeviceInfo:
     """Return official-style registry metadata available from the web snapshot."""
@@ -51,6 +70,24 @@ def _entity_picture_for(device: BridgeDevice) -> str | None:
             or _safe_device_asset_url(fallback, animation=False)
         )
     return _safe_device_asset_url(fallback, animation=False)
+
+
+def _device_icon_for(device: BridgeDevice) -> str | None:
+    """Return a safe fallback icon when SmartThings has no static picture."""
+    candidates = []
+    if device.presentation is not None:
+        candidates.append(device.presentation.asset_type)
+    candidates.append(device.device_type)
+    for candidate in candidates:
+        normalized = _normalized_device_type(candidate)
+        icon = _DEVICE_TYPE_ICONS.get(normalized)
+        if icon is not None:
+            return icon
+    return None
+
+
+def _normalized_device_type(value: str | None) -> str:
+    return (value or "").strip().lower().replace("-", "_")
 
 
 class SmartThingsWebEntity(Entity):
@@ -126,7 +163,13 @@ class SmartThingsWebDeviceEntity(Entity):
             self._attr_name = name
         self._attr_unique_id = f"{device.device_id}_{suffix}"
         self._attr_device_info = device_info_for(device)
-        self._attr_entity_picture = _entity_picture_for(device)
+        entity_picture = _entity_picture_for(device)
+        if entity_picture is not None:
+            self._attr_entity_picture = entity_picture
+        else:
+            icon = _device_icon_for(device)
+            if icon is not None:
+                self._attr_icon = icon
 
     @property
     def available(self) -> bool:
