@@ -654,6 +654,144 @@ describe("DeviceStore", () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
+  test("merges advanced component arrays into the existing refrigerator device and restores roles", () => {
+    const store = new DeviceStore({
+      normalizeAdvancedAlias: (kind, value) => {
+        if (kind === "device" && value === "dev_advanced") return "dev_001";
+        if (kind === "location" && value === "loc_advanced") return "loc_001";
+        return value.replace("_advanced", "");
+      }
+    });
+    observeDeviceSnapshot(store, {
+      deviceId: "dev_001",
+      locationId: "loc_001",
+      deviceName: "냉장고",
+      deviceTypeData: { type: "refrigerator" }
+    });
+    for (const component of ["main", "freezer", "cooler", "cvroom"]) {
+      observeSnapshotState(store, {
+        componentId: `identifier_${component}`,
+        capabilityId: "identifier_contactSensor",
+        attributeName: "contact",
+        value: "closed",
+        timestamp: "2026-08-27T03:00:00.000Z"
+      });
+    }
+
+    store.observeAdvancedDeviceSnapshot({
+      items: [
+        {
+          deviceId: "dev_advanced",
+          locationId: "loc_advanced",
+          label: "냉장고",
+          ocfDeviceType: "oic.d.refrigerator",
+          components: [
+            advancedComponent("identifier_main_advanced", "main", "Refrigerator"),
+            advancedComponent("identifier_freezer_advanced", "freezer", "Other"),
+            advancedComponent("identifier_cooler_advanced", "cooler", "Other"),
+            advancedComponent("identifier_cvroom_advanced", "cvroom", "Other")
+          ]
+        }
+      ]
+    });
+
+    const snapshot = store.snapshot();
+    expect(snapshot.devices).toHaveLength(1);
+    expect(snapshot.devices[0]?.states).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ component: "identifier_main", value: "closed", componentRole: "refrigerator" }),
+        expect.objectContaining({ component: "identifier_freezer", value: "closed", componentRole: "freezer" }),
+        expect.objectContaining({ component: "identifier_cooler", value: "closed", componentRole: "cooler" }),
+        expect.objectContaining({ component: "identifier_cvroom", value: "closed", componentRole: "cvroom" })
+      ])
+    );
+    expect(snapshot.devices[0]?.states.every((state) => state.updatedAt === "2026-08-27T03:00:00.000Z")).toBe(true);
+  });
+
+  test("does not replace an existing semantic role from a stale advanced state", () => {
+    const store = new DeviceStore({
+      identifierRole: (value) => value === "identifier_freezer" ? "freezer" : undefined
+    });
+    observeSnapshotState(store, {
+      componentId: "identifier_freezer",
+      capabilityId: "identifier_contactSensor",
+      attributeName: "contact",
+      value: "closed",
+      timestamp: "2026-08-27T03:00:00.000Z"
+    });
+
+    store.observeAdvancedDeviceSnapshot({
+      items: [
+        {
+          deviceId: "dev_001",
+          locationId: "loc_001",
+          components: [
+            advancedComponent(
+              "identifier_freezer",
+              "cooler",
+              "Other",
+              "identifier_contactSensor"
+            )
+          ]
+        }
+      ]
+    });
+
+    expect(store.snapshot().devices[0]?.states).toEqual([
+      expect.objectContaining({
+        component: "identifier_freezer",
+        value: "closed",
+        updatedAt: "2026-08-27T03:00:00.000Z",
+        componentRole: "freezer"
+      })
+    ]);
+  });
+
+  test("uses component array metadata when advanced values use status components", () => {
+    const store = new DeviceStore({
+      normalizeStateToken: (value) => ({
+        cooler: "identifier_cooler",
+        contactSensor: "identifier_contactSensor"
+      })[value] ?? value
+    });
+
+    store.observeAdvancedDeviceSnapshot({
+      items: [
+        {
+          deviceId: "dev_001",
+          locationId: "loc_001",
+          components: [
+            {
+              id: "identifier_cooler",
+              label: "cooler",
+              categories: [{ name: "Other" }]
+            }
+          ],
+          status: {
+            components: {
+              cooler: {
+                contactSensor: {
+                  contact: {
+                    value: "closed",
+                    timestamp: "2026-08-27T03:00:00.000Z"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    });
+
+    expect(store.snapshot().devices[0]?.states).toEqual([
+      expect.objectContaining({
+        component: "identifier_cooler",
+        capability: "identifier_contactSensor",
+        componentRole: "cooler"
+      })
+    ]);
+  });
+
   test("aliases raw advanced status keys before publishing semantic roles", () => {
     const aliases: Record<string, string> = {
       cooler: "identifier_cooler",
@@ -1258,6 +1396,30 @@ describe("DeviceStore", () => {
     }
   });
 });
+
+function advancedComponent(
+  id: string,
+  label: string,
+  category: string,
+  capabilityId = "identifier_contactSensor_advanced"
+): Record<string, unknown> {
+  return {
+    id,
+    label,
+    categories: [{ name: category }],
+    capabilities: [
+      {
+        id: capabilityId,
+        status: {
+          contact: {
+            value: "open",
+            timestamp: "2026-08-27T02:00:00.000Z"
+          }
+        }
+      }
+    ]
+  };
+}
 
 function observeSnapshotState(
   store: DeviceStore,

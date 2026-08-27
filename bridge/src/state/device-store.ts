@@ -97,6 +97,8 @@ export type BridgeDeviceStoreEvent =
 type Listener = (event: BridgeDeviceStoreEvent) => void;
 type StateTokenNormalizer = (value: string) => string;
 type IdentifierRoleResolver = (alias: string) => string | undefined;
+type AdvancedAliasKind = "device" | "location" | "identifier";
+type AdvancedAliasNormalizer = (kind: AdvancedAliasKind, value: string) => string;
 type SnapshotQuery =
   | "api/location"
   | "api/scene"
@@ -143,6 +145,7 @@ export class DeviceStore {
   readonly #pending = new Map<string, PendingSnapshot>();
   readonly #listeners = new Set<Listener>();
   readonly #normalizeStateToken: StateTokenNormalizer;
+  readonly #normalizeAdvancedAlias: AdvancedAliasNormalizer;
   readonly #identifierRole: IdentifierRoleResolver;
   readonly #db: DatabaseSync | undefined;
   readonly #onPersistenceError: (() => void) | undefined;
@@ -152,11 +155,13 @@ export class DeviceStore {
 
   constructor(options: {
     normalizeStateToken?: StateTokenNormalizer;
+    normalizeAdvancedAlias?: AdvancedAliasNormalizer;
     identifierRole?: IdentifierRoleResolver;
     sqlitePath?: string;
     onPersistenceError?: () => void;
   } = {}) {
     this.#normalizeStateToken = options.normalizeStateToken ?? ((value) => value);
+    this.#normalizeAdvancedAlias = options.normalizeAdvancedAlias ?? ((_kind, value) => value);
     this.#identifierRole = options.identifierRole ?? (() => undefined);
     this.#onPersistenceError = options.onPersistenceError;
     if (options.sqlitePath) {
@@ -431,8 +436,16 @@ export class DeviceStore {
     }
     let changed = false;
     for (const row of rows) {
-      const id = safeId(row.deviceId ?? row.device_id ?? row.id, "dev");
-      const locationId = safeId(row.locationId ?? row.location_id, "loc");
+      const id = normalizedAdvancedId(
+        row.deviceId ?? row.device_id ?? row.id,
+        "device",
+        this.#normalizeAdvancedAlias
+      );
+      const locationId = normalizedAdvancedId(
+        row.locationId ?? row.location_id,
+        "location",
+        this.#normalizeAdvancedAlias
+      );
       if (!id || !locationId) continue;
       const device = this.#ensureDevice(id, locationId);
       const nextName = safeName(
@@ -442,7 +455,11 @@ export class DeviceStore {
         Object.prototype.hasOwnProperty.call(row, "roomId") ||
         Object.prototype.hasOwnProperty.call(row, "room_id");
       const nextRoomId = hasRoom
-        ? safeId(row.roomId ?? row.room_id, "identifier")
+        ? normalizedAdvancedId(
+            row.roomId ?? row.room_id,
+            "identifier",
+            this.#normalizeAdvancedAlias
+          )
         : device.roomId;
       const nextType =
         safeName(row.deviceTypeName ?? row.deviceType ?? row.type ?? row.deviceTypeId) ??
@@ -470,8 +487,10 @@ export class DeviceStore {
       for (const state of advancedDeviceStates(
         row,
         this.#identifierRole,
-        this.#normalizeStateToken
+        this.#normalizeStateToken,
+        this.#normalizeAdvancedAlias
       )) {
+        changed = this.#mergeStateRoles(device, state) || changed;
         changed = this.#setState(device, state) || changed;
       }
     }
@@ -582,6 +601,26 @@ export class DeviceStore {
       return false;
     }
     device.states.set(key, cloneState(state));
+    return true;
+  }
+
+  #mergeStateRoles(device: MutableDevice, state: BridgeDeviceState): boolean {
+    const key = stateKey(state);
+    const current = device.states.get(key);
+    if (!current) return false;
+    const componentRole = preferredAdvancedRole(current.componentRole, state.componentRole);
+    const capabilityRole = current.capabilityRole ?? state.capabilityRole;
+    if (
+      componentRole === current.componentRole &&
+      capabilityRole === current.capabilityRole
+    ) {
+      return false;
+    }
+    device.states.set(key, {
+      ...current,
+      ...(componentRole ? { componentRole } : {}),
+      ...(capabilityRole ? { capabilityRole } : {})
+    });
     return true;
   }
 
@@ -827,16 +866,20 @@ function advancedDeviceRows(value: unknown): Record<string, unknown>[] | null {
 function advancedDeviceStates(
   row: Record<string, unknown>,
   identifierRole: IdentifierRoleResolver,
-  normalizeStateToken: StateTokenNormalizer
+  normalizeStateToken: StateTokenNormalizer,
+  normalizeAdvancedAlias: AdvancedAliasNormalizer
 ): BridgeDeviceState[] {
   const status = asRecord(row.status);
-  const components = asRecord(status?.components ?? row.components);
-  if (!components) return [];
+  const componentRoles = advancedComponentRoles(row.components, normalizeAdvancedAlias);
+  const components = asRecord(status?.components);
+  if (!components) {
+    return advancedArrayDeviceStates(row.components, identifierRole, normalizeAdvancedAlias);
+  }
   const result: BridgeDeviceState[] = [];
   for (const [rawComponent, capabilitiesValue] of Object.entries(components)) {
-    const componentRole = identifierRole(rawComponent);
     const component = normalizeToken(rawComponent, normalizeStateToken);
     if (!component) continue;
+    const componentRole = componentRoles.get(component) ?? identifierRole(rawComponent);
     const capabilities = asRecord(capabilitiesValue);
     if (!capabilities) continue;
     for (const [rawCapability, attributesValue] of Object.entries(capabilities)) {
@@ -866,6 +909,119 @@ function advancedDeviceStates(
     }
   }
   return result;
+}
+
+function advancedComponentRoles(
+  value: unknown,
+  normalizeAdvancedAlias: AdvancedAliasNormalizer
+): Map<string, string> {
+  const result = new Map<string, string>();
+  if (!Array.isArray(value)) return result;
+  for (const componentValue of value) {
+    const componentRow = asRecord(componentValue);
+    if (!componentRow) continue;
+    const component = normalizedAdvancedId(
+      componentRow.id ?? componentRow.componentId,
+      "identifier",
+      normalizeAdvancedAlias
+    );
+    const role = advancedComponentRole(componentRow);
+    if (component && role) result.set(component, role);
+  }
+  return result;
+}
+
+function advancedArrayDeviceStates(
+  value: unknown,
+  identifierRole: IdentifierRoleResolver,
+  normalizeAdvancedAlias: AdvancedAliasNormalizer
+): BridgeDeviceState[] {
+  if (!Array.isArray(value)) return [];
+  const result: BridgeDeviceState[] = [];
+  for (const componentValue of value) {
+    const componentRow = asRecord(componentValue);
+    if (!componentRow) continue;
+    const component = normalizedAdvancedId(
+      componentRow.id ?? componentRow.componentId,
+      "identifier",
+      normalizeAdvancedAlias
+    );
+    if (!component) continue;
+    const componentRole = advancedComponentRole(componentRow) ?? identifierRole(component);
+    if (!Array.isArray(componentRow.capabilities)) continue;
+    for (const capabilityValue of componentRow.capabilities) {
+      const capabilityRow = asRecord(capabilityValue);
+      if (!capabilityRow) continue;
+      const capability = normalizedAdvancedId(
+        capabilityRow.id ?? capabilityRow.capabilityId,
+        "identifier",
+        normalizeAdvancedAlias
+      );
+      const attributes = asRecord(capabilityRow.status);
+      if (!capability || !attributes) continue;
+      const capabilityRole = identifierRole(capability);
+      for (const [attribute, stateValue] of Object.entries(attributes)) {
+        if (!safeToken(attribute)) continue;
+        const stateRecord = asRecord(stateValue);
+        if (!stateRecord || !Object.prototype.hasOwnProperty.call(stateRecord, "value")) {
+          continue;
+        }
+        const state = stateFromParts({
+          component,
+          capability,
+          attribute,
+          value: stateRecord.value,
+          unit: stateRecord.unit,
+          updatedAt: stateRecord.timestamp ?? stateRecord.updatedAt,
+          componentRole,
+          capabilityRole
+        }, identifierRole);
+        if (state) result.push(state);
+      }
+    }
+  }
+  return result;
+}
+
+function advancedComponentRole(component: Record<string, unknown>): string | undefined {
+  const label = safeRole(component.label ?? component.name);
+  if (label?.toLowerCase() !== "main") return label;
+  if (!Array.isArray(component.categories)) return label;
+  const refrigerator = component.categories.some((value) => {
+    const category = asRecord(value);
+    const name = readString(category?.name ?? category?.category ?? category?.id);
+    return name?.toLowerCase() === "refrigerator";
+  });
+  return refrigerator ? "refrigerator" : label;
+}
+
+function preferredAdvancedRole(
+  current: string | undefined,
+  advanced: string | undefined
+): string | undefined {
+  if (!current) return advanced;
+  if (current.toLowerCase() === "main" && advanced?.toLowerCase() === "refrigerator") {
+    return advanced;
+  }
+  return current;
+}
+
+function normalizedAdvancedId(
+  value: unknown,
+  kind: AdvancedAliasKind,
+  normalize: AdvancedAliasNormalizer
+): string | null {
+  const raw = readString(value);
+  if (!raw) return null;
+  try {
+    const normalized = normalize(kind, raw);
+    return safeId(
+      normalized,
+      kind === "device" ? "dev" : kind === "location" ? "loc" : "identifier"
+    );
+  } catch {
+    return null;
+  }
 }
 
 function stateFromSnapshot(

@@ -119,6 +119,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     onPersistenceError: () => log.warn("device_store_persist_failed"),
     normalizeStateToken: (value) =>
       aliases.alias("identifier", aliases.alias("identifier", value)),
+    normalizeAdvancedAlias: (kind, value) => aliases.alias(kind, value),
     identifierRole: (value) => volatileIdentifiers.semanticIdentifierRole(value)
   });
   status.update({ observedDeviceCount: devices.snapshot().devices.length });

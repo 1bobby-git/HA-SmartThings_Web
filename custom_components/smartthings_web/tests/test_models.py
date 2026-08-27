@@ -1480,6 +1480,7 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
 
     def test_duplicate_state_names_localize_known_component_roles(self) -> None:
         roles = {
+            "refrigerator": "냉장고",
             "cooler": "냉장실",
             "freezer": "냉동실",
             "cvroom": "맞춤보관실",

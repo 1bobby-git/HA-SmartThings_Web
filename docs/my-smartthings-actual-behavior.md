@@ -76,7 +76,11 @@ compartments and appliance values that are distributed across components.
 Version 0.1.95 observes that naturally loaded response once per new Chromium
 context after installing the existing CDP network observer, redacts it, merges
 only metadata and state into DeviceStore, publishes each accepted snapshot as
-one atomic inventory transition, and closes the temporary Advanced page.
+one atomic inventory transition, and closes the temporary Advanced page. The
+single-redaction Advanced aliases are normalized to the existing inventory
+aliases before merge, and the array-shaped component labels/categories are
+used to restore refrigerator, freezer, cooler, custom-zone, and similar roles
+after a Bridge restart without replacing a newer pushed value.
 Component and capability identifiers
 remain aliases; only a small allowlist of semantic roles such as cooler,
 freezer, pantry, ice maker, hub, setup, and Bixby is carried separately for

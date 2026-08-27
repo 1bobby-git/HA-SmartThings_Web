@@ -646,6 +646,7 @@ STATE_ROLE_DISPLAY_NAMES = {
     "onedoor": "단일 도어",
     "pantry-01": "팬트리 1",
     "pantry-02": "팬트리 2",
+    "refrigerator": "냉장고",
     "setup": "설정",
     "smartthings-findnode": "찾기 노드",
     "smartthings-hub": "스마트싱스 허브",
