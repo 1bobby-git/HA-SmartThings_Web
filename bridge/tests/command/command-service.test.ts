@@ -633,6 +633,53 @@ describe("SafeCommandService", () => {
     }))).resolves.toMatchObject({ status: "confirmed" });
   });
 
+  test("confirms string shuffle states with the current SmartThings vocabulary", async () => {
+    const store = readyDeviceStore();
+    store.observe(received(deviceEventFrame(
+      "off",
+      "2026-08-25T00:00:00.500Z",
+      "shuffle",
+      "dev_001",
+      "identifier_mediaPlaybackShuffle"
+    )));
+    observeDeviceDetails(store, [
+      detailSwatch("TOGGLE", "toggle", {
+        swatchId: "identifier_shuffle",
+        label: "Shuffle",
+        capabilityId: "identifier_mediaPlaybackShuffle",
+        attributeName: "shuffle",
+        commands: ["setShuffle"]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async (input) => {
+        expect(input.command).toBe("setShuffle");
+        expect(input.nativeCommand).toBe("setShuffle");
+        store.observe(received(deviceEventFrame(
+          "on",
+          "2026-08-25T00:00:01Z",
+          "shuffle",
+          "dev_001",
+          "identifier_mediaPlaybackShuffle"
+        )));
+      })
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 1_000,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute(deviceCommand("setShuffle", "request_shuffle_string", {
+      attribute: "shuffle",
+      arguments: [true],
+      capability: "identifier_mediaPlaybackShuffle",
+      controlId: "identifier_shuffle"
+    }))).resolves.toMatchObject({ status: "confirmed" });
+  });
+
   test("rejects unobserved or invalid media source repeat and shuffle commands", async () => {
     const store = readyDeviceStore();
     observeDeviceDetails(store, [

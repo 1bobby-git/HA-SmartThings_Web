@@ -2988,6 +2988,36 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(option.click).toHaveBeenCalledWith({ timeout: 15_000 });
   });
 
+  test("does not guess a shuffle DOM fallback when native command dispatch is unavailable", async () => {
+    const page = new FakeCommandPage();
+    const card = new FakeLocator(1);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (role === "button" && options?.name instanceof RegExp && options.name.test("Speaker")) {
+        return card;
+      }
+      if (role === "button") return card;
+      if (role === "dialog") return page.detailDialog;
+      return new FakeLocator(1);
+    });
+    const manager = { openCommandPage: vi.fn(async () => page) };
+    const executor = new SmartThingsWebUiCommandExecutor(() => manager);
+
+    await expect(executor.executeDeviceAction({
+      deviceName: "Speaker",
+      locationId: "loc_001",
+      command: "setShuffle",
+      action: "setShuffle",
+      component: "main",
+      capability: "identifier_mediaPlaybackShuffle",
+      attribute: "shuffle",
+      controlId: "identifier_shuffle",
+      controlLabel: "Shuffle",
+      arguments: [true]
+    })).rejects.toThrow("command_execution_failed");
+
+    expect(manager.openCommandPage).toHaveBeenCalledTimes(1);
+  });
+
   test("clicks the observed fan-mode data-command inside the labeled swatch", async () => {
     const page = new FakeCommandPage();
     const card = new FakeLocator(1);

@@ -674,7 +674,9 @@ function desiredValueFor(command: string, args: BridgeJsonValue[], state: Bridge
   ) {
     return value;
   }
-  if (command === "setShuffle" && typeof value === "boolean") return value;
+  if (command === "setShuffle" && typeof value === "boolean") {
+    return shuffleDesiredValue(value, state);
+  }
   if (command === "setPosition" && typeof value === "number") return value;
   if (state && typeof state.value === "number" && typeof value !== "number") return undefined;
   if (state && typeof state.value === "string" && typeof value !== "string") return undefined;
@@ -683,6 +685,26 @@ function desiredValueFor(command: string, args: BridgeJsonValue[], state: Bridge
 
 function armStateForCommand(command: string): string | undefined {
   return { armAway: "ARMED_AWAY", armStay: "ARMED_STAY", disarm: "DISARMED" }[command];
+}
+
+function shuffleDesiredValue(
+  enabled: boolean,
+  state: BridgeDeviceState | undefined
+): BridgeJsonValue {
+  if (typeof state?.value !== "string") return enabled;
+  const current = state.value.trim().toLowerCase();
+  const pairs: Array<readonly [string, string]> = [
+    ["on", "off"],
+    ["enabled", "disabled"],
+    ["true", "false"],
+    ["shuffled", "linear"]
+  ];
+  for (const [onValue, offValue] of pairs) {
+    if (current === onValue || current === offValue) {
+      return enabled ? onValue : offValue;
+    }
+  }
+  return enabled ? "on" : "off";
 }
 
 function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest): ResolvedDeviceRequest {
