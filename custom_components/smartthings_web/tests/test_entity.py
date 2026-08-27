@@ -266,6 +266,51 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("_attr_entity_picture", state_entity.__dict__)
         self.assertNotIn("_attr_name", state_entity.__dict__)
 
+    def test_device_info_display_name_only_rewrites_room_clone_names(self) -> None:
+        state = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "on",
+            None,
+            "2026-08-26T06:00:00.000Z",
+        )
+
+        def _device(name: str, room_id: str | None) -> BridgeDevice:
+            return BridgeDevice(
+                "dev_001",
+                "loc_001",
+                room_id,
+                name,
+                "speaker",
+                True,
+                states={state.key: state},
+            )
+
+        rooms = {"room_001": ("loc_001", "거실")}
+        clone = _device("거실", "room_001")
+        distinct = _device("거실 스피커 2", "room_001")
+        runtime = SmartThingsWebRuntime(
+            object(),
+            "loc_001",
+            BridgeInventory(1, True, "0.1.99", "4:test", {}, rooms, {clone.device_id: clone}),
+        )
+        empty_runtime = SmartThingsWebRuntime(
+            object(),
+            "loc_001",
+            BridgeInventory(1, True, "0.1.99", "4:test", {}, {}, {distinct.device_id: distinct}),
+        )
+
+        clone_entity = SmartThingsWebDeviceEntity(runtime, clone, "device", None)
+        distinct_entity = SmartThingsWebDeviceEntity(runtime, distinct, "device", None)
+        no_room_entity = SmartThingsWebDeviceEntity(empty_runtime, distinct, "device", None)
+
+        self.assertEqual(clone_entity._attr_device_info["name"], "스피커")
+        self.assertEqual(distinct_entity._attr_device_info["name"], "거실 스피커 2")
+        self.assertEqual(no_room_entity._attr_device_info["name"], "거실 스피커 2")
+        self.assertEqual(clone.name, "거실")
+        self.assertEqual(distinct.name, "거실 스피커 2")
+
     def test_explicit_state_entity_name_is_preserved(self) -> None:
         state = BridgeState(
             "main",

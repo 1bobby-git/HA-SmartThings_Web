@@ -281,7 +281,7 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
             "https://app-asset.samsungiotcloud.com/assets/icons/published/ai_speaker_lux_one/ai_speaker_lux_one.json",
         )
 
-    def test_inventory_strips_room_names_from_device_names(self) -> None:
+    def test_inventory_keeps_device_names_pristine_for_room_free_display(self) -> None:
         parsed = parse_inventory(
             {
                 "schemaVersion": 1,
@@ -289,68 +289,34 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
                 "ready": True,
                 "bridgeVersion": "0.1.38",
                 "protocolVersion": "1",
-                "locations": [
-                    {"id": "loc_001", "name": "Home", "armState": "disarmed"}
-                ],
+                "locations": [],
                 "rooms": [
                     {
                         "id": "room_001",
                         "locationId": "loc_001",
                         "name": "디티오룸",
-                    },
-                    {
-                        "id": "room_002",
-                        "locationId": "loc_001",
-                        "name": "Living Room",
-                    },
+                    }
                 ],
                 "devices": [
                     {
-                        "id": "dev_prefix_kr",
+                        "id": "dev_001",
                         "locationId": "loc_001",
                         "roomId": "room_001",
-                        "name": "디티오룸 상태",
+                        "name": "디티오룸 Status",
                     },
                     {
-                        "id": "dev_suffix_latin",
+                        "id": "dev_002",
                         "locationId": "loc_001",
-                        "roomId": "room_002",
-                        "name": "Mood Light living room",
-                    },
-                    {
-                        "id": "dev_compound",
-                        "locationId": "loc_001",
-                        "roomId": "room_001",
-                        "name": "디티오룸의조명",
-                    },
-                    {
-                        "id": "dev_kept_middle",
-                        "locationId": "loc_001",
-                        "roomId": "room_001",
-                        "name": "미니 디티오룸 스피커",
-                    },
-                    {
-                        "id": "dev_named_like_room",
-                        "locationId": "loc_001",
-                        "roomId": "room_001",
-                        "name": "디티오룸",
-                    },
-                    {
-                        "id": "dev_case_insensitive",
-                        "locationId": "loc_001",
-                        "roomId": "room_002",
-                        "name": "LIVING ROOM Fan",
+                        "roomId": None,
+                        "name": "거실 2",
                     },
                 ],
             }
         )
 
-        self.assertEqual(parsed.devices["dev_prefix_kr"].name, "상태")
-        self.assertEqual(parsed.devices["dev_suffix_latin"].name, "Mood Light")
-        self.assertEqual(parsed.devices["dev_compound"].name, "조명")
-        self.assertEqual(parsed.devices["dev_kept_middle"].name, "미니 디티오룸 스피커")
-        self.assertEqual(parsed.devices["dev_named_like_room"].name, "디티오룸")
-        self.assertEqual(parsed.devices["dev_case_insensitive"].name, "Fan")
+        self.assertEqual(parsed.rooms["room_001"][1], "디티오룸")
+        self.assertEqual(parsed.devices["dev_001"].name, "디티오룸 Status")
+        self.assertEqual(parsed.devices["dev_002"].name, "거실 2")
 
 
 class _FakeResponse:

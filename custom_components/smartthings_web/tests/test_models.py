@@ -1740,5 +1740,76 @@ def sensor_value(runtime: SmartThingsWebRuntime) -> int:
     return next(iter(device.states.values())).value
 
 
+class RoomFreeDisplayNameTests(unittest.TestCase):
+    """Only devices named exactly like their own room lose the room-name slug."""
+
+    def _runtime(self, rooms: dict[str, tuple[str, str]]) -> SmartThingsWebRuntime:
+        return SmartThingsWebRuntime(
+            client=object(),
+            location_id="loc_001",
+            inventory=BridgeInventory(1, True, "0.1.99", "4:test", {}, rooms, {}),
+        )
+
+    @staticmethod
+    def _device(name: str, device_type: str | None, room_id: str | None) -> BridgeDevice:
+        return BridgeDevice(
+            device_id="dev_001",
+            location_id="loc_001",
+            room_id=room_id,
+            name=name,
+            device_type=device_type,
+            online=True,
+        )
+
+    def test_device_named_like_its_own_room_falls_back_to_type_label(self) -> None:
+        runtime = self._runtime(
+            {"room_001": ("loc_001", "거실"), "room_002": ("loc_001", "Living Room")}
+        )
+        cases = {
+            ("거실", "speaker", "room_001"): "스피커",
+            ("거실", "air_conditioner", "room_001"): "에어컨",
+            (" 거실 ", "switch", "room_001"): "스위치",
+            ("living room", "speaker", "room_002"): "스피커",
+        }
+        for (name, device_type, room_id), expected in cases.items():
+            with self.subTest(name=name, device_type=device_type):
+                self.assertEqual(
+                    models_module.room_free_display_name(
+                        runtime,
+                        self._device(name, device_type, room_id),
+                    ),
+                    expected,
+                )
+
+    def test_other_devices_keep_their_raw_names(self) -> None:
+        runtime = self._runtime(
+            {
+                "room_001": ("loc_001", "거실"),
+                "room_002": ("loc_001", "디티오룸"),
+            }
+        )
+        unchanged = [
+            self._device("거실 2", "speaker", "room_001"),
+            self._device("디티오룸의조명", "light", "room_001"),
+            self._device("미니 거실 스피커", "speaker", "room_001"),
+            self._device("주방 냉장고", "refrigerator", "room_002"),
+        ]
+        for device in unchanged:
+            with self.subTest(name=device.name):
+                self.assertIsNone(models_module.room_free_display_name(runtime, device))
+
+    def test_unknown_rooms_or_types_fall_back_to_the_raw_name(self) -> None:
+        runtime = self._runtime({"room_001": ("loc_001", "거실")})
+        no_match = [
+            self._device("거실", "robot_vacuum", "room_001"),
+            self._device("거실", "speaker", None),
+            self._device("거실", "speaker", "room_missing"),
+            self._device("부산집 거실", None, None),
+        ]
+        for device in no_match:
+            with self.subTest(name=device.name, room_id=device.room_id):
+                self.assertIsNone(models_module.room_free_display_name(runtime, device))
+
+
 if __name__ == "__main__":
     unittest.main()

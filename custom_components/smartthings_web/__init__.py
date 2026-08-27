@@ -42,6 +42,7 @@ from .models import (
     is_image_device,
     is_media_device,
     number_controls,
+    room_free_display_name,
     sensor_state_allowed,
     sensor_state_owned_by_primary_domain,
     state_has_entity_value,
@@ -103,9 +104,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
             if device.location_id != location_id:
                 continue
             room = runtime.inventory.rooms.get(device.room_id) if device.room_id else None
-            device_info = device_info_for(device)
+            display_name = room_free_display_name(runtime, device)
+            device_info = device_info_for(device, display_name=display_name)
             metadata = (
-                device.name,
+                display_name,
                 device_info.get("manufacturer"),
                 device_info.get("model"),
                 device_info.get("hw_version"),

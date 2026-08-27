@@ -17,6 +17,7 @@ from .models import (
     device_model,
     device_software_version,
     entity_unique_id,
+    room_free_display_name,
 )
 
 
@@ -42,11 +43,15 @@ _DEVICE_TYPE_ICONS = {
 }
 
 
-def device_info_for(device: BridgeDevice) -> DeviceInfo:
+def device_info_for(
+    device: BridgeDevice,
+    *,
+    display_name: str | None = None,
+) -> DeviceInfo:
     """Return official-style registry metadata available from the web snapshot."""
     return DeviceInfo(
         identifiers={(DOMAIN, device.device_id)},
-        name=device.name,
+        name=display_name if display_name is not None else device.name,
         manufacturer=device_manufacturer(device),
         model=device_model(device),
         hw_version=device_hardware_version(device),
@@ -129,7 +134,10 @@ class SmartThingsWebEntity(Entity):
         if name is not None:
             self._attr_name = name
         self._attr_unique_id = entity_unique_id(device.device_id, state)
-        self._attr_device_info = device_info_for(device)
+        self._attr_device_info = device_info_for(
+            device,
+            display_name=room_free_display_name(runtime, device),
+        )
 
     @property
     def available(self) -> bool:
@@ -182,7 +190,10 @@ class SmartThingsWebDeviceEntity(Entity):
         if name is not None:
             self._attr_name = name
         self._attr_unique_id = f"{device.device_id}_{suffix}"
-        self._attr_device_info = device_info_for(device)
+        self._attr_device_info = device_info_for(
+            device,
+            display_name=room_free_display_name(runtime, device),
+        )
         entity_picture = _entity_picture_for(device)
         if entity_picture is not None:
             self._attr_entity_picture = entity_picture
