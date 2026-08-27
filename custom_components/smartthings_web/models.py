@@ -634,11 +634,8 @@ MEDIA_TRANSPORT_COMMANDS = {
 }
 
 MEDIA_DEVICE_TYPES = {
-    "ai_speaker_lux_one",
-    "audio",
     "av_receiver",
     "home_theater",
-    "media_player",
     "soundbar",
     "speaker",
 }
