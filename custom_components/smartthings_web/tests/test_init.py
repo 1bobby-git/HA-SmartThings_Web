@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
 import sys
@@ -137,6 +138,7 @@ from smartthings_web.const import (  # noqa: E402
 )
 from smartthings_web.models import BridgeControl, BridgeDevice, BridgeInventory, BridgeState  # noqa: E402
 import smartthings_web.__init__ as integration  # noqa: E402
+import smartthings_web.naming as naming_module  # noqa: E402
 
 
 class FakeRegistry:
@@ -1545,6 +1547,202 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             "smartthings_device_dev_426_presence_custom",
         )
 
+    def test_rebased_role_metadata_does_not_accumulate_transliterated_suffixes(self) -> None:
+        """Keep HA-transliterated role suffixes stable across repeated setup passes."""
+        state_specs = [
+            ("identifier_7091628e9151", "부모님댁", "presence"),
+            ("identifier_bf4c9146a548", "친정집", "presence_2"),
+            ("identifier_cd4f3cfbf2aa", "Home", "presence_3"),
+            ("identifier_d5fc226da811", "회사", "presence_4"),
+        ]
+        states = [
+            BridgeState(
+                component,
+                "presenceSensor",
+                "presence",
+                "present",
+                None,
+                "2026-08-28T06:00:00Z",
+                component_role=role,
+            )
+            for component, role, _suffix in state_specs
+        ]
+        device = BridgeDevice(
+            "dev_426",
+            "loc_001",
+            "room_family",
+            "Gyeongsugyi S22",
+            "mobile",
+            True,
+            states={state.key: state for state in states},
+        )
+        registry_entries = [
+            SimpleNamespace(
+                entity_id=f"binary_sensor.smartthings_device_dev_426_{suffix}",
+                domain="binary_sensor",
+                platform=DOMAIN,
+                unique_id=f"dev_426_{component}_presenceSensor_presence",
+                device_id="uuid_phone",
+                name=None,
+                disabled_by=None,
+                original_name=f"smartthings_device_dev_426_{suffix}",
+                object_id_base=f"smartthings_device_dev_426_{suffix}",
+                suggested_object_id=f"smartthings_device_dev_426_{suffix}",
+            )
+            for component, _role, suffix in state_specs
+        ]
+        registry = FakeRegistry(registry_entries)
+        self.patch_registry(registry)
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.127",
+            protocol_version="4",
+            locations={"loc_001": "Home"},
+            rooms={"room_family": ("loc_001", "Family")},
+            devices={device.device_id: device},
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_001"},
+        )
+        original_integration_slugify = integration.slugify
+        original_naming_slugify = naming_module.slugify
+
+        def ha_style_slugify(value: object) -> str:
+            text = str(value)
+            for source, replacement in {
+                "부모님댁": "bumonimdaeg",
+                "친정집": "cinjeongjib",
+                "회사": "hoesa",
+            }.items():
+                text = text.replace(source, replacement)
+            return original_integration_slugify(text)
+
+        integration.slugify = ha_style_slugify
+        naming_module.slugify = ha_style_slugify
+        try:
+            for _ in range(5):
+                _migrate_entity_registry(object(), entry, inventory)
+        finally:
+            integration.slugify = original_integration_slugify
+            naming_module.slugify = original_naming_slugify
+
+        self.assertEqual(
+            [item.entity_id for item in registry_entries],
+            [
+                "binary_sensor.gyeongsugyi_s22_presence_bumonimdaeg",
+                "binary_sensor.gyeongsugyi_s22_presence_cinjeongjib",
+                "binary_sensor.gyeongsugyi_s22_presence_home",
+                "binary_sensor.gyeongsugyi_s22_presence_hoesa",
+            ],
+        )
+        self.assertEqual(
+            [item.object_id_base for item in registry_entries],
+            [
+                "presence_bumonimdaeg",
+                "presence_cinjeongjib",
+                "presence_home",
+                "presence_hoesa",
+            ],
+        )
+        self.assertEqual(
+            [item.suggested_object_id for item in registry_entries],
+            [
+                "gyeongsugyi_s22_presence_bumonimdaeg",
+                "gyeongsugyi_s22_presence_cinjeongjib",
+                "gyeongsugyi_s22_presence_home",
+                "gyeongsugyi_s22_presence_hoesa",
+            ],
+        )
+
+    def test_rebased_role_metadata_repairs_accumulated_restore_hints(self) -> None:
+        """Collapse role suffixes already accumulated by earlier restore passes."""
+        parent_state = BridgeState(
+            "identifier_7091628e9151",
+            "presenceSensor",
+            "presence",
+            "present",
+            None,
+            "2026-08-28T06:00:00Z",
+            component_role="부모님댁",
+        )
+        home_state = BridgeState(
+            "identifier_cd4f3cfbf2aa",
+            "presenceSensor",
+            "presence",
+            "present",
+            None,
+            "2026-08-28T06:00:00Z",
+            component_role="Home",
+        )
+        device = BridgeDevice(
+            "dev_426",
+            "loc_001",
+            "room_family",
+            "Gyeongsugyi S22",
+            "mobile",
+            True,
+            states={state.key: state for state in (parent_state, home_state)},
+        )
+        registry_entry = SimpleNamespace(
+            entity_id="binary_sensor.gyeongsugyi_s22_presence_bumonimdaeg",
+            domain="binary_sensor",
+            platform=DOMAIN,
+            unique_id="dev_426_identifier_7091628e9151_presenceSensor_presence",
+            device_id="uuid_phone",
+            name=None,
+            disabled_by=None,
+            original_name="Presence (부모님댁)",
+            object_id_base=(
+                "presence_bumonimdaeg_bumonimdaeg_bumonimdaeg_bumonimdaeg"
+            ),
+            suggested_object_id=(
+                "gyeongsugyi_s22_presence_bumonimdaeg_bumonimdaeg_bumonimdaeg"
+            ),
+        )
+        registry = FakeRegistry([registry_entry])
+        self.patch_registry(registry)
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.127",
+            protocol_version="4",
+            locations={"loc_001": "Home"},
+            rooms={"room_family": ("loc_001", "Family")},
+            devices={device.device_id: device},
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_001"},
+        )
+        original_integration_slugify = integration.slugify
+        original_naming_slugify = naming_module.slugify
+
+        def ha_style_slugify(value: object) -> str:
+            return original_integration_slugify(
+                str(value).replace("부모님댁", "bumonimdaeg")
+            )
+
+        integration.slugify = ha_style_slugify
+        naming_module.slugify = ha_style_slugify
+        try:
+            _migrate_entity_registry(object(), entry, inventory)
+            _migrate_entity_registry(object(), entry, inventory)
+        finally:
+            integration.slugify = original_integration_slugify
+            naming_module.slugify = original_naming_slugify
+
+        self.assertEqual(
+            registry_entry.entity_id,
+            "binary_sensor.gyeongsugyi_s22_presence_bumonimdaeg",
+        )
+        self.assertEqual(registry_entry.object_id_base, "presence_bumonimdaeg")
+        self.assertEqual(
+            registry_entry.suggested_object_id,
+            "gyeongsugyi_s22_presence_bumonimdaeg",
+        )
+
     def test_fallback_id_repair_uses_original_name_when_it_is_not_stale(self) -> None:
         """Re-apply role suffixes instead of preserving stale duplicated suffixes."""
         state = BridgeState(
@@ -2059,13 +2257,14 @@ class EntityRegistryMigrationTests(unittest.TestCase):
                 ),
             ]
         )
-        scheduled: list[object] = []
-        delayed: list[object] = []
+        scheduled: list[Callable[[], None]] = []
+        delayed: list[tuple[float, Callable[[], None]]] = []
         hass = SimpleNamespace(
             loop=SimpleNamespace(
                 call_soon=lambda callback: scheduled.append(callback),
-                call_later=lambda _delay, callback: (
-                    delayed.append(callback) or SimpleNamespace(cancel=lambda: None)
+                call_later=lambda delay, callback: (
+                    delayed.append((delay, callback))
+                    or SimpleNamespace(cancel=lambda: None)
                 ),
             ),
         )
@@ -2096,6 +2295,10 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         )
 
         _subscribe_entity_registry_migration(hass, entry)
+        self.assertEqual(
+            [delay for delay, _callback in delayed],
+            [0.5, 2.0, 10.0, 30.0],
+        )
         scheduled.pop(0)()
         self.assertEqual(registry.renamed, [])
 
@@ -2107,7 +2310,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
                 unique_id="dev_window_button_advanced:refresh:identifier_main:identifier_refresh",
             )
         )
-        delayed.pop(0)()
+        delayed.pop(0)[1]()
         scheduled.pop(0)()
 
         self.assertEqual(

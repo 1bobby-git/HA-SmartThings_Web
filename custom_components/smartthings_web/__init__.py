@@ -176,7 +176,7 @@ def _subscribe_entity_registry_migration(
         hass.loop.call_soon(run_migration)
 
     def schedule_settled_migrations() -> None:
-        """Run once now and twice after dynamic entity discovery can settle."""
+        """Retry through startup so transient restored-state reservations can clear."""
         nonlocal last_topology
         topology = _entity_registry_topology_fingerprint(
             runtime.inventory,
@@ -193,7 +193,7 @@ def _subscribe_entity_registry_migration(
         schedule_migration()
         call_later = getattr(hass.loop, "call_later", None)
         if callable(call_later):
-            for delay in (0.5, 2.0):
+            for delay in (0.5, 2.0, 10.0, 30.0):
                 handle = call_later(delay, schedule_migration)
                 if handle is not None:
                     delayed_handles.append(handle)
@@ -1230,11 +1230,33 @@ def _generated_registry_state_name(
 def _normalized_registry_state_name_base(base: str, state: object) -> str:
     """Remove stale role suffixes before current sibling disambiguation runs."""
     for qualifier in _registry_state_qualifier_names(state):
-        for suffix in (f" ({qualifier})", f" {qualifier}", f"_{qualifier}", f"-{qualifier}"):
-            if base.casefold().endswith(suffix.casefold()):
-                trimmed = base[: -len(suffix)].strip()
-                if trimmed:
-                    return trimmed
+        qualifier_variants = list(
+            dict.fromkeys(
+                candidate
+                for candidate in (qualifier, slugify(qualifier))
+                if isinstance(candidate, str) and candidate.strip()
+            )
+        )
+        while True:
+            trimmed_base = None
+            for candidate in qualifier_variants:
+                for suffix in (
+                    f" ({candidate})",
+                    f" {candidate}",
+                    f"_{candidate}",
+                    f"-{candidate}",
+                ):
+                    if not base.casefold().endswith(suffix.casefold()):
+                        continue
+                    trimmed = base[: -len(suffix)].strip()
+                    if trimmed:
+                        trimmed_base = trimmed
+                        break
+                if trimmed_base is not None:
+                    break
+            if trimmed_base is None:
+                break
+            base = trimmed_base
     return base
 
 
