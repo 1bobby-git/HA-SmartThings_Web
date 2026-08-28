@@ -204,6 +204,42 @@ describe("CameraImageStore", () => {
     });
   });
 
+  test("retains only the latest raw observed URL for an authenticated page thumbnail request", async () => {
+    const fetchImage = vi.fn(async () => new Response(null, { status: 400 }));
+    const store = createStore(fetchImage);
+    const redactedUrl =
+      "https://mediaserv.media1208.ec2.st-av.net/image?source_id=identifier_camera&image_id=identifier_still";
+    const rawUrl =
+      "https://mediaserv.media1208.ec2.st-av.net/image?source_id=camera-source&image_id=still-001";
+
+    store.observeInventory(
+      inventoryWithImageState({ deviceId: "dev_001", value: redactedUrl })
+    );
+    expect(store.thumbnailRequestUrl("dev_001")).toBeUndefined();
+
+    store.observeRawAdvancedDeviceSnapshot({
+      items: [
+        {
+          deviceId: "raw-camera-uuid",
+          status: {
+            components: {
+              main: {
+                imageCapture: {
+                  image: { value: rawUrl }
+                }
+              }
+            }
+          }
+        }
+      ]
+    });
+
+    expect(store.thumbnailRequestUrl("dev_001")).toBe(rawUrl);
+    expect(store.thumbnailRequestUrl("raw-camera-uuid")).toBeUndefined();
+    store.reset();
+    expect(store.thumbnailRequestUrl("dev_001")).toBeUndefined();
+  });
+
   test("rejects unsafe inventory image URLs before fetching", async () => {
     const fetchImage = vi.fn<typeof fetch>();
     const store = createStore(fetchImage);

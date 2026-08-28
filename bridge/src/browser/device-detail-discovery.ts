@@ -15,6 +15,7 @@ interface DeviceDetailDiscoveryOptions {
   inventory: () => BridgeInventory;
   inspector: DeviceDetailInspector;
   canInspect: () => boolean;
+  resolveCameraImageUrl?: (deviceId: string) => string | undefined;
   maxAttempts?: number;
 }
 
@@ -67,7 +68,9 @@ export class DeviceDetailDiscovery {
         ? inventory.rooms.find((room) => room.id === device.roomId)?.name
         : undefined;
       const cameraImageUrl = isCameraImageDevice(device)
-        ? observedCameraImageUrl(device)
+        ? this.options.resolveCameraImageUrl
+          ? this.options.resolveCameraImageUrl(device.id)
+          : observedCameraImageUrl(device)
         : undefined;
       await this.options.inspector.inspectDeviceDetails({
         deviceName: device.name,

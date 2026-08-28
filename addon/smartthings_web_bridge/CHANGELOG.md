@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.124
+
+- Keep the latest raw camera image URL observed from authenticated Socket.IO or Advanced traffic in volatile Bridge memory and use that exact URL for the in-page `api/camera/thumbnail` request.
+- Never substitute the identifier-redacted inventory URL for the authenticated request; normalized inventory continues to expose only safe aliases while raw URLs remain absent from persistence, logs, health output, and Home Assistant responses.
+
 ## 0.1.123
 
 - Request Home Camera still-image thumbnails through the already authenticated SmartThings web page's observed `api/camera/thumbnail` service, then keep using the existing Socket.IO binary-frame observer to persist only validated image bytes and metadata.

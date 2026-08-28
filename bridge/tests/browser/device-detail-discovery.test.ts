@@ -229,10 +229,14 @@ describe("DeviceDetailDiscovery", () => {
 
   test("requests a longer detail settle window for camera image devices", async () => {
     const inspectDeviceDetails = vi.fn(async () => undefined);
+    const rawImageUrl =
+      "https://mediaserv.media1203.ec2.st-av.net/image?source_id=raw-camera&image_id=raw-still";
     const discovery = new DeviceDetailDiscovery({
       inventory: () => cameraInventory(),
       inspector: { inspectDeviceDetails },
-      canInspect: () => true
+      canInspect: () => true,
+      resolveCameraImageUrl: (deviceId) =>
+        deviceId === "dev_camera" ? rawImageUrl : undefined
     });
 
     expect(await discovery.runOne()).toBe("inspected");
@@ -241,8 +245,7 @@ describe("DeviceDetailDiscovery", () => {
       locationId: "loc_001",
       locationNames: { loc_001: "Home" },
       detailSettleMs: 5_000,
-      cameraImageUrl:
-        "https://mediaserv.media1203.ec2.st-av.net/image?source_id=camera&image_id=still"
+      cameraImageUrl: rawImageUrl
     });
   });
 

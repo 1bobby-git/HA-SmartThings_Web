@@ -47,6 +47,7 @@ export class CameraImageStore {
     Array<{ deviceId: string; remaining: number }>
   >();
   readonly #imageUrlDevices = new Map<string, string>();
+  readonly #thumbnailRequestUrls = new Map<string, string>();
   readonly #inFlight = new Set<Promise<void>>();
 
   constructor(options: CameraImageStoreOptions) {
@@ -84,7 +85,7 @@ export class CameraImageStore {
     for (const reference of findImageReferences(decoded)) {
       const alias = this.#safeAlias(reference.rawDeviceId);
       const url = safeCameraImageUrl(reference.url);
-      if (alias && url) this.#imageUrlDevices.set(url, alias);
+      if (alias && url) this.#rememberRawImageUrl(alias, url);
     }
     if (decoded.kind === "binary_ack" && decoded.ackId !== undefined) {
       const key = pendingKey(connectionId, decoded.ackId);
@@ -117,7 +118,11 @@ export class CameraImageStore {
     const url = readString(event?.value);
     if (attribute !== "image" || !rawDeviceId || !url) return;
     const alias = this.#safeAlias(rawDeviceId);
-    if (alias) this.#download(alias, url);
+    const safeUrl = safeCameraImageUrl(url);
+    if (alias && safeUrl) {
+      this.#rememberRawImageUrl(alias, safeUrl);
+      this.#download(alias, safeUrl);
+    }
   }
 
   observeRawWebSocketBinaryFrame(
@@ -161,10 +166,16 @@ export class CameraImageStore {
       const alias = this.#safeAlias(rawDeviceId);
       if (!alias) continue;
       for (const url of findAdvancedImageUrls(row)) {
-        this.#imageUrlDevices.set(url, alias);
+        this.#rememberRawImageUrl(alias, url);
         this.#download(alias, url);
       }
     }
+  }
+
+  thumbnailRequestUrl(deviceId: string): string | undefined {
+    return DEVICE_ALIAS.test(deviceId)
+      ? this.#thumbnailRequestUrls.get(deviceId)
+      : undefined;
   }
 
   get(deviceId: string): BridgeCameraImage | undefined {
@@ -190,6 +201,7 @@ export class CameraImageStore {
     this.#pendingThumbnails.clear();
     this.#pendingBinaryThumbnails.clear();
     this.#imageUrlDevices.clear();
+    this.#thumbnailRequestUrls.clear();
   }
 
   #safeAlias(rawDeviceId: string): string | undefined {
@@ -199,6 +211,11 @@ export class CameraImageStore {
     } catch {
       return undefined;
     }
+  }
+
+  #rememberRawImageUrl(deviceId: string, url: string): void {
+    this.#imageUrlDevices.set(url, deviceId);
+    this.#thumbnailRequestUrls.set(deviceId, url);
   }
 
   #download(deviceId: string, rawUrl: string): void {
