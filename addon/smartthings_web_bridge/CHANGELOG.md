@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.112
+
+- Keep alias cleanup compatible with HAOS's small temporary filesystem: remove mandatory startup `VACUUM`, commit the legacy transient-alias deletion and migration marker in one logical cleanup transaction, and let SQLite reuse freed pages without blocking Bridge startup.
+- Preserve the 0.1.111 room-normalized entity IDs, SmartThings device presentation, event-driven Advanced status supplement, and push-first state authority.
+
 ## 0.1.111
 
 - Prevent newly discovered Home Assistant entities from generating duplicated room-name object IDs such as `geosil_geosil_*`; existing registry repair still cleans older generated IDs on startup.

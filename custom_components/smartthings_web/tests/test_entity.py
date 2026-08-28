@@ -350,7 +350,7 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
             BridgeInventory(
                 1,
                 True,
-                "0.1.111",
+                "0.1.112",
                 "4",
                 {},
                 {"room_001": ("loc_001", "거실")},
@@ -389,7 +389,7 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
             BridgeInventory(
                 1,
                 True,
-                "0.1.111",
+                "0.1.112",
                 "4",
                 {},
                 {"room_001": ("loc_001", "거실")},

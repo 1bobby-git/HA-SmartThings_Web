@@ -65,14 +65,24 @@ export class SqliteAliasStore {
 
     // These aliases are deterministic HMAC digests. Persisting every transient
     // request/event ID only grows SQLite without adding identity stability.
-    // This constructor runs before the capture and inventory connections open,
-    // so one bounded compaction can safely reclaim the legacy rows and pages.
-    this.#db.exec("DELETE FROM aliases WHERE kind IN ('account', 'user', 'identifier')");
-    this.#db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    this.#db.exec("VACUUM");
-    this.#db
-      .prepare("INSERT INTO bridge_migrations (name) VALUES (?)")
-      .run(digestOnlyMigration);
+    // Keep startup limited to the logical cleanup: HAOS add-on containers have
+    // a deliberately small temporary filesystem, while VACUUM may need a full
+    // database-sized temporary copy. Freed pages remain reusable by SQLite.
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      this.#db.exec("DELETE FROM aliases WHERE kind IN ('account', 'user', 'identifier')");
+      this.#db
+        .prepare("INSERT INTO bridge_migrations (name) VALUES (?)")
+        .run(digestOnlyMigration);
+      this.#db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.#db.exec("ROLLBACK");
+      } catch {
+        // Preserve the original migration error.
+      }
+      throw error;
+    }
   }
 
   #digest(kind: AliasKind, rawIdentifier: string): string {
