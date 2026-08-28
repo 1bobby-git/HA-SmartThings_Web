@@ -370,6 +370,10 @@ class SmartThingsWebMediaPlayer(SmartThingsWebDeviceEntity, MediaPlayerEntity):
 
     async def async_play_media(self, media_type: str, media_id: str, **kwargs: object) -> None:
         """Play a track and resume playback."""
+        if not _is_play_track_media_type(media_type):
+            raise HomeAssistantError(
+                f"SmartThings Web media device has no observed {media_type} argument shape"
+            )
         await self._async_command("playTrackAndResume", [media_id])
 
     async def async_set_repeat(self, repeat: str) -> None:
@@ -474,8 +478,10 @@ def _control_for(device: BridgeDevice | None, command: str) -> BridgeControl | N
         elif command == "setVolume":
             matched = control.kind == "slider" and control.attribute == "volume"
         elif command == "playTrackAndResume":
-            matched = control.kind == "button" and control_supports_command(
-                control, command
+            matched = (
+                control.kind == "button"
+                and _is_play_track_control(control)
+                and control_supports_command(control, command)
             )
         elif command == "setInputSource":
             matched = (
@@ -632,3 +638,27 @@ def _string_list(value: object | None) -> list[str]:
             if result:
                 return result
     return []
+
+
+def _is_play_track_media_type(media_type: str) -> bool:
+    normalized = media_type.strip().lower().replace("_", "-")
+    return normalized in {"music", "playlist", "track", "url"}
+
+
+def _is_play_track_control(control: BridgeControl) -> bool:
+    identity = " ".join(
+        value
+        for value in (
+            control.control_id,
+            control.capability,
+            control.attribute,
+            control.label,
+        )
+        if value
+    ).lower()
+    if any(token in identity for token in ("tts", "text to speech", "speech")):
+        return False
+    return control.attribute == "audioTrackData" or control.capability in {
+        "audioTrackData",
+        "mediaTrackControl",
+    }

@@ -407,6 +407,43 @@ describe("CameraImageStore", () => {
       capturedAt: "2026-08-25T02:00:00.000Z"
     });
   });
+
+  test("notifies listeners with a sanitized image sequence after bytes are persisted", async () => {
+    const fetchImage = vi.fn(async () =>
+      new Response(Uint8Array.from([0xff, 0xd8, 0xff]), {
+        status: 200,
+        headers: { "content-type": "image/jpeg", "content-length": "3" }
+      })
+    );
+    const events: unknown[] = [];
+    const store = new CameraImageStore({
+      dataDir: temporaryRoot(),
+      aliasDeviceId: () => "dev_001",
+      fetchImage,
+      now: () => new Date("2026-08-25T02:00:00.000Z")
+    });
+    store.subscribe((event) => events.push(event));
+
+    store.observeRawWebSocketFrame(
+      "received",
+      '42["api/subscription DEVICE_EVENT",{"data":{"device_event":{"device_id":"raw-camera-uuid","attribute":"image","value":"https://media.st-av.net/image?token=secret"}}}]'
+    );
+    await store.whenIdle();
+
+    expect(events).toEqual([
+      {
+        schemaVersion: 1,
+        type: "image",
+        sequence: 1,
+        deviceId: "dev_001",
+        image: {
+          contentType: "image/jpeg",
+          capturedAt: "2026-08-25T02:00:00.000Z"
+        }
+      }
+    ]);
+    expect(JSON.stringify(events)).not.toMatch(/secret|media\.st-av\.net|token/i);
+  });
 });
 
 function createStore(

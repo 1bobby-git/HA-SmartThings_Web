@@ -10,6 +10,17 @@ export interface BridgeCameraImage {
   capturedAt: string;
 }
 
+export interface BridgeCameraImageEvent {
+  schemaVersion: 1;
+  type: "image";
+  sequence: number;
+  deviceId: string;
+  image: {
+    contentType: BridgeCameraImage["contentType"];
+    capturedAt: string;
+  };
+}
+
 interface CameraImageStoreOptions {
   dataDir: string;
   aliasDeviceId: (rawDeviceId: string) => string;
@@ -23,6 +34,8 @@ interface PersistedMetadata {
   contentType: BridgeCameraImage["contentType"];
   capturedAt: string;
 }
+
+type CameraImageListener = (event: BridgeCameraImageEvent) => void;
 
 const DEVICE_ALIAS = /^dev_[0-9]{3,32}$/u;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -49,6 +62,8 @@ export class CameraImageStore {
   readonly #imageUrlDevices = new Map<string, string>();
   readonly #thumbnailRequestUrls = new Map<string, string>();
   readonly #inFlight = new Set<Promise<void>>();
+  readonly #listeners = new Set<CameraImageListener>();
+  #sequence = 0;
 
   constructor(options: CameraImageStoreOptions) {
     this.#root = join(options.dataDir, "camera-images");
@@ -193,6 +208,11 @@ export class CameraImageStore {
     }
   }
 
+  subscribe(listener: CameraImageListener): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
   async whenIdle(): Promise<void> {
     await Promise.allSettled([...this.#inFlight]);
   }
@@ -268,6 +288,23 @@ export class CameraImageStore {
     renameSync(tempMetadata, metadataPath);
     chmodSync(bodyPath, 0o600);
     chmodSync(metadataPath, 0o600);
+    this.#publish({
+      schemaVersion: 1,
+      type: "image",
+      sequence: ++this.#sequence,
+      deviceId,
+      image: { contentType, capturedAt }
+    });
+  }
+
+  #publish(event: BridgeCameraImageEvent): void {
+    for (const listener of this.#listeners) {
+      try {
+        listener(event);
+      } catch {
+        // One failed local client must not interrupt camera cache updates.
+      }
+    }
   }
 }
 

@@ -507,6 +507,57 @@ describe("createBridgeHttpServer", () => {
     expect(get).toHaveBeenCalledWith("dev_001");
     expect(await missing.text()).toBe(JSON.stringify({ error: "camera_image_not_found" }));
   });
+
+  test("merges camera image cache notifications into the authenticated event stream", async () => {
+    const token = "d".repeat(32);
+    let imageListener: ((event: unknown) => void) | undefined;
+    const unsubscribe = vi.fn();
+    const server = await createBridgeHttpServer({
+      store: createStore(),
+      host: "127.0.0.1",
+      port: 0,
+      auth: new BridgeAuth(token),
+      devices: new DeviceStore(),
+      images: {
+        get: vi.fn(),
+        subscribe: vi.fn((listener: (event: unknown) => void) => {
+          imageListener = listener;
+          return unsubscribe;
+        })
+      }
+    });
+    servers.push(server);
+    const controller = new AbortController();
+    const response = await fetch(`http://127.0.0.1:${server.port}/api/v1/events`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: controller.signal
+    });
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+
+    imageListener?.({
+      schemaVersion: 1,
+      type: "image",
+      sequence: 7,
+      deviceId: "dev_001",
+      image: { contentType: "image/jpeg", capturedAt: "2026-08-25T02:00:00.000Z" }
+    });
+
+    const chunks: string[] = [];
+    while (!chunks.join("").includes('"type":"image"')) {
+      const chunk = await reader!.read();
+      expect(chunk.done).toBe(false);
+      chunks.push(new TextDecoder().decode(chunk.value));
+    }
+    controller.abort();
+    await reader!.cancel().catch(() => undefined);
+
+    const text = chunks.join("");
+    expect(text).toContain('"type":"image"');
+    expect(text).toContain('"deviceId":"dev_001"');
+    expect(text).not.toMatch(/token|media\.st-av\.net|cookie/i);
+    await vi.waitFor(() => expect(unsubscribe).toHaveBeenCalledTimes(1));
+  });
 });
 
 function createStore(): RuntimeStatusStore {

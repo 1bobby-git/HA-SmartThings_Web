@@ -117,6 +117,7 @@ from smartthings_web.models import (  # noqa: E402
     BridgeDevice,
     BridgeDevicePresentation,
     BridgeInventory,
+    BridgeImageUpdate,
     SmartThingsWebRuntime,
 )
 
@@ -160,6 +161,138 @@ class SmartThingsWebImageTests(unittest.TestCase):
         entity = SmartThingsWebImage(object(), runtime, device)
 
         self.assertNotIn("_attr_entity_picture", entity.__dict__)
+
+    def test_camera_image_rotates_token_for_cache_only_image_events(self) -> None:
+        device = BridgeDevice(
+            "camera_001",
+            "loc_001",
+            None,
+            "Home Camera 360",
+            "camera_security",
+            True,
+        )
+        runtime = SmartThingsWebRuntime(
+            object(),
+            "loc_001",
+            BridgeInventory(1, True, "0.1.126", "4", {}, {}, {device.device_id: device}),
+        )
+        entity = SmartThingsWebImage(object(), runtime, device)
+        token_updates = 0
+        writes = 0
+
+        def update_token() -> None:
+            nonlocal token_updates
+            token_updates += 1
+
+        def write_state() -> None:
+            nonlocal writes
+            writes += 1
+
+        entity.async_update_token = update_token  # type: ignore[method-assign]
+        entity.async_write_ha_state = write_state  # type: ignore[method-assign]
+        entity.async_on_remove = lambda _callback: None  # type: ignore[method-assign]
+        self.assertIsNone(entity.image_last_updated)
+
+        runtime.image_updates[device.device_id] = BridgeImageUpdate(
+            1, "2026-08-25T02:00:00.000Z", "image/jpeg"
+        )
+        self.assertEqual(entity.image_last_updated.isoformat(), "2026-08-25T02:00:00+00:00")
+        import asyncio
+
+        asyncio.run(entity.async_added_to_hass())
+        runtime._notify_listeners(device_ids={device.device_id}, notify_global=False)
+
+        self.assertEqual(token_updates, 1)
+        self.assertEqual(writes, 1)
+
+    def test_runtime_ignores_stale_camera_image_cache_events(self) -> None:
+        device = BridgeDevice(
+            "camera_001",
+            "loc_001",
+            None,
+            "Home Camera 360",
+            "camera_security",
+            True,
+        )
+        runtime = SmartThingsWebRuntime(
+            object(),
+            "loc_001",
+            BridgeInventory(1, True, "0.1.126", "4", {}, {}, {device.device_id: device}),
+        )
+
+        self.assertTrue(
+            runtime.apply_image_event(
+                {
+                    "schemaVersion": 1,
+                    "type": "image",
+                    "sequence": 2,
+                    "deviceId": device.device_id,
+                    "image": {
+                        "capturedAt": "2026-08-25T02:00:01.000Z",
+                        "contentType": "image/jpeg",
+                    },
+                }
+            )
+        )
+        self.assertFalse(
+            runtime.apply_image_event(
+                {
+                    "schemaVersion": 1,
+                    "type": "image",
+                    "sequence": 1,
+                    "deviceId": device.device_id,
+                    "image": {
+                        "capturedAt": "2026-08-25T02:00:00.000Z",
+                        "contentType": "image/jpeg",
+                    },
+                }
+            )
+        )
+
+    def test_runtime_accepts_newer_camera_image_after_bridge_sequence_reset(self) -> None:
+        device = BridgeDevice(
+            "camera_001",
+            "loc_001",
+            None,
+            "Home Camera 360",
+            "camera_security",
+            True,
+        )
+        runtime = SmartThingsWebRuntime(
+            object(),
+            "loc_001",
+            BridgeInventory(1, True, "0.1.126", "4", {}, {}, {device.device_id: device}),
+        )
+        self.assertTrue(
+            runtime.apply_image_event(
+                {
+                    "schemaVersion": 1,
+                    "type": "image",
+                    "sequence": 12,
+                    "deviceId": device.device_id,
+                    "image": {
+                        "capturedAt": "2026-08-25T02:00:01.000Z",
+                        "contentType": "image/jpeg",
+                    },
+                }
+            )
+        )
+
+        self.assertTrue(
+            runtime.apply_image_event(
+                {
+                    "schemaVersion": 1,
+                    "type": "image",
+                    "sequence": 1,
+                    "deviceId": device.device_id,
+                    "image": {
+                        "capturedAt": "2026-08-25T02:00:02.000Z",
+                        "contentType": "image/jpeg",
+                    },
+                }
+            )
+        )
+        self.assertEqual(runtime.image_updates[device.device_id].sequence, 1)
 
 
 if __name__ == "__main__":

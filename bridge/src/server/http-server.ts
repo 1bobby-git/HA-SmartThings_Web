@@ -12,7 +12,7 @@ import {
   type ProbeRuntimeEvidence
 } from "../inspector/physical-action-correlation-probe.js";
 import type { DeviceStore } from "../state/device-store.js";
-import type { CameraImageStore } from "../state/camera-image-store.js";
+import type { BridgeCameraImageEvent, CameraImageStore } from "../state/camera-image-store.js";
 import { createHealthReport } from "./health.js";
 import type { BridgeAuth } from "./bridge-auth.js";
 import { renderStatusPage } from "./status-page.js";
@@ -25,7 +25,7 @@ export interface BridgeHttpServerOptions {
   auth?: BridgeAuth;
   devices?: DeviceStore;
   commands?: Pick<SafeCommandService, "execute">;
-  images?: Pick<CameraImageStore, "get">;
+  images?: Pick<CameraImageStore, "get"> & Partial<Pick<CameraImageStore, "subscribe">>;
   physicalActionProbe?: PhysicalActionCorrelationProbe;
   getProbeEvidence?: () => ProbeRuntimeEvidence;
 }
@@ -151,7 +151,7 @@ async function handleBridgeApiRequest(
     }
     if (path === "/api/v1/events") {
       if (method !== "GET") return writeError(response, 405, "method_not_allowed");
-      return openEventStream(request, response, options.devices, options.store);
+      return openEventStream(request, response, options.devices, options.store, options.images);
     }
     writeError(response, 404, "not_found");
   } catch (error) {
@@ -202,7 +202,8 @@ function openEventStream(
   request: IncomingMessage,
   response: ServerResponse,
   devices: DeviceStore,
-  store: RuntimeStatusStore
+  store: RuntimeStatusStore,
+  images?: Partial<Pick<CameraImageStore, "subscribe">>
 ): void {
   request.socket.setNoDelay(true);
   response.writeHead(200, {
@@ -219,6 +220,9 @@ function openEventStream(
   store.update({ activeConnections: activeConnections + 1 });
   writeEvent({ schemaVersion: 1, sequence: devices.currentSequence(), type: "inventory" });
   const unsubscribe = devices.subscribe(writeEvent);
+  const unsubscribeImages = images?.subscribe
+    ? images.subscribe((event: BridgeCameraImageEvent) => writeEvent(event))
+    : undefined;
   const keepalive = setInterval(() => {
     if (!response.destroyed) response.write(": keepalive\n\n");
   }, 15_000);
@@ -228,6 +232,7 @@ function openEventStream(
     closed = true;
     clearInterval(keepalive);
     unsubscribe();
+    unsubscribeImages?.();
     const currentConnections = store.getSnapshot().activeConnections;
     store.update({ activeConnections: Math.max(0, currentConnections - 1) });
     response.end();

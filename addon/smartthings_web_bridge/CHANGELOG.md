@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.126
+
+- Publish a sanitized `type: "image"` SSE event whenever authenticated camera image cache bytes are atomically persisted, carrying only the public device alias, cache sequence, content type, and capture timestamp.
+- Let Home Assistant image entities rotate their image token from that cache event even when SmartThings image metadata states do not change, while rejecting stale image cache events by sequence and `capturedAt`.
+
 ## 0.1.125
 
 - Normalize raw camera device IDs through the same redactor and DeviceStore alias generations used by the public inventory, so observed binary thumbnail bytes are cached under the exact `dev_*` ID that Home Assistant requests.

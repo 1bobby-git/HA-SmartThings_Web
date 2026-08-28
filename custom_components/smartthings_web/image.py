@@ -62,6 +62,9 @@ class SmartThingsWebImage(SmartThingsWebDeviceEntity, ImageEntity):
             if state.attribute in {"captureTime", "clip", "image", "imageTransferProgress", "stream"}
             and state.updated_at is not None
         ]
+        image_update = self.runtime.image_updates.get(self.device_id)
+        if image_update is not None:
+            timestamps.append(_parse_time(image_update.captured_at))
         return max((timestamp for timestamp in timestamps if timestamp is not None), default=None)
 
     async def async_image(self) -> bytes | None:

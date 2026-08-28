@@ -1009,6 +1009,77 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertEqual(numeric_range_for(device, frequency), (10.0, 120.0, 5.0))
         self.assertEqual(option_values({"values": [{"value": "auto"}, {"name": "sleep"}]}), ["auto", "sleep"])
 
+    def test_number_controls_keep_numeric_sliders_without_range_metadata(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        frequency = BridgeState(
+            "main",
+            "motion",
+            "detectionFrequency",
+            45,
+            "s",
+            "2026-08-24T21:10:00Z",
+        )
+        fan_speed = BridgeState(
+            "main",
+            "fanSpeed",
+            "fanSpeed",
+            40,
+            "%",
+            "2026-08-24T21:10:00Z",
+        )
+        device.states = {frequency.key: frequency, fan_speed.key: fan_speed}
+        device.controls = {
+            "detection_frequency": BridgeControl(
+                "detection_frequency",
+                "slider",
+                "Detection Frequency",
+                component="main",
+                capability="motion",
+                attribute="detectionFrequency",
+            ),
+            "fan_speed": BridgeControl(
+                "fan_speed",
+                "slider",
+                "Fan Speed",
+                component="main",
+                capability="fanSpeed",
+                attribute="fanSpeed",
+            ),
+        }
+
+        self.assertEqual(
+            [control.control_id for control in number_controls(device)],
+            ["detection_frequency", "fan_speed"],
+        )
+        self.assertEqual(numeric_range_for(device, frequency), (0.0, 3600.0, 1.0))
+        self.assertEqual(numeric_range_for(device, fan_speed), (0.0, 100.0, 1.0))
+
+    def test_number_controls_reject_missing_range_when_state_is_not_numeric(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        mode = BridgeState(
+            "main",
+            "custom",
+            "customValue",
+            "auto",
+            None,
+            "2026-08-24T21:10:00Z",
+        )
+        device.states = {mode.key: mode}
+        device.controls = {
+            "custom_value": BridgeControl(
+                "custom_value",
+                "slider",
+                "Custom Value",
+                component="main",
+                capability="custom",
+                attribute="customValue",
+            )
+        }
+
+        self.assertEqual(number_controls(device), [])
+
     def test_richer_domains_do_not_create_duplicate_number_entities(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")
         device = current.devices["dev_001"]

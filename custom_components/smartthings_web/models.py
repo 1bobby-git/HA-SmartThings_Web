@@ -98,6 +98,15 @@ class BridgeScene:
     updated_at: str | None = None
 
 
+@dataclass(frozen=True)
+class BridgeImageUpdate:
+    """One sanitized Bridge camera cache update."""
+
+    sequence: int
+    captured_at: str
+    content_type: str
+
+
 @dataclass
 class BridgeInventory:
     """Current Bridge inventory."""
@@ -138,6 +147,7 @@ class SmartThingsWebRuntime:
         tuple[str, tuple[str, str, str]], set[Callable[[], None]]
     ] = field(default_factory=dict)
     device_listeners: dict[str, set[Callable[[], None]]] = field(default_factory=dict)
+    image_updates: dict[str, BridgeImageUpdate] = field(default_factory=dict)
 
     def subscribe(self, listener: Callable[[], None]) -> Callable[[], None]:
         """Subscribe to state changes."""
@@ -166,6 +176,8 @@ class SmartThingsWebRuntime:
 
     async def handle_event(self, event: dict[str, Any]) -> bool:
         """Apply one SSE event, resynchronizing on reconnects and gaps."""
+        if event.get("type") == "image":
+            return self.apply_image_event(event)
         if event.get("type") == "inventory":
             sequence = _event_sequence(event)
             if sequence is None or sequence <= self.inventory.sequence:
@@ -190,6 +202,22 @@ class SmartThingsWebRuntime:
             if sequence <= self.inventory.sequence:
                 return changed
         return self.apply_state(event) or changed
+
+    def apply_image_event(self, event: dict[str, Any]) -> bool:
+        """Apply one sanitized camera cache update from the Bridge."""
+        update = parse_image_update(event)
+        device_id = event.get("deviceId")
+        if update is None or not isinstance(device_id, str):
+            return False
+        device = self.inventory.devices.get(device_id)
+        if device is None or device.location_id != self.location_id:
+            return False
+        current = self.image_updates.get(device_id)
+        if current is not None and not _image_update_is_newer(update, current):
+            return False
+        self.image_updates[device_id] = update
+        self._notify_listeners(device_ids={device_id}, notify_global=False)
+        return True
 
     def apply_reconnect_inventory(self, latest: BridgeInventory) -> bool:
         """Apply the first fetched inventory of a new SSE connection epoch."""
@@ -880,8 +908,10 @@ def number_controls(device: BridgeDevice) -> list[BridgeControl]:
         for control in device.controls.values()
         if control.kind == "slider"
         and control.attribute is not None
-        and control.minimum is not None
-        and control.maximum is not None
+        and (
+            (control.minimum is not None and control.maximum is not None)
+            or _slider_has_numeric_state(device, control)
+        )
         and safe_observed_control(control)
         and not _slider_owned_by_richer_domain(device, control)
     ]
@@ -918,6 +948,18 @@ def _slider_owned_by_richer_domain(
         and control_kind(device, state) == "light"
         and (toggle := toggle_control_for_state(device, state)) is not None
         and safe_observed_control(toggle)
+        for state in device.states.values()
+    )
+
+
+def _slider_has_numeric_state(device: BridgeDevice, control: BridgeControl) -> bool:
+    """Allow metadata-light sliders only when the pushed state is numeric."""
+    return any(
+        state.attribute == control.attribute
+        and (control.component is None or state.component == control.component)
+        and (control.capability is None or state.capability == control.capability)
+        and isinstance(state.value, (int, float))
+        and not isinstance(state.value, bool)
         for state in device.states.values()
     )
 
@@ -1464,6 +1506,27 @@ def parse_scene(raw: Any) -> BridgeScene | None:
     )
 
 
+def parse_image_update(raw: Any) -> BridgeImageUpdate | None:
+    """Parse a sanitized Bridge camera cache SSE event."""
+    if not isinstance(raw, dict) or raw.get("schemaVersion") != 1 or raw.get("type") != "image":
+        return None
+    sequence = raw.get("sequence")
+    image = raw.get("image")
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0:
+        return None
+    if not isinstance(image, dict):
+        return None
+    captured_at = image.get("capturedAt")
+    content_type = image.get("contentType")
+    if (
+        not isinstance(captured_at, str)
+        or _timestamp(captured_at) is None
+        or content_type not in {"image/jpeg", "image/png", "image/webp"}
+    ):
+        return None
+    return BridgeImageUpdate(sequence, captured_at, content_type)
+
+
 def parse_device_presentation(raw: Any) -> BridgeDevicePresentation | None:
     """Parse only public SmartThings icon and animation asset metadata."""
     if not isinstance(raw, dict):
@@ -1667,6 +1730,20 @@ def _metadata_is_newer(candidate: str | None, current: str | None) -> bool:
     if candidate_time is None:
         return False
     return candidate_time >= current_time
+
+
+def _image_update_is_newer(candidate: BridgeImageUpdate, current: BridgeImageUpdate) -> bool:
+    if candidate.sequence > current.sequence:
+        return True
+    candidate_time = _timestamp(candidate.captured_at)
+    current_time = _timestamp(current.captured_at)
+    if current_time is None:
+        return True
+    if candidate_time is None:
+        return False
+    if candidate.sequence < current.sequence:
+        return candidate_time > current_time
+    return candidate_time > current_time
 
 
 def _parse_numeric_range(value: Any) -> tuple[float, float, float] | None:

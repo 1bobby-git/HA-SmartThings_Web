@@ -329,6 +329,59 @@ class SmartThingsWebMediaPlayerTests(unittest.TestCase):
         with self.assertRaises(exceptions_module.HomeAssistantError):
             _preferred_command(device, "nextTrack", "fastForward")
 
+    def test_speech_control_does_not_advertise_generic_play_media(self) -> None:
+        speech = BridgeControl(
+            "tts",
+            "button",
+            "Text to speech",
+            component="main",
+            capability="speechSynthesis",
+            attribute="phrase",
+            commands=("playTrackAndResume",),
+        )
+        device = BridgeDevice(
+            "dev_speech",
+            "loc_001",
+            None,
+            "Speaker",
+            None,
+            True,
+            controls={speech.control_id: speech},
+        )
+
+        features = SmartThingsWebMediaPlayer(object(), device).supported_features
+
+        self.assertFalse(features & MediaPlayerEntityFeature.PLAY_MEDIA)
+
+    def test_tts_media_type_is_rejected_without_observed_tts_argument_shape(self) -> None:
+        device = BridgeDevice(
+            "dev_tts",
+            "loc_001",
+            None,
+            "Speaker",
+            None,
+            True,
+            controls=_media_controls(),
+        )
+
+        class Client:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            async def async_execute_command(self, **kwargs: object) -> None:
+                self.calls.append(kwargs)
+
+        client = Client()
+        runtime = type("Runtime", (), {"client": client})()
+        player = SmartThingsWebMediaPlayer(runtime, device)
+
+        async def exercise() -> None:
+            await player.async_play_media("tts", "hello")
+
+        with self.assertRaises(exceptions_module.HomeAssistantError):
+            asyncio.run(exercise())
+        self.assertEqual(client.calls, [])
+
     def test_all_media_services_forward_exact_bridge_commands_without_state_mutation(self) -> None:
         values = {
             "switch": "off",
