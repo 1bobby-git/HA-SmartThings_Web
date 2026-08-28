@@ -111,7 +111,7 @@ class FakePage extends FakeEmitter {
 }
 
 class FakeCdpSession extends FakeEmitter {
-  readonly send = vi.fn(async () => ({}));
+  readonly send = vi.fn(async (_method: string, _params?: Record<string, unknown>) => ({}));
 }
 
 class FakeContext extends FakeEmitter {
@@ -941,6 +941,91 @@ describe("createBridgeRuntime", () => {
           init?.redirect === "error"
         )
       ).toBe(true);
+    } finally {
+      vi.stubGlobal("fetch", originalFetch);
+    }
+  });
+
+  test("serves camera image bytes seeded from raw Advanced inventory", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchWithMedia = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("identifier_")) {
+        return new Response(null, { status: 400 });
+      }
+      if (url.startsWith("https://mediaserv.media1208.ec2.st-av.net/")) {
+        return new Response(Uint8Array.from([51, 52, 53]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg", "content-length": "3" }
+        });
+      }
+      return originalFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchWithMedia);
+    try {
+      const { baseUrl, context } = await startReadyRuntime();
+      const token = await exchangeBridgeToken(baseUrl);
+      const headers = { authorization: `Bearer ${token}` };
+      const session = context.cdpSessions[0];
+      expect(session).toBeDefined();
+      session?.send.mockImplementation(async (method: string) =>
+        method === "Network.getResponseBody"
+          ? {
+              body: JSON.stringify({
+                items: [
+                  {
+                    deviceId: "raw-camera-inventory",
+                    locationId: "raw-location-001",
+                    label: "Inventory Camera",
+                    deviceTypeName: "camera",
+                    status: {
+                      components: {
+                        main: {
+                          imageCapture: {
+                            image: {
+                              value:
+                                "https://mediaserv.media1208.ec2.st-av.net/image?source_id=camera-source&image_id=still-001",
+                              timestamp: "2026-08-25T02:00:00.000Z"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }),
+              base64Encoded: false
+            }
+          : {}
+      );
+
+      await session?.emit("Network.requestWillBeSent", {
+        requestId: "advanced-inventory-camera",
+        request: { method: "GET" }
+      });
+      await session?.emit("Network.responseReceived", {
+        requestId: "advanced-inventory-camera",
+        type: "XHR",
+        response: {
+          url: "https://my.smartthings.com/advanced/cupcake-api/api/devices?includeStatus=true",
+          mimeType: "application/json"
+        }
+      });
+      await session?.emit("Network.loadingFinished", {
+        requestId: "advanced-inventory-camera"
+      });
+
+      const response = await fetchFirstImage(baseUrl, headers);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("image/jpeg");
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from([51, 52, 53]));
+      expect(fetchWithMedia).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /^https:\/\/mediaserv\.media1208\.ec2\.st-av\.net\/image\?source_id=camera-source&image_id=still-001$/
+        ),
+        expect.objectContaining({ redirect: "error" })
+      );
     } finally {
       vi.stubGlobal("fetch", originalFetch);
     }

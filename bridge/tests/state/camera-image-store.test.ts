@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { CameraImageStore } from "../../src/state/camera-image-store.js";
+import type { BridgeInventory } from "../../src/state/device-store.js";
 
 const roots: string[] = [];
 
@@ -121,6 +122,139 @@ describe("CameraImageStore", () => {
     await store.whenIdle();
 
     expect(store.get("dev_001")?.body).toEqual(Buffer.from([7, 8]));
+  });
+
+  test("seeds a camera image from normalized inventory image state", async () => {
+    const fetchImage = vi.fn(async () =>
+      new Response(Uint8Array.from([41, 42]), {
+        status: 200,
+        headers: { "content-type": "image/jpeg", "content-length": "2" }
+      })
+    );
+    const store = createStore(fetchImage);
+
+    store.observeInventory(
+      inventoryWithImageState({
+        deviceId: "dev_001",
+        value: "https://media.st-av.net/camera/from-inventory.jpg?token=secret"
+      })
+    );
+    await store.whenIdle();
+
+    expect(fetchImage).toHaveBeenCalledOnce();
+    expect(store.get("dev_001")).toMatchObject({
+      body: Buffer.from([41, 42]),
+      contentType: "image/jpeg"
+    });
+  });
+
+  test("downloads nested raw Advanced image state without relying on redacted inventory URL", async () => {
+    const fetchImage = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("identifier_")) {
+        return new Response(null, { status: 400 });
+      }
+      return new Response(Uint8Array.from([71, 72, 73]), {
+        status: 200,
+        headers: { "content-type": "image/jpeg", "content-length": "3" }
+      });
+    });
+    const store = createStore(fetchImage);
+
+    store.observeInventory(
+      inventoryWithImageState({
+        deviceId: "dev_001",
+        value:
+          "https://mediaserv.media1208.ec2.st-av.net/image?source_id=identifier_camera&image_id=identifier_still"
+      })
+    );
+    await store.whenIdle();
+    expect(store.get("dev_001")).toBeUndefined();
+
+    store.observeRawAdvancedDeviceSnapshot({
+      items: [
+        {
+          deviceId: "raw-camera-uuid",
+          locationId: "raw-location-001",
+          status: {
+            components: {
+              main: {
+                imageCapture: {
+                  image: {
+                    value:
+                      "https://mediaserv.media1208.ec2.st-av.net/image?source_id=camera-source&image_id=still-001",
+                    timestamp: "2026-08-25T02:00:00.000Z"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    });
+    await store.whenIdle();
+
+    expect(fetchImage.mock.calls.map(([input]) => input.toString())).toEqual([
+      "https://mediaserv.media1208.ec2.st-av.net/image?source_id=identifier_camera&image_id=identifier_still",
+      "https://mediaserv.media1208.ec2.st-av.net/image?source_id=camera-source&image_id=still-001"
+    ]);
+    expect(store.get("dev_001")).toMatchObject({
+      body: Buffer.from([71, 72, 73]),
+      contentType: "image/jpeg"
+    });
+  });
+
+  test("rejects unsafe inventory image URLs before fetching", async () => {
+    const fetchImage = vi.fn<typeof fetch>();
+    const store = createStore(fetchImage);
+
+    store.observeInventory(
+      inventoryWithImageState({
+        deviceId: "dev_001",
+        value: "https://example.com/private-camera.jpg"
+      })
+    );
+    await store.whenIdle();
+
+    expect(fetchImage).not.toHaveBeenCalled();
+    expect(store.get("dev_001")).toBeUndefined();
+  });
+
+  test("rejects invalid inventory device aliases before fetching", async () => {
+    const fetchImage = vi.fn<typeof fetch>();
+    const store = createStore(fetchImage);
+
+    store.observeInventory(
+      inventoryWithImageState({
+        deviceId: "raw-camera-uuid",
+        value: "https://media.st-av.net/camera/from-inventory.jpg?token=secret"
+      })
+    );
+    await store.whenIdle();
+
+    expect(fetchImage).not.toHaveBeenCalled();
+    expect(store.get("raw-camera-uuid")).toBeUndefined();
+  });
+
+  test("rejects non-image inventory downloads", async () => {
+    const fetchImage = vi.fn(async () =>
+      new Response(Uint8Array.from([60, 61]), {
+        status: 200,
+        headers: { "content-type": "application/json", "content-length": "2" }
+      })
+    );
+    const store = createStore(fetchImage);
+
+    store.observeInventory(
+      inventoryWithImageState({
+        deviceId: "dev_001",
+        value: "https://media.st-av.net/camera/not-image"
+      })
+    );
+    await store.whenIdle();
+
+    expect(fetchImage).toHaveBeenCalledOnce();
+    expect(store.get("dev_001")).toBeUndefined();
   });
 
   test("rejects untrusted hosts, redirects, non-images, and oversized bodies", async () => {
@@ -257,4 +391,34 @@ function temporaryRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "stw-camera-image-"));
   roots.push(root);
   return root;
+}
+
+function inventoryWithImageState(options: { deviceId: string; value: string }): BridgeInventory {
+  return {
+    schemaVersion: 1,
+    sequence: 1,
+    locations: [{ id: "loc_001", name: "Home" }],
+    rooms: [],
+    devices: [
+      {
+        id: options.deviceId,
+        locationId: "loc_001",
+        roomId: null,
+        name: "Camera",
+        type: "camera",
+        online: true,
+        states: [
+          {
+            component: "component_main",
+            capability: "identifier_imageCapture",
+            attribute: "image",
+            value: options.value,
+            unit: null,
+            updatedAt: "2026-08-25T02:00:00.000Z"
+          }
+        ]
+      }
+    ],
+    scenes: []
+  };
 }

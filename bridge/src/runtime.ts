@@ -68,7 +68,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.119";
+const bridgeVersion = "0.1.120";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -131,6 +131,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     dataDir: paths.dataDir,
     aliasDeviceId: (rawDeviceId) => aliases.alias("device", rawDeviceId)
   });
+  cameraImages.observeInventory(devices.snapshot());
   const physicalActionProbe = new PhysicalActionCorrelationProbe();
   let currentContext: ObservableContext | undefined;
   let currentKeeperManager: KeeperPageManager | undefined;
@@ -148,7 +149,9 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       if (snapshots.length === 0) throw new Error("advanced_snapshot_unavailable");
       for (const snapshot of snapshots) {
         volatileIdentifiers.observeRawAdvancedDeviceSnapshot(snapshot);
+        cameraImages.observeRawAdvancedDeviceSnapshot(snapshot);
         devices.observeAdvancedDeviceSnapshot(redactor(snapshot));
+        cameraImages.observeInventory(devices.snapshot());
       }
       log.info(`command_diag:advanced_snapshot_refreshed:${snapshots.length}`);
     })().finally(() => {
@@ -334,6 +337,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           },
           (snapshot) => {
             devices.observeAdvancedDeviceSnapshot(snapshot);
+            cameraImages.observeInventory(devices.snapshot());
           }
         );
         currentContext = context;
@@ -680,6 +684,7 @@ async function installCdpForPage(
     await installCdpNetworkObserver(session, sink, redact, {
       onRawSmartThingsAdvancedDeviceSnapshot: (snapshot) => {
         volatileIdentifiers.observeRawAdvancedDeviceSnapshot(snapshot);
+        cameraImages.observeRawAdvancedDeviceSnapshot(snapshot);
       },
       onRawWebSocketFrame: (direction, payload, connectionId) => {
         volatileIdentifiers.observeRawWebSocketFrame(direction, payload);
@@ -748,6 +753,7 @@ async function observeAdvancedSnapshotPage(
       const snapshots = await fetchAdvancedDeviceSnapshots(page);
       for (const snapshot of snapshots) {
         volatileIdentifiers.observeRawAdvancedDeviceSnapshot(snapshot);
+        cameraImages.observeRawAdvancedDeviceSnapshot(snapshot);
         onAdvancedDeviceSnapshot(
           redact(snapshot),
           "https://my.smartthings.com/advanced/cupcake-api/api/devices"

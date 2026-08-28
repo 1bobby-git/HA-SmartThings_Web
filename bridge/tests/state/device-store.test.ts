@@ -247,6 +247,99 @@ describe("DeviceStore", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  test("applies and persists a live device health event as an inventory change", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-health-event-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const store = new DeviceStore({ sqlitePath });
+      observeDeviceSnapshot(store, {
+        deviceId: "dev_001",
+        locationId: "loc_001",
+        deviceName: "Hub",
+        deviceTypeData: { type: "hub" }
+      });
+      const listener = vi.fn();
+      store.subscribe(listener);
+
+      store.observe(
+        liveHealthEvent({
+          status: "offline",
+          eventTime: "2026-08-24T21:01:00.000Z"
+        })
+      );
+
+      expect(store.snapshot()).toMatchObject({
+        sequence: 2,
+        devices: [expect.objectContaining({ id: "dev_001", online: false })]
+      });
+      expect(listener).toHaveBeenCalledOnce();
+      expect(listener).toHaveBeenCalledWith({
+        schemaVersion: 1,
+        sequence: 2,
+        type: "inventory"
+      });
+      store.close();
+
+      const restored = new DeviceStore({ sqlitePath });
+      expect(restored.snapshot().devices[0]).toMatchObject({ id: "dev_001", online: false });
+      restored.observe(
+        liveHealthEvent({
+          status: "ONLINE",
+          eventTime: "2026-08-24T21:00:59.000Z"
+        })
+      );
+      expect(restored.snapshot()).toMatchObject({
+        sequence: 2,
+        devices: [expect.objectContaining({ id: "dev_001", online: false })]
+      });
+      restored.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
+  test("rejects stale device health events before accepting newer status", () => {
+    const store = new DeviceStore();
+    observeHealthSnapshot(store, {
+      deviceId: "dev_001",
+      locationId: "loc_001",
+      state: "OFFLINE",
+      updatedAt: "2026-08-24T21:02:00.000Z"
+    });
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    store.observe(
+      liveHealthEvent({
+        status: "ONLINE",
+        eventTime: "2026-08-24T21:01:59.000Z"
+      })
+    );
+    expect(store.snapshot()).toMatchObject({
+      sequence: 1,
+      devices: [expect.objectContaining({ online: false })]
+    });
+    expect(listener).not.toHaveBeenCalled();
+
+    store.observe(
+      liveHealthEvent({
+        status: "online",
+        eventTime: "2026-08-24T21:03:00.000Z"
+      })
+    );
+
+    expect(store.snapshot()).toMatchObject({
+      sequence: 2,
+      devices: [expect.objectContaining({ online: true })]
+    });
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ type: "inventory", sequence: 2 }));
+  });
+
   test("restores the normalized inventory and sequence after a Bridge restart", () => {
     const root = mkdtempSync(join(tmpdir(), "stw-device-store-"));
     try {
@@ -1781,6 +1874,11 @@ function observeDeviceSnapshot(store: DeviceStore, device: Record<string, unknow
   store.observe(receivedFrame(`434${JSON.stringify([null, [{ basic: device }]])}`));
 }
 
+function observeHealthSnapshot(store: DeviceStore, health: Record<string, unknown>): void {
+  store.observe(sentFrame('425["find","api/device/health",{}]'));
+  store.observe(receivedFrame(`435${JSON.stringify([null, [health]])}`));
+}
+
 function observeDeviceDetails(store: DeviceStore, rows: Record<string, unknown>[]): void {
   store.observe(sentFrame('423["get","api/device","identifier_rawdevice",{}]'));
   store.observe(receivedFrame(`433${JSON.stringify([null, { data: rows }])}`));
@@ -1816,6 +1914,23 @@ function liveStateEvent(overrides: Record<string, unknown>): SanitizedCaptureRec
             device_id: "dev_001",
             location_id: "loc_001",
             component: null,
+            ...overrides
+          }
+        }
+      }
+    ])}`
+  );
+}
+
+function liveHealthEvent(overrides: Record<string, unknown>): SanitizedCaptureRecord {
+  return receivedFrame(
+    `42${JSON.stringify([
+      "api/subscription DEVICE_HEALTH_EVENT",
+      {
+        data: {
+          eventType: "DEVICE_HEALTH_EVENT",
+          deviceHealthEvent: {
+            deviceId: "dev_001",
             ...overrides
           }
         }

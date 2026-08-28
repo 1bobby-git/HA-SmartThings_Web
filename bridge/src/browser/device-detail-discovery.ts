@@ -92,10 +92,10 @@ export class DeviceDetailDiscovery {
   }
 
   #needsInspection(device: BridgeDevice): boolean {
-    return (
-      (!hasActionableControl(device) || isCameraImageDevice(device)) &&
-      (this.#attempts.get(device.id) ?? 0) < this.#maxAttempts
-    );
+    const attempts = this.#attempts.get(device.id) ?? 0;
+    if (attempts >= this.#maxAttempts) return false;
+    if (attempts === 0) return true;
+    return !hasActionableControl(device) || isCameraImageDevice(device);
   }
 }
 
@@ -112,7 +112,13 @@ function safeFailureReason(error: unknown): string {
 }
 
 function hasActionableControl(device: BridgeDevice): boolean {
-  return (device.controls ?? []).some((control) => control.kind !== "value");
+  return (device.controls ?? []).some(
+    (control) => control.kind !== "value" && !isRefreshControl(control)
+  );
+}
+
+function isRefreshControl(control: NonNullable<BridgeDevice["controls"]>[number]): boolean {
+  return control.command === "refresh" || control.attribute === "refresh";
 }
 
 const refreshDetailAttributes = new Set(["battery", "contact", "signalMetrics"]);

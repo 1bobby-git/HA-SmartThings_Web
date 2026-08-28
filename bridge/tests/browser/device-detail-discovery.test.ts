@@ -38,7 +38,7 @@ describe("DeviceDetailDiscovery", () => {
     });
   });
 
-  test("skips devices that already have actionable detail controls", async () => {
+  test("inspects devices that already have actionable detail controls once per session", async () => {
     const inspectDeviceDetails = vi.fn(async () => undefined);
     const discovery = new DeviceDetailDiscovery({
       inventory: () => actionableControlInventory(),
@@ -46,8 +46,34 @@ describe("DeviceDetailDiscovery", () => {
       canInspect: () => true
     });
 
+    expect(await discovery.runOne()).toBe("inspected");
     expect(await discovery.runOne()).toBe("idle");
-    expect(inspectDeviceDetails).not.toHaveBeenCalled();
+    expect(inspectDeviceDetails).toHaveBeenCalledTimes(1);
+    expect(inspectDeviceDetails).toHaveBeenCalledWith({
+      deviceName: "거실창문센서",
+      locationId: "loc_001",
+      locationNames: { loc_001: "Home" },
+      roomName: "거실"
+    });
+  });
+
+  test("does not treat a refresh-only control as completed discovery", async () => {
+    const inspectDeviceDetails = vi.fn(async () => undefined);
+    const discovery = new DeviceDetailDiscovery({
+      inventory: () => refreshOnlyControlInventory(),
+      inspector: { inspectDeviceDetails },
+      canInspect: () => true
+    });
+
+    expect(await discovery.runOne()).toBe("inspected");
+    expect(await discovery.runOne()).toBe("inspected");
+    expect(await discovery.runOne()).toBe("idle");
+    expect(inspectDeviceDetails).toHaveBeenCalledTimes(2);
+    expect(inspectDeviceDetails).toHaveBeenNthCalledWith(1, {
+      deviceName: "Galaxy Home Mini",
+      locationId: "loc_001",
+      locationNames: { loc_001: "Home" }
+    });
   });
 
   test("prioritizes refresh-worthy value-only devices over generic undiscovered devices", async () => {
@@ -118,7 +144,7 @@ describe("DeviceDetailDiscovery", () => {
       throw new Error("not_found");
     });
     const discovery = new DeviceDetailDiscovery({
-      inventory: () => inventory(),
+      inventory: () => undiscoveredOnlyInventory(),
       inspector: { inspectDeviceDetails },
       canInspect: () => true,
       maxAttempts: 2
@@ -129,6 +155,20 @@ describe("DeviceDetailDiscovery", () => {
     expect(await discovery.runOne()).toBe("idle");
     discovery.reset();
     expect(await discovery.runOne()).toBe("failed");
+  });
+
+  test("enforces max attempts for the per-session detail sweep", async () => {
+    const inspectDeviceDetails = vi.fn(async () => undefined);
+    const discovery = new DeviceDetailDiscovery({
+      inventory: () => actionableControlInventory(),
+      inspector: { inspectDeviceDetails },
+      canInspect: () => true,
+      maxAttempts: 1
+    });
+
+    expect(await discovery.runOne()).toBe("inspected");
+    expect(await discovery.runOne()).toBe("idle");
+    expect(inspectDeviceDetails).toHaveBeenCalledTimes(1);
   });
 
   test("exposes sanitized failure diagnostics for runtime logs", async () => {
@@ -383,16 +423,62 @@ function actionableControlInventory(): BridgeInventory {
       controls: [
         ...(device.controls ?? []),
         {
-          id: "refresh",
-          kind: "button" as const,
-          label: "Refresh",
+          id: "switch",
+          kind: "toggle" as const,
+          label: "Power",
           component: "main",
-          capability: "refresh",
-          attribute: "refresh",
-          command: "refresh"
+          capability: "switch",
+          attribute: "switch",
+          command: "on"
         }
       ]
     }))
+  };
+}
+
+function undiscoveredOnlyInventory(): BridgeInventory {
+  return {
+    ...inventory(),
+    devices: [inventory().devices[0]!]
+  };
+}
+
+function refreshOnlyControlInventory(): BridgeInventory {
+  return {
+    schemaVersion: 1,
+    sequence: 1,
+    locations: [{ id: "loc_001", name: "Home" }],
+    rooms: [],
+    devices: [
+      {
+        id: "dev_203",
+        locationId: "loc_001",
+        roomId: null,
+        name: "Galaxy Home Mini",
+        type: "speaker",
+        online: true,
+        states: Array.from({ length: 50 }, (_, index) => ({
+          component: "main",
+          capability: `capability_${index}`,
+          attribute: `attribute_${index}`,
+          value: index,
+          unit: null,
+          updatedAt: "2026-08-28T00:00:00Z"
+        })),
+        controls: [
+          {
+            id: "refresh",
+            kind: "button",
+            label: "Refresh",
+            component: "main",
+            capability: "refresh",
+            attribute: "refresh",
+            command: "refresh"
+          }
+        ]
+      }
+    ],
+    scenes: []
   };
 }
 

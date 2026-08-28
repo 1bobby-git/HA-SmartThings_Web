@@ -98,7 +98,8 @@ async def async_setup_entry(
                 continue
             candidates = _binary_sensor_candidates(device)
             name_overrides = disambiguated_state_names(
-                (state, description.name) for state, description in candidates
+                ((state, description.name) for state, description in candidates),
+                all_states=device.states.values(),
             )
             for state, description in candidates:
                 unique_id = "_".join((device.device_id, *state.key))

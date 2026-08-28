@@ -167,7 +167,8 @@ class SmartThingsWebRuntime:
     async def handle_event(self, event: dict[str, Any]) -> bool:
         """Apply one SSE event, resynchronizing on reconnects and gaps."""
         if event.get("type") == "inventory":
-            if _event_sequence(event) == self.inventory.sequence:
+            sequence = _event_sequence(event)
+            if sequence is None or sequence <= self.inventory.sequence:
                 return False
             return self.apply_inventory(await self.client.async_get_inventory())
         if event.get("type") != "state":
@@ -184,12 +185,33 @@ class SmartThingsWebRuntime:
                 return changed
             if sequence > self.inventory.sequence + 1:
                 return changed
+        if _state_event_needs_inventory(self.inventory, self.location_id, event):
+            changed = self.apply_inventory(await self.client.async_get_inventory()) or changed
+            if sequence <= self.inventory.sequence:
+                return changed
         return self.apply_state(event) or changed
+
+    def apply_reconnect_inventory(self, latest: BridgeInventory) -> bool:
+        """Apply the first fetched inventory of a new SSE connection epoch."""
+        return self._apply_inventory(latest, allow_sequence_reset=True)
 
     def apply_inventory(self, latest: BridgeInventory) -> bool:
         """Atomically merge the newest full or partial Bridge inventory."""
+        return self._apply_inventory(latest, allow_sequence_reset=False)
+
+    def _apply_inventory(
+        self,
+        latest: BridgeInventory,
+        *,
+        allow_sequence_reset: bool,
+    ) -> bool:
+        """Atomically merge the newest full or partial Bridge inventory."""
         current = self.inventory
-        authoritative = latest.ready
+        if not allow_sequence_reset and latest.sequence < current.sequence:
+            return False
+        authoritative = latest.ready and (
+            allow_sequence_reset or latest.sequence > current.sequence
+        )
         devices = {} if authoritative else deepcopy(current.devices)
         for device_id, latest_device in latest.devices.items():
             existing = current.devices.get(device_id)
@@ -219,7 +241,7 @@ class SmartThingsWebRuntime:
                 ),
             )
         merged = BridgeInventory(
-            sequence=latest.sequence,
+            sequence=latest.sequence if allow_sequence_reset else max(current.sequence, latest.sequence),
             ready=latest.ready,
             bridge_version=latest.bridge_version,
             protocol_version=latest.protocol_version,
@@ -498,18 +520,27 @@ def entity_unique_id(device_id: str, state: BridgeState) -> str:
 
 def disambiguated_state_names(
     items: Iterable[tuple[BridgeState, str]],
+    *,
+    all_states: Iterable[BridgeState] | None = None,
 ) -> dict[tuple[str, str, str], str]:
     """Return explicit names only for states sharing the same display name."""
     grouped: dict[str, list[BridgeState]] = {}
     for state, name in items:
         grouped.setdefault(name, []).append(state)
 
+    component_role_hints = (
+        _unique_component_role_hints(all_states) if all_states is not None else {}
+    )
     names: dict[tuple[str, str, str], str] = {}
     for base_name, states in grouped.items():
         if len(states) < 2:
             continue
         ordered = sorted(states, key=lambda state: state.key)
-        qualifiers = _unique_state_qualifiers(ordered, "component")
+        qualifiers = _unique_state_qualifiers(
+            ordered,
+            "component",
+            component_role_hints=component_role_hints,
+        )
         if qualifiers is None:
             qualifiers = _unique_state_qualifiers(ordered, "capability")
         if qualifiers is None:
@@ -520,10 +551,18 @@ def disambiguated_state_names(
 
 
 def _unique_state_qualifiers(
-    states: list[BridgeState], field_name: Literal["component", "capability"]
+    states: list[BridgeState],
+    field_name: Literal["component", "capability"],
+    *,
+    component_role_hints: dict[str, str] | None = None,
 ) -> list[str] | None:
     qualifiers = [
         _readable_state_role(state, field_name)
+        or (
+            component_role_hints.get(state.component)
+            if field_name == "component" and component_role_hints is not None
+            else None
+        )
         or _readable_state_token(getattr(state, field_name), field_name)
         for state in states
     ]
@@ -531,6 +570,21 @@ def _unique_state_qualifiers(
         return None
     readable = [qualifier for qualifier in qualifiers if qualifier is not None]
     return readable if len(set(readable)) == len(states) else None
+
+
+def _unique_component_role_hints(
+    states: Iterable[BridgeState],
+) -> dict[str, str]:
+    roles_by_component: dict[str, set[str]] = {}
+    for state in states:
+        role = _readable_state_role(state, "component")
+        if role is not None:
+            roles_by_component.setdefault(state.component, set()).add(role)
+    return {
+        component: next(iter(roles))
+        for component, roles in roles_by_component.items()
+        if len(roles) == 1
+    }
 
 
 def _readable_state_role(
@@ -1553,6 +1607,18 @@ def parse_state(raw: dict[str, Any]) -> BridgeState | None:
 def _event_sequence(event: dict[str, Any]) -> int | None:
     sequence = event.get("sequence")
     return sequence if isinstance(sequence, int) and not isinstance(sequence, bool) and sequence >= 0 else None
+
+
+def _state_event_needs_inventory(
+    inventory: BridgeInventory,
+    location_id: str,
+    event: dict[str, Any],
+) -> bool:
+    device_id = event.get("deviceId")
+    if not isinstance(device_id, str) or not isinstance(event.get("state"), dict):
+        return False
+    device = inventory.devices.get(device_id)
+    return device is None or device.location_id != location_id
 
 
 def _state_is_newer(candidate: BridgeState, current: BridgeState) -> bool:

@@ -288,7 +288,7 @@ async def _event_loop(entry: SmartThingsWebConfigEntry) -> None:
     reconnect_delay = _EVENT_RECONNECT_MIN_DELAY
     while True:
         try:
-            runtime.apply_inventory(await runtime.client.async_get_inventory())
+            runtime.apply_reconnect_inventory(await runtime.client.async_get_inventory())
             async for event in runtime.client.async_events():
                 await runtime.handle_event(event)
                 reconnect_delay = _EVENT_RECONNECT_MIN_DELAY

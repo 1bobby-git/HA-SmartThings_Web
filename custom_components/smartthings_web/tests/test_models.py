@@ -138,7 +138,7 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertIsNone(runtime.inventory.devices["dev_001"].presentation)
 
-    def test_inventory_merge_does_not_lose_devices_from_an_incomplete_restart_snapshot(self) -> None:
+    def test_reconnect_inventory_merge_does_not_lose_devices_from_an_incomplete_restart_snapshot(self) -> None:
         current = inventory(50, 20, "2026-08-24T21:00:00Z")
         partial = BridgeInventory(
             sequence=1,
@@ -151,12 +151,38 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         )
         runtime = SmartThingsWebRuntime(FakeClient(partial), "loc_001", current)
 
-        changed = asyncio.run(runtime.handle_event({"type": "inventory", "sequence": 1}))
+        changed = runtime.apply_reconnect_inventory(partial)
 
         self.assertTrue(changed)
         self.assertEqual(runtime.inventory.sequence, 1)
         self.assertIn("dev_001", runtime.inventory.devices)
         self.assertEqual(sensor_value(runtime), 20)
+
+    def test_stale_inventory_marker_in_same_epoch_does_not_rewind_or_delete_topology(self) -> None:
+        current = inventory(50, 20, "2026-08-24T21:00:00Z")
+        stale = inventory(49, 19, "2026-08-24T20:59:00Z")
+        stale.devices = {}
+        client = FakeClient(stale)
+        runtime = SmartThingsWebRuntime(client, "loc_001", current)
+
+        changed = asyncio.run(runtime.handle_event({"type": "inventory", "sequence": 49}))
+
+        self.assertFalse(changed)
+        self.assertEqual(client.calls, 0)
+        self.assertEqual(runtime.inventory.sequence, 50)
+        self.assertIn("dev_001", runtime.inventory.devices)
+        self.assertEqual(sensor_value(runtime), 20)
+
+    def test_reconnect_inventory_snapshot_starts_new_epoch_with_lower_sequence(self) -> None:
+        current = inventory(50, 20, "2026-08-24T21:00:00Z")
+        restarted = inventory(1, 21, "2026-08-24T21:01:00Z")
+        runtime = SmartThingsWebRuntime(FakeClient(), "loc_001", current)
+
+        changed = runtime.apply_reconnect_inventory(restarted)
+
+        self.assertTrue(changed)
+        self.assertEqual(runtime.inventory.sequence, 1)
+        self.assertEqual(sensor_value(runtime), 21)
 
     def test_ready_inventory_atomically_removes_items_absent_from_latest_snapshot(self) -> None:
         current = inventory(50, 20, "2026-08-24T21:00:00Z")
@@ -202,6 +228,55 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertEqual(client.calls, 1)
         self.assertEqual(runtime.inventory.sequence, 12)
         self.assertEqual(sensor_value(runtime), 22)
+
+    def test_current_next_unknown_device_event_resyncs_once_and_preserves_event_state(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:00:00Z")
+        latest = inventory(10, 20, "2026-08-24T21:00:00Z")
+        discovered_state = BridgeState(
+            "identifier_component_main",
+            "identifier_capability_temperature",
+            "temperature",
+            30,
+            "C",
+            "2026-08-24T21:00:00Z",
+        )
+        latest.devices["dev_new"] = BridgeDevice(
+            "dev_new",
+            "loc_001",
+            None,
+            "New sensor",
+            "sensor",
+            True,
+            states={discovered_state.key: discovered_state},
+        )
+        client = FakeClient(latest)
+        runtime = SmartThingsWebRuntime(client, "loc_001", current)
+
+        changed = asyncio.run(
+            runtime.handle_event(
+                {
+                    "type": "state",
+                    "sequence": 11,
+                    "deviceId": "dev_new",
+                    "state": {
+                        "component": "identifier_component_main",
+                        "capability": "identifier_capability_temperature",
+                        "attribute": "temperature",
+                        "value": 31,
+                        "unit": "C",
+                        "updatedAt": "2026-08-24T21:01:00Z",
+                    },
+                }
+            )
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(client.calls, 1)
+        self.assertEqual(runtime.inventory.sequence, 11)
+        self.assertEqual(
+            runtime.inventory.devices["dev_new"].states[discovered_state.key].value,
+            31,
+        )
 
     def test_stale_sequence_and_timestamp_cannot_overwrite_current_state(self) -> None:
         runtime = SmartThingsWebRuntime(
@@ -1654,6 +1729,98 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             {state.component_role: names[state.key] for state in states},
             {role: f"Value ({label})" for role, label in roles.items()},
         )
+
+    def test_duplicate_contact_names_inherit_unique_sibling_component_roles(self) -> None:
+        role_labels = {
+            "refrigerator": "냉장고",
+            "freezer": "냉동실",
+            "cvroom": "맞춤보관실",
+            "cooler": "냉장실",
+            "onedoor": "단일 도어",
+        }
+        contacts: list[BridgeState] = []
+        all_states: list[BridgeState] = []
+        for role, label in role_labels.items():
+            component = f"identifier_component_{role}"
+            contact = BridgeState(
+                component,
+                "contactSensor",
+                "contact",
+                "closed",
+                None,
+                "2026-08-28T00:00:00Z",
+                component_role="main",
+            )
+            temperature = BridgeState(
+                component,
+                "temperatureMeasurement",
+                "temperature",
+                3,
+                "C",
+                "2026-08-28T00:00:00Z",
+                component_role=role,
+            )
+            contacts.append(contact)
+            all_states.extend((contact, temperature))
+
+        names = models_module.disambiguated_state_names(
+            [(state, "Contact") for state in contacts],
+            all_states=all_states,
+        )
+
+        self.assertEqual(
+            {state.component: names[state.key] for state in contacts},
+            {
+                f"identifier_component_{role}": f"Contact ({label})"
+                for role, label in role_labels.items()
+            },
+        )
+
+    def test_duplicate_state_names_keep_numbering_for_conflicting_sibling_roles(self) -> None:
+        first = BridgeState(
+            "identifier_component_first",
+            "contactSensor",
+            "contact",
+            "closed",
+            None,
+            "2026-08-28T00:00:00Z",
+            component_role="main",
+        )
+        first_fridge = BridgeState(
+            first.component,
+            "temperatureMeasurement",
+            "temperature",
+            3,
+            "C",
+            "2026-08-28T00:00:00Z",
+            component_role="refrigerator",
+        )
+        first_freezer = BridgeState(
+            first.component,
+            "temperatureMeasurement",
+            "temperature",
+            -18,
+            "C",
+            "2026-08-28T00:00:00Z",
+            component_role="freezer",
+        )
+        second = BridgeState(
+            "identifier_component_second",
+            "contactSensor",
+            "contact",
+            "closed",
+            None,
+            "2026-08-28T00:00:00Z",
+            component_role="main",
+        )
+
+        names = models_module.disambiguated_state_names(
+            [(second, "Contact"), (first, "Contact")],
+            all_states=[first, first_fridge, first_freezer, second],
+        )
+
+        self.assertEqual(names[first.key], "Contact (1)")
+        self.assertEqual(names[second.key], "Contact (2)")
 
     def test_primary_state_attributes_prefer_safe_roles_for_duplicate_keys(self) -> None:
         device = BridgeDevice(

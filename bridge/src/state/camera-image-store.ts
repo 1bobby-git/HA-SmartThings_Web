@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync
 import { join } from "node:path";
 
 import { decodeSocketIoTextFrame } from "../inspector/socketio-decoder.js";
+import type { BridgeInventory } from "./device-store.js";
 
 export interface BridgeCameraImage {
   body: Buffer;
@@ -136,6 +137,34 @@ export class CameraImageStore {
     const contentType = imageContentType(body);
     if (!contentType || body.length === 0 || body.length > this.#maxBytes) return;
     this.#persist(current.deviceId, body, contentType, this.#now().toISOString());
+  }
+
+  observeInventory(inventory: BridgeInventory): void {
+    for (const device of inventory.devices) {
+      if (!DEVICE_ALIAS.test(device.id)) continue;
+      for (const state of device.states) {
+        if (state.attribute !== "image" || typeof state.value !== "string") continue;
+        const url = safeImageUrl(state.value);
+        if (!url) continue;
+        this.#imageUrlDevices.set(url, device.id);
+        this.#download(device.id, url);
+      }
+    }
+  }
+
+  observeRawAdvancedDeviceSnapshot(snapshot: unknown): void {
+    const rows = advancedDeviceRows(snapshot);
+    if (!rows) return;
+    for (const row of rows) {
+      const rawDeviceId = readString(row.deviceId ?? row.device_id ?? row.id);
+      if (!rawDeviceId) continue;
+      const alias = this.#safeAlias(rawDeviceId);
+      if (!alias) continue;
+      for (const url of findAdvancedImageUrls(row)) {
+        this.#imageUrlDevices.set(url, alias);
+        this.#download(alias, url);
+      }
+    }
   }
 
   get(deviceId: string): BridgeCameraImage | undefined {
@@ -366,4 +395,35 @@ function findImageReferences(
     findImageReferences(nested, depth + 1, references);
   }
   return references;
+}
+
+function advancedDeviceRows(value: unknown): Record<string, unknown>[] | null {
+  const record = asRecord(value);
+  const rows =
+    record && Array.isArray(record.items)
+      ? record.items
+      : record && Array.isArray(record.devices)
+        ? record.devices
+        : record && Array.isArray(record.data)
+          ? record.data
+          : value;
+  if (!Array.isArray(rows)) return null;
+  const records = rows.map(asRecord);
+  return records.some((item) => !item) ? null : (records as Record<string, unknown>[]);
+}
+
+function findAdvancedImageUrls(value: unknown, keyHint?: string, depth = 0): string[] {
+  if (depth > 8 || value === null || typeof value !== "object") return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => findAdvancedImageUrls(item, keyHint, depth + 1));
+  }
+
+  const record = value as Record<string, unknown>;
+  const attribute = readString(record.attributeName ?? record.attribute) ?? keyHint;
+  const directValue = readString(record.value);
+  const directUrl = attribute === "image" && directValue ? safeImageUrl(directValue) : undefined;
+  const nestedUrls = Object.entries(record).flatMap(([key, nested]) =>
+    findAdvancedImageUrls(nested, key, depth + 1)
+  );
+  return directUrl ? [directUrl, ...nestedUrls] : nestedUrls;
 }

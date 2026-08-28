@@ -967,7 +967,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             inventory=BridgeInventory(
                 sequence=1,
                 ready=True,
-                bridge_version="0.1.119",
+                bridge_version="0.1.120",
                 protocol_version="4",
                 locations={"loc_001": "Home"},
                 rooms={"room_living": ("loc_001", "Living")},
@@ -1148,7 +1148,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
                 inventory = BridgeInventory(
                     sequence=1,
                     ready=True,
-                    bridge_version="0.1.119",
+                    bridge_version="0.1.120",
                     protocol_version="4",
                     locations={"loc_001": "Home"},
                     rooms={"room_kitchen": ("loc_001", "Jubang")},
@@ -1201,7 +1201,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         inventory = BridgeInventory(
             sequence=1,
             ready=True,
-            bridge_version="0.1.119",
+            bridge_version="0.1.120",
             protocol_version="4",
             locations={"loc_001": "Home"},
             rooms={"room_bathroom": ("loc_001", "Hwajangsil")},
@@ -1297,7 +1297,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         inventory = BridgeInventory(
             sequence=1,
             ready=True,
-            bridge_version="0.1.119",
+            bridge_version="0.1.120",
             protocol_version="4",
             locations={"loc_001": "Home"},
             rooms={
@@ -1377,7 +1377,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         inventory = BridgeInventory(
             sequence=1,
             ready=True,
-            bridge_version="0.1.119",
+            bridge_version="0.1.120",
             protocol_version="4",
             locations={"loc_001": "Home"},
             rooms={"room_bathroom": ("loc_001", "Hwajangsil")},
@@ -1450,7 +1450,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             BridgeInventory(
                 sequence=1,
                 ready=True,
-                bridge_version="0.1.119",
+                bridge_version="0.1.120",
                 protocol_version="4",
                 locations={"loc_001": "Home"},
                 rooms={"room_bathroom": ("loc_001", "Hwajangsil")},
@@ -1787,8 +1787,26 @@ class ControlPlaneTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(runtime.client.inventory_calls, 2)
         self.assertEqual(runtime.client.event_calls, 2)
-        self.assertEqual(runtime.applied_sequences, [2, 3])
+        self.assertEqual(runtime.reconnect_sequences, [2, 3])
+        self.assertEqual(runtime.applied_sequences, [])
         self.assertEqual(runtime.handled_events, [{"type": "state", "sequence": 4}])
+
+    async def test_event_loop_applies_reconnect_snapshot_as_new_epoch_after_sequence_reset(self) -> None:
+        runtime = FakeRestartEpochRuntime()
+        original_sleep = integration.asyncio.sleep
+
+        async def fake_sleep(_seconds: int) -> None:
+            return None
+
+        integration.asyncio.sleep = fake_sleep
+        try:
+            with self.assertRaises(integration.asyncio.CancelledError):
+                await _event_loop(SimpleNamespace(runtime_data=runtime))
+        finally:
+            integration.asyncio.sleep = original_sleep
+
+        self.assertEqual(runtime.reconnect_sequences, [50, 1])
+        self.assertEqual(runtime.applied_sequences, [])
 
     async def test_event_loop_retries_transient_bridge_failures_immediately_with_a_cap(self) -> None:
         runtime = FakeReconnectRuntime()
@@ -1843,8 +1861,13 @@ class FakeEventRuntime:
 
     def __init__(self) -> None:
         self.client = FakeEventClient()
+        self.reconnect_sequences: list[int] = []
         self.applied_sequences: list[int] = []
         self.handled_events: list[dict[str, object]] = []
+
+    def apply_reconnect_inventory(self, inventory: SimpleNamespace) -> bool:
+        self.reconnect_sequences.append(inventory.sequence)
+        return True
 
     def apply_inventory(self, inventory: SimpleNamespace) -> bool:
         self.applied_sequences.append(inventory.sequence)
@@ -1852,6 +1875,42 @@ class FakeEventRuntime:
 
     async def handle_event(self, event: dict[str, object]) -> bool:
         self.handled_events.append(event)
+        return True
+
+
+class FakeRestartEpochClient:
+    """Event client that simulates a Bridge restart sequence reset."""
+
+    def __init__(self) -> None:
+        self.inventory_calls = 0
+        self.event_calls = 0
+
+    async def async_get_inventory(self) -> SimpleNamespace:
+        self.inventory_calls += 1
+        return SimpleNamespace(sequence=50 if self.inventory_calls == 1 else 1)
+
+    async def async_events(self):
+        self.event_calls += 1
+        if self.event_calls == 1:
+            raise BridgeAuthError("bridge_auth_failed")
+        raise integration.asyncio.CancelledError
+        yield
+
+
+class FakeRestartEpochRuntime:
+    """Minimal runtime proving lower reconnect snapshots start a new epoch."""
+
+    def __init__(self) -> None:
+        self.client = FakeRestartEpochClient()
+        self.reconnect_sequences: list[int] = []
+        self.applied_sequences: list[int] = []
+
+    def apply_reconnect_inventory(self, inventory: SimpleNamespace) -> bool:
+        self.reconnect_sequences.append(inventory.sequence)
+        return True
+
+    def apply_inventory(self, inventory: SimpleNamespace) -> bool:
+        self.applied_sequences.append(inventory.sequence)
         return True
 
 
@@ -1875,6 +1934,9 @@ class FakeReconnectRuntime:
         self.client = FakeReconnectClient()
 
     def apply_inventory(self, _inventory: SimpleNamespace) -> bool:
+        return True
+
+    def apply_reconnect_inventory(self, _inventory: SimpleNamespace) -> bool:
         return True
 
 

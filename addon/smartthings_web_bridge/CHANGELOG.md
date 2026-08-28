@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.120
+
+- Apply pushed `DEVICE_HEALTH_EVENT` availability changes immediately, reject stale health timestamps, and persist only actual online/offline transitions.
+- Keep inventory sequence monotonic inside one SSE connection epoch, explicitly accept a lower full snapshot only after reconnect/Bridge restart, and resynchronize once when the first push references a newly observed device.
+- Seed Home Camera still images from the raw authenticated Advanced snapshot before identifier redaction, persisting only validated image bytes and metadata so redacted query parameters can no longer leave the HA image entity at HTTP 404.
+- Inspect every observed device detail once per browser session, including devices that already expose only Refresh or another cached control, while retaining bounded retries and foreground-command preemption. This lets Galaxy Home Mini and other partially discovered devices expose the rest of their actual web controls without state polling.
+- Name duplicated appliance states from safe component roles shared by sibling states, so refrigerator contact and temperature entities use compartment labels such as 냉장고, 냉동실, 맞춤보관실, 냉장실, and 단일 도어 instead of anonymous `(1)` through `(5)` suffixes.
+- Preserve the push-first local Bridge/SSE architecture and its existing authenticated-web-session boundaries; no new state polling, DOM-derived state authority, or optimistic HA state mutation is added.
+
 ## 0.1.119
 
 - Fixed Home Assistant entity-ID generation so `has_entity_name` entities provide only their local suffix (`contact`, `temperature`, `refresh`, and similar) instead of feeding the full device name back into Home Assistant and creating duplicated room prefixes.

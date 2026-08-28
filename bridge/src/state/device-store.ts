@@ -63,6 +63,7 @@ export interface BridgeDevice {
   name: string;
   type: string | null;
   online: boolean;
+  healthUpdatedAt?: string | null;
   presentation?: BridgeDevicePresentation;
   states: BridgeDeviceState[];
   controls?: BridgeDeviceControl[];
@@ -119,6 +120,7 @@ interface MutableDevice {
   name: string;
   type: string | null;
   online: boolean;
+  healthUpdatedAt: string | null;
   presentation?: BridgeDevicePresentation;
   states: Map<string, BridgeDeviceState>;
   controls: Map<string, BridgeDeviceControl>;
@@ -242,6 +244,10 @@ export class DeviceStore {
       this.#applyDeviceEvent(decoded.args[0]);
       return;
     }
+    if (decoded.kind === "event" && decoded.eventName === "api/subscription DEVICE_HEALTH_EVENT") {
+      this.#applyDeviceHealthEvent(decoded.args[0]);
+      return;
+    }
     if (decoded.kind === "event" && decoded.eventName === "api/subscription SECURITY_ARM_STATE_EVENT") {
       this.#applySecurityArmStateEvent(decoded.args[0]);
       return;
@@ -266,6 +272,7 @@ export class DeviceStore {
         name: device.name,
         type: device.type,
         online: device.online,
+        ...(device.healthUpdatedAt ? { healthUpdatedAt: device.healthUpdatedAt } : {}),
         ...(device.presentation ? { presentation: { ...device.presentation } } : {}),
         states: snapshotDeviceStates(device).sort(byState).map(cloneState),
         ...(device.controls.size > 0
@@ -438,13 +445,14 @@ export class DeviceStore {
     for (const row of rows) {
       const deviceId = safeId(row.deviceId, "dev");
       const locationId = safeId(row.locationId, "loc");
-      const online = readString(row.state)?.toUpperCase() === "ONLINE";
-      if (!deviceId || !locationId) continue;
+      const online = healthOnlineState(row.state ?? row.status);
+      if (!deviceId || !locationId || online === undefined) continue;
       const device = this.#ensureDevice(deviceId, locationId);
-      if (device.online !== online) {
-        device.online = online;
-        changed = true;
-      }
+      changed = this.#setDeviceHealth(
+        device,
+        online,
+        validTimestamp(row.updatedAt ?? row.updated_at ?? row.timestamp ?? row.eventTime ?? row.event_time)
+      ) || changed;
     }
     return changed;
   }
@@ -558,6 +566,32 @@ export class DeviceStore {
     this.#schedulePersist();
   }
 
+  #applyDeviceHealthEvent(input: unknown): void {
+    const envelope = asRecord(input);
+    const data = asRecord(envelope?.data);
+    const event = asRecord(data?.deviceHealthEvent ?? data?.device_health_event);
+    const deviceId = safeId(event?.device_id ?? event?.deviceId, "dev");
+    const locationId = safeId(event?.location_id ?? event?.locationId, "loc");
+    const online = healthOnlineState(event?.status ?? event?.state);
+    const updatedAt = validTimestamp(
+      event?.event_time ?? event?.eventTime ?? event?.updatedAt ?? data?.event_time ?? data?.eventTime
+    );
+    if (!deviceId || online === undefined || !updatedAt) {
+      return;
+    }
+    const current = this.#devices.get(deviceId);
+    if (!current && !locationId) {
+      return;
+    }
+    const device = current ?? this.#ensureDevice(deviceId, locationId as string);
+    if (!this.#setDeviceHealth(device, online, updatedAt)) {
+      return;
+    }
+    const sequence = this.#nextSequence();
+    this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
+    this.#schedulePersist();
+  }
+
   #applySecurityArmStateEvent(input: unknown): void {
     const envelope = asRecord(input);
     const data = asRecord(envelope?.data) ?? envelope;
@@ -606,11 +640,24 @@ export class DeviceStore {
       name: `SmartThings device ${id}`,
       type: null,
       online: true,
+      healthUpdatedAt: null,
       states: new Map(),
       controls: new Map()
     };
     this.#devices.set(id, created);
     return created;
+  }
+
+  #setDeviceHealth(device: MutableDevice, online: boolean, updatedAt: string | null): boolean {
+    if (isOlderOrUndated(updatedAt, device.healthUpdatedAt)) {
+      return false;
+    }
+    device.healthUpdatedAt = updatedAt;
+    if (device.online === online) {
+      return false;
+    }
+    device.online = online;
+    return true;
   }
 
   #setState(device: MutableDevice, state: BridgeDeviceState): boolean {
@@ -707,6 +754,7 @@ export class DeviceStore {
         name: device.name,
         type: device.type,
         online: device.online,
+        healthUpdatedAt: device.healthUpdatedAt ?? null,
         ...(device.presentation ? { presentation: { ...device.presentation } } : {}),
         states: new Map(device.states.map((state) => [stateKey(state), cloneState(state)])),
         controls: new Map((device.controls ?? []).map((control) => [control.id, cloneControl(control)]))
@@ -830,6 +878,10 @@ function parsePersistedInventory(value: unknown): BridgeInventory | undefined {
     const roomId = item?.roomId === null ? null : safeId(item?.roomId, "identifier");
     const name = safeName(item?.name);
     const type = item?.type === null ? null : safeName(item?.type);
+    const healthUpdatedAt =
+      item?.healthUpdatedAt === undefined || item.healthUpdatedAt === null
+        ? item?.healthUpdatedAt
+        : validTimestamp(item.healthUpdatedAt);
     const presentation = devicePresentation(asRecord(item?.presentation));
     if (
       !id ||
@@ -838,6 +890,9 @@ function parsePersistedInventory(value: unknown): BridgeInventory | undefined {
       !name ||
       type === undefined ||
       typeof item?.online !== "boolean" ||
+      (item?.healthUpdatedAt !== undefined &&
+        item.healthUpdatedAt !== null &&
+        healthUpdatedAt === null) ||
       !Array.isArray(item.states)
     ) {
       return undefined;
@@ -865,6 +920,9 @@ function parsePersistedInventory(value: unknown): BridgeInventory | undefined {
       name,
       type,
       online: item.online,
+      ...(item.healthUpdatedAt !== undefined
+        ? { healthUpdatedAt: healthUpdatedAt as string | null }
+        : {}),
       ...(presentation ? { presentation } : {}),
       states,
       ...(controls.length > 0 ? { controls } : {})
@@ -1507,7 +1565,11 @@ function advancedOnlineState(source: Record<string, unknown>): boolean | undefin
   const health = asRecord(source.healthState ?? source.health);
   const state = readString(source.state ?? source.status ?? source.healthState);
   const nestedState = readString(health?.state ?? health?.status);
-  const text = (nestedState ?? state)?.toUpperCase();
+  return healthOnlineState(nestedState ?? state);
+}
+
+function healthOnlineState(value: unknown): boolean | undefined {
+  const text = readString(value)?.toUpperCase();
   if (text === "ONLINE") return true;
   if (text === "OFFLINE") return false;
   return undefined;

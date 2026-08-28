@@ -87,6 +87,7 @@ from smartthings_web.binary_sensor import (  # noqa: E402
     BINARY_STATES,
     SmartThingsWebBinarySensor,
     _binary_sensor_candidates,
+    async_setup_entry,
 )
 from smartthings_web.models import (  # noqa: E402
     BridgeDevice,
@@ -155,6 +156,92 @@ class SmartThingsWebBinarySensorTests(unittest.TestCase):
         candidates = _binary_sensor_candidates(dryer)
 
         self.assertEqual(candidates, [(power, BINARY_STATES["switch"])])
+
+
+class SmartThingsWebBinarySensorSetupTests(unittest.IsolatedAsyncioTestCase):
+    """Keep setup-time duplicate naming aligned with registry migration."""
+
+    async def test_contact_original_name_migration_uses_sibling_compartment_roles(self) -> None:
+        role_labels = {
+            "refrigerator": "냉장고",
+            "freezer": "냉동실",
+            "cvroom": "맞춤보관실",
+            "cooler": "냉장실",
+            "onedoor": "단일 도어",
+        }
+        states: list[BridgeState] = []
+        for role in role_labels:
+            component = f"identifier_component_{role}"
+            states.extend(
+                [
+                    BridgeState(
+                        component,
+                        "contactSensor",
+                        "contact",
+                        "closed",
+                        None,
+                        "2026-08-28T00:00:00Z",
+                        component_role="main",
+                    ),
+                    BridgeState(
+                        component,
+                        "temperatureMeasurement",
+                        "temperature",
+                        3,
+                        "C",
+                        "2026-08-28T00:00:00Z",
+                        component_role=role,
+                    ),
+                ]
+            )
+        device = BridgeDevice(
+            "dev_392",
+            "loc_001",
+            None,
+            "Bespoke refrigerator",
+            "refrigerator",
+            True,
+            states={state.key: state for state in states},
+        )
+        runtime = SmartThingsWebRuntime(
+            object(),
+            "loc_001",
+            BridgeInventory(1, True, "0.1.99", "4:test", {}, {}, {device.device_id: device}),
+        )
+        migrations: list[tuple[str, str, str, str | None]] = []
+        setup_globals = async_setup_entry.__globals__
+        original_migrate = setup_globals["migrate_entity_original_name"]
+        setup_globals["migrate_entity_original_name"] = lambda *args: migrations.append(args)
+        added: list[object] = []
+        entry = SimpleNamespace(
+            runtime_data=runtime,
+            async_on_unload=lambda callback: None,
+        )
+        try:
+            await async_setup_entry(object(), entry, added.extend)
+        finally:
+            setup_globals["migrate_entity_original_name"] = original_migrate
+
+        self.assertEqual(
+            {
+                entity.state_key[0]: entity._attr_name
+                for entity in added
+                if entity.state_key[2] == "contact"
+            },
+            {
+                f"identifier_component_{role}": f"Contact ({label})"
+                for role, label in role_labels.items()
+            },
+        )
+        self.assertEqual(
+            {unique_id: name for _, _, unique_id, name in migrations},
+            {
+                f"dev_392_identifier_component_{role}_contactSensor_contact": (
+                    f"Contact ({label})"
+                )
+                for role, label in role_labels.items()
+            },
+        )
 
 
 if __name__ == "__main__":
