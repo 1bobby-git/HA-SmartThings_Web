@@ -428,9 +428,11 @@ export class SmartThingsWebUiCommandExecutor {
     this.#backgroundInspectionPage = page;
     try {
       if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
-      await openDeviceDetail(page, input.deviceName, input.roomName, {
-        preferRooms: Boolean(input.roomName)
-      });
+      // Background discovery never executes a control, so start with the
+      // overview and retain the existing rooms/search fallbacks.  Forcing the
+      // room route here made layout drift prevent otherwise safe detail
+      // observation for devices that already had an exact overview card.
+      await openDeviceDetail(page, input.deviceName, input.roomName);
       if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
       await page.waitForTimeout?.(input.detailSettleMs ?? 1_500);
       if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");

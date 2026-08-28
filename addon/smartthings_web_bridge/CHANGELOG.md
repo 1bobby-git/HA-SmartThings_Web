@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.107
+
+- Start non-mutating background detail discovery from the location overview, retaining the exact-room and search fallbacks when the card is absent. This avoids layout-drift failures that prevented value-only devices such as contact sensors from exposing their observed Refresh action, while foreground controls continue to require the strict exact-room path.
+
 ## 0.1.106
 
 - Devices restored from a previous browser session now start as unconfirmed: the live session must refresh them (whole snapshots, detail sweeps, or the advanced refresh poll) or they are pruned after a grace period. This stops one physical device from splitting into old-alias and new-alias cards whenever the session is rebuilt.

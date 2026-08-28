@@ -1571,7 +1571,26 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(page.close).toHaveBeenCalledTimes(1);
   });
 
-  test("uses the exact room route without probing a page-wide overview button", async () => {
+  test("tries the overview before the brittle room route during background discovery", async () => {
+    const page = new FakeCommandPage();
+    page.waitForTimeout = vi.fn(async () => undefined);
+    page.goto = vi.fn(page.goto.bind(page));
+    const manager = { openCommandPage: vi.fn(async () => page) };
+    const executor = new SmartThingsWebUiCommandExecutor(() => manager);
+
+    await executor.inspectDeviceDetails({
+      deviceName: "Safe plug",
+      locationId: "loc_001",
+      roomName: "Kitchen"
+    });
+
+    expect(page.card.click).toHaveBeenCalledTimes(1);
+    expect(page.goto).not.toHaveBeenCalled();
+    expect(page.toggle.click).not.toHaveBeenCalled();
+    expect(page.close).toHaveBeenCalledTimes(1);
+  });
+
+  test("falls back to the exact room route after the overview card is absent", async () => {
     const page = new FakeCommandPage();
     const overviewCard = new FakeLocator(1, true);
     const missingExactWrappers = new FakeLocator(0, true);
@@ -1615,6 +1634,10 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       waitUntil: "domcontentloaded"
     });
     expect(overviewCard.waitFor).not.toHaveBeenCalled();
+    expect(missingExactWrappers.waitFor).toHaveBeenCalledWith({
+      state: "visible",
+      timeout: 15_000
+    });
     expect(roomButton.dispatchEvent).toHaveBeenCalledWith("click");
     expect(roomButton.click).not.toHaveBeenCalled();
     expect(roomDeviceWrapper.waitFor).toHaveBeenCalledWith({
@@ -1622,7 +1645,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       timeout: 3_000
     });
     expect(roomDeviceWrapper.click).toHaveBeenCalledTimes(1);
-    expect(missingExactWrappers.waitFor).not.toHaveBeenCalled();
+    expect(missingExactWrappers.waitFor).toHaveBeenCalledTimes(1);
     expect(page.toggle.click).not.toHaveBeenCalled();
     expect(page.close).toHaveBeenCalledTimes(1);
   });
@@ -1906,11 +1929,14 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       page.currentUrl = url;
     });
     const executor = new SmartThingsWebUiCommandExecutor(() => ({
-      openCommandPage: vi.fn(async () => page)
+      openCommandPage: vi.fn(async () => {
+        page.currentUrl = "https://my.smartthings.com/location/loc_001";
+        return page;
+      })
     }));
 
     await expect(
-      executor.inspectDeviceDetails({
+      executor.executeSwitch({
         deviceName: "Safe plug",
         locationId: "loc_001",
         roomName: "Kitchen"
@@ -1933,11 +1959,14 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       page.currentUrl = url;
     });
     const executor = new SmartThingsWebUiCommandExecutor(() => ({
-      openCommandPage: vi.fn(async () => page)
+      openCommandPage: vi.fn(async () => {
+        page.currentUrl = "https://my.smartthings.com/location/loc_001";
+        return page;
+      })
     }));
 
     await expect(
-      executor.inspectDeviceDetails({
+      executor.executeSwitch({
         deviceName: "Safe plug",
         locationId: "loc_001",
         roomName: "Kitchen"
@@ -1961,11 +1990,14 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       page.currentUrl = url;
     });
     const executor = new SmartThingsWebUiCommandExecutor(() => ({
-      openCommandPage: vi.fn(async () => page)
+      openCommandPage: vi.fn(async () => {
+        page.currentUrl = "https://my.smartthings.com/location/loc_001";
+        return page;
+      })
     }));
 
     await expect(
-      executor.inspectDeviceDetails({
+      executor.executeSwitch({
         deviceName: "Safe plug",
         locationId: "loc_001",
         roomName: "Kitchen"
