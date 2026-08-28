@@ -291,6 +291,17 @@ describe("HAOS soak sampling", () => {
     await expect(readCgroupMemoryUsage([zeroMemoryFile])).resolves.toBe(0);
   });
 
+  it("uses an explicit process RSS fallback when HAOS denies cgroup reads", async () => {
+    const root = await temporaryRoot();
+
+    await expect(
+      readCgroupMemoryUsage([join(root, "missing")], () => 123_456_789)
+    ).resolves.toBe(123_456_789);
+    await expect(
+      readCgroupMemoryUsage([join(root, "missing")], () => Number.NaN)
+    ).rejects.toThrowError("stats_response_invalid");
+  });
+
   it("writes only the constructed sanitized observation outside the repository", async () => {
     const root = await temporaryRoot();
     const repositoryRoot = join(root, "repo");

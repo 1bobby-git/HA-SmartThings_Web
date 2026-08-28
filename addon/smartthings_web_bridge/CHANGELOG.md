@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.117
+
+- Keep the 72-hour HAOS soak collector measurable when the container runtime denies cgroup memory-file reads by falling back to the Bridge Node process RSS instead of recording every sample as `stats_response_invalid`.
+- Preserve exact live-control state binding, scene fallback execution, push-first SSE state delivery, and the prohibition on periodic SmartThings state polling.
+
 ## 0.1.116
 
 - Resolve the live control benchmark against the entity registry's exact normalized Bridge state key, including aliased component and capability identifiers, so pushed ON/OFF transitions are measured instead of being discarded as canonical-name mismatches.

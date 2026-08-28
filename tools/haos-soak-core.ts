@@ -361,7 +361,8 @@ export async function writeSanitizedObservation(
 }
 
 export async function readCgroupMemoryUsage(
-  paths = ["/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory/memory.usage_in_bytes"]
+  paths = ["/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory/memory.usage_in_bytes"],
+  fallback?: () => number
 ): Promise<number> {
   for (const path of paths) {
     try {
@@ -373,6 +374,10 @@ export async function readCgroupMemoryUsage(
     } catch {
       // Try the next known cgroup location; absence is not evidence of zero usage.
     }
+  }
+  const fallbackValue = fallback?.();
+  if (Number.isSafeInteger(fallbackValue) && fallbackValue !== undefined && fallbackValue >= 0) {
+    return fallbackValue;
   }
   throw new Error("stats_response_invalid");
 }

@@ -438,7 +438,7 @@ function parseLocalBridgeHealth(input: unknown): SoakHealthObservation {
 }
 
 async function collectLocalResources() {
-  return zeroResources(await readCgroupMemoryUsage());
+  return zeroResources(await readCgroupMemoryUsage(undefined, () => process.memoryUsage().rss));
 }
 
 function zeroResources(memoryUsageBytes = 0) {
