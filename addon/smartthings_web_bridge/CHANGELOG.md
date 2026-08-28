@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.121
+
+- Persist the complete canonical SmartThings device/entity object ID as Home Assistant's generated restore suggestion. This bypasses Home Assistant 2026.8's area-plus-device template, so restoring `화장실 도어센서` and `작은방 재실센서` keeps `hwajangsil_doeosenseo_contact` and `jageunbang_jaesilsenseo_presence` instead of recreating a duplicated room prefix.
+- Build that canonical ID from the actual SmartThings device name, preserving a room token that belongs to the name while collapsing only a duplicated generated prefix. Exact room-named speakers such as `거실` remain `media_player.geosil`, and `거실 4` remains `media_player.geosil_4`.
+- Keep collision reclamation, restore metadata repair, and orphaned Bridge device-card retirement on Home Assistant's public registry APIs, with direct regressions for the numbered-ID and stale-card paths.
+- Make the Home Camera image-entity regression independently runnable while retaining the authenticated local byte proxy and functional sensor icons.
+
 ## 0.1.120
 
 - Apply pushed `DEVICE_HEALTH_EVENT` availability changes immediately, reject stale health timestamps, and persist only actual online/offline transitions.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import re
 import sys
 from types import ModuleType
 import unittest
@@ -15,6 +16,14 @@ package.__path__ = [str(PACKAGE_ROOT)]  # type: ignore[attr-defined]
 package.SmartThingsWebConfigEntry = object  # type: ignore[attr-defined]
 
 sys.modules.setdefault("homeassistant", ModuleType("homeassistant"))
+
+homeassistant_util = ModuleType("homeassistant.util")
+homeassistant_util.slugify = lambda value: re.sub(  # type: ignore[attr-defined]
+    r"[\s_-]+",
+    "_",
+    re.sub(r"(?u)[^\w\s-]", "", str(value).strip().lower()),
+)
+sys.modules["homeassistant.util"] = homeassistant_util
 
 components = sys.modules.setdefault(
     "homeassistant.components", ModuleType("homeassistant.components")
@@ -110,6 +119,10 @@ from smartthings_web.models import (  # noqa: E402
     BridgeInventory,
     SmartThingsWebRuntime,
 )
+
+sys.modules.pop("smartthings_web.entity", None)
+if hasattr(package, "entity"):
+    delattr(package, "entity")
 
 image_spec = importlib.util.spec_from_file_location(
     "smartthings_web.image_under_test",

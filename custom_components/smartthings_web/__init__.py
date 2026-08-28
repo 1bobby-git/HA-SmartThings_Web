@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -49,6 +50,7 @@ from .models import (
     sensor_state_owned_by_primary_domain,
     state_has_entity_value,
 )
+from .naming import canonical_entity_object_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -715,15 +717,13 @@ def _migrate_entity_registry(
             new_entity_id is not None
             and registry.async_get(registry_entity_id) is not None
         ):
-            registry.async_update_entity(
-                registry_entity_id,
-                new_entity_id=new_entity_id,
-            )
-            current_entity_ids.discard(registry_entity_id)
-            current_entity_ids.add(new_entity_id)
-            registry_entity_id = new_entity_id
-            renamed_this_entry = True
-        _refresh_generated_registry_metadata(registry, entry, entity_entry)
+            if _rename_generated_registry_entity(
+                registry, registry_entity_id, new_entity_id
+            ):
+                current_entity_ids.discard(registry_entity_id)
+                current_entity_ids.add(new_entity_id)
+                registry_entity_id = new_entity_id
+                renamed_this_entry = True
         if not renamed_this_entry:
             room_named_candidates = _room_named_primary_entity_ids(
                 entity_entry,
@@ -737,15 +737,14 @@ def _migrate_entity_registry(
                     and room_named_entity_id not in current_entity_ids
                     and registry.async_get(registry_entity_id) is not None
                 ):
-                    registry.async_update_entity(
-                        registry_entity_id,
-                        new_entity_id=room_named_entity_id,
-                    )
-                    current_entity_ids.discard(registry_entity_id)
-                    current_entity_ids.add(room_named_entity_id)
-                    registry_entity_id = room_named_entity_id
-                    renamed_this_entry = True
-                    break
+                    if _rename_generated_registry_entity(
+                        registry, registry_entity_id, room_named_entity_id
+                    ):
+                        current_entity_ids.discard(registry_entity_id)
+                        current_entity_ids.add(room_named_entity_id)
+                        registry_entity_id = room_named_entity_id
+                        renamed_this_entry = True
+                        break
         if (
             not renamed_this_entry
             and _exact_room_named_device_slug(entity_entry, inventory) is None
@@ -763,14 +762,25 @@ def _migrate_entity_registry(
                     and room_free_entity_id not in current_entity_ids
                     and registry.async_get(registry_entity_id) is not None
                 ):
-                    registry.async_update_entity(
-                        registry_entity_id,
-                        new_entity_id=room_free_entity_id,
-                    )
-                    current_entity_ids.discard(registry_entity_id)
-                    current_entity_ids.add(room_free_entity_id)
-                    registry_entity_id = room_free_entity_id
-                    break
+                    if _rename_generated_registry_entity(
+                        registry, registry_entity_id, room_free_entity_id
+                    ):
+                        current_entity_ids.discard(registry_entity_id)
+                        current_entity_ids.add(room_free_entity_id)
+                        registry_entity_id = room_free_entity_id
+                        break
+        current_registry_entry = registry.async_get(registry_entity_id)
+        _refresh_generated_registry_metadata(
+            registry,
+            entry,
+            current_registry_entry or entity_entry,
+            _canonical_registry_suggested_object_id(
+                inventory,
+                owner_device,
+                current_registry_entry or entity_entry,
+                registry_entity_id,
+            ),
+        )
         new_unique_id = old_to_new.get(entity_entry.unique_id)
         if new_unique_id is None:
             continue
@@ -780,20 +790,76 @@ def _migrate_entity_registry(
     _remove_orphan_bridge_device_cards(hass, entry, inventory, registry_entries, removed_entity_ids)
 
 
+def _rename_generated_registry_entity(
+    registry: object,
+    current_entity_id: str,
+    new_entity_id: str,
+) -> bool:
+    """Rename a generated row without aborting setup on an HA state reservation."""
+    try:
+        registry.async_update_entity(current_entity_id, new_entity_id=new_entity_id)
+    except ValueError:
+        _LOGGER.warning(
+            "Could not restore SmartThings Web entity ID %s to %s because Home "
+            "Assistant has reserved the target ID",
+            current_entity_id,
+            new_entity_id,
+        )
+        return False
+    return True
+
+
+def _canonical_registry_suggested_object_id(
+    inventory: BridgeInventory,
+    device: object | None,
+    entity_entry: object,
+    final_entity_id: str,
+) -> str | None:
+    """Derive restore metadata from the final canonical registry target."""
+    if device is None:
+        return None
+    domain = getattr(entity_entry, "domain", "")
+    domain_value = getattr(domain, "value", domain)
+    device_id = str(getattr(device, "device_id", ""))
+    unique_id = str(getattr(entity_entry, "unique_id", ""))
+    primary_domain = domain_value in {"climate", "cover", "fan", "media_player"}
+    if primary_domain and unique_id == f"{device_id}_{domain_value}":
+        base = canonical_entity_object_id(inventory, device)
+        if not base:
+            return None
+        final_object_id = final_entity_id.partition(".")[2]
+        if final_object_id == base:
+            return base
+        if final_object_id.startswith(f"{base}_"):
+            suffix = final_object_id[len(base) + 1 :]
+            if suffix.isdigit():
+                return final_object_id
+        if _exact_room_named_device_slug(entity_entry, inventory) is not None:
+            _legacy_stem, separator, legacy_suffix = final_object_id.rpartition("_")
+            if separator and legacy_suffix.isdigit() and int(legacy_suffix) >= 2:
+                return f"{base}_{legacy_suffix}"
+        return base
+    return canonical_entity_object_id(
+        inventory,
+        device,
+        getattr(entity_entry, "object_id_base", None),
+    )
+
+
 def _refresh_generated_registry_metadata(
     registry: object,
     entry: SmartThingsWebConfigEntry,
     entity_entry: object,
+    canonical_suggested_object_id: str | None,
 ) -> None:
-    """Clear stale generated restore hints through Home Assistant's public API."""
+    """Repair generated restore hints through Home Assistant's public API."""
     if (
         getattr(entity_entry, "platform", None) != DOMAIN
         or getattr(entity_entry, "name", None) is not None
     ):
         return
     object_id_base = getattr(entity_entry, "object_id_base", None)
-    suggested_object_id = getattr(entity_entry, "suggested_object_id", None)
-    if suggested_object_id is None:
+    if canonical_suggested_object_id is None:
         return
     if not isinstance(object_id_base, str) or not object_id_base.strip():
         return
@@ -807,7 +873,7 @@ def _refresh_generated_registry_metadata(
         config_entry=entry,
         has_entity_name=True,
         object_id_base=object_id_base,
-        suggested_object_id=None,
+        suggested_object_id=canonical_suggested_object_id,
     )
 
 
@@ -815,7 +881,7 @@ def _remove_orphan_bridge_device_cards(
     hass: object,
     entry: SmartThingsWebConfigEntry,
     inventory: BridgeInventory,
-    registry_entries: list[object],
+    registry_entries: Sequence[object],
     removed_entity_ids: set[str],
 ) -> None:
     """Detach config-entry links for Bridge device cards the session replaced.
@@ -917,15 +983,13 @@ def _canonical_numbered_generated_entity_id(
     object_id_base = getattr(entity_entry, "object_id_base", None)
     if not isinstance(object_id_base, str) or not object_id_base.strip():
         return None
-    device_slug = _device_object_id_slug(inventory, device)
-    base_slug = slugify(object_id_base)
-    if not device_slug or not base_slug:
-        return None
-    canonical_object_id = (
-        device_slug
-        if device_slug == base_slug or device_slug.endswith(f"_{base_slug}")
-        else f"{device_slug}_{base_slug}"
+    canonical_object_id = canonical_entity_object_id(
+        inventory,
+        device,
+        object_id_base,
     )
+    if not canonical_object_id:
+        return None
     domain = getattr(entity_entry, "domain", "") or ""
     current_object_id = getattr(entity_entry, "entity_id", "").partition(".")[2]
     numbered_prefix = f"{canonical_object_id}_"
@@ -935,37 +999,6 @@ def _canonical_numbered_generated_entity_id(
     if not collision_suffix.isdigit() or int(collision_suffix) < 2:
         return None
     return f"{domain}.{canonical_object_id}"
-
-
-def _device_object_id_slug(
-    inventory: BridgeInventory,
-    device: object,
-) -> str | None:
-    """Return the device-name slug with at most one matching room token."""
-    device_name = str(getattr(device, "name", "")).strip()
-    device_slug = slugify(device_name)
-    room_id = getattr(device, "room_id", None)
-    if not room_id:
-        return device_slug or None
-    room = inventory.rooms.get(room_id)
-    if room is None or room[0] != getattr(device, "location_id", None):
-        return device_slug or None
-    room_name = room[1].strip()
-    room_slug = slugify(room_name)
-    if not room_name or not room_slug:
-        return device_slug or None
-    if device_name.casefold() == room_name.casefold():
-        return room_slug
-    if device_name.casefold().startswith(room_name.casefold()):
-        remainder = device_name[len(room_name):].strip(" _-")
-        remainder_slug = slugify(remainder)
-        if remainder_slug:
-            return f"{room_slug}_{remainder_slug}"
-    duplicate_prefix = f"{room_slug}_{room_slug}_"
-    if device_slug.startswith(duplicate_prefix):
-        return f"{room_slug}_{device_slug[len(duplicate_prefix):]}"
-    return device_slug or None
-
 
 def _registry_uuid_room_slugs(
     hass: object,

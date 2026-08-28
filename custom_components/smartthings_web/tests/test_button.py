@@ -170,6 +170,7 @@ class ButtonDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(added[0].control.control_id, "refresh")
         self.assertEqual(added[0]._attr_translation_key, "refresh")
         self.assertEqual(added[0]._attr_suggested_object_id, "window_sensor_refresh")
+        self.assertEqual(added[0].entity_id, "button.window_sensor_refresh")
 
     async def test_observed_refresh_button_sends_refresh_command(self) -> None:
         control = BridgeControl(

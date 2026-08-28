@@ -324,7 +324,7 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(clone_entity._attr_device_info["name"], "거실")
         self.assertEqual(distinct_entity._attr_device_info["name"], "거실 스피커 2")
         self.assertEqual(no_room_entity._attr_device_info["name"], "거실 스피커 2")
-        self.assertIsNone(primary_entity._attr_suggested_object_id)
+        self.assertEqual(primary_entity._attr_suggested_object_id, "geosil")
         self.assertEqual(clone.name, "거실")
         self.assertEqual(distinct.name, "거실 스피커 2")
 
@@ -364,11 +364,11 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             entity._attr_suggested_object_id,
-            "temperature",
+            "geosil_onseubdogye_temperature",
         )
 
-    def test_named_entity_suggests_only_its_local_object_id_base(self) -> None:
-        """HA prefixes has-entity-name rows with the device name exactly once."""
+    def test_named_entity_suggests_the_full_canonical_object_id(self) -> None:
+        """Bypass HA's area template when the SmartThings name has the room."""
         state = BridgeState(
             "main",
             "contactSensor",
@@ -400,10 +400,58 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        entity = SmartThingsWebEntity(runtime, device, state, None)
+        class BathroomBinarySensor(SmartThingsWebEntity):
+            """Stand in for a real binary_sensor platform entity."""
+
+        BathroomBinarySensor.__module__ = "smartthings_web.binary_sensor"
+        entity = BathroomBinarySensor(runtime, device, state, None)
 
         self.assertTrue(entity._attr_has_entity_name)
-        self.assertEqual(entity._attr_suggested_object_id, "contact")
+        self.assertEqual(
+            entity._attr_suggested_object_id,
+            "hwajangsil_doeosenseo_contact",
+        )
+        self.assertEqual(
+            entity.entity_id,
+            "binary_sensor.hwajangsil_doeosenseo_contact",
+        )
+
+    def test_already_canonical_object_id_is_idempotent(self) -> None:
+        state = BridgeState(
+            "main",
+            "contactSensor",
+            "contact",
+            "closed",
+            None,
+            "2026-08-28T06:00:00.000Z",
+        )
+        device = BridgeDevice(
+            "dev_door",
+            "loc_001",
+            "room_bathroom",
+            "Hwajangsil Doeosenseo",
+            "contact_sensor",
+            True,
+            states={state.key: state},
+        )
+        inventory = BridgeInventory(
+            1,
+            True,
+            "0.1.121",
+            "4",
+            {},
+            {"room_bathroom": ("loc_001", "Hwajangsil")},
+            {device.device_id: device},
+        )
+
+        self.assertEqual(
+            entity_under_test.canonical_entity_object_id(
+                inventory,
+                device,
+                "hwajangsil_doeosenseo_contact",
+            ),
+            "hwajangsil_doeosenseo_contact",
+        )
 
     def test_device_entity_suggests_refresh_object_id_without_room_prefix_duplication(self) -> None:
         state = BridgeState(
@@ -441,7 +489,7 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             entity._attr_suggested_object_id,
-            "refresh",
+            "geosil_cangmunsenseo_refresh",
         )
 
     def test_explicit_state_entity_name_is_preserved(self) -> None:

@@ -812,15 +812,18 @@ class EntityRegistryMigrationTests(unittest.TestCase):
 
     def test_room_named_media_player_reclaims_room_slug_without_rotating(self) -> None:
         """Migrate legacy type-label IDs to the preserved room-name slug once."""
+        legacy_media = self._registry_entry(
+            "media_player.3_4",
+            "uuid_living_speaker",
+            domain="media_player",
+            unique_id="dev_living_media_player",
+        )
+        legacy_media.object_id_base = "3_4"
+        legacy_media.suggested_object_id = None
         registry = FakeRegistry(
             [
                 entity("media_player.geosil", "media_player", "official_living", platform="other"),
-                self._registry_entry(
-                    "media_player.3_4",
-                    "uuid_living_speaker",
-                    domain="media_player",
-                    unique_id="dev_living_media_player",
-                ),
+                legacy_media,
             ]
         )
         self.patch_registry(registry)
@@ -870,6 +873,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             registry.renamed,
             [("media_player.3_4", "media_player.geosil_4")],
         )
+        self.assertEqual(legacy_media.suggested_object_id, "geosil_4")
 
     def test_dynamic_registry_migration_waits_for_discovered_entities(self) -> None:
         """Repair entity IDs created by platform discovery after inventory changes."""
@@ -1225,8 +1229,8 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             ],
         )
 
-    def test_reclaims_numbered_id_without_private_registry_metadata_mutation(self) -> None:
-        """Use HA's public rename API and let entity registration refresh suggestions."""
+    def test_reclaims_numbered_id_and_repairs_the_restore_suggestion(self) -> None:
+        """Keep HA's restore action on the same canonical generated entity ID."""
         state = BridgeState(
             "main",
             "contactSensor",
@@ -1328,9 +1332,86 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         )
         self.assertEqual(
             registry_entry.suggested_object_id,
-            None,
+            "hwajangsil_doeosenseo_contact",
         )
         self.assertEqual(registry_entry.object_id_base, "contact")
+
+    def test_reserved_state_id_does_not_abort_numbered_id_repair(self) -> None:
+        """Keep setup running when HA reserves an ID outside the registry."""
+        state = BridgeState(
+            "main",
+            "contactSensor",
+            "contact",
+            "closed",
+            None,
+            "2026-08-28T06:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_door",
+            "loc_001",
+            "room_bathroom",
+            "Hwajangsil Doeosenseo",
+            "contact_sensor",
+            True,
+            states={state.key: state},
+        )
+        registry_entry = SimpleNamespace(
+            entity_id="binary_sensor.hwajangsil_doeosenseo_contact_4",
+            domain="binary_sensor",
+            platform=DOMAIN,
+            unique_id="dev_door_main_contactSensor_contact",
+            device_id="uuid_door",
+            name=None,
+            disabled_by=None,
+            original_name="Contact",
+            object_id_base="contact",
+            suggested_object_id=None,
+        )
+
+        class ReservedStateRegistry(FakeRegistry):
+            def async_update_entity(
+                self,
+                entity_id: str,
+                *,
+                new_unique_id: str | None = None,
+                new_entity_id: str | None = None,
+            ) -> None:
+                if new_entity_id == "binary_sensor.hwajangsil_doeosenseo_contact":
+                    raise ValueError("entity id is already reserved")
+                super().async_update_entity(
+                    entity_id,
+                    new_unique_id=new_unique_id,
+                    new_entity_id=new_entity_id,
+                )
+
+        registry = ReservedStateRegistry([registry_entry])
+        self.patch_registry(registry)
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(
+                entry_id="entry_001",
+                data={CONF_LOCATION_ID: "loc_001"},
+            ),
+            BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.121",
+                protocol_version="4",
+                locations={"loc_001": "Home"},
+                rooms={"room_bathroom": ("loc_001", "Hwajangsil")},
+                devices={device.device_id: device},
+            ),
+        )
+
+        self.assertEqual(
+            registry_entry.entity_id,
+            "binary_sensor.hwajangsil_doeosenseo_contact_4",
+        )
+        self.assertEqual(
+            registry_entry.suggested_object_id,
+            "hwajangsil_doeosenseo_contact",
+        )
 
     def test_live_door_id_repairs_missing_room_then_reclaims_numbered_suffix(self) -> None:
         """Settle the observed live ID on one room token with no collision suffix."""
@@ -1618,6 +1699,69 @@ class EntityRegistryMigrationTests(unittest.TestCase):
                 )
             ],
         )
+
+    def test_detaches_only_unreferenced_stale_bridge_device_card(self) -> None:
+        """Retire an old alias card without touching current or active devices."""
+        updates: list[tuple[str, str]] = []
+        device_registry = SimpleNamespace(
+            devices=[
+                SimpleNamespace(
+                    id="uuid_active",
+                    identifiers={(DOMAIN, "dev_active")},
+                    config_entries={"entry_001"},
+                ),
+                SimpleNamespace(
+                    id="uuid_current_empty",
+                    identifiers={(DOMAIN, "dev_current_empty")},
+                    config_entries={"entry_001"},
+                ),
+                SimpleNamespace(
+                    id="uuid_orphan",
+                    identifiers={(DOMAIN, "dev_old_alias")},
+                    config_entries={"entry_001"},
+                ),
+                SimpleNamespace(
+                    id="uuid_other_entry",
+                    identifiers={(DOMAIN, "dev_old_other")},
+                    config_entries={"entry_999"},
+                ),
+            ],
+            async_update_device=lambda device_id, *, remove_config_entry: updates.append(
+                (device_id, remove_config_entry)
+            ),
+        )
+        integration.dr.async_get = lambda _hass: device_registry
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_001"},
+        )
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.120",
+            protocol_version="4",
+            locations={"loc_001": "Home"},
+            rooms={},
+            devices={
+                "dev_active": self._bridge_device("dev_active", "Active"),
+                "dev_current_empty": self._bridge_device(
+                    "dev_current_empty", "Current Empty"
+                ),
+            },
+        )
+        registry_entries = [
+            SimpleNamespace(entity_id="switch.active", device_id="uuid_active")
+        ]
+
+        integration._remove_orphan_bridge_device_cards(
+            object(),
+            entry,
+            inventory,
+            registry_entries,
+            set(),
+        )
+
+        self.assertEqual(updates, [("uuid_orphan", "entry_001")])
 
     @staticmethod
     def _registry_entry(

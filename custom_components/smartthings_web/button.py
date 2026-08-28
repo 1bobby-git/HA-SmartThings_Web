@@ -96,6 +96,8 @@ class SmartThingsWebButton(SmartThingsWebDeviceEntity, ButtonEntity):
             self._attr_suggested_object_id = suggested_entity_object_id(
                 runtime, device, "refresh"
             )
+            if self._attr_suggested_object_id is not None:
+                self.entity_id = f"button.{self._attr_suggested_object_id}"
 
     @property
     def available(self) -> bool:

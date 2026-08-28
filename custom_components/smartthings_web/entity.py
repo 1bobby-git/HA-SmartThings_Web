@@ -5,7 +5,6 @@ from __future__ import annotations
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
-from homeassistant.util import slugify
 
 from .const import DOMAIN
 from .models import (
@@ -20,6 +19,7 @@ from .models import (
     entity_unique_id,
     room_free_display_name,
 )
+from .naming import canonical_entity_object_id
 
 
 _LAUNDRY_APPLIANCE_TYPES = {"dryer", "washer"}
@@ -99,21 +99,48 @@ def _normalized_device_type(value: str | None) -> str:
 
 _PRIMARY_DEVICE_ENTITY_SUFFIXES = {"climate", "cover", "fan", "image", "media_player"}
 
+_ENTITY_PLATFORM_DOMAINS = {
+    "binary_sensor",
+    "button",
+    "climate",
+    "cover",
+    "event",
+    "fan",
+    "image",
+    "light",
+    "media_player",
+    "number",
+    "select",
+    "sensor",
+    "switch",
+    "update",
+}
+
 
 def suggested_entity_object_id(
     runtime: SmartThingsWebRuntime,
     device: BridgeDevice,
     entity_name: str | None = None,
 ) -> str | None:
-    """Return only the entity-local object ID base for named HA entities.
+    """Return the full canonical object ID used for creation and restore.
 
-    Home Assistant prefixes ``has_entity_name`` entities with their device
-    name. Supplying the full device slug here makes HA prepend that name a
-    second time and also persists the duplicated value as the restore target.
+    Current Home Assistant entity-ID generation can prefix both the assigned
+    area and the device name when only an entity-local base is supplied.  A
+    SmartThings device whose real name already begins with its room would then
+    restore as ``room_room_device_entity``.  Supplying the complete canonical
+    object ID bypasses that template and keeps the SmartThings name exactly
+    once.
     """
-    del runtime, device
-    suffix = slugify(entity_name) if entity_name else ""
-    return suffix or None
+    return canonical_entity_object_id(runtime.inventory, device, entity_name)
+
+
+def _set_initial_entity_id(entity: Entity, object_id: str | None) -> None:
+    """Use HA's supported integration suggestion path for a canonical ID."""
+    if object_id is None:
+        return
+    domain = type(entity).__module__.rsplit(".", 1)[-1]
+    if domain in _ENTITY_PLATFORM_DOMAINS:
+        entity.entity_id = f"{domain}.{object_id}"
 
 
 def migrate_entity_original_name(
@@ -157,6 +184,7 @@ class SmartThingsWebEntity(Entity):
         self._attr_suggested_object_id = suggested_entity_object_id(
             runtime, device, name or state.attribute
         )
+        _set_initial_entity_id(self, self._attr_suggested_object_id)
         self._attr_device_info = device_info_for(
             device,
             display_name=room_free_display_name(runtime, device),
@@ -221,6 +249,7 @@ class SmartThingsWebDeviceEntity(Entity):
         self._attr_suggested_object_id = suggested_entity_object_id(
             runtime, device, object_name
         )
+        _set_initial_entity_id(self, self._attr_suggested_object_id)
         self._attr_device_info = device_info_for(
             device,
             display_name=room_free_display_name(runtime, device),
