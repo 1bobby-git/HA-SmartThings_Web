@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.128
+
+- Prevent restored entity metadata from accumulating transliterated role suffixes after repeated Home Assistant registry migration passes.
+- Retry registry repair through the first 30 seconds of Home Assistant startup so a transient restored-state reservation cannot leave `smartthings_device_dev_*` fallback IDs behind.
+- Preserve exact same-origin switch actions observed beside pushed device status, including action-only display rows, so controllable on/off devices are not reduced to auxiliary contact sensors.
+- Expose a primary pushed `switch` state in Home Assistant even while its write action is temporarily absent, while keeping commands fail-closed until an exact safe toggle action is observed.
+
 ## 0.1.127
 
 - Confirm SmartThings scene execution only from explicit scene action state expectations parsed from the observed `api/scene` snapshot, instead of accepting any newer same-location device event.
