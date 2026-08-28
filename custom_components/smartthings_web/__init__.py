@@ -617,6 +617,31 @@ def _migrate_entity_registry(
             registry_entity_id = new_entity_id
             renamed_this_entry = True
         if not renamed_this_entry:
+            room_named_candidates = _room_named_primary_entity_ids(
+                entity_entry,
+                inventory,
+                current_entity_ids,
+            )
+            for room_named_entity_id in room_named_candidates:
+                if (
+                    room_named_entity_id != registry_entity_id
+                    and registry.async_get(room_named_entity_id) is None
+                    and room_named_entity_id not in current_entity_ids
+                    and registry.async_get(registry_entity_id) is not None
+                ):
+                    registry.async_update_entity(
+                        registry_entity_id,
+                        new_entity_id=room_named_entity_id,
+                    )
+                    current_entity_ids.discard(registry_entity_id)
+                    current_entity_ids.add(room_named_entity_id)
+                    registry_entity_id = room_named_entity_id
+                    renamed_this_entry = True
+                    break
+        if (
+            not renamed_this_entry
+            and _exact_room_named_device_slug(entity_entry, inventory) is None
+        ):
             room_free_candidates = _room_prefixed_generated_entity_ids(
                 entity_entry,
                 current_device_ids,
@@ -861,6 +886,70 @@ def _room_prefixed_generated_entity_ids(
             seen.add(candidate)
             ordered_unique.append(candidate)
     return ordered_unique
+
+
+def _room_named_primary_entity_ids(
+    entity_entry: object,
+    inventory: BridgeInventory,
+    current_entity_ids: set[str],
+) -> list[str]:
+    """Rebase legacy type-label primary IDs onto an exact room-name slug.
+
+    Earlier releases replaced devices named exactly like their room with a
+    localized type label. Existing primary entities therefore froze as opaque
+    IDs such as ``media_player.3_4``. Only automatic primary-domain rows whose
+    stable unique ID proves the owning device are eligible. Once an ID is one
+    of the room-slug candidates, later migration passes leave it untouched.
+    """
+    if getattr(entity_entry, "name", None) is not None:
+        return []
+    domain = getattr(entity_entry, "domain", "") or ""
+    if domain not in {"climate", "cover", "fan", "image", "media_player"}:
+        return []
+    unique_id = getattr(entity_entry, "unique_id", "") or ""
+    device = next(
+        (
+            item
+            for item in inventory.devices.values()
+            if unique_id == f"{item.device_id}_{domain}"
+        ),
+        None,
+    )
+    room_slug = _exact_room_named_device_slug(entity_entry, inventory)
+    if device is None or room_slug is None:
+        return []
+    base = f"{domain}.{room_slug}"
+    candidates = [base, *(f"{base}_{index}" for index in range(2, 100))]
+    original_entity_id = getattr(entity_entry, "entity_id", "")
+    if original_entity_id in candidates:
+        return []
+    return [candidate for candidate in candidates if candidate not in current_entity_ids]
+
+
+def _exact_room_named_device_slug(
+    entity_entry: object,
+    inventory: BridgeInventory,
+) -> str | None:
+    """Return the room slug when the entity's device uses that exact name."""
+    unique_id = getattr(entity_entry, "unique_id", "") or ""
+    device = next(
+        (
+            item
+            for item in inventory.devices.values()
+            if unique_id == item.device_id or unique_id.startswith(f"{item.device_id}_")
+        ),
+        None,
+    )
+    if device is None or device.room_id is None:
+        return None
+    room = inventory.rooms.get(device.room_id)
+    if (
+        room is None
+        or room[0] != device.location_id
+        or device.name.strip().casefold() != room[1].strip().casefold()
+    ):
+        return None
+    return slugify(room[1].strip()) or None
 
 
 def _stale_fan_unique_id(

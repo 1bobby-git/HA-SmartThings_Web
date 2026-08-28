@@ -590,47 +590,17 @@ def location_unique_id(location_id: str, suffix: str) -> str:
     return f"{location_id}_{suffix}"
 
 
-_DEVICE_TYPE_ROOM_FREE_LABELS = {
-    "air_conditioner": "에어컨",
-    "air_purifier": "공기청정기",
-    "camera": "카메라",
-    "camera_security": "보안 카메라",
-    "contact_sensor": "도어 센서",
-    "dishwasher": "식세기",
-    "dryer": "건조기",
-    "fan": "선풍기",
-    "hub": "허브",
-    "light": "조명",
-    "motion_sensor": "모션 센서",
-    "refrigerator": "냉장고",
-    "speaker": "스피커",
-    "switch": "스위치",
-    "temp_humidity_sensor": "온습도 센서",
-    "washer": "세탁기",
-}
-
-
 def room_free_display_name(
     runtime: SmartThingsWebRuntime,
     device: BridgeDevice,
 ) -> str | None:
-    """Keep Home Assistant-facing names from repeating the device's room name.
+    """Preserve the SmartThings device name, including an exact room name.
 
-    Only devices whose SmartThings name is exactly their own room name are
-    affected — SmartThings auto-named room clones such as "거실" sitting in the
-    "거실" room would otherwise surface duplicated slugs like geosil_geosil.
-    Those devices fall back to a room-free device-type label. Every other
-    device, including discriminated names such as "거실 2", keeps its raw name.
+    Room-prefix deduplication belongs only to generated entity object IDs.
+    Replacing an exact room-name device with a type label loses the user's
+    actual SmartThings name and can produce opaque collision IDs.
     """
-    if device.room_id is None:
-        return None
-    room = runtime.inventory.rooms.get(device.room_id)
-    if room is None or not isinstance(room[1], str):
-        return None
-    if device.name.strip().lower() != room[1].strip().lower():
-        return None
-    normalized_type = (device.device_type or "").strip().lower().replace("-", "_")
-    return _DEVICE_TYPE_ROOM_FREE_LABELS.get(normalized_type)
+    return None
 
 
 def scene_unique_id(scene_id: str) -> str:

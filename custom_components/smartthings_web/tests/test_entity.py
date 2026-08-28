@@ -281,7 +281,7 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("_attr_icon", state_entity.__dict__)
         self.assertNotIn("_attr_name", state_entity.__dict__)
 
-    def test_device_info_display_name_only_rewrites_room_clone_names(self) -> None:
+    def test_device_info_preserves_names_that_equal_their_room(self) -> None:
         state = BridgeState(
             "main",
             "switch",
@@ -317,12 +317,14 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
         )
 
         clone_entity = SmartThingsWebDeviceEntity(runtime, clone, "device", None)
+        primary_entity = SmartThingsWebDeviceEntity(runtime, clone, "media_player", None)
         distinct_entity = SmartThingsWebDeviceEntity(runtime, distinct, "device", None)
         no_room_entity = SmartThingsWebDeviceEntity(empty_runtime, distinct, "device", None)
 
-        self.assertEqual(clone_entity._attr_device_info["name"], "스피커")
+        self.assertEqual(clone_entity._attr_device_info["name"], "거실")
         self.assertEqual(distinct_entity._attr_device_info["name"], "거실 스피커 2")
         self.assertEqual(no_room_entity._attr_device_info["name"], "거실 스피커 2")
+        self.assertEqual(primary_entity._attr_suggested_object_id, "geosil")
         self.assertEqual(clone.name, "거실")
         self.assertEqual(distinct.name, "거실 스피커 2")
 

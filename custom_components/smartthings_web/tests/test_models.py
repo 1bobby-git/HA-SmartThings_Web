@@ -1741,7 +1741,7 @@ def sensor_value(runtime: SmartThingsWebRuntime) -> int:
 
 
 class RoomFreeDisplayNameTests(unittest.TestCase):
-    """Only devices named exactly like their own room lose the room-name slug."""
+    """Device display names always preserve the SmartThings inventory name."""
 
     def _runtime(self, rooms: dict[str, tuple[str, str]]) -> SmartThingsWebRuntime:
         return SmartThingsWebRuntime(
@@ -1761,24 +1761,23 @@ class RoomFreeDisplayNameTests(unittest.TestCase):
             online=True,
         )
 
-    def test_device_named_like_its_own_room_falls_back_to_type_label(self) -> None:
+    def test_device_named_like_its_own_room_keeps_the_raw_name(self) -> None:
         runtime = self._runtime(
             {"room_001": ("loc_001", "거실"), "room_002": ("loc_001", "Living Room")}
         )
-        cases = {
-            ("거실", "speaker", "room_001"): "스피커",
-            ("거실", "air_conditioner", "room_001"): "에어컨",
-            (" 거실 ", "switch", "room_001"): "스위치",
-            ("living room", "speaker", "room_002"): "스피커",
-        }
-        for (name, device_type, room_id), expected in cases.items():
+        cases = [
+            ("거실", "speaker", "room_001"),
+            ("거실", "air_conditioner", "room_001"),
+            (" 거실 ", "switch", "room_001"),
+            ("living room", "speaker", "room_002"),
+        ]
+        for name, device_type, room_id in cases:
             with self.subTest(name=name, device_type=device_type):
-                self.assertEqual(
+                self.assertIsNone(
                     models_module.room_free_display_name(
                         runtime,
                         self._device(name, device_type, room_id),
-                    ),
-                    expected,
+                    )
                 )
 
     def test_other_devices_keep_their_raw_names(self) -> None:

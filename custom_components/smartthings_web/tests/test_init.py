@@ -791,6 +791,69 @@ class EntityRegistryMigrationTests(unittest.TestCase):
 
         self.assertEqual(registry.renamed, [])
 
+    def test_room_named_media_player_reclaims_room_slug_without_rotating(self) -> None:
+        """Migrate legacy type-label IDs to the preserved room-name slug once."""
+        registry = FakeRegistry(
+            [
+                entity("media_player.geosil", "media_player", "official_living", platform="other"),
+                entity("media_player.geosil_2", "media_player", "other_living_2", platform="other"),
+                entity("media_player.geosil_3", "media_player", "other_living_3", platform="other"),
+                self._registry_entry(
+                    "media_player.3_4",
+                    "uuid_living_speaker",
+                    domain="media_player",
+                    unique_id="dev_living_media_player",
+                ),
+            ]
+        )
+        self.patch_registry(registry)
+        volume = BridgeState(
+            "main",
+            "audioVolume",
+            "volume",
+            25,
+            "%",
+            "2026-08-28T03:00:00Z",
+        )
+        mute = BridgeState(
+            "main",
+            "audioMute",
+            "mute",
+            "unmuted",
+            None,
+            "2026-08-28T03:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_living",
+            "loc_001",
+            "room_living",
+            "Geosil",
+            "speaker",
+            True,
+            states={volume.key: volume, mute.key: mute},
+        )
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.114",
+            protocol_version="4",
+            locations={"loc_001": "Home"},
+            rooms={"room_living": ("loc_001", "Geosil")},
+            devices={device.device_id: device},
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_001"},
+        )
+
+        _migrate_entity_registry(object(), entry, inventory)
+        _migrate_entity_registry(object(), entry, inventory)
+
+        self.assertEqual(
+            registry.renamed,
+            [("media_player.3_4", "media_player.geosil_4")],
+        )
+
     def test_dynamic_registry_migration_waits_for_discovered_entities(self) -> None:
         """Repair entity IDs created by platform discovery after inventory changes."""
         registry = FakeRegistry([])

@@ -135,9 +135,7 @@ def _room_normalized_device_slug(
         return device_slug or None
 
     if device_name.casefold() == room_name.casefold():
-        display_name = room_free_display_name(runtime, device)
-        display_slug = slugify(display_name) if display_name else ""
-        return f"{room_slug}_{display_slug}" if display_slug else device_slug or None
+        return room_slug
 
     if device_name.casefold().startswith(room_name.casefold()):
         remainder = device_name[len(room_name):].strip(" _-")

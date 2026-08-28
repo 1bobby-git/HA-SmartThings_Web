@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.114
+
+- Preserve a device name that is the exact SmartThings room name instead of replacing it with a localized device-type label such as `스피커`.
+- Keep only one leading room token in generated entity IDs and migrate legacy exact-room primary IDs such as `media_player.3_4` to a stable room-based candidate such as `media_player.geosil_4` without later numeric rotation.
+- Retain the 0.1.113 bounded registry repair, push-first state path, and event-driven one-shot Advanced supplement without periodic SmartThings state polling.
+
 ## 0.1.113
 
 - Replace the Home Assistant entity-registry feedback listener with bounded settling retries, preventing a registry feedback loop from retriggering cleanup and rotating generated IDs through numeric suffixes during startup.
