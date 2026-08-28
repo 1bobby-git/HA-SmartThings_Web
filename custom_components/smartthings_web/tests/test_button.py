@@ -49,6 +49,7 @@ class SmartThingsWebDeviceEntity:
     def __init__(self, runtime: object, device: object, *_args: object) -> None:
         self.runtime = runtime
         self.device_id = device.device_id  # type: ignore[attr-defined]
+        self._attr_suggested_object_id = f"{device.device_id}_{_args[0]}"
 
     @property
     def bridge_device(self):
@@ -57,6 +58,9 @@ class SmartThingsWebDeviceEntity:
 
 entity_module.SmartThingsWebDeviceEntity = SmartThingsWebDeviceEntity  # type: ignore[attr-defined]
 entity_module.device_info_for = lambda *_args, **_kwargs: {}  # type: ignore[attr-defined]
+entity_module.suggested_entity_object_id = (  # type: ignore[attr-defined]
+    lambda _runtime, _device, entity_name=None: f"window_sensor_{entity_name}"
+)
 sys.modules["smartthings_web.entity"] = entity_module
 
 bridge_client_module = ModuleType("smartthings_web.bridge_client")
@@ -165,6 +169,7 @@ class ButtonDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(added), 1)
         self.assertEqual(added[0].control.control_id, "refresh")
         self.assertEqual(added[0]._attr_translation_key, "refresh")
+        self.assertEqual(added[0]._attr_suggested_object_id, "window_sensor_refresh")
 
     async def test_observed_refresh_button_sends_refresh_command(self) -> None:
         control = BridgeControl(

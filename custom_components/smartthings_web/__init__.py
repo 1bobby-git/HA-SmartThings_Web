@@ -131,6 +131,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
     entry.async_on_unload(runtime.subscribe(register_devices))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(_subscribe_entity_registry_migration(hass, entry))
     entry.async_create_background_task(hass, _event_loop(entry), "smartthings_web_events")
     entry.async_create_background_task(
         hass,
@@ -143,6 +144,44 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
 async def async_unload_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntry) -> bool:
     """Unload a SmartThings Web config entry."""
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+def _subscribe_entity_registry_migration(
+    hass: HomeAssistant,
+    entry: SmartThingsWebConfigEntry,
+) -> object:
+    """Repair generated entity IDs after dynamic platform discovery settles."""
+    scheduled = False
+    runtime = entry.runtime_data
+
+    def run_migration() -> None:
+        nonlocal scheduled
+        scheduled = False
+        _migrate_entity_registry(hass, entry, runtime.inventory)
+
+    def schedule_migration() -> None:
+        nonlocal scheduled
+        if scheduled:
+            return
+        scheduled = True
+        hass.loop.call_soon(run_migration)
+
+    unsubscribe_inventory = runtime.subscribe(schedule_migration)
+    unsubscribe_registry = None
+    listen = getattr(getattr(hass, "bus", None), "async_listen", None)
+    if callable(listen):
+        unsubscribe_registry = listen(
+            getattr(er, "EVENT_ENTITY_REGISTRY_UPDATED", "entity_registry_updated"),
+            lambda _event: schedule_migration(),
+        )
+    schedule_migration()
+
+    def unsubscribe() -> None:
+        unsubscribe_inventory()
+        if callable(unsubscribe_registry):
+            unsubscribe_registry()
+
+    return unsubscribe
 
 
 async def _event_loop(entry: SmartThingsWebConfigEntry) -> None:

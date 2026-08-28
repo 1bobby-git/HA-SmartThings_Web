@@ -24,10 +24,16 @@ export type DeviceDetailDiscoveryResult =
   | "idle"
   | "inspected";
 
+export interface DeviceDetailDiscoveryFailure {
+  deviceId: string;
+  reason: string;
+}
+
 export class DeviceDetailDiscovery {
   readonly #attempts = new Map<string, number>();
   readonly #maxAttempts: number;
   #running = false;
+  #lastFailure: DeviceDetailDiscoveryFailure | undefined;
 
   constructor(private readonly options: DeviceDetailDiscoveryOptions) {
     this.#maxAttempts = options.maxAttempts ?? 2;
@@ -35,6 +41,11 @@ export class DeviceDetailDiscovery {
 
   reset(): void {
     this.#attempts.clear();
+    this.#lastFailure = undefined;
+  }
+
+  lastFailure(): DeviceDetailDiscoveryFailure | undefined {
+    return this.#lastFailure;
   }
 
   async runOne(): Promise<DeviceDetailDiscoveryResult> {
@@ -61,6 +72,7 @@ export class DeviceDetailDiscovery {
         ...(roomName ? { roomName } : {}),
         ...(isCameraImageDevice(device) ? { detailSettleMs: 5_000 } : {})
       });
+      this.#lastFailure = undefined;
       return "inspected";
     } catch (error) {
       if (error instanceof Error && error.message === "detail_discovery_preempted") {
@@ -69,6 +81,10 @@ export class DeviceDetailDiscovery {
         else this.#attempts.delete(device.id);
         return "blocked";
       }
+      this.#lastFailure = {
+        deviceId: device.id,
+        reason: safeFailureReason(error)
+      };
       return "failed";
     } finally {
       this.#running = false;
@@ -81,6 +97,18 @@ export class DeviceDetailDiscovery {
       (this.#attempts.get(device.id) ?? 0) < this.#maxAttempts
     );
   }
+}
+
+function safeFailureReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    message.length <= 80 &&
+    /^[a-z0-9_-]+$/u.test(message) &&
+    !/(?:authorization|cookie|password|token|secret|csrf|session)/iu.test(message)
+  ) {
+    return message;
+  }
+  return "detail_discovery_error";
 }
 
 function hasActionableControl(device: BridgeDevice): boolean {

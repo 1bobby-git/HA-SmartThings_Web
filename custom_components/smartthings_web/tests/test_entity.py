@@ -15,6 +15,20 @@ package.__path__ = [str(PACKAGE_ROOT)]  # type: ignore[attr-defined]
 
 sys.modules.setdefault("homeassistant", ModuleType("homeassistant"))
 sys.modules.setdefault("homeassistant.helpers", ModuleType("homeassistant.helpers"))
+homeassistant_util = ModuleType("homeassistant.util")
+homeassistant_util.slugify = lambda value: {  # type: ignore[attr-defined]
+    "거실": "geosil",
+    "거실 온습도계": "geosil_onseubdogye",
+    "온습도계": "onseubdogye",
+    "거실 에어컨": "geosil_eeokeon",
+    "에어컨": "eeokeon",
+    "거실창문센서": "geosil_cangmunsenseo",
+    "창문센서": "cangmunsenseo",
+    "Refresh": "refresh",
+    "refresh": "refresh",
+    "temperature": "temperature",
+}.get(str(value), str(value).strip().lower().replace(" ", "_"))
+sys.modules["homeassistant.util"] = homeassistant_util
 
 device_registry = ModuleType("homeassistant.helpers.device_registry")
 
@@ -311,6 +325,84 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(no_room_entity._attr_device_info["name"], "거실 스피커 2")
         self.assertEqual(clone.name, "거실")
         self.assertEqual(distinct.name, "거실 스피커 2")
+
+    def test_state_entity_suggests_object_id_without_repeating_room_prefix(self) -> None:
+        state = BridgeState(
+            "main",
+            "temperatureMeasurement",
+            "temperature",
+            24,
+            "C",
+            "2026-08-26T06:00:00.000Z",
+        )
+        device = BridgeDevice(
+            "dev_001",
+            "loc_001",
+            "room_001",
+            "거실 온습도계",
+            "temp_humidity_sensor",
+            True,
+            states={state.key: state},
+        )
+        runtime = SmartThingsWebRuntime(
+            object(),
+            "loc_001",
+            BridgeInventory(
+                1,
+                True,
+                "0.1.111",
+                "4",
+                {},
+                {"room_001": ("loc_001", "거실")},
+                {device.device_id: device},
+            ),
+        )
+
+        entity = SmartThingsWebEntity(runtime, device, state, None)
+
+        self.assertEqual(
+            entity._attr_suggested_object_id,
+            "geosil_onseubdogye_temperature",
+        )
+
+    def test_device_entity_suggests_refresh_object_id_without_room_prefix_duplication(self) -> None:
+        state = BridgeState(
+            "main",
+            "contactSensor",
+            "contact",
+            "closed",
+            None,
+            "2026-08-26T06:00:00.000Z",
+        )
+        device = BridgeDevice(
+            "dev_001",
+            "loc_001",
+            "room_001",
+            "거실창문센서",
+            "contact_sensor",
+            True,
+            states={state.key: state},
+        )
+        runtime = SmartThingsWebRuntime(
+            object(),
+            "loc_001",
+            BridgeInventory(
+                1,
+                True,
+                "0.1.111",
+                "4",
+                {},
+                {"room_001": ("loc_001", "거실")},
+                {device.device_id: device},
+            ),
+        )
+
+        entity = SmartThingsWebDeviceEntity(runtime, device, "button_refresh", "Refresh")
+
+        self.assertEqual(
+            entity._attr_suggested_object_id,
+            "geosil_cangmunsenseo_refresh",
+        )
 
     def test_explicit_state_entity_name_is_preserved(self) -> None:
         state = BridgeState(

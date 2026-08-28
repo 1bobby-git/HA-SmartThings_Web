@@ -5,6 +5,9 @@ import { DatabaseSync } from "node:sqlite";
 
 export type AliasKind = "location" | "device" | "account" | "user" | "identifier";
 
+const digestOnlyAliasKinds = new Set<AliasKind>(["account", "user", "identifier"]);
+const digestOnlyMigration = "digest-only-aliases-v1";
+
 export class SqliteAliasStore {
   readonly #db: DatabaseSync;
   readonly #secret: string;
@@ -21,12 +24,21 @@ export class SqliteAliasStore {
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (kind, digest),
         UNIQUE (kind, alias)
-      )
+      );
+
+      CREATE TABLE IF NOT EXISTS bridge_migrations (
+        name TEXT PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
     `);
+    this.#migrateDigestOnlyAliases();
   }
 
   alias(kind: AliasKind, rawIdentifier: string): string {
     const digest = this.#digest(kind, rawIdentifier);
+    if (digestOnlyAliasKinds.has(kind)) {
+      return this.#createAlias(kind, digest);
+    }
     const found = this.#db
       .prepare("SELECT alias FROM aliases WHERE kind = ? AND digest = ?")
       .get(kind, digest) as { alias: string } | undefined;
@@ -43,6 +55,24 @@ export class SqliteAliasStore {
 
   close(): void {
     this.#db.close();
+  }
+
+  #migrateDigestOnlyAliases(): void {
+    const applied = this.#db
+      .prepare("SELECT 1 AS applied FROM bridge_migrations WHERE name = ?")
+      .get(digestOnlyMigration) as { applied: number } | undefined;
+    if (applied) return;
+
+    // These aliases are deterministic HMAC digests. Persisting every transient
+    // request/event ID only grows SQLite without adding identity stability.
+    // This constructor runs before the capture and inventory connections open,
+    // so one bounded compaction can safely reclaim the legacy rows and pages.
+    this.#db.exec("DELETE FROM aliases WHERE kind IN ('account', 'user', 'identifier')");
+    this.#db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    this.#db.exec("VACUUM");
+    this.#db
+      .prepare("INSERT INTO bridge_migrations (name) VALUES (?)")
+      .run(digestOnlyMigration);
   }
 
   #digest(kind: AliasKind, rawIdentifier: string): string {

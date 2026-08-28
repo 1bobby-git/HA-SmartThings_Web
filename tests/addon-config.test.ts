@@ -10,20 +10,24 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("publishes command-time Advanced refresh support as version 0.1.110", () => {
+  test("publishes room-normalized entity IDs as version 0.1.111", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.110");
+    expect(config.version).toBe("0.1.111");
     expect(config.homeassistant_api).toBe(true);
-    expect(packageMetadata.version).toBe("0.1.110");
-    expect(protocolMetadata.bridge_version).toBe("0.1.110");
+    expect(packageMetadata.version).toBe("0.1.111");
+    expect(protocolMetadata.bridge_version).toBe("0.1.111");
     expect(protocolMetadata.protocol_version).toBe(4);
-    expect(runtime).toContain('const bridgeVersion = "0.1.110";');
+    expect(runtime).toContain('const bridgeVersion = "0.1.111";');
     expect(runtime).not.toContain("confirmationStabilityMs: 500");
+    expect(changelog).toContain("## 0.1.111");
+    expect(changelog).toContain("duplicated room-name object IDs");
+    expect(changelog).toContain("transient identifier aliases");
+    expect(changelog).toContain("bounded event-driven supplement");
     expect(changelog).toContain("## 0.1.110");
     expect(changelog).toContain("complete consumer `api/device` snapshot");
     expect(changelog).toContain("state-backed sensors keep their Home Assistant functional icons");

@@ -63,7 +63,7 @@ export interface LiveControlEventBenchmarkOptions {
   waitTimeoutMs?: number;
   pollIntervalMs?: number;
   baselineHaObservedAfterRequestMs?: number;
-  writeArtifact?: (fileName: string, value: LiveControlEventBenchmarkResult) => Promise<void>;
+  writeArtifact?: (fileName: string, value: LiveControlEventBenchmarkArtifact) => Promise<void>;
 }
 
 export interface LiveControlEventBenchmarkPreview {
@@ -129,6 +129,24 @@ export interface LiveControlEventBenchmarkResult {
     maximumHaEventSeenAfterRequestMs: number;
   };
   finalState: SafeHaEventStateObservation;
+}
+
+export type LiveControlEventBenchmarkArtifact =
+  | LiveControlEventBenchmarkResult
+  | LiveControlEventBenchmarkFailureResult;
+
+export interface LiveControlEventBenchmarkFailureResult {
+  schemaVersion: 1;
+  mode: "failure";
+  entityId: string;
+  cycles: number;
+  startedAt: string;
+  endedAt: string;
+  transitions: LiveControlEventTransition[];
+  sequence: { first?: number; last?: number; gaps: number };
+  error: string;
+  finalStateKnown: boolean;
+  finalState?: SafeHaEventStateObservation;
 }
 
 export async function createLiveControlEventBenchmarkPreview(
@@ -227,12 +245,29 @@ export async function runLiveControlEventBenchmark(
     }
     finalState = await ensureOff(options, clock, waitTimeoutMs, pollIntervalMs);
   } catch (error) {
+    let finalStateKnown = true;
+    let failureError = error;
     try {
-      await ensureOff(options, clock, waitTimeoutMs, pollIntervalMs);
+      finalState = await ensureOff(options, clock, waitTimeoutMs, pollIntervalMs);
     } catch (cleanupError) {
-      throw benchmarkCleanupError(error, cleanupError);
+      finalStateKnown = false;
+      failureError = benchmarkCleanupError(error, cleanupError);
     }
-    throw error;
+    await options.writeArtifact?.(
+      artifactFileName(startedAt),
+      failureResult({
+        entityId: options.entityId,
+        cycles: options.cycles,
+        startedAt,
+        endedAt: clock.nowIso(),
+        transitions,
+        receivedSequences: bridgeSequences,
+        error: failureError,
+        finalStateKnown,
+        finalState
+      })
+    );
+    throw failureError;
   } finally {
     await bridgeSubscription?.unsubscribe();
     await haSubscription?.unsubscribe();
@@ -253,6 +288,32 @@ export async function runLiveControlEventBenchmark(
   };
   await options.writeArtifact?.(artifactFileName(startedAt), result);
   return result;
+}
+
+function failureResult(input: {
+  entityId: string;
+  cycles: number;
+  startedAt: string;
+  endedAt: string;
+  transitions: LiveControlEventTransition[];
+  receivedSequences: readonly number[];
+  error: unknown;
+  finalStateKnown: boolean;
+  finalState: SafeHaEventStateObservation | undefined;
+}): LiveControlEventBenchmarkFailureResult {
+  return {
+    schemaVersion: 1,
+    mode: "failure",
+    entityId: input.entityId,
+    cycles: input.cycles,
+    startedAt: input.startedAt,
+    endedAt: input.endedAt,
+    transitions: input.transitions,
+    sequence: summarizeSequences(input.receivedSequences),
+    error: safeErrorMessage(input.error),
+    finalStateKnown: input.finalStateKnown,
+    ...(input.finalState === undefined ? {} : { finalState: input.finalState })
+  };
 }
 
 async function executeEventTransition(
@@ -629,6 +690,18 @@ function benchmarkCleanupError(primaryError: unknown, cleanupError: unknown): Er
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function safeErrorMessage(error: unknown): string {
+  const message = errorMessage(error);
+  if (
+    message.length <= 256 &&
+    /^live_control_event_benchmark[a-z0-9_:;= -]*$/u.test(message) &&
+    !/(?:authorization|cookie|password|token|secret|csrf|session)/iu.test(message)
+  ) {
+    return message;
+  }
+  return "live_control_event_benchmark_failed";
 }
 
 const systemClock: LiveControlEventBenchmarkClock = {

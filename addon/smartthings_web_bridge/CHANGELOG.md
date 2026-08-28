@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.111
+
+- Prevent newly discovered Home Assistant entities from generating duplicated room-name object IDs such as `geosil_geosil_*`; existing registry repair still cleans older generated IDs on startup.
+- Keep device-info rows free of sensor-specific icons while preserving SmartThings artwork or device-type icons on primary device entities.
+- Stop persisting deterministic transient identifier aliases and compact legacy rows once at startup, preventing request/event diagnostics from inflating the Bridge database and degrading long-running responsiveness.
+- Keep SmartThings push as the primary state authority. Same-session Advanced status GET remains a bounded event-driven supplement after commands/reconnect gaps, not periodic SmartThings state polling.
+
 ## 0.1.110
 
 - Preserve the raw semantic identity of the authenticated Advanced `refresh` capability in memory only, then expose its observed control as the missing Home Assistant Refresh button for contact sensors without inventing controls from state attributes.

@@ -131,6 +131,46 @@ describe("DeviceDetailDiscovery", () => {
     expect(await discovery.runOne()).toBe("failed");
   });
 
+  test("exposes sanitized failure diagnostics for runtime logs", async () => {
+    const discovery = new DeviceDetailDiscovery({
+      inventory: () => inventory(),
+      inspector: {
+        inspectDeviceDetails: vi.fn(async () => {
+          throw new Error("not_found");
+        })
+      },
+      canInspect: () => true,
+      maxAttempts: 1
+    });
+
+    expect(await discovery.runOne()).toBe("failed");
+
+    expect(discovery.lastFailure()).toEqual({
+      deviceId: "dev_001",
+      reason: "not_found"
+    });
+  });
+
+  test("redacts unsafe detail discovery failure messages", async () => {
+    const discovery = new DeviceDetailDiscovery({
+      inventory: () => inventory(),
+      inspector: {
+        inspectDeviceDetails: vi.fn(async () => {
+          throw new Error("token=raw-secret");
+        })
+      },
+      canInspect: () => true,
+      maxAttempts: 1
+    });
+
+    expect(await discovery.runOne()).toBe("failed");
+
+    expect(discovery.lastFailure()).toEqual({
+      deviceId: "dev_001",
+      reason: "detail_discovery_error"
+    });
+  });
+
   test("does not consume a discovery attempt when foreground control preempts it", async () => {
     const inspectDeviceDetails = vi.fn(async () => {
       throw new Error("detail_discovery_preempted");

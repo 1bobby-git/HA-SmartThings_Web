@@ -125,6 +125,7 @@ from smartthings_web.__init__ import (  # noqa: E402
     _event_loop,
     _migrate_entity_registry,
     _repair_loop,
+    _subscribe_entity_registry_migration,
 )
 from smartthings_web.bridge_client import BridgeAuthError, BridgeClientError  # noqa: E402
 from smartthings_web.const import (  # noqa: E402
@@ -743,6 +744,142 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             ],
         )
         self.assertEqual(registry.updated, [])
+
+    def test_dynamic_registry_migration_waits_for_discovered_entities(self) -> None:
+        """Repair entity IDs created by platform discovery after inventory changes."""
+        registry = FakeRegistry([])
+        self.patch_registry(registry)
+        integration.dr.async_get = lambda _hass: SimpleNamespace(
+            devices=[
+                SimpleNamespace(
+                    id="uuid_window",
+                    identifiers={(DOMAIN, "dev_window")},
+                    area_id="geosil",
+                    config_entries={"entry_001"},
+                ),
+            ]
+        )
+        scheduled: list[object] = []
+        hass = SimpleNamespace(loop=SimpleNamespace(call_soon=lambda callback: scheduled.append(callback)))
+        runtime = SimpleNamespace(
+            inventory=BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.110",
+                protocol_version="4",
+                locations={"loc_001": "Home"},
+                rooms={"room_g": ("loc_001", "Geosil")},
+                devices={
+                    "dev_window": self._bridge_device("dev_window", "거실 창문센서", room="room_g")
+                },
+            ),
+            subscribe=lambda callback: callback,
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_001"},
+            runtime_data=runtime,
+            async_on_unload=lambda callback: None,
+        )
+
+        callback = _subscribe_entity_registry_migration(hass, entry)
+        callback()
+        registry.entries.append(
+            self._registry_entry(
+                "button.geosil_geosil_cangmunsenseo_refresh",
+                "uuid_window",
+                domain="button",
+                unique_id="dev_window_button_advanced:refresh:identifier_main:identifier_refresh",
+            )
+        )
+        for item in scheduled:
+            item()
+
+        self.assertEqual(
+            registry.renamed,
+            [
+                (
+                    "button.geosil_geosil_cangmunsenseo_refresh",
+                    "button.geosil_cangmunsenseo_refresh",
+                )
+            ],
+        )
+
+    def test_registry_event_retries_migration_after_dynamic_entity_is_registered(self) -> None:
+        """Retry when HA registers a dynamic entity after the first loop callback."""
+        registry = FakeRegistry([])
+        self.patch_registry(registry)
+        integration.dr.async_get = lambda _hass: SimpleNamespace(
+            devices=[
+                SimpleNamespace(
+                    id="uuid_window",
+                    identifiers={(DOMAIN, "dev_window")},
+                    area_id="geosil",
+                    config_entries={"entry_001"},
+                ),
+            ]
+        )
+        scheduled: list[object] = []
+        registry_listeners: list[object] = []
+        hass = SimpleNamespace(
+            loop=SimpleNamespace(call_soon=lambda callback: scheduled.append(callback)),
+            bus=SimpleNamespace(
+                async_listen=lambda _event_type, callback: (
+                    registry_listeners.append(callback) or (lambda: None)
+                )
+            ),
+        )
+        runtime_callbacks: list[object] = []
+        runtime = SimpleNamespace(
+            inventory=BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.110",
+                protocol_version="4",
+                locations={"loc_001": "Home"},
+                rooms={"room_g": ("loc_001", "Geosil")},
+                devices={
+                    "dev_window": self._bridge_device(
+                        "dev_window", "거실 창문센서", room="room_g"
+                    )
+                },
+            ),
+            subscribe=lambda callback: (
+                runtime_callbacks.append(callback) or (lambda: None)
+            ),
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_001"},
+            runtime_data=runtime,
+            async_on_unload=lambda callback: None,
+        )
+
+        _subscribe_entity_registry_migration(hass, entry)
+        runtime_callbacks[0]()
+        scheduled.pop(0)()
+        self.assertEqual(registry.renamed, [])
+
+        registry.entries.append(
+            self._registry_entry(
+                "button.geosil_geosil_cangmunsenseo_refresh",
+                "uuid_window",
+                domain="button",
+                unique_id="dev_window_button_advanced:refresh:identifier_main:identifier_refresh",
+            )
+        )
+        registry_listeners[0](SimpleNamespace())
+        scheduled.pop(0)()
+
+        self.assertEqual(
+            registry.renamed,
+            [
+                (
+                    "button.geosil_geosil_cangmunsenseo_refresh",
+                    "button.geosil_cangmunsenseo_refresh",
+                )
+            ],
+        )
 
     @staticmethod
     def _registry_entry(

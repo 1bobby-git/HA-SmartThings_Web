@@ -5,6 +5,7 @@ from __future__ import annotations
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
+from homeassistant.util import slugify
 
 from .const import DOMAIN
 from .models import (
@@ -96,6 +97,60 @@ def _normalized_device_type(value: str | None) -> str:
     return (value or "").strip().lower().replace("-", "_")
 
 
+_PRIMARY_DEVICE_ENTITY_SUFFIXES = {"climate", "cover", "fan", "image", "media_player"}
+
+
+def suggested_entity_object_id(
+    runtime: SmartThingsWebRuntime,
+    device: BridgeDevice,
+    entity_name: str | None = None,
+) -> str | None:
+    """Return a generated object_id that does not repeat the device room name."""
+    base = _room_normalized_device_slug(runtime, device)
+    if not base:
+        return None
+    suffix = slugify(entity_name) if entity_name else ""
+    if not suffix:
+        return base
+    if base == suffix or base.endswith(f"_{suffix}"):
+        return base
+    return f"{base}_{suffix}"
+
+
+def _room_normalized_device_slug(
+    runtime: SmartThingsWebRuntime,
+    device: BridgeDevice,
+) -> str | None:
+    """Preserve one leading room token while dropping duplicated room tokens."""
+    device_name = device.name.strip()
+    device_slug = slugify(device_name)
+    if not device.room_id:
+        return device_slug or None
+    room = runtime.inventory.rooms.get(device.room_id)
+    if room is None or room[0] != device.location_id:
+        return device_slug or None
+    room_name = room[1].strip()
+    room_slug = slugify(room_name)
+    if not room_name or not room_slug:
+        return device_slug or None
+
+    if device_name.casefold() == room_name.casefold():
+        display_name = room_free_display_name(runtime, device)
+        display_slug = slugify(display_name) if display_name else ""
+        return f"{room_slug}_{display_slug}" if display_slug else device_slug or None
+
+    if device_name.casefold().startswith(room_name.casefold()):
+        remainder = device_name[len(room_name):].strip(" _-")
+        remainder_slug = slugify(remainder)
+        if remainder_slug:
+            return f"{room_slug}_{remainder_slug}"
+
+    duplicate_prefix = f"{room_slug}_{room_slug}_"
+    if device_slug.startswith(duplicate_prefix):
+        return f"{room_slug}_{device_slug[len(duplicate_prefix):]}"
+    return device_slug or None
+
+
 def migrate_entity_original_name(
     hass: object,
     domain: str,
@@ -134,6 +189,9 @@ class SmartThingsWebEntity(Entity):
         if name is not None:
             self._attr_name = name
         self._attr_unique_id = entity_unique_id(device.device_id, state)
+        self._attr_suggested_object_id = suggested_entity_object_id(
+            runtime, device, name or state.attribute
+        )
         self._attr_device_info = device_info_for(
             device,
             display_name=room_free_display_name(runtime, device),
@@ -190,6 +248,14 @@ class SmartThingsWebDeviceEntity(Entity):
         if name is not None:
             self._attr_name = name
         self._attr_unique_id = f"{device.device_id}_{suffix}"
+        object_name = (
+            name
+            if name is not None
+            else None if suffix in _PRIMARY_DEVICE_ENTITY_SUFFIXES else suffix
+        )
+        self._attr_suggested_object_id = suggested_entity_object_id(
+            runtime, device, object_name
+        )
         self._attr_device_info = device_info_for(
             device,
             display_name=room_free_display_name(runtime, device),

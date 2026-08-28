@@ -68,7 +68,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.110";
+const bridgeVersion = "0.1.111";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -243,7 +243,12 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       status.update({
         detailDiscoveryFailureCount: current.detailDiscoveryFailureCount + 1
       });
-      log.warn("detail_discovery_failed");
+      const failure = detailDiscovery.lastFailure();
+      log.warn(
+        failure
+          ? `detail_discovery_failed:${failure.reason}:${failure.deviceId}`
+          : "detail_discovery_failed"
+      );
     });
   }, 1_000);
   heartbeat();

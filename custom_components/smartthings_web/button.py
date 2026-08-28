@@ -9,7 +9,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SmartThingsWebConfigEntry
 from .bridge_client import BridgeClientError, bridge_error_message
-from .entity import SmartThingsWebDeviceEntity
+from .entity import SmartThingsWebDeviceEntity, suggested_entity_object_id
 from .models import (
     BridgeControl,
     BridgeDevice,
@@ -93,6 +93,9 @@ class SmartThingsWebButton(SmartThingsWebDeviceEntity, ButtonEntity):
         )
         if refresh:
             self._attr_translation_key = "refresh"
+            self._attr_suggested_object_id = suggested_entity_object_id(
+                runtime, device, "refresh"
+            )
 
     @property
     def available(self) -> bool:

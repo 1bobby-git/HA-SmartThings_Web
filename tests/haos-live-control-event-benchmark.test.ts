@@ -184,6 +184,7 @@ describe("HAOS live control event benchmark", () => {
 
   test("turns the allowlisted switch back off in finally when event wait fails", async () => {
     const calls: string[] = [];
+    const artifacts: unknown[] = [];
 
     await expect(
       runLiveControlEventBenchmark({
@@ -201,7 +202,10 @@ describe("HAOS live control event benchmark", () => {
           events: []
         }),
         clock: fixedClock(),
-        waitTimeoutMs: 1
+        waitTimeoutMs: 1,
+        writeArtifact: async (_fileName, value) => {
+          artifacts.push(value);
+        }
       })
     ).rejects.toThrowError("live_control_event_benchmark_state_timeout");
 
@@ -214,6 +218,19 @@ describe("HAOS live control event benchmark", () => {
       `get:${DEFAULT_LIVE_CONTROL_EVENT_ENTITY_ID}`,
       "ha-unsubscribe"
     ]);
+    expect(artifacts).toEqual([
+      expect.objectContaining({
+        schemaVersion: 1,
+        mode: "failure",
+        entityId: DEFAULT_LIVE_CONTROL_EVENT_ENTITY_ID,
+        error: "live_control_event_benchmark_state_timeout",
+        finalStateKnown: true,
+        finalState: { state: "off", lastUpdated: "2026-08-27T00:00:00.700Z" },
+        transitions: [],
+        sequence: { gaps: 0 }
+      })
+    ]);
+    expect(JSON.stringify(artifacts)).not.toMatch(/token|authorization|cookie|secret/i);
   });
 
   test("preserves primary and cleanup errors when final off state is uncertain", async () => {
