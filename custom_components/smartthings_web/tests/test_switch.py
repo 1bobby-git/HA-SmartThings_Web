@@ -56,6 +56,8 @@ class SmartThingsWebEntity:
         self.runtime = runtime
         self.device_id = device.device_id  # type: ignore[attr-defined]
         self.state_key = state.key  # type: ignore[attr-defined]
+        if _name is not None:
+            self._attr_name = _name
         self._attr_unique_id = "_".join((self.device_id, *self.state_key))
 
     @property
@@ -75,6 +77,7 @@ class SmartThingsWebEntity:
 
 entity_module.SmartThingsWebEntity = SmartThingsWebEntity  # type: ignore[attr-defined]
 entity_module.device_info_for = lambda *_args, **_kwargs: {}  # type: ignore[attr-defined]
+entity_module.migrate_entity_original_name = lambda *_args, **_kwargs: None  # type: ignore[attr-defined]
 sys.modules["smartthings_web.entity"] = entity_module
 
 from smartthings_web.models import (  # noqa: E402
@@ -146,6 +149,37 @@ def _one_direction_device() -> tuple[BridgeDevice, BridgeState]:
     return device, state
 
 
+def _multi_component_switch_device(
+    components: tuple[tuple[str, str], ...] = (
+        ("main", "main"),
+        ("switch2", "switch2"),
+        ("switch3", "switch3"),
+        ("switch4", "switch4"),
+    ),
+) -> BridgeDevice:
+    states = [
+        BridgeState(
+            component,
+            f"capability_{component}",
+            "switch",
+            "off",
+            None,
+            "2026-08-29T00:00:00Z",
+            component_role=role,
+        )
+        for component, role in components
+    ]
+    return BridgeDevice(
+        "dev_multiswitch",
+        "loc_001",
+        "room_001",
+        "거실 간접등",
+        "switch",
+        True,
+        states={state.key: state for state in states},
+    )
+
+
 def _runtime(device: BridgeDevice, client: object) -> SmartThingsWebRuntime:
     inventory = BridgeInventory(
         1,
@@ -183,6 +217,89 @@ class SmartThingsWebSwitchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             added[0].extra_state_attributes,
             {"smartthings_raw_value": "off"},
+        )
+
+    async def test_setup_names_secondary_switch_components_without_dropping_states(self) -> None:
+        device = _multi_component_switch_device()
+        runtime = _runtime(device, object())
+        entry = SimpleNamespace(
+            runtime_data=runtime,
+            async_on_unload=lambda _callback: None,
+        )
+        added: list[SmartThingsWebSwitch] = []
+
+        await async_setup_entry(object(), entry, added.extend)
+
+        self.assertEqual(len(added), 4)
+        names_by_component = {
+            entity.state_key[0]: getattr(entity, "_attr_name", None)
+            for entity in added
+        }
+        self.assertEqual(
+            names_by_component,
+            {
+                "main": None,
+                "switch2": "스위치 2",
+                "switch3": "스위치 3",
+                "switch4": "스위치 4",
+            },
+        )
+
+    async def test_setup_names_single_secondary_switch_component(self) -> None:
+        device = _multi_component_switch_device(
+            (("main", "main"), ("switch2", "switch2"))
+        )
+        runtime = _runtime(device, object())
+        entry = SimpleNamespace(
+            runtime_data=runtime,
+            async_on_unload=lambda _callback: None,
+        )
+        added: list[SmartThingsWebSwitch] = []
+
+        await async_setup_entry(object(), entry, added.extend)
+
+        self.assertEqual(len(added), 2)
+        names_by_component = {
+            entity.state_key[0]: getattr(entity, "_attr_name", None)
+            for entity in added
+        }
+        self.assertEqual(
+            names_by_component,
+            {
+                "main": None,
+                "switch2": "스위치 2",
+            },
+        )
+
+    async def test_setup_names_unreadable_secondary_switch_components_by_sorted_order(self) -> None:
+        device = _multi_component_switch_device(
+            (
+                ("main", "main"),
+                ("identifier_b", "identifier_role_b"),
+                ("identifier_a", "identifier_role_a"),
+            )
+        )
+        runtime = _runtime(device, object())
+        entry = SimpleNamespace(
+            runtime_data=runtime,
+            async_on_unload=lambda _callback: None,
+        )
+        added: list[SmartThingsWebSwitch] = []
+
+        await async_setup_entry(object(), entry, added.extend)
+
+        self.assertEqual(len(added), 3)
+        names_by_component = {
+            entity.state_key[0]: getattr(entity, "_attr_name", None)
+            for entity in added
+        }
+        self.assertEqual(
+            names_by_component,
+            {
+                "main": None,
+                "identifier_a": "스위치 2",
+                "identifier_b": "스위치 3",
+            },
         )
 
     async def test_state_backed_switch_rejects_unobserved_commands(self) -> None:

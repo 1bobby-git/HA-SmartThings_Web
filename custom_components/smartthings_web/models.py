@@ -710,6 +710,7 @@ REFRESH_ATTRIBUTES = {
 }
 
 IMAGE_ATTRIBUTES = {"captureTime", "clip", "image", "imageTransferProgress", "stream"}
+SENSITIVE_IMAGE_ATTRIBUTES = {"image"}
 
 CAMERA_DEVICE_TYPES = {
     "camera",
@@ -1168,6 +1169,7 @@ def sensor_state_allowed(
         attribute != "switch"
         and attribute not in BINARY_ATTRIBUTES
         and attribute not in EVENT_ATTRIBUTES
+        and attribute not in SENSITIVE_IMAGE_ATTRIBUTES
         and (image_device or attribute not in IMAGE_ATTRIBUTES)
         and not firmware
         and not primary_domain

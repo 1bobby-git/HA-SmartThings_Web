@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.131
+
+- Keep ordinary on/off devices with auxiliary contact state exposed as primary Home Assistant `switch` entities while retaining their contact state as a separate binary sensor.
+- Give secondary switch channels stable generated names such as `스위치 2` and migrate restored duplicate room-prefixed IDs onto those distinct channel IDs.
+- Rebase current-state `smartthings_device_dev_*` fallback entity IDs even when a user display name is set, while preserving that display name and leaving unrelated custom rows untouched.
+- Keep signed camera media URLs out of regular sensor states while preserving the dedicated Home Assistant `image` entity and safe capture metadata sensors.
+
 ## 0.1.130
 
 - Recover an authenticated SmartThings Socket.IO connection automatically when received frames stop beyond the existing push-freshness boundary, invalidating the old snapshot before reloading the keeper so Home Assistant performs a full resynchronization.

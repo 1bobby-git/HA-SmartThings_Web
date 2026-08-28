@@ -1511,6 +1511,10 @@ class EntityRegistryMigrationTests(unittest.TestCase):
                     "binary_sensor.smartthings_device_dev_426_presence_4",
                     "binary_sensor.gyeongsugyi_s22_presence_회사",
                 ),
+                (
+                    "binary_sensor.smartthings_device_dev_426_presence_custom",
+                    "binary_sensor.gyeongsugyi_s22_presence_custom",
+                ),
             ],
         )
         self.assertEqual(
@@ -1536,15 +1540,127 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         )
         self.assertEqual(
             custom_named_entry.entity_id,
-            "binary_sensor.smartthings_device_dev_426_presence_custom",
+            "binary_sensor.gyeongsugyi_s22_presence_custom",
         )
         self.assertEqual(
             custom_named_entry.object_id_base,
-            "smartthings_device_dev_426_presence_custom",
+            "presence_custom",
         )
         self.assertEqual(
             custom_named_entry.suggested_object_id,
-            "smartthings_device_dev_426_presence_custom",
+            "gyeongsugyi_s22_presence_custom",
+        )
+
+    def test_rebases_secondary_switch_components_to_distinct_generated_ids(self) -> None:
+        """Move generated multi-switch rows away from duplicate device-name IDs."""
+        states = [
+            BridgeState(
+                component,
+                f"identifier_capability_{component}",
+                "switch",
+                "off",
+                None,
+                "2026-08-29T00:00:00Z",
+                component_role=role,
+            )
+            for component, role in (
+                ("main", "main"),
+                ("identifier_component_switch2", "switch2"),
+                ("identifier_component_switch3", "switch3"),
+            )
+        ]
+        device = BridgeDevice(
+            "dev_lamp",
+            "loc_001",
+            "room_living",
+            "Geosil Ganjeobdeung",
+            "switch",
+            True,
+            states={state.key: state for state in states},
+        )
+        registry_entries = [
+            SimpleNamespace(
+                entity_id="switch.geosil_ganjeobdeung",
+                domain="switch",
+                platform=DOMAIN,
+                unique_id="dev_lamp_main_identifier_capability_main_switch",
+                device_id="uuid_lamp",
+                name=None,
+                disabled_by=None,
+                original_name=None,
+                object_id_base=None,
+                suggested_object_id="geosil_ganjeobdeung",
+            ),
+            SimpleNamespace(
+                entity_id="switch.geosil_geosil_ganjeobdeung",
+                domain="switch",
+                platform=DOMAIN,
+                unique_id=(
+                    "dev_lamp_identifier_component_switch2_"
+                    "identifier_capability_identifier_component_switch2_switch"
+                ),
+                device_id="uuid_lamp",
+                name=None,
+                disabled_by=None,
+                original_name=None,
+                object_id_base=None,
+                suggested_object_id="geosil_geosil_ganjeobdeung",
+            ),
+            SimpleNamespace(
+                entity_id="switch.geosil_ganjeobdeung_2",
+                domain="switch",
+                platform=DOMAIN,
+                unique_id=(
+                    "dev_lamp_identifier_component_switch3_"
+                    "identifier_capability_identifier_component_switch3_switch"
+                ),
+                device_id="uuid_lamp",
+                name=None,
+                disabled_by=None,
+                original_name=None,
+                object_id_base=None,
+                suggested_object_id="geosil_ganjeobdeung_2",
+            ),
+        ]
+        registry = FakeRegistry(registry_entries)
+        self.patch_registry(registry)
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.130",
+            protocol_version="4",
+            locations={"loc_001": "Home"},
+            rooms={"room_living": ("loc_001", "Geosil")},
+            devices={device.device_id: device},
+        )
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}),
+            inventory,
+        )
+
+        self.assertCountEqual(
+            registry.renamed,
+            [
+                (
+                    "switch.geosil_geosil_ganjeobdeung",
+                    "switch.geosil_ganjeobdeung_스위치_2",
+                ),
+                (
+                    "switch.geosil_ganjeobdeung_2",
+                    "switch.geosil_ganjeobdeung_스위치_3",
+                ),
+            ],
+        )
+        self.assertEqual(registry_entries[0].entity_id, "switch.geosil_ganjeobdeung")
+        self.assertEqual(
+            registry_entries[1].suggested_object_id,
+            "geosil_ganjeobdeung_스위치_2",
+        )
+        self.assertEqual(
+            registry_entries[2].suggested_object_id,
+            "geosil_ganjeobdeung_스위치_3",
         )
 
     def test_rebased_role_metadata_does_not_accumulate_transliterated_suffixes(self) -> None:
@@ -2271,8 +2387,8 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         self.assertEqual(stale_entry.object_id_base, "presence")
         self.assertEqual(stale_entry.suggested_object_id, "iphone_presence_3")
 
-    def test_same_name_fallback_repair_preserves_user_named_rows(self) -> None:
-        """Leave explicit user names untouched even when a duplicate base exists."""
+    def test_same_name_fallback_repair_preserves_user_name_while_rebasing_id(self) -> None:
+        """Preserve explicit display names while removing stale fallback IDs."""
         state = BridgeState(
             "main",
             "presenceSensor",
@@ -2337,19 +2453,22 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             inventory,
         )
 
-        self.assertEqual(registry.renamed, [])
+        self.assertEqual(
+            registry.renamed,
+            [
+                (
+                    "binary_sensor.smartthings_device_dev_401_presence",
+                    "binary_sensor.iphone_presence_2",
+                )
+            ],
+        )
         self.assertEqual(
             stale_entry.entity_id,
-            "binary_sensor.smartthings_device_dev_401_presence",
+            "binary_sensor.iphone_presence_2",
         )
-        self.assertEqual(
-            stale_entry.object_id_base,
-            "smartthings_device_dev_401_presence",
-        )
-        self.assertEqual(
-            stale_entry.suggested_object_id,
-            "smartthings_device_dev_401_presence",
-        )
+        self.assertEqual(stale_entry.name, "My iPhone presence")
+        self.assertEqual(stale_entry.object_id_base, "presence")
+        self.assertEqual(stale_entry.suggested_object_id, "iphone_presence_2")
 
     def test_reserved_state_id_does_not_abort_numbered_id_repair(self) -> None:
         """Keep setup running when HA reserves an ID outside the registry."""

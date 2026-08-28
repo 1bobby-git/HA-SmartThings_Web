@@ -38,6 +38,7 @@ from .models import (
     BridgeInventory,
     FIRMWARE_ATTRIBUTES,
     IMAGE_ATTRIBUTES,
+    STATE_ROLE_DISPLAY_NAMES,
     SmartThingsWebRuntime,
     button_controls,
     disambiguated_state_names,
@@ -735,6 +736,13 @@ def _migrate_entity_registry(
             current_device_ids,
             current_entity_ids,
         )
+        canonical_state_entity_id = _canonical_generated_state_entity_id(
+            entity_entry,
+            owner_device,
+            inventory,
+        )
+        if canonical_state_entity_id is not None:
+            new_entity_id = canonical_state_entity_id
         numbered_entity_id = _canonical_numbered_generated_entity_id(
             entity_entry,
             owner_device,
@@ -814,6 +822,18 @@ def _migrate_entity_registry(
             owner_device,
             metadata_entry,
         )
+        if (
+            getattr(metadata_entry, "name", None) is not None
+            and not _registry_entry_matches_device_state(metadata_entry, owner_device)
+            and not (
+                _stale_restore_object_id(getattr(metadata_entry, "object_id_base", None))
+                or _stale_restore_object_id(
+                    getattr(metadata_entry, "suggested_object_id", None)
+                )
+            )
+        ):
+            canonical_object_id_base = None
+            canonical_suggested_object_id = None
         if canonical_suggested_object_id is not None:
             canonical_entity_id = (
                 f"{getattr(metadata_entry, 'domain', '')}.{canonical_suggested_object_id}"
@@ -1018,11 +1038,18 @@ def _canonical_registry_suggested_object_id(
         None,
     )
     if state is not None:
-        return canonical_entity_object_id(
-            inventory,
-            device,
-            _generated_registry_state_name(entity_entry, device, state),
-        )
+        entity_name = _generated_registry_state_name(entity_entry, device, state)
+        secondary_switch_role = _secondary_switch_role_name(state)
+        if (
+            domain_value == Platform.SWITCH
+            and getattr(state, "attribute", None) == "switch"
+            and secondary_switch_role is not None
+        ):
+            entity_name = secondary_switch_role
+        return canonical_entity_object_id(inventory, device, entity_name)
+    fallback_suffix = _fallback_entity_suffix_name(entity_entry, device)
+    if fallback_suffix is not None:
+        return canonical_entity_object_id(inventory, device, fallback_suffix)
     return canonical_entity_object_id(
         inventory,
         device,
@@ -1038,9 +1065,11 @@ def _refresh_generated_registry_metadata(
     canonical_suggested_object_id: str | None,
 ) -> None:
     """Repair generated restore hints through Home Assistant's public API."""
-    if (
-        getattr(entity_entry, "platform", None) != DOMAIN
-        or getattr(entity_entry, "name", None) is not None
+    if getattr(entity_entry, "platform", None) != DOMAIN:
+        return
+    if getattr(entity_entry, "name", None) is not None and not (
+        _stale_restore_object_id(getattr(entity_entry, "object_id_base", None))
+        or _stale_restore_object_id(getattr(entity_entry, "suggested_object_id", None))
     ):
         return
     if canonical_suggested_object_id is None:
@@ -1076,7 +1105,17 @@ def _canonical_registry_object_id_base(
         None,
     )
     if state is not None:
+        secondary_switch_role = _secondary_switch_role_name(state)
+        if (
+            getattr(entity_entry, "domain", "") == Platform.SWITCH
+            and getattr(state, "attribute", None) == "switch"
+            and secondary_switch_role is not None
+        ):
+            return slugify(secondary_switch_role) or None
         return slugify(_generated_registry_state_name(entity_entry, device, state)) or None
+    fallback_suffix = _fallback_entity_suffix_name(entity_entry, device)
+    if fallback_suffix is not None:
+        return fallback_suffix
     object_id_base = getattr(entity_entry, "object_id_base", None)
     if (
         isinstance(object_id_base, str)
@@ -1211,13 +1250,68 @@ def _canonical_numbered_generated_entity_id(
     return f"{domain}.{canonical_object_id}"
 
 
+def _canonical_generated_state_entity_id(
+    entity_entry: object,
+    device: object | None,
+    inventory: BridgeInventory,
+) -> str | None:
+    """Return the current generated entity ID for state-backed rows."""
+    if device is None or getattr(entity_entry, "name", None) is not None:
+        return None
+    domain = getattr(entity_entry, "domain", "") or ""
+    if domain != Platform.SWITCH:
+        return None
+    state = next(
+        (
+            item
+            for item in getattr(device, "states", {}).values()
+            if entity_unique_id(getattr(device, "device_id", ""), item)
+            == getattr(entity_entry, "unique_id", "")
+        ),
+        None,
+    )
+    if state is None:
+        return None
+    if getattr(state, "attribute", None) != "switch":
+        return None
+    role = _secondary_switch_role_name(state)
+    if role is None:
+        return None
+    entity_name = role
+    object_id = canonical_entity_object_id(inventory, device, entity_name)
+    if not object_id:
+        return None
+    target = f"{domain}.{object_id}"
+    return target if target != getattr(entity_entry, "entity_id", "") else None
+
+
+def _secondary_switch_role_name(state: object) -> str | None:
+    """Return the current generated name suffix for a secondary switch channel."""
+    role = getattr(state, "component_role", None) or getattr(state, "component", None)
+    if not isinstance(role, str):
+        return None
+    normalized = role.strip()
+    if (
+        not normalized
+        or normalized.lower() == "main"
+        or normalized.lower().startswith("identifier_")
+    ):
+        return None
+    known_role = STATE_ROLE_DISPLAY_NAMES.get(normalized.lower())
+    if known_role is not None:
+        return known_role
+    normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", normalized)
+    normalized = re.sub(r"[_-]+", " ", normalized).strip()
+    return normalized.title() or None
+
+
 def _stale_fallback_generated_entity_id(
     entity_entry: object,
     device: object | None,
     inventory: BridgeInventory,
 ) -> str | None:
     """Rebase IDs frozen from ``SmartThings device <id>`` onto the real name."""
-    if device is None or getattr(entity_entry, "name", None) is not None:
+    if device is None:
         return None
     device_id = getattr(device, "device_id", "")
     fallback_object_id = slugify(f"SmartThings device {device_id}") or None
@@ -1243,15 +1337,38 @@ def _stale_fallback_generated_entity_id(
         object_name = _generated_registry_state_name(entity_entry, device, state)
         canonical_object_id = canonical_entity_object_id(inventory, device, object_name)
     else:
+        object_name = _fallback_entity_suffix_name(entity_entry, device)
         canonical_object_id = _canonical_registry_suggested_object_id(
             inventory,
             device,
             entity_entry,
             entity_id,
-        )
+        ) if object_name is None else canonical_entity_object_id(inventory, device, object_name)
     if not canonical_object_id or canonical_object_id == object_id:
         return None
     return f"{domain}.{canonical_object_id}"
+
+
+def _stale_restore_object_id(value: object) -> bool:
+    """Return whether HA restore metadata still carries the early fallback slug."""
+    if not isinstance(value, str):
+        return False
+    return slugify(value).startswith("smartthings_device_dev_")
+
+
+def _registry_entry_matches_device_state(
+    entity_entry: object,
+    device: object | None,
+) -> bool:
+    """Return whether this registry row is backed by a current Bridge state."""
+    if device is None:
+        return False
+    device_id = str(getattr(device, "device_id", ""))
+    unique_id = getattr(entity_entry, "unique_id", "")
+    return any(
+        entity_unique_id(device_id, state) == unique_id
+        for state in getattr(device, "states", {}).values()
+    )
 
 
 def _generated_registry_state_name(
@@ -1360,6 +1477,28 @@ def _fallback_state_name_base(value: str, device: object) -> bool:
             or value_object_id.startswith(f"{fallback_object_id}_")
         )
     )
+
+
+def _fallback_entity_suffix_name(entity_entry: object, device: object) -> str | None:
+    """Return the meaningful suffix from old SmartThings-device fallback IDs."""
+    device_id = getattr(device, "device_id", "")
+    fallback_object_id = slugify(f"SmartThings device {device_id}") or ""
+    if not fallback_object_id:
+        return None
+    values = [
+        getattr(entity_entry, "object_id_base", None),
+        getattr(entity_entry, "suggested_object_id", None),
+        getattr(entity_entry, "entity_id", "").partition(".")[2],
+    ]
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            continue
+        object_id = slugify(value) or value.strip().lower().replace(" ", "_")
+        prefix = f"{fallback_object_id}_"
+        if object_id.startswith(prefix):
+            suffix = object_id[len(prefix) :]
+            return suffix or None
+    return None
 
 
 def _readable_registry_state_attribute(state: object) -> str:

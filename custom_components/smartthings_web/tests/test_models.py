@@ -1024,7 +1024,11 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         device.states = {image.key: image}
 
         self.assertTrue(is_image_device(device))
-        self.assertTrue(sensor_state_allowed("image", image_device=True))
+        self.assertFalse(sensor_state_allowed("image", image_device=True))
+        self.assertTrue(sensor_state_allowed("captureTime", image_device=True))
+        self.assertTrue(sensor_state_allowed("imageTransferProgress", image_device=True))
+        self.assertTrue(sensor_state_allowed("clip", image_device=True))
+        self.assertTrue(sensor_state_allowed("stream", image_device=True))
 
     def test_audio_volume_without_mute_is_not_a_media_player(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")

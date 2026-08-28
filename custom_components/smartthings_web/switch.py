@@ -9,12 +9,13 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SmartThingsWebConfigEntry
 from .bridge_client import BridgeClientError, bridge_error_message
-from .entity import SmartThingsWebEntity
+from .entity import SmartThingsWebEntity, migrate_entity_original_name
 from .models import (
     BridgeControl,
     BridgeDevice,
     BridgeState,
     SmartThingsWebRuntime,
+    _readable_state_token,
     control_supports_command,
     control_kind,
     safe_observed_control,
@@ -37,6 +38,7 @@ async def async_setup_entry(
         for device in runtime.inventory.devices.values():
             if device.location_id != runtime.location_id:
                 continue
+            name_overrides = _secondary_switch_name_overrides(device)
             for state in device.states.values():
                 unique_id = "_".join((device.device_id, *state.key))
                 control = toggle_control_for_state(device, state)
@@ -52,6 +54,13 @@ async def async_setup_entry(
                         if control is not None and safe_observed_control(control)
                         else None
                     )
+                    name_override = name_overrides.get(state.key)
+                    migrate_entity_original_name(
+                        hass,
+                        "switch",
+                        unique_id,
+                        name_override,
+                    )
                     known.add(unique_id)
                     entities.append(
                         SmartThingsWebSwitch(
@@ -59,6 +68,7 @@ async def async_setup_entry(
                             device,
                             state,
                             observed_control,
+                            name_override=name_override,
                         )
                     )
         if entities:
@@ -77,13 +87,21 @@ class SmartThingsWebSwitch(SmartThingsWebEntity, SwitchEntity):
         device: BridgeDevice,
         state: BridgeState,
         control: BridgeControl | None = None,
+        name_override: str | None = None,
     ) -> None:
         self.control = control
+        name = (
+            name_override
+            if name_override is not None
+            else control.label
+            if control is not None and state.attribute != "switch"
+            else None
+        )
         super().__init__(
             runtime,
             device,
             state,
-            control.label if control is not None and state.attribute != "switch" else None,
+            name,
         )
 
     @property
@@ -163,3 +181,23 @@ class SmartThingsWebSwitch(SmartThingsWebEntity, SwitchEntity):
             )
         except BridgeClientError as err:
             raise HomeAssistantError(bridge_error_message("switch command", err)) from err
+
+
+def _secondary_switch_name_overrides(
+    device: BridgeDevice,
+) -> dict[tuple[str, str, str], str]:
+    secondary_switches = [
+        state
+        for state in device.states.values()
+        if control_kind(device, state) == "switch"
+        and state.attribute == "switch"
+        and (state.component_role or state.component).strip().lower() != "main"
+    ]
+    names: dict[tuple[str, str, str], str] = {}
+    for index, state in enumerate(sorted(secondary_switches, key=lambda item: item.key), 2):
+        role_name = _readable_state_token(
+            state.component_role or state.component,
+            "component",
+        )
+        names[state.key] = role_name if role_name is not None else f"스위치 {index}"
+    return names
