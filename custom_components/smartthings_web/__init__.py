@@ -581,6 +581,16 @@ def _migrate_entity_registry(
     for entity_entry in stale_duplicate_rows:
         remove_registry_entity(entity_entry.entity_id)
 
+    _relocate_primary_name_collisions(
+        registry,
+        registry_entries,
+        inventory,
+        entry.data[CONF_LOCATION_ID],
+        current_entity_ids,
+        removed_entity_ids,
+    )
+    registry_entries = list(er.async_entries_for_config_entry(registry, entry.entry_id))
+
     for entity_entry in registry_entries:
         if entity_entry.platform != DOMAIN:
             continue
@@ -809,6 +819,75 @@ def _rename_generated_registry_entity(
     return True
 
 
+def _relocate_primary_name_collisions(
+    registry: object,
+    registry_entries: Sequence[object],
+    inventory: BridgeInventory,
+    location_id: str,
+    current_entity_ids: set[str],
+    removed_entity_ids: set[str],
+) -> None:
+    """Give exact device-name IDs priority over HA collision suffixes."""
+    primary_rows: list[tuple[object, object, str, str]] = []
+    targets: dict[str, list[str]] = {}
+    for entity_entry in registry_entries:
+        if (
+            getattr(entity_entry, "platform", None) != DOMAIN
+            or getattr(entity_entry, "entity_id", None) in removed_entity_ids
+            or getattr(entity_entry, "name", None) is not None
+        ):
+            continue
+        domain = getattr(entity_entry, "domain", "")
+        domain_value = getattr(domain, "value", domain)
+        if domain_value not in {"climate", "cover", "fan", "media_player"}:
+            continue
+        unique_id = str(getattr(entity_entry, "unique_id", ""))
+        device = next(
+            (
+                item
+                for item in inventory.devices.values()
+                if item.location_id == location_id
+                and unique_id == f"{item.device_id}_{domain_value}"
+            ),
+            None,
+        )
+        if device is None:
+            continue
+        object_id = canonical_entity_object_id(inventory, device)
+        if not object_id:
+            continue
+        target = f"{domain_value}.{object_id}"
+        primary_rows.append((entity_entry, device, domain_value, target))
+        targets.setdefault(target, []).append(unique_id)
+
+    reserved_targets = set(targets)
+    for entity_entry, _device, _domain, own_target in primary_rows:
+        current_entity_id = str(getattr(entity_entry, "entity_id", ""))
+        unique_id = str(getattr(entity_entry, "unique_id", ""))
+        target_owners = targets.get(current_entity_id, [])
+        if (
+            current_entity_id == own_target
+            or not target_owners
+            or all(owner == unique_id for owner in target_owners)
+        ):
+            continue
+        for index in range(1, 100):
+            candidate = own_target if index == 1 else f"{own_target}_{index}"
+            if candidate == current_entity_id:
+                continue
+            if candidate in reserved_targets and candidate != own_target:
+                continue
+            if candidate in current_entity_ids or registry.async_get(candidate) is not None:
+                continue
+            if not _rename_generated_registry_entity(
+                registry, current_entity_id, candidate
+            ):
+                continue
+            current_entity_ids.discard(current_entity_id)
+            current_entity_ids.add(candidate)
+            break
+
+
 def _canonical_registry_suggested_object_id(
     inventory: BridgeInventory,
     device: object | None,
@@ -860,8 +939,6 @@ def _refresh_generated_registry_metadata(
         return
     object_id_base = getattr(entity_entry, "object_id_base", None)
     if canonical_suggested_object_id is None:
-        return
-    if not isinstance(object_id_base, str) or not object_id_base.strip():
         return
     get_or_create = getattr(registry, "async_get_or_create", None)
     if not callable(get_or_create):

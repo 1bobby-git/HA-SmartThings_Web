@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.122
+
+- Reserve canonical primary entity IDs for devices whose actual SmartThings name contains the numeric suffix. When an exact-room device holds `media_player.geosil_4` only as Home Assistant's fourth collision, it is safely moved to the next free generated ID so the device actually named `거실 4` can reclaim `media_player.geosil_4`.
+- Refresh the public Home Assistant restore metadata after that relocation, including primary entities whose `object_id_base` is intentionally empty, so the corrected allocation survives Entity ID restore.
+
 ## 0.1.121
 
 - Persist the complete canonical SmartThings device/entity object ID as Home Assistant's generated restore suggestion. This bypasses Home Assistant 2026.8's area-plus-device template, so restoring `화장실 도어센서` and `작은방 재실센서` keeps `hwajangsil_doeosenseo_contact` and `jageunbang_jaesilsenseo_presence` instead of recreating a duplicated room prefix.

@@ -875,6 +875,85 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         )
         self.assertEqual(legacy_media.suggested_object_id, "geosil_4")
 
+    def test_actual_numbered_device_name_reclaims_id_from_collision_suffix(self) -> None:
+        """Reserve geosil_4 for a device actually named Geosil 4."""
+        exact_room = self._registry_entry(
+            "media_player.geosil_4",
+            "uuid_exact_room",
+            domain="media_player",
+            unique_id="dev_exact_media_player",
+        )
+        exact_room.object_id_base = None
+        exact_room.suggested_object_id = "geosil"
+        numbered_name = self._registry_entry(
+            "media_player.4",
+            "uuid_numbered_name",
+            domain="media_player",
+            unique_id="dev_four_media_player",
+        )
+        numbered_name.object_id_base = None
+        numbered_name.suggested_object_id = "geosil_4"
+        second_name = self._registry_entry(
+            "media_player.geosil_2",
+            "uuid_second_name",
+            domain="media_player",
+            unique_id="dev_two_media_player",
+        )
+        second_name.object_id_base = None
+        second_name.suggested_object_id = "geosil_2"
+        registry = FakeRegistry(
+            [
+                entity("media_player.geosil", "media_player", "official_living", platform="other"),
+                exact_room,
+                numbered_name,
+                second_name,
+            ]
+        )
+        self.patch_registry(registry)
+
+        def speaker(device_id: str, name: str) -> BridgeDevice:
+            volume = BridgeState(
+                "main", "audioVolume", "volume", 25, "%", "2026-08-28T03:00:00Z"
+            )
+            mute = BridgeState(
+                "main", "audioMute", "mute", "unmuted", None, "2026-08-28T03:00:00Z"
+            )
+            return BridgeDevice(
+                device_id,
+                "loc_001",
+                "room_living",
+                name,
+                "speaker",
+                True,
+                states={volume.key: volume, mute.key: mute},
+            )
+
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.121",
+            protocol_version="4",
+            locations={"loc_001": "Home"},
+            rooms={"room_living": ("loc_001", "Geosil")},
+            devices={
+                "dev_exact": speaker("dev_exact", "Geosil"),
+                "dev_four": speaker("dev_four", "Geosil 4"),
+                "dev_two": speaker("dev_two", "Geosil 2"),
+            },
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_001"},
+        )
+
+        _migrate_entity_registry(object(), entry, inventory)
+        _migrate_entity_registry(object(), entry, inventory)
+
+        self.assertEqual(numbered_name.entity_id, "media_player.geosil_4")
+        self.assertEqual(numbered_name.suggested_object_id, "geosil_4")
+        self.assertEqual(exact_room.entity_id, "media_player.geosil_3")
+        self.assertEqual(exact_room.suggested_object_id, "geosil_3")
+
     def test_dynamic_registry_migration_waits_for_discovered_entities(self) -> None:
         """Repair entity IDs created by platform discovery after inventory changes."""
         registry = FakeRegistry([])
