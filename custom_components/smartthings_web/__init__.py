@@ -592,6 +592,26 @@ def _migrate_entity_registry(
         removed_entity_ids,
     )
     registry_entries = list(er.async_entries_for_config_entry(registry, entry.entry_id))
+    fallback_repair_rows: list[tuple[object, str]] = []
+    for candidate_entry in registry_entries:
+        if getattr(candidate_entry, "platform", None) != DOMAIN:
+            continue
+        candidate_owner = owner_device_for(candidate_entry)
+        candidate_target = _stale_fallback_generated_entity_id(
+            candidate_entry,
+            candidate_owner,
+            inventory,
+        )
+        if candidate_target is not None:
+            fallback_repair_rows.append((candidate_entry, candidate_target))
+    _repair_numbered_fallback_entity_ids(
+        registry,
+        fallback_repair_rows,
+        current_entity_ids,
+    )
+    # Home Assistant replaces immutable RegistryEntry objects on update. Read
+    # the rows again so metadata repair uses the renamed entity ID immediately.
+    registry_entries = list(er.async_entries_for_config_entry(registry, entry.entry_id))
 
     for entity_entry in registry_entries:
         if entity_entry.platform != DOMAIN:
@@ -722,13 +742,6 @@ def _migrate_entity_registry(
         )
         if numbered_entity_id is not None:
             new_entity_id = numbered_entity_id
-        stale_fallback_entity_id = _stale_fallback_generated_entity_id(
-            entity_entry,
-            owner_device,
-            inventory,
-        )
-        if stale_fallback_entity_id is not None:
-            new_entity_id = stale_fallback_entity_id
         renamed_this_entry = False
         if new_entity_id is not None and registry.async_get(new_entity_id) is not None:
             new_entity_id = None
@@ -809,8 +822,18 @@ def _migrate_entity_registry(
                 canonical_entity_id != getattr(metadata_entry, "entity_id", None)
                 and registry.async_get(canonical_entity_id) is not None
             ):
-                canonical_suggested_object_id = None
-                canonical_object_id_base = None
+                final_object_id = registry_entity_id.partition(".")[2]
+                numbered_prefix = f"{canonical_suggested_object_id}_"
+                numbered_suffix = (
+                    final_object_id[len(numbered_prefix) :]
+                    if final_object_id.startswith(numbered_prefix)
+                    else ""
+                )
+                if numbered_suffix.isdigit() and int(numbered_suffix) >= 2:
+                    canonical_suggested_object_id = final_object_id
+                else:
+                    canonical_suggested_object_id = None
+                    canonical_object_id_base = None
         _refresh_generated_registry_metadata(
             registry,
             entry,
@@ -844,6 +867,47 @@ def _rename_generated_registry_entity(
         )
         return False
     return True
+
+
+def _repair_numbered_fallback_entity_ids(
+    registry: object,
+    fallback_rows: Sequence[tuple[object, str]],
+    current_entity_ids: set[str],
+) -> None:
+    """Repair fallbacks, advancing past registry and restored-state reservations."""
+    reserved = set(current_entity_ids)
+    ordered_rows = sorted(
+        fallback_rows,
+        key=lambda item: (
+            item[1],
+            str(getattr(item[0], "unique_id", "")),
+            str(getattr(item[0], "entity_id", "")),
+        ),
+    )
+    for entity_entry, canonical_entity_id in ordered_rows:
+        current_entity_id = str(getattr(entity_entry, "entity_id", ""))
+        for index in range(1, 1000):
+            candidate = (
+                canonical_entity_id
+                if index == 1
+                else f"{canonical_entity_id}_{index}"
+            )
+            if candidate == current_entity_id:
+                break
+            if candidate in reserved or registry.async_get(candidate) is not None:
+                continue
+            if not _rename_generated_registry_entity(
+                registry,
+                current_entity_id,
+                candidate,
+            ):
+                reserved.add(candidate)
+                continue
+            current_entity_ids.discard(current_entity_id)
+            current_entity_ids.add(candidate)
+            reserved.discard(current_entity_id)
+            reserved.add(candidate)
+            break
 
 
 def _relocate_primary_name_collisions(

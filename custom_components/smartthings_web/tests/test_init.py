@@ -1492,7 +1492,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         _migrate_entity_registry(object(), entry, inventory)
         _migrate_entity_registry(object(), entry, inventory)
 
-        self.assertEqual(
+        self.assertCountEqual(
             registry.renamed,
             [
                 (
@@ -1879,8 +1879,8 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             "gyeongsugyi_s22_presence",
         )
 
-    def test_fallback_id_repair_does_not_rename_to_an_occupied_target(self) -> None:
-        """Keep a stale row unchanged when the canonical generated target is taken."""
+    def test_fallback_id_repair_numbers_around_an_occupied_target(self) -> None:
+        """Keep an occupied target intact while replacing an unreadable fallback."""
         state = BridgeState(
             "home",
             "presenceSensor",
@@ -1940,18 +1940,415 @@ class EntityRegistryMigrationTests(unittest.TestCase):
 
         _migrate_entity_registry(object(), entry, inventory)
 
-        self.assertEqual(registry.renamed, [])
+        self.assertEqual(
+            registry.renamed,
+            [
+                (
+                    "binary_sensor.smartthings_device_dev_426_presence_3",
+                    "binary_sensor.gyeongsugyi_s22_presence_2",
+                )
+            ],
+        )
         self.assertEqual(
             stale_entry.entity_id,
-            "binary_sensor.smartthings_device_dev_426_presence_3",
+            "binary_sensor.gyeongsugyi_s22_presence_2",
+        )
+        self.assertEqual(
+            occupied_entry.entity_id,
+            "binary_sensor.gyeongsugyi_s22_presence",
         )
         self.assertEqual(
             stale_entry.object_id_base,
-            "smartthings_device_dev_426_presence_3",
+            "presence",
         )
         self.assertEqual(
             stale_entry.suggested_object_id,
-            "smartthings_device_dev_426_presence_3",
+            "gyeongsugyi_s22_presence_2",
+        )
+
+    def test_rebases_same_name_fallback_to_next_free_generated_id(self) -> None:
+        """Use a stable numbered ID when a same-name device owns the base ID."""
+        state = BridgeState(
+            "main",
+            "presenceSensor",
+            "presence",
+            "present",
+            None,
+            "2026-08-29T00:00:00Z",
+        )
+        other_state = BridgeState(
+            "main",
+            "presenceSensor",
+            "presence",
+            "not present",
+            None,
+            "2026-08-29T00:00:00Z",
+        )
+        stale_entry = SimpleNamespace(
+            entity_id="binary_sensor.smartthings_device_dev_401_presence",
+            domain="binary_sensor",
+            platform=DOMAIN,
+            unique_id="dev_401_main_presenceSensor_presence",
+            device_id="uuid_iphone_401",
+            name=None,
+            disabled_by=None,
+            original_name="Presence",
+            object_id_base="smartthings_device_dev_401_presence",
+            suggested_object_id="smartthings_device_dev_401_presence",
+        )
+        base_entry = SimpleNamespace(
+            entity_id="binary_sensor.iphone_presence",
+            domain="binary_sensor",
+            platform=DOMAIN,
+            unique_id="dev_580_main_presenceSensor_presence",
+            device_id="uuid_iphone_580",
+            name=None,
+            disabled_by=None,
+            original_name="Presence",
+            object_id_base="presence",
+            suggested_object_id="iphone_presence",
+        )
+        class ReplacingRegistry(FakeRegistry):
+            def async_update_entity(
+                self,
+                entity_id: str,
+                *,
+                new_unique_id: str | None = None,
+                new_entity_id: str | None = None,
+            ) -> None:
+                if new_entity_id is None:
+                    super().async_update_entity(
+                        entity_id,
+                        new_unique_id=new_unique_id,
+                    )
+                    return
+                current = self.async_get(entity_id)
+                if current is None:
+                    raise KeyError(entity_id)
+                replacement = SimpleNamespace(**vars(current))
+                replacement.entity_id = new_entity_id
+                if new_unique_id is not None:
+                    replacement.unique_id = new_unique_id
+                    self.updated.append((entity_id, new_unique_id))
+                self.entries = [
+                    replacement if item is current else item for item in self.entries
+                ]
+                self.renamed.append((entity_id, new_entity_id))
+
+        registry = ReplacingRegistry([stale_entry, base_entry])
+        self.patch_registry(registry)
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.129",
+            protocol_version="4",
+            locations={"loc_009": "Home"},
+            rooms={},
+            devices={
+                "dev_401": BridgeDevice(
+                    "dev_401",
+                    "loc_009",
+                    None,
+                    "iPhone",
+                    "MOBILE",
+                    True,
+                    states={state.key: state},
+                ),
+                "dev_580": BridgeDevice(
+                    "dev_580",
+                    "loc_009",
+                    None,
+                    "iPhone",
+                    "MOBILE",
+                    True,
+                    states={other_state.key: other_state},
+                ),
+            },
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_009"},
+        )
+
+        _migrate_entity_registry(object(), entry, inventory)
+
+        self.assertEqual(
+            registry.renamed,
+            [
+                (
+                    "binary_sensor.smartthings_device_dev_401_presence",
+                    "binary_sensor.iphone_presence_2",
+                )
+            ],
+        )
+        self.assertEqual(base_entry.entity_id, "binary_sensor.iphone_presence")
+        repaired_entry = registry.async_get("binary_sensor.iphone_presence_2")
+        self.assertIsNotNone(repaired_entry)
+        self.assertEqual(repaired_entry.object_id_base, "presence")
+        self.assertEqual(repaired_entry.suggested_object_id, "iphone_presence_2")
+
+        _migrate_entity_registry(object(), entry, inventory)
+
+        self.assertEqual(len(registry.renamed), 1)
+
+    def test_same_name_fallback_skips_ids_owned_by_other_integrations(self) -> None:
+        """Never overwrite occupied numbered IDs while repairing a duplicate name."""
+        state = BridgeState(
+            "main",
+            "presenceSensor",
+            "presence",
+            "present",
+            None,
+            "2026-08-29T00:00:00Z",
+        )
+        stale_entry = SimpleNamespace(
+            entity_id="binary_sensor.smartthings_device_dev_401_presence",
+            domain="binary_sensor",
+            platform=DOMAIN,
+            unique_id="dev_401_main_presenceSensor_presence",
+            device_id="uuid_iphone_401",
+            name=None,
+            disabled_by=None,
+            original_name="Presence",
+            object_id_base="smartthings_device_dev_401_presence",
+            suggested_object_id="smartthings_device_dev_401_presence",
+        )
+        base_entry = SimpleNamespace(
+            entity_id="binary_sensor.iphone_presence",
+            domain="binary_sensor",
+            platform=DOMAIN,
+            unique_id="dev_580_main_presenceSensor_presence",
+            device_id="uuid_iphone_580",
+            name=None,
+            disabled_by=None,
+            original_name="Presence",
+            object_id_base="presence",
+            suggested_object_id="iphone_presence",
+        )
+        occupied_entry = SimpleNamespace(
+            entity_id="binary_sensor.iphone_presence_2",
+            domain="binary_sensor",
+            platform="other_platform",
+            unique_id="occupied",
+            device_id="uuid_other",
+            name=None,
+            disabled_by=None,
+            original_name=None,
+            object_id_base=None,
+            suggested_object_id=None,
+        )
+        registry = FakeRegistry([stale_entry, base_entry, occupied_entry])
+        self.patch_registry(registry)
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.128",
+            protocol_version="4",
+            locations={"loc_009": "Home"},
+            rooms={},
+            devices={
+                device_id: BridgeDevice(
+                    device_id,
+                    "loc_009",
+                    None,
+                    "iPhone",
+                    "MOBILE",
+                    True,
+                    states={state.key: state},
+                )
+                for device_id in ("dev_401", "dev_580")
+            },
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_009"},
+        )
+
+        _migrate_entity_registry(object(), entry, inventory)
+        _migrate_entity_registry(object(), entry, inventory)
+
+        self.assertEqual(
+            stale_entry.entity_id,
+            "binary_sensor.iphone_presence_3",
+        )
+        self.assertEqual(base_entry.entity_id, "binary_sensor.iphone_presence")
+        self.assertEqual(occupied_entry.entity_id, "binary_sensor.iphone_presence_2")
+        self.assertEqual(stale_entry.object_id_base, "presence")
+        self.assertEqual(stale_entry.suggested_object_id, "iphone_presence_3")
+
+    def test_same_name_fallback_advances_past_a_reserved_state_id(self) -> None:
+        """Try the next suffix when HA reserves an ID outside the registry."""
+        state = BridgeState(
+            "main",
+            "presenceSensor",
+            "presence",
+            "present",
+            None,
+            "2026-08-29T00:00:00Z",
+        )
+        stale_entry = SimpleNamespace(
+            entity_id="binary_sensor.smartthings_device_dev_401_presence",
+            domain="binary_sensor",
+            platform=DOMAIN,
+            unique_id="dev_401_main_presenceSensor_presence",
+            device_id="uuid_iphone_401",
+            name=None,
+            disabled_by=None,
+            original_name="Presence",
+            object_id_base="smartthings_device_dev_401_presence",
+            suggested_object_id="smartthings_device_dev_401_presence",
+        )
+        base_entry = SimpleNamespace(
+            entity_id="binary_sensor.iphone_presence",
+            domain="binary_sensor",
+            platform=DOMAIN,
+            unique_id="dev_580_main_presenceSensor_presence",
+            device_id="uuid_iphone_580",
+            name=None,
+            disabled_by=None,
+            original_name="Presence",
+            object_id_base="presence",
+            suggested_object_id="iphone_presence",
+        )
+
+        class ReservedStateRegistry(FakeRegistry):
+            def async_update_entity(
+                self,
+                entity_id: str,
+                *,
+                new_unique_id: str | None = None,
+                new_entity_id: str | None = None,
+            ) -> None:
+                if new_entity_id == "binary_sensor.iphone_presence_2":
+                    raise ValueError("entity id is already reserved")
+                super().async_update_entity(
+                    entity_id,
+                    new_unique_id=new_unique_id,
+                    new_entity_id=new_entity_id,
+                )
+
+        registry = ReservedStateRegistry([stale_entry, base_entry])
+        self.patch_registry(registry)
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.129",
+            protocol_version="4",
+            locations={"loc_009": "Home"},
+            rooms={},
+            devices={
+                device_id: BridgeDevice(
+                    device_id,
+                    "loc_009",
+                    None,
+                    "iPhone",
+                    "MOBILE",
+                    True,
+                    states={state.key: state},
+                )
+                for device_id in ("dev_401", "dev_580")
+            },
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_009"},
+        )
+
+        _migrate_entity_registry(object(), entry, inventory)
+        _migrate_entity_registry(object(), entry, inventory)
+
+        self.assertEqual(
+            registry.renamed,
+            [
+                (
+                    "binary_sensor.smartthings_device_dev_401_presence",
+                    "binary_sensor.iphone_presence_3",
+                )
+            ],
+        )
+        self.assertEqual(stale_entry.entity_id, "binary_sensor.iphone_presence_3")
+        self.assertEqual(base_entry.entity_id, "binary_sensor.iphone_presence")
+        self.assertEqual(stale_entry.object_id_base, "presence")
+        self.assertEqual(stale_entry.suggested_object_id, "iphone_presence_3")
+
+    def test_same_name_fallback_repair_preserves_user_named_rows(self) -> None:
+        """Leave explicit user names untouched even when a duplicate base exists."""
+        state = BridgeState(
+            "main",
+            "presenceSensor",
+            "presence",
+            "present",
+            None,
+            "2026-08-29T00:00:00Z",
+        )
+        stale_entry = SimpleNamespace(
+            entity_id="binary_sensor.smartthings_device_dev_401_presence",
+            domain="binary_sensor",
+            platform=DOMAIN,
+            unique_id="dev_401_main_presenceSensor_presence",
+            device_id="uuid_iphone_401",
+            name="My iPhone presence",
+            disabled_by=None,
+            original_name="Presence",
+            object_id_base="smartthings_device_dev_401_presence",
+            suggested_object_id="smartthings_device_dev_401_presence",
+        )
+        base_entry = SimpleNamespace(
+            entity_id="binary_sensor.iphone_presence",
+            domain="binary_sensor",
+            platform=DOMAIN,
+            unique_id="dev_580_main_presenceSensor_presence",
+            device_id="uuid_iphone_580",
+            name=None,
+            disabled_by=None,
+            original_name="Presence",
+            object_id_base="presence",
+            suggested_object_id="iphone_presence",
+        )
+        registry = FakeRegistry([stale_entry, base_entry])
+        self.patch_registry(registry)
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.128",
+            protocol_version="4",
+            locations={"loc_009": "Home"},
+            rooms={},
+            devices={
+                device_id: BridgeDevice(
+                    device_id,
+                    "loc_009",
+                    None,
+                    "iPhone",
+                    "MOBILE",
+                    True,
+                    states={state.key: state},
+                )
+                for device_id in ("dev_401", "dev_580")
+            },
+        )
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(
+                entry_id="entry_001",
+                data={CONF_LOCATION_ID: "loc_009"},
+            ),
+            inventory,
+        )
+
+        self.assertEqual(registry.renamed, [])
+        self.assertEqual(
+            stale_entry.entity_id,
+            "binary_sensor.smartthings_device_dev_401_presence",
+        )
+        self.assertEqual(
+            stale_entry.object_id_base,
+            "smartthings_device_dev_401_presence",
+        )
+        self.assertEqual(
+            stale_entry.suggested_object_id,
+            "smartthings_device_dev_401_presence",
         )
 
     def test_reserved_state_id_does_not_abort_numbered_id_repair(self) -> None:

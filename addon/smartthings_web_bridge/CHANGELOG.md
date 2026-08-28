@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.129
+
+- Replace stale `smartthings_device_dev_*` entity IDs with stable readable numbered IDs when same-name devices or other integrations already occupy the canonical target.
+- Preserve every occupied entity ID and explicit user name while assigning same-name devices deterministic `_2`, `_3`, and later suffixes, advancing past restored-state reservations and persisting numbered restore metadata across Home Assistant restarts.
+
 ## 0.1.128
 
 - Prevent restored entity metadata from accumulating transliterated role suffixes after repeated Home Assistant registry migration passes.
