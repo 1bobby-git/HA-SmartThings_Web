@@ -155,6 +155,7 @@ def _subscribe_entity_registry_migration(
     active = True
     delayed_handles: list[object] = []
     runtime = entry.runtime_data
+    last_topology: tuple[object, ...] | None = None
 
     def run_migration() -> None:
         nonlocal scheduled
@@ -172,6 +173,14 @@ def _subscribe_entity_registry_migration(
 
     def schedule_settled_migrations() -> None:
         """Run once now and twice after dynamic entity discovery can settle."""
+        nonlocal last_topology
+        topology = _entity_registry_topology_fingerprint(
+            runtime.inventory,
+            entry.data[CONF_LOCATION_ID],
+        )
+        if topology == last_topology:
+            return
+        last_topology = topology
         for handle in delayed_handles:
             cancel = getattr(handle, "cancel", None)
             if callable(cancel):
@@ -199,6 +208,78 @@ def _subscribe_entity_registry_migration(
         delayed_handles.clear()
 
     return unsubscribe
+
+
+def _entity_registry_topology_fingerprint(
+    inventory: BridgeInventory,
+    location_id: str,
+) -> tuple[object, ...]:
+    """Return only inventory structure that can change entity discovery.
+
+    Ordinary push updates replace values and timestamps many times per minute.
+    Those updates already notify the exact entity listener and must not trigger
+    a full entity-registry migration.  A new state/control, a value becoming
+    available, or device naming/classification metadata still changes this
+    fingerprint and receives the bounded settled migration passes.
+    """
+    rooms = tuple(
+        sorted(
+            (room_id, name)
+            for room_id, (owner_location_id, name) in inventory.rooms.items()
+            if owner_location_id == location_id
+        )
+    )
+    devices: list[tuple[object, ...]] = []
+    for device in sorted(inventory.devices.values(), key=lambda item: item.device_id):
+        if device.location_id != location_id:
+            continue
+        states = tuple(
+            sorted(
+                (
+                    state.component,
+                    state.capability,
+                    state.attribute,
+                    state.unit,
+                    state.component_role,
+                    state.capability_role,
+                    state.value is not None,
+                    type(state.value).__name__,
+                )
+                for state in device.states.values()
+            )
+        )
+        controls = tuple(
+            sorted(
+                (
+                    control.control_id,
+                    control.kind,
+                    control.label,
+                    control.component,
+                    control.capability,
+                    control.attribute,
+                    control.commands,
+                    control.options,
+                    tuple(sorted(control.option_labels.items())),
+                    tuple(sorted(control.option_commands.items())),
+                    control.minimum,
+                    control.maximum,
+                    control.step,
+                )
+                for control in device.controls.values()
+            )
+        )
+        devices.append(
+            (
+                device.device_id,
+                device.room_id,
+                device.name,
+                device.device_type,
+                device.presentation.asset_type if device.presentation else None,
+                states,
+                controls,
+            )
+        )
+    return (rooms, tuple(devices))
 
 
 async def _event_loop(entry: SmartThingsWebConfigEntry) -> None:
@@ -627,6 +708,7 @@ def _migrate_entity_registry(
             current_entity_ids.add(new_entity_id)
             registry_entity_id = new_entity_id
             renamed_this_entry = True
+        _refresh_generated_registry_metadata(registry, entry, entity_entry)
         if not renamed_this_entry:
             room_named_candidates = _room_named_primary_entity_ids(
                 entity_entry,
@@ -681,6 +763,37 @@ def _migrate_entity_registry(
         if existing is None and registry.async_get(registry_entity_id) is not None:
             registry.async_update_entity(registry_entity_id, new_unique_id=new_unique_id)
     _remove_orphan_bridge_device_cards(hass, entry, inventory, registry_entries, removed_entity_ids)
+
+
+def _refresh_generated_registry_metadata(
+    registry: object,
+    entry: SmartThingsWebConfigEntry,
+    entity_entry: object,
+) -> None:
+    """Clear stale generated restore hints through Home Assistant's public API."""
+    if (
+        getattr(entity_entry, "platform", None) != DOMAIN
+        or getattr(entity_entry, "name", None) is not None
+    ):
+        return
+    object_id_base = getattr(entity_entry, "object_id_base", None)
+    suggested_object_id = getattr(entity_entry, "suggested_object_id", None)
+    if suggested_object_id is None:
+        return
+    if not isinstance(object_id_base, str) or not object_id_base.strip():
+        return
+    get_or_create = getattr(registry, "async_get_or_create", None)
+    if not callable(get_or_create):
+        return
+    get_or_create(
+        getattr(entity_entry, "domain", ""),
+        DOMAIN,
+        getattr(entity_entry, "unique_id", ""),
+        config_entry=entry,
+        has_entity_name=True,
+        object_id_base=object_id_base,
+        suggested_object_id=None,
+    )
 
 
 def _remove_orphan_bridge_device_cards(
@@ -939,6 +1052,23 @@ def _room_prefixed_generated_entity_ids(
             candidate = (room_slug, device_name_slug)
             if candidate not in candidate_slugs:
                 candidate_slugs.append(candidate)
+    # The same entity is normally resolved twice: once from its Bridge unique
+    # ID (which knows the SmartThings device name) and once from the HA device
+    # registry UUID (which only knows the room).  Keeping both for the same
+    # room made the name-aware branch preserve/restore the legitimate room
+    # token while the anonymous fallback stripped it on the next pass.  Prefer
+    # the name-aware binding; retain anonymous fallbacks only for distinct
+    # legacy area slugs that cannot be matched to the inventory room.
+    name_aware_room_slugs = {
+        room_slug
+        for room_slug, device_name_slug in candidate_slugs
+        if device_name_slug is not None
+    }
+    candidate_slugs = [
+        (room_slug, device_name_slug)
+        for room_slug, device_name_slug in candidate_slugs
+        if device_name_slug is not None or room_slug not in name_aware_room_slugs
+    ]
     if not any(
         room_slug for room_slug, _device_name_slug in candidate_slugs
     ) and not any(

@@ -164,6 +164,25 @@ class FakeRegistry:
             None,
         )
 
+    def async_get_or_create(
+        self,
+        domain: str,
+        platform: str,
+        unique_id: str,
+        **kwargs: object,
+    ) -> SimpleNamespace:
+        entity_id = self.async_get_entity_id(domain, platform, unique_id)
+        if entity_id is None:
+            raise AssertionError("test registry must not create rows during migration")
+        entry = self.async_get(entity_id)
+        if entry is None:
+            raise AssertionError(entity_id)
+        for field_name, value in kwargs.items():
+            if field_name == "config_entry":
+                continue
+            setattr(entry, field_name, value)
+        return entry
+
     def async_update_entity(
         self,
         entity_id: str,
@@ -922,6 +941,99 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         )
         unsubscribe()
 
+    def test_dynamic_registry_migration_ignores_value_only_inventory_changes(self) -> None:
+        """Do not rescan the whole registry for ordinary pushed state values."""
+        scheduled: list[object] = []
+        delayed: list[object] = []
+        runtime_callbacks: list[object] = []
+        state = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "on",
+            None,
+            "2026-08-28T00:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_switch",
+            "loc_001",
+            "room_living",
+            "Living Switch",
+            "switch",
+            True,
+            states={state.key: state},
+        )
+        runtime = SimpleNamespace(
+            inventory=BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.119",
+                protocol_version="4",
+                locations={"loc_001": "Home"},
+                rooms={"room_living": ("loc_001", "Living")},
+                devices={device.device_id: device},
+            ),
+            subscribe=lambda callback: (
+                runtime_callbacks.append(callback) or (lambda: None)
+            ),
+        )
+        hass = SimpleNamespace(
+            loop=SimpleNamespace(
+                call_soon=lambda callback: scheduled.append(callback),
+                call_later=lambda _delay, callback: (
+                    delayed.append(callback) or SimpleNamespace(cancel=lambda: None)
+                ),
+            )
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_001"},
+            runtime_data=runtime,
+        )
+        migrations: list[int] = []
+        original_migration = integration._migrate_entity_registry
+        integration._migrate_entity_registry = (
+            lambda _hass, _entry, inventory: migrations.append(inventory.sequence)
+        )
+        try:
+            unsubscribe = _subscribe_entity_registry_migration(hass, entry)
+            scheduled.pop(0)()
+            self.assertEqual(migrations, [1])
+
+            runtime.inventory.sequence = 2
+            runtime.inventory.devices[device.device_id].states[state.key] = BridgeState(
+                "main",
+                "switch",
+                "switch",
+                "off",
+                None,
+                "2026-08-28T00:00:01Z",
+            )
+            runtime_callbacks[0]()
+
+            self.assertEqual(scheduled, [])
+            self.assertEqual(migrations, [1])
+
+            added_state = BridgeState(
+                "main",
+                "powerMeter",
+                "power",
+                5,
+                "W",
+                "2026-08-28T00:00:02Z",
+            )
+            runtime.inventory.sequence = 3
+            runtime.inventory.devices[device.device_id].states[
+                added_state.key
+            ] = added_state
+            runtime_callbacks[0]()
+            scheduled.pop(0)()
+
+            self.assertEqual(migrations, [1, 3])
+            unsubscribe()
+        finally:
+            integration._migrate_entity_registry = original_migration
+
     def test_restores_room_token_that_belongs_to_the_smartthings_device_name(self) -> None:
         """Remove only a template room prefix, never the device-name token."""
         state = BridgeState(
@@ -974,6 +1086,141 @@ class EntityRegistryMigrationTests(unittest.TestCase):
                 (
                     "binary_sensor.jaesilsenseo_presence",
                     "binary_sensor.jageunbang_jaesilsenseo_presence",
+                )
+            ],
+        )
+
+    def test_g3_energy_room_cleanup_is_deterministic_from_device_name(self) -> None:
+        """Keep the room once only when it is part of the SmartThings name."""
+        energy = BridgeState(
+            "main",
+            "energyMeter",
+            "energy",
+            100,
+            "Wh",
+            "2026-08-28T00:00:00Z",
+        )
+        cases = (
+            (
+                "dev_named",
+                "Jubang G3 Jeonweon",
+                "sensor.g3_jeonweon_energy",
+                "sensor.jubang_g3_jeonweon_energy",
+            ),
+            (
+                "dev_plain",
+                "G3 Jeonweon",
+                "sensor.jubang_g3_jeonweon_energy",
+                "sensor.g3_jeonweon_energy",
+            ),
+        )
+        for device_id, device_name, initial_entity_id, expected_entity_id in cases:
+            with self.subTest(device_name=device_name):
+                device = BridgeDevice(
+                    device_id,
+                    "loc_001",
+                    "room_kitchen",
+                    device_name,
+                    "outlet",
+                    True,
+                    states={energy.key: energy},
+                )
+                registry = FakeRegistry(
+                    [
+                        self._registry_entry(
+                            initial_entity_id,
+                            "uuid_g3",
+                            domain="sensor",
+                            unique_id=f"{device_id}_main_energyMeter_energy",
+                        )
+                    ]
+                )
+                self.patch_registry(registry)
+                integration.dr.async_get = lambda _hass: SimpleNamespace(
+                    devices=[
+                        SimpleNamespace(
+                            id="uuid_g3",
+                            identifiers={(DOMAIN, device_id)},
+                            area_id=None,
+                        )
+                    ]
+                )
+                inventory = BridgeInventory(
+                    sequence=1,
+                    ready=True,
+                    bridge_version="0.1.119",
+                    protocol_version="4",
+                    locations={"loc_001": "Home"},
+                    rooms={"room_kitchen": ("loc_001", "Jubang")},
+                    devices={device.device_id: device},
+                )
+                entry = SimpleNamespace(
+                    entry_id="entry_001",
+                    data={CONF_LOCATION_ID: "loc_001"},
+                )
+
+                _migrate_entity_registry(object(), entry, inventory)
+                first_pass = list(registry.renamed)
+                _migrate_entity_registry(object(), entry, inventory)
+
+                self.assertEqual(
+                    first_pass,
+                    [(initial_entity_id, expected_entity_id)],
+                )
+                self.assertEqual(registry.renamed, first_pass)
+
+    def test_duplicate_room_template_prefix_is_removed_once_and_stays_removed(self) -> None:
+        """Never recreate the room template after reducing it to the device name."""
+        contact = BridgeState(
+            "main",
+            "contactSensor",
+            "contact",
+            "closed",
+            None,
+            "2026-08-28T00:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_door",
+            "loc_001",
+            "room_bathroom",
+            "Hwajangsil Doeosenseo",
+            "contact_sensor",
+            True,
+            states={contact.key: contact},
+        )
+        registry = FakeRegistry(
+            [
+                entity(
+                    "binary_sensor.hwajangsil_hwajangsil_doeosenseo_contact",
+                    "binary_sensor",
+                    "dev_door_main_contactSensor_contact",
+                )
+            ]
+        )
+        self.patch_registry(registry)
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.119",
+            protocol_version="4",
+            locations={"loc_001": "Home"},
+            rooms={"room_bathroom": ("loc_001", "Hwajangsil")},
+            devices={device.device_id: device},
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_001"},
+        )
+
+        _migrate_entity_registry(object(), entry, inventory)
+        _migrate_entity_registry(object(), entry, inventory)
+
+        self.assertEqual(
+            registry.renamed,
+            [
+                (
+                    "binary_sensor.hwajangsil_hwajangsil_doeosenseo_contact",
+                    "binary_sensor.hwajangsil_doeosenseo_contact",
                 )
             ],
         )
@@ -1039,8 +1286,9 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         )
         self.assertEqual(
             registry_entry.suggested_object_id,
-            "hwajangsil_hwajangsil_doeosenseo_contact_4",
+            None,
         )
+        self.assertEqual(registry_entry.object_id_base, "contact")
 
     def test_preserves_user_named_numbered_id_and_restore_suggestion(self) -> None:
         """Never reinterpret a user-named registry row as generated cleanup."""
