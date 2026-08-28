@@ -1032,19 +1032,26 @@ describe("createBridgeRuntime", () => {
   });
 
   test("serves the Socket.IO binary thumbnail format used by the SmartThings camera page", async () => {
-    const { baseUrl, context } = await startReadyRuntime();
+    const { baseUrl, context, socket } = await startReadyRuntime();
     const token = await exchangeBridgeToken(baseUrl);
     const headers = { authorization: `Bearer ${token}` };
+    const baselineInventory = (await fetch(`${baseUrl}/api/v1/inventory`, { headers }).then(
+      (response) => response.json()
+    )) as { devices: Array<{ id: string }> };
+    const baselineDeviceIds = new Set(baselineInventory.devices.map((device) => device.id));
     const imageUrl =
       "https://mediaserv.media1208.ec2.st-av.net/image?source_id=camera-source&image_id=still-001";
     const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 11, 12, 13, 0xff, 0xd9]);
 
-    await context.cdpSessions[0]?.emit("Network.webSocketFrameReceived", {
-      requestId: "cdp-socket-camera-binary",
-      response: {
-        opcode: 1,
-        payloadData: `435[null,[{"deviceId":"raw-camera-binary","componentId":"main","capabilityId":"imageCapture","attributeName":"image","value":"${imageUrl}"}]]`
-      }
+    await socket.emit("framereceived", {
+      payload: buildDeviceEventFrame({
+        eventId: "evt_camera_binary_001",
+        deviceId: "raw-camera-binary",
+        capability: "imageCapture",
+        attribute: "image",
+        value: imageUrl,
+        stateChange: true
+      })
     });
     await context.cdpSessions[0]?.emit("Network.webSocketFrameSent", {
       requestId: "cdp-socket-camera-binary",
@@ -1065,7 +1072,20 @@ describe("createBridgeRuntime", () => {
       response: { opcode: 2, payloadData: jpeg.toString("base64") }
     });
 
-    const response = await fetchFirstImage(baseUrl, headers);
+    const inventory = (await fetch(`${baseUrl}/api/v1/inventory`, { headers }).then(
+      (response) => response.json()
+    )) as {
+      devices: Array<{ id: string }>;
+    };
+    const cameraDevice = inventory.devices.find(
+      (device) => !baselineDeviceIds.has(device.id)
+    );
+    expect(cameraDevice, JSON.stringify(inventory)).toBeDefined();
+    expect(cameraDevice!.id).toMatch(/^dev_\d{3,32}$/u);
+    const response = await fetch(
+      `${baseUrl}/api/v1/images/${encodeURIComponent(cameraDevice!.id)}`,
+      { headers }
+    );
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("image/jpeg");

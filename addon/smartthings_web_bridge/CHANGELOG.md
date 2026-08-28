@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.125
+
+- Normalize raw camera device IDs through the same redactor and DeviceStore alias generations used by the public inventory, so observed binary thumbnail bytes are cached under the exact `dev_*` ID that Home Assistant requests.
+- Add a runtime regression that discovers the camera's public inventory ID first and requires the corresponding authenticated image endpoint to return the observed JPEG bytes, preventing hidden cache aliases from passing broad endpoint scans.
+
 ## 0.1.124
 
 - Keep the latest raw camera image URL observed from authenticated Socket.IO or Advanced traffic in volatile Bridge memory and use that exact URL for the in-page `api/camera/thumbnail` request.

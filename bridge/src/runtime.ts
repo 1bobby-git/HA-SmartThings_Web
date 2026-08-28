@@ -68,7 +68,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.124";
+const bridgeVersion = "0.1.125";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -129,7 +129,11 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   status.update({ observedDeviceCount: devices.snapshot().devices.length });
   const cameraImages = new CameraImageStore({
     dataDir: paths.dataDir,
-    aliasDeviceId: (rawDeviceId) => aliases.alias("device", rawDeviceId)
+    // Raw camera traffic is observed before the redacted snapshot reaches
+    // DeviceStore. Match the redactor plus DeviceStore normalization so cached
+    // bytes use the exact public device ID exposed by inventory and Home Assistant.
+    aliasDeviceId: (rawDeviceId) =>
+      aliases.alias("device", aliases.alias("device", rawDeviceId))
   });
   cameraImages.observeInventory(devices.snapshot());
   const physicalActionProbe = new PhysicalActionCorrelationProbe();
