@@ -288,7 +288,7 @@ export class DeviceStore {
           ? { controls: [...device.controls.values()].sort(byId).map(cloneControl) }
           : {})
       })),
-      scenes: [...this.#scenes.values()].sort(byId).map((value) => ({ ...value }))
+      scenes: [...this.#scenes.values()].sort(byId).map(cloneScene)
     };
   }
 
@@ -367,7 +367,7 @@ export class DeviceStore {
             locationId,
             name,
             updatedAt: validTimestamp(row.updatedAt ?? row.updated_at ?? row.timestamp ?? row.dateUpdated ?? meta?.dateUpdated),
-            ...(expectedStates.length > 0 ? { expectedStates } : {})
+            ...(expectedStates.length > 0 ? { expectedStates: expectedStates.map(cloneSceneExpectedState) } : {})
           }) || changed;
       }
       return changed;
@@ -756,7 +756,7 @@ export class DeviceStore {
     this.#sequence = inventory.sequence;
     for (const location of inventory.locations) this.#locations.set(location.id, { ...location });
     for (const room of inventory.rooms) this.#rooms.set(room.id, { ...room });
-    for (const scene of inventory.scenes) this.#scenes.set(scene.id, { ...scene });
+    for (const scene of inventory.scenes) this.#scenes.set(scene.id, cloneScene(scene));
     for (const device of inventory.devices) {
       this.#devices.set(device.id, {
         id: device.id,
@@ -1841,6 +1841,17 @@ function cloneControl(control: BridgeDeviceControl): BridgeDeviceControl {
 
 function cloneState(state: BridgeDeviceState): BridgeDeviceState {
   return { ...state, value: jsonValue(state.value) ?? null };
+}
+
+function cloneScene(scene: BridgeScene): BridgeScene {
+  return {
+    ...scene,
+    ...(scene.expectedStates ? { expectedStates: scene.expectedStates.map(cloneSceneExpectedState) } : {})
+  };
+}
+
+function cloneSceneExpectedState(expected: BridgeSceneExpectedState): BridgeSceneExpectedState {
+  return { ...expected, value: jsonValue(expected.value) ?? null };
 }
 
 function byId<T extends { id: string }>(left: T, right: T): number {

@@ -307,7 +307,12 @@ export class SafeCommandService {
       throw commandError(error);
     }
     confirmation.startTimeout(this.options.timeoutMs, this.options.resyncAfterMs);
-    return confirmed(request.clientRequestId, (await confirmation.result).sequence, "device_event");
+    const evidence = await confirmation.result;
+    return confirmed(
+      request.clientRequestId,
+      evidence.sequence,
+      evidence.source === "inventory_snapshot" ? "inventory_snapshot" : "device_event"
+    );
   }
 
   async #executeLocation(
@@ -461,26 +466,60 @@ function waitForSceneExpectedStates(options: {
   afterSequence: number;
   resync: () => Promise<unknown>;
 }): ConfirmationWait {
-  const matchesState = (state: BridgeDeviceState, deviceId: string): boolean =>
-    options.expectedStates.some(
-      (expected) =>
-        expected.deviceId === deviceId &&
-        expected.component === state.component &&
-        expected.capability === state.capability &&
-        expected.attribute === state.attribute &&
-        stateValuesEqual(state.value, expected.value)
-    );
-  const matchesSnapshot = (): boolean =>
-    options.devices.snapshot().devices.some((device) =>
-      device.states.some((state) => matchesState(state, device.id))
-    );
+  const expectedByKey = new Map(options.expectedStates.map((expected) => [sceneExpectedStateKey(expected), expected]));
+  const observed = new Set<string>();
+  const rebuildObservedFromSnapshot = (): boolean => {
+    const snapshot = options.devices.snapshot();
+    observed.clear();
+    for (const expected of expectedByKey.values()) {
+      const matches = snapshot.devices.some((device) =>
+        device.id === expected.deviceId &&
+        device.states.some(
+          (state) =>
+            state.component === expected.component &&
+            state.capability === expected.capability &&
+            state.attribute === expected.attribute &&
+            stateValuesEqual(state.value, expected.value)
+        )
+      );
+      if (matches) observed.add(sceneExpectedStateKey(expected));
+    }
+    return observed.size === expectedByKey.size;
+  };
+  const updateObserved = (state: BridgeDeviceState, deviceId: string): "match" | "mismatch" | "unrelated" => {
+    const key = sceneStateKey(deviceId, state.component, state.capability, state.attribute);
+    const expected = expectedByKey.get(key);
+    if (!expected) return "unrelated";
+    if (stateValuesEqual(state.value, expected.value)) {
+      observed.add(key);
+      return "match";
+    }
+    observed.delete(key);
+    return "mismatch";
+  };
   return waitForPredicate({
     devices: options.devices,
     afterSequence: options.afterSequence,
     resync: options.resync,
-    matches: (event) => event.type === "state" && matchesState(event.state, event.deviceId),
-    matchesSnapshot
+    matches: (event) =>
+      event.type === "inventory"
+        ? rebuildObservedFromSnapshot()
+        : updateObserved(event.state, event.deviceId) === "match" &&
+          observed.size === expectedByKey.size,
+    invalidates: (event) =>
+      event.type === "inventory"
+        ? !rebuildObservedFromSnapshot()
+        : updateObserved(event.state, event.deviceId) === "mismatch",
+    matchesSnapshot: rebuildObservedFromSnapshot
   });
+}
+
+function sceneExpectedStateKey(expected: BridgeSceneExpectedState): string {
+  return sceneStateKey(expected.deviceId, expected.component, expected.capability, expected.attribute);
+}
+
+function sceneStateKey(deviceId: string, component: string, capability: string, attribute: string): string {
+  return `${deviceId}\u0000${component}\u0000${capability}\u0000${attribute}`;
 }
 
 function waitForAnyDeviceEvent(options: {

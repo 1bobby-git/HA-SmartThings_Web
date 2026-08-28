@@ -39,6 +39,7 @@ from .models import (
     IMAGE_ATTRIBUTES,
     SmartThingsWebRuntime,
     button_controls,
+    disambiguated_state_names,
     entity_unique_id,
     firmware_states,
     is_fan_device,
@@ -720,6 +721,13 @@ def _migrate_entity_registry(
         )
         if numbered_entity_id is not None:
             new_entity_id = numbered_entity_id
+        stale_fallback_entity_id = _stale_fallback_generated_entity_id(
+            entity_entry,
+            owner_device,
+            inventory,
+        )
+        if stale_fallback_entity_id is not None:
+            new_entity_id = stale_fallback_entity_id
         renamed_this_entry = False
         if new_entity_id is not None and registry.async_get(new_entity_id) is not None:
             new_entity_id = None
@@ -918,6 +926,20 @@ def _canonical_registry_suggested_object_id(
             if separator and legacy_suffix.isdigit() and int(legacy_suffix) >= 2:
                 return f"{base}_{legacy_suffix}"
         return base
+    state = next(
+        (
+            item
+            for item in getattr(device, "states", {}).values()
+            if entity_unique_id(device_id, item) == unique_id
+        ),
+        None,
+    )
+    if state is not None:
+        return canonical_entity_object_id(
+            inventory,
+            device,
+            _generated_registry_state_name(entity_entry, device, state),
+        )
     return canonical_entity_object_id(
         inventory,
         device,
@@ -1076,6 +1098,78 @@ def _canonical_numbered_generated_entity_id(
     if not collision_suffix.isdigit() or int(collision_suffix) < 2:
         return None
     return f"{domain}.{canonical_object_id}"
+
+
+def _stale_fallback_generated_entity_id(
+    entity_entry: object,
+    device: object | None,
+    inventory: BridgeInventory,
+) -> str | None:
+    """Rebase IDs frozen from ``SmartThings device <id>`` onto the real name."""
+    if device is None or getattr(entity_entry, "name", None) is not None:
+        return None
+    device_id = getattr(device, "device_id", "")
+    fallback_object_id = slugify(f"SmartThings device {device_id}") or None
+    if fallback_object_id is None:
+        return None
+    entity_id = getattr(entity_entry, "entity_id", "")
+    domain, separator, object_id = entity_id.partition(".")
+    if not separator:
+        return None
+    if object_id != fallback_object_id and not object_id.startswith(
+        f"{fallback_object_id}_"
+    ):
+        return None
+    state = next(
+        (
+            item
+            for item in getattr(device, "states", {}).values()
+            if entity_unique_id(device_id, item) == getattr(entity_entry, "unique_id", "")
+        ),
+        None,
+    )
+    if state is not None:
+        object_name = _generated_registry_state_name(entity_entry, device, state)
+        canonical_object_id = canonical_entity_object_id(inventory, device, object_name)
+    else:
+        canonical_object_id = _canonical_registry_suggested_object_id(
+            inventory,
+            device,
+            entity_entry,
+            entity_id,
+        )
+    if not canonical_object_id or canonical_object_id == object_id:
+        return None
+    return f"{domain}.{canonical_object_id}"
+
+
+def _generated_registry_state_name(
+    entity_entry: object,
+    device: object,
+    state: object,
+) -> str:
+    """Return the entity-local name that current setup would suggest."""
+    base = getattr(entity_entry, "object_id_base", None)
+    if not isinstance(base, str) or not base.strip():
+        base = getattr(entity_entry, "original_name", None)
+    if not isinstance(base, str) or not base.strip():
+        base = str(getattr(state, "attribute", ""))
+    base = base.strip()
+    siblings = [
+        item
+        for item in getattr(device, "states", {}).values()
+        if getattr(item, "attribute", None) == getattr(state, "attribute", None)
+    ]
+    names = disambiguated_state_names(
+        [(item, base) for item in siblings],
+        all_states=getattr(device, "states", {}).values(),
+    )
+    name = names.get(getattr(state, "key", ()), base)
+    prefix = f"{base} ("
+    if name.startswith(prefix) and name.endswith(")"):
+        return f"{base} {name[len(prefix):-1]}"
+    return name
+
 
 def _registry_uuid_room_slugs(
     hass: object,

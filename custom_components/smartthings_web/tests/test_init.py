@@ -1415,6 +1415,112 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         )
         self.assertEqual(registry_entry.object_id_base, "contact")
 
+    def test_rebases_stale_fallback_device_ids_to_current_device_name(self) -> None:
+        """Repair IDs frozen before the Bridge learned the SmartThings name."""
+        states = [
+            BridgeState(
+                "home",
+                "presenceSensor",
+                "presence",
+                "present",
+                None,
+                "2026-08-28T06:00:00Z",
+            ),
+            BridgeState(
+                "away",
+                "presenceSensor",
+                "presence",
+                "not present",
+                None,
+                "2026-08-28T06:00:00Z",
+            ),
+            BridgeState(
+                "office",
+                "presenceSensor",
+                "presence",
+                "not present",
+                None,
+                "2026-08-28T06:00:00Z",
+            ),
+            BridgeState(
+                "sleep",
+                "presenceSensor",
+                "presence",
+                "not present",
+                None,
+                "2026-08-28T06:00:00Z",
+            ),
+        ]
+        device = BridgeDevice(
+            "dev_426",
+            "loc_001",
+            "room_family",
+            "Gyeongsugyi S22",
+            "mobile",
+            True,
+            states={state.key: state for state in states},
+        )
+        registry_entry = SimpleNamespace(
+            entity_id="binary_sensor.smartthings_device_dev_426_presence_3",
+            domain="binary_sensor",
+            platform=DOMAIN,
+            unique_id="dev_426_home_presenceSensor_presence",
+            device_id="uuid_phone",
+            name=None,
+            disabled_by=None,
+            original_name="Presence",
+            object_id_base="presence",
+            suggested_object_id="smartthings_device_dev_426_presence_3",
+        )
+        custom_named_entry = SimpleNamespace(
+            entity_id="binary_sensor.smartthings_device_dev_426_presence_custom",
+            domain="binary_sensor",
+            platform=DOMAIN,
+            unique_id="dev_426_away_presenceSensor_presence",
+            device_id="uuid_phone",
+            name="Do not rename",
+            disabled_by=None,
+            original_name="Presence",
+            object_id_base="presence",
+            suggested_object_id="smartthings_device_dev_426_presence_custom",
+        )
+        registry = FakeRegistry([registry_entry, custom_named_entry])
+        self.patch_registry(registry)
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.120",
+            protocol_version="4",
+            locations={"loc_001": "Home"},
+            rooms={"room_family": ("loc_001", "Family")},
+            devices={device.device_id: device},
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_001"},
+        )
+
+        _migrate_entity_registry(object(), entry, inventory)
+        _migrate_entity_registry(object(), entry, inventory)
+
+        self.assertEqual(
+            registry.renamed,
+            [
+                (
+                    "binary_sensor.smartthings_device_dev_426_presence_3",
+                    "binary_sensor.gyeongsugyi_s22_presence_home",
+                )
+            ],
+        )
+        self.assertEqual(
+            registry_entry.suggested_object_id,
+            "gyeongsugyi_s22_presence_home",
+        )
+        self.assertEqual(
+            custom_named_entry.entity_id,
+            "binary_sensor.smartthings_device_dev_426_presence_custom",
+        )
+
     def test_reserved_state_id_does_not_abort_numbered_id_repair(self) -> None:
         """Keep setup running when HA reserves an ID outside the registry."""
         state = BridgeState(

@@ -1343,6 +1343,55 @@ describe("DeviceStore", () => {
     ]);
   });
 
+  test("deep clones scene expected states in snapshots", () => {
+    const store = new DeviceStore();
+    observeSceneSnapshot(store, {
+      sceneId: "identifier_sceneclone",
+      locationId: "loc_001",
+      name: "Clone scene",
+      updatedAt: "2026-08-24T21:01:00.000Z",
+      actions: [
+        {
+          command: {
+            devices: ["dev_001"],
+            commands: [
+              {
+                component: "main",
+                capability: "identifier_switch",
+                command: "on",
+                arguments: []
+              }
+            ]
+          }
+        }
+      ]
+    });
+
+    const snapshot = store.snapshot();
+    const expected = snapshot.scenes[0]?.expectedStates?.[0];
+    expect(expected).toBeDefined();
+    if (!expected) return;
+    expected.value = "off";
+    expected.component = "mutated";
+    snapshot.scenes[0]?.expectedStates?.push({
+      deviceId: "dev_999",
+      component: "main",
+      capability: "identifier_switch",
+      attribute: "switch",
+      value: "off"
+    });
+
+    expect(store.snapshot().scenes[0]?.expectedStates).toEqual([
+      {
+        deviceId: "dev_001",
+        component: "main",
+        capability: "identifier_switch",
+        attribute: "switch",
+        value: "on"
+      }
+    ]);
+  });
+
   test("captures api/location get rows that expose id instead of locationId", () => {
     const store = new DeviceStore();
 
@@ -1532,6 +1581,19 @@ describe("DeviceStore", () => {
 
       const restored = new DeviceStore({ sqlitePath });
 
+      expect(restored.snapshot()).toEqual(beforeRestart);
+      const restoredSnapshot = restored.snapshot();
+      const expected = restoredSnapshot.scenes[0]?.expectedStates?.[0];
+      expect(expected).toBeDefined();
+      if (!expected) return;
+      expected.value = "off";
+      restoredSnapshot.scenes[0]?.expectedStates?.push({
+        deviceId: "dev_999",
+        component: "main",
+        capability: "identifier_switch",
+        attribute: "switch",
+        value: "off"
+      });
       expect(restored.snapshot()).toEqual(beforeRestart);
       restored.close();
     } finally {

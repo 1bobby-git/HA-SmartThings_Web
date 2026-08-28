@@ -1239,6 +1239,217 @@ describe("SafeCommandService", () => {
     })).resolves.toMatchObject({ confirmation: "device_event" });
   });
 
+  test("does not confirm multi-action scenes until every expected state is observed or snapshotted", async () => {
+    const store = readyDeviceStore();
+    const resync = vi.fn(async () => {
+      store.observe(sent('425["find","api/device/status",{}]'));
+      store.observe(
+        received(
+          '435[null,[{"deviceId":"dev_001","locationId":"loc_001","componentId":"main","capabilityId":"identifier_switch","attributeName":"switch","value":"on","unit":null,"timestamp":"2026-08-25T00:00:03Z"},{"deviceId":"dev_002","locationId":"loc_001","componentId":"main","capabilityId":"identifier_audioVolume","attributeName":"volume","value":64,"unit":null,"timestamp":"2026-08-25T00:00:03Z"}]]'
+        )
+      );
+    });
+    observeSceneSnapshot(store, [
+      {
+        command: {
+          devices: ["dev_001", "dev_002"],
+          commands: [
+            {
+              component: "main",
+              capability: "identifier_switch",
+              command: "on",
+              arguments: []
+            },
+            {
+              component: "main",
+              capability: "identifier_audioVolume",
+              command: "setVolume",
+              arguments: [{ integer: 64, type: "integer" }]
+            }
+          ]
+        }
+      }
+    ]);
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: {
+        executeScene: vi.fn(async () => {
+          store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:01Z", "switch", "dev_001")));
+          store.observe(received(deviceEventFrame(64, "2026-08-25T00:00:02Z", "volume", "dev_002", "identifier_audioVolume")));
+        })
+      },
+      timeoutMs: 20,
+      resync
+    });
+
+    await expect(service.execute({
+      targetType: "scene",
+      targetId: "identifier_scene001",
+      command: "execute",
+      arguments: [],
+      clientRequestId: "request_023"
+    })).rejects.toMatchObject({ code: "command_confirmation_timeout" });
+    expect(resync).toHaveBeenCalledOnce();
+  });
+
+  test("accumulates every expected scene state and clears a contradicted observed state", async () => {
+    const store = readyDeviceStore();
+    observeSceneSnapshot(store, [
+      {
+        command: {
+          devices: ["dev_001", "dev_002"],
+          commands: [
+            {
+              component: "main",
+              capability: "identifier_switch",
+              command: "on",
+              arguments: []
+            },
+            {
+              component: "main",
+              capability: "identifier_audioVolume",
+              command: "setVolume",
+              arguments: [{ integer: 64, type: "integer" }]
+            }
+          ]
+        }
+      }
+    ]);
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: {
+        executeScene: vi.fn(async () => {
+          store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:01Z", "switch", "dev_001")));
+          store.observe(received(deviceEventFrame("off", "2026-08-25T00:00:02Z", "switch", "dev_001")));
+          store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:03Z", "switch", "dev_002")));
+          store.observe(received(deviceEventFrame(64, "2026-08-25T00:00:04Z", "volume", "dev_001", "identifier_audioVolume")));
+          store.observe(received(deviceEventFrame(64, "2026-08-25T00:00:05Z", "volume", "dev_002", "identifier_audioVolume")));
+          store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:06Z", "switch", "dev_001")));
+        })
+      },
+      timeoutMs: 1_000,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute({
+      targetType: "scene",
+      targetId: "identifier_scene001",
+      command: "execute",
+      arguments: [],
+      clientRequestId: "request_024"
+    })).resolves.toMatchObject({ confirmation: "device_event" });
+  });
+
+  test("rebuilds scene evidence from inventory before accepting later expected events", async () => {
+    const store = readyDeviceStore();
+    let sequenceAfterB = 0;
+    observeSceneSnapshot(store, [
+      {
+        command: {
+          deviceId: "dev_001",
+          component: "main",
+          capability: "identifier_switch",
+          command: "on",
+          arguments: []
+        }
+      },
+      {
+        command: {
+          deviceId: "dev_001",
+          component: "main",
+          capability: "identifier_audioVolume",
+          command: "setVolume",
+          arguments: [{ integer: 64, type: "integer" }]
+        }
+      }
+    ]);
+    const resync = vi.fn(async () => {
+      store.observe(sent('425["find","api/device/status",{}]'));
+      store.observe(
+        received(
+          '435[null,[{"deviceId":"dev_001","locationId":"loc_001","componentId":"main","capabilityId":"identifier_switch","attributeName":"switch","value":"off","unit":null,"timestamp":"2026-08-25T00:00:02Z"}]]'
+        )
+      );
+      store.observe(received(deviceEventFrame(64, "2026-08-25T00:00:03Z", "volume", "dev_001", "identifier_audioVolume")));
+      sequenceAfterB = store.currentSequence();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:04Z", "switch", "dev_001")));
+    });
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: {
+        executeScene: vi.fn(async () => {
+          store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:01Z", "switch", "dev_001")));
+        })
+      },
+      timeoutMs: 20,
+      resync
+    });
+
+    const result = await service.execute({
+      targetType: "scene",
+      targetId: "identifier_scene001",
+      command: "execute",
+      arguments: [],
+      clientRequestId: "request_026"
+    });
+
+    expect(resync).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ confirmation: "device_event" });
+    expect(result.sequence).toBeGreaterThan(sequenceAfterB);
+  });
+
+  test("confirms multi-action scenes from a full resync snapshot only when every expected state matches", async () => {
+    const store = readyDeviceStore();
+    observeSceneSnapshot(store, [
+      {
+        command: {
+          devices: ["dev_001", "dev_002"],
+          commands: [
+            {
+              component: "main",
+              capability: "identifier_switch",
+              command: "on",
+              arguments: []
+            },
+            {
+              component: "main",
+              capability: "identifier_audioVolume",
+              command: "setVolume",
+              arguments: [{ integer: 64, type: "integer" }]
+            }
+          ]
+        }
+      }
+    ]);
+    const resync = vi.fn(async () => {
+      store.observe(sent('425["find","api/device/status",{}]'));
+      store.observe(
+        received(
+          '435[null,[{"deviceId":"dev_001","locationId":"loc_001","componentId":"main","capabilityId":"identifier_switch","attributeName":"switch","value":"on","unit":null,"timestamp":"2026-08-25T00:00:01Z"},{"deviceId":"dev_001","locationId":"loc_001","componentId":"main","capabilityId":"identifier_audioVolume","attributeName":"volume","value":64,"unit":null,"timestamp":"2026-08-25T00:00:01Z"},{"deviceId":"dev_002","locationId":"loc_001","componentId":"main","capabilityId":"identifier_switch","attributeName":"switch","value":"on","unit":null,"timestamp":"2026-08-25T00:00:01Z"},{"deviceId":"dev_002","locationId":"loc_001","componentId":"main","capabilityId":"identifier_audioVolume","attributeName":"volume","value":64,"unit":null,"timestamp":"2026-08-25T00:00:01Z"}]]'
+        )
+      );
+    });
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: { executeScene: vi.fn(async () => undefined) },
+      timeoutMs: 20,
+      resync
+    });
+
+    await expect(service.execute({
+      targetType: "scene",
+      targetId: "identifier_scene001",
+      command: "execute",
+      arguments: [],
+      clientRequestId: "request_025"
+    })).resolves.toMatchObject({ confirmation: "inventory_snapshot" });
+  });
+
   test("does not confirm scenes from unrelated same-location device traffic", async () => {
     const store = readyDeviceStore();
     observeSceneSnapshot(store, [
@@ -1306,6 +1517,7 @@ describe("SafeCommandService", () => {
       executor: {
         executeScene: vi.fn(async () => {
           store.observe(received(deviceEventFrame(64, "2026-08-25T00:00:01Z", "volume")));
+          store.observe(received(deviceEventFrame("eco", "2026-08-25T00:00:02Z", "thermostatMode", "dev_001", "identifier_thermostatMode")));
         })
       },
       timeoutMs: 1_000,
@@ -1355,6 +1567,7 @@ describe("SafeCommandService", () => {
       executor: {
         executeScene: vi.fn(async () => {
           store.observe(received(deviceEventFrame(64, "2026-08-25T00:00:01Z", "volume", "dev_001", "audioVolume")));
+          store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:02Z", "switch", "dev_001", "switch")));
         })
       },
       timeoutMs: 1_000,

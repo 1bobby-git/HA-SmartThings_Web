@@ -4,11 +4,15 @@
 
 - Confirm SmartThings scene execution only from explicit scene action state expectations parsed from the observed `api/scene` snapshot, instead of accepting any newer same-location device event.
 - Persist sanitized expected scene states across Bridge restarts and fail closed with a confirmation timeout when a scene exposes no safe device/component/capability/value expectation.
+- Require every parsed scene action outcome to match before confirmation, accumulating newer target pushes while clearing an outcome again when a contradictory push arrives.
+- Rebase Home Assistant entity IDs that were frozen from the early fallback name `SmartThings device <id>` onto the current SmartThings device name, including semantic duplicate-state suffixes such as `presence_home`, while preserving user-named registry rows.
 
 ## 0.1.126
 
 - Publish a sanitized `type: "image"` SSE event whenever authenticated camera image cache bytes are atomically persisted, carrying only the public device alias, cache sequence, content type, and capture timestamp.
 - Let Home Assistant image entities rotate their image token from that cache event even when SmartThings image metadata states do not change, while rejecting stale image cache events by sequence and `capturedAt`.
+- Keep observed numeric sliders without explicit range metadata when the matching pushed state is numeric, so conservative Home Assistant ranges can expose controls such as detection frequency and fan speed.
+- Advertise generic media playback only for an observed track control and reject TTS/speech media types before dispatch when SmartThings Web has not exposed a safe text argument shape.
 
 ## 0.1.125
 
