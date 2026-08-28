@@ -147,7 +147,6 @@ class FakeRegistry:
         self.removed: list[str] = []
         self.updated: list[tuple[str, str]] = []
         self.renamed: list[tuple[str, str]] = []
-        self.suggested_updates: list[tuple[str, str | None]] = []
 
     def async_remove(self, entity_id: str) -> None:
         self.removed.append(entity_id)
@@ -171,7 +170,6 @@ class FakeRegistry:
         *,
         new_unique_id: str | None = None,
         new_entity_id: str | None = None,
-        suggested_object_id: str | None | object = ...,
     ) -> None:
         entry = next((e for e in self.entries if e.entity_id == entity_id), None)
         if entry is None:
@@ -182,9 +180,6 @@ class FakeRegistry:
         if new_entity_id is not None:
             entry.entity_id = new_entity_id
             self.renamed.append((entity_id, new_entity_id))
-        if suggested_object_id is not ...:
-            entry.suggested_object_id = suggested_object_id
-            self.suggested_updates.append((entry.entity_id, suggested_object_id))
 
 
 class EntityRegistryMigrationTests(unittest.TestCase):
@@ -983,8 +978,8 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             ],
         )
 
-    def test_reclaims_numbered_id_and_clears_stale_room_prefixed_suggestion(self) -> None:
-        """Deleted reservations must not freeze numbered or duplicated restore IDs."""
+    def test_reclaims_numbered_id_without_private_registry_metadata_mutation(self) -> None:
+        """Use HA's public rename API and let entity registration refresh suggestions."""
         state = BridgeState(
             "main",
             "contactSensor",
@@ -1042,10 +1037,9 @@ class EntityRegistryMigrationTests(unittest.TestCase):
                 )
             ],
         )
-        self.assertIsNone(registry_entry.suggested_object_id)
         self.assertEqual(
-            registry.suggested_updates,
-            [("binary_sensor.hwajangsil_doeosenseo_contact", None)],
+            registry_entry.suggested_object_id,
+            "hwajangsil_hwajangsil_doeosenseo_contact_4",
         )
 
     def test_preserves_user_named_numbered_id_and_restore_suggestion(self) -> None:
@@ -1097,7 +1091,6 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         )
 
         self.assertEqual(registry.renamed, [])
-        self.assertEqual(registry.suggested_updates, [])
         self.assertEqual(registry_entry.suggested_object_id, "my_bathroom_contact_4")
 
     def test_observed_refresh_reuses_id_freed_by_synthetic_refresh_cleanup(self) -> None:

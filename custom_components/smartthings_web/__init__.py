@@ -615,27 +615,18 @@ def _migrate_entity_registry(
         renamed_this_entry = False
         if new_entity_id is not None and registry.async_get(new_entity_id) is not None:
             new_entity_id = None
-        clear_suggested_object_id = bool(
-            owner_device is not None
-            and getattr(entity_entry, "name", None) is None
-            and getattr(entity_entry, "object_id_base", None)
-            and getattr(entity_entry, "suggested_object_id", None) is not None
-        )
         if (
-            (new_entity_id is not None or clear_suggested_object_id)
+            new_entity_id is not None
             and registry.async_get(registry_entity_id) is not None
         ):
-            update_kwargs: dict[str, object] = {}
-            if new_entity_id is not None:
-                update_kwargs["new_entity_id"] = new_entity_id
-            if clear_suggested_object_id:
-                update_kwargs["suggested_object_id"] = None
-            registry.async_update_entity(registry_entity_id, **update_kwargs)
-            if new_entity_id is not None:
-                current_entity_ids.discard(registry_entity_id)
-                current_entity_ids.add(new_entity_id)
-                registry_entity_id = new_entity_id
-                renamed_this_entry = True
+            registry.async_update_entity(
+                registry_entity_id,
+                new_entity_id=new_entity_id,
+            )
+            current_entity_ids.discard(registry_entity_id)
+            current_entity_ids.add(new_entity_id)
+            registry_entity_id = new_entity_id
+            renamed_this_entry = True
         if not renamed_this_entry:
             room_named_candidates = _room_named_primary_entity_ids(
                 entity_entry,
