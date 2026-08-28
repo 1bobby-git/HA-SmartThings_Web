@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.123
+
+- Request Home Camera still-image thumbnails through the already authenticated SmartThings web page's observed `api/camera/thumbnail` service, then keep using the existing Socket.IO binary-frame observer to persist only validated image bytes and metadata.
+- Validate the observed media URL against the existing HTTPS SmartThings/Samsung media allowlist and return only constant request outcomes from the page, without exporting or replaying Bearer tokens, cookies, CSRF values, response bodies, or signed URLs.
+- Prioritize camera detail discovery ahead of the general bounded sweep so images are available promptly after login, reconnect, or Bridge restart without adding SmartThings state polling.
+
 ## 0.1.122
 
 - Reserve canonical primary entity IDs for devices whose actual SmartThings name contains the numeric suffix. When an exact-room device holds `media_player.geosil_4` only as Home Assistant's fourth collision, it is safely moved to the next free generated ID so the device actually named `거실 4` can reclaim `media_player.geosil_4`.

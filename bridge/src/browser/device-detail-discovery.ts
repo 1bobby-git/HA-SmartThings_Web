@@ -7,6 +7,7 @@ interface DeviceDetailInspector {
     locationNames?: Readonly<Record<string, string>>;
     roomName?: string;
     detailSettleMs?: number;
+    cameraImageUrl?: string;
   }): Promise<void>;
 }
 
@@ -65,12 +66,16 @@ export class DeviceDetailDiscovery {
       const roomName = device.roomId
         ? inventory.rooms.find((room) => room.id === device.roomId)?.name
         : undefined;
+      const cameraImageUrl = isCameraImageDevice(device)
+        ? observedCameraImageUrl(device)
+        : undefined;
       await this.options.inspector.inspectDeviceDetails({
         deviceName: device.name,
         locationId: device.locationId,
         locationNames,
         ...(roomName ? { roomName } : {}),
-        ...(isCameraImageDevice(device) ? { detailSettleMs: 5_000 } : {})
+        ...(isCameraImageDevice(device) ? { detailSettleMs: 5_000 } : {}),
+        ...(cameraImageUrl ? { cameraImageUrl } : {})
       });
       this.#lastFailure = undefined;
       return "inspected";
@@ -124,15 +129,15 @@ function isRefreshControl(control: NonNullable<BridgeDevice["controls"]>[number]
 const refreshDetailAttributes = new Set(["battery", "contact", "signalMetrics"]);
 
 function inspectionPriority(device: BridgeDevice): number {
+  if (isCameraImageDevice(device)) {
+    return -1;
+  }
   if (!hasActionableControl(device)) {
     const valuePriority = refreshDetailValuePriority(device);
     if (valuePriority !== undefined) {
       return valuePriority;
     }
     return 3;
-  }
-  if (isCameraImageDevice(device)) {
-    return 4;
   }
   return 5;
 }
@@ -176,4 +181,11 @@ function isCameraImageDevice(device: BridgeDevice): boolean {
     (["clip", "stream"] as const).some((attribute) => attributes.has(attribute)) &&
     (["captureTime", "image"] as const).some((attribute) => attributes.has(attribute))
   );
+}
+
+function observedCameraImageUrl(device: BridgeDevice): string | undefined {
+  const imageState = device.states.find(
+    (state) => state.attribute === "image" && typeof state.value === "string"
+  );
+  return typeof imageState?.value === "string" ? imageState.value : undefined;
 }

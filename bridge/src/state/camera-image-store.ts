@@ -72,7 +72,7 @@ export class CameraImageStore {
         decoded.ackId !== undefined &&
         typeof decoded.args[1] === "string"
       ) {
-        const imageUrl = safeImageUrl(decoded.args[1]);
+        const imageUrl = safeCameraImageUrl(decoded.args[1]);
         const alias = imageUrl
           ? this.#imageUrlDevices.get(imageUrl)
           : this.#safeAlias(decoded.args[1]);
@@ -83,7 +83,7 @@ export class CameraImageStore {
     if (direction !== "received") return;
     for (const reference of findImageReferences(decoded)) {
       const alias = this.#safeAlias(reference.rawDeviceId);
-      const url = safeImageUrl(reference.url);
+      const url = safeCameraImageUrl(reference.url);
       if (alias && url) this.#imageUrlDevices.set(url, alias);
     }
     if (decoded.kind === "binary_ack" && decoded.ackId !== undefined) {
@@ -144,7 +144,7 @@ export class CameraImageStore {
       if (!DEVICE_ALIAS.test(device.id)) continue;
       for (const state of device.states) {
         if (state.attribute !== "image" || typeof state.value !== "string") continue;
-        const url = safeImageUrl(state.value);
+        const url = safeCameraImageUrl(state.value);
         if (!url) continue;
         this.#imageUrlDevices.set(url, device.id);
         this.#download(device.id, url);
@@ -208,7 +208,7 @@ export class CameraImageStore {
   }
 
   async #downloadAndPersist(deviceId: string, rawUrl: string): Promise<void> {
-    const url = safeImageUrl(rawUrl);
+    const url = safeCameraImageUrl(rawUrl);
     if (!url) return;
     const response = await this.#fetchImage(url, {
       headers: { accept: "image/avif,image/webp,image/png,image/jpeg" },
@@ -304,7 +304,7 @@ async function readBoundedResponseBody(response: Response, maxBytes: number): Pr
   return byteLength === 0 ? undefined : Buffer.concat(chunks, byteLength);
 }
 
-function safeImageUrl(value: string): string | undefined {
+export function safeCameraImageUrl(value: string): string | undefined {
   try {
     const url = new URL(value);
     if (url.protocol !== "https:" || url.username || url.password) return undefined;
@@ -421,7 +421,8 @@ function findAdvancedImageUrls(value: unknown, keyHint?: string, depth = 0): str
   const record = value as Record<string, unknown>;
   const attribute = readString(record.attributeName ?? record.attribute) ?? keyHint;
   const directValue = readString(record.value);
-  const directUrl = attribute === "image" && directValue ? safeImageUrl(directValue) : undefined;
+  const directUrl =
+    attribute === "image" && directValue ? safeCameraImageUrl(directValue) : undefined;
   const nestedUrls = Object.entries(record).flatMap(([key, nested]) =>
     findAdvancedImageUrls(nested, key, depth + 1)
   );

@@ -110,7 +110,7 @@ describe("DeviceDetailDiscovery", () => {
     });
   });
 
-  test("still inspects camera image devices after refresh-worthy value-only devices", async () => {
+  test("prioritizes camera image devices before the general detail sweep", async () => {
     const inspected: string[] = [];
     const inspectDeviceDetails = vi.fn(async ({ deviceName }: { deviceName: string }) => {
       inspected.push(deviceName);
@@ -124,7 +124,7 @@ describe("DeviceDetailDiscovery", () => {
 
     expect(await discovery.runOne()).toBe("inspected");
     expect(await discovery.runOne()).toBe("inspected");
-    expect(inspected).toEqual(["거실창문센서", "Home camera"]);
+    expect(inspected).toEqual(["Home camera", "거실창문센서"]);
   });
 
   test("pauses while runtime or the physical-action probe forbids extra pages", async () => {
@@ -240,7 +240,9 @@ describe("DeviceDetailDiscovery", () => {
       deviceName: "Home camera",
       locationId: "loc_001",
       locationNames: { loc_001: "Home" },
-      detailSettleMs: 5_000
+      detailSettleMs: 5_000,
+      cameraImageUrl:
+        "https://mediaserv.media1203.ec2.st-av.net/image?source_id=camera&image_id=still"
     });
   });
 
@@ -320,7 +322,8 @@ function cameraInventory(): BridgeInventory {
             component: "main",
             capability: "videoCapture",
             attribute: "image",
-            value: null,
+            value:
+              "https://mediaserv.media1203.ec2.st-av.net/image?source_id=camera&image_id=still",
             unit: null,
             updatedAt: null
           }

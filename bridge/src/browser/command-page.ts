@@ -1,4 +1,5 @@
 import type { BrowserPageLike, KeeperPageManager } from "./keeper-page.js";
+import { safeCameraImageUrl } from "../state/camera-image-store.js";
 
 interface CommandLocatorLike {
   click(options?: { timeout?: number }): Promise<unknown>;
@@ -385,6 +386,7 @@ export class SmartThingsWebUiCommandExecutor {
     locationNames?: Readonly<Record<string, string>>;
     roomName?: string;
     detailSettleMs?: number;
+    cameraImageUrl?: string;
   }): Promise<void> {
     if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
     const preemption = createBackgroundPreemption();
@@ -422,6 +424,7 @@ export class SmartThingsWebUiCommandExecutor {
     locationNames?: Readonly<Record<string, string>>;
     roomName?: string;
     detailSettleMs?: number;
+    cameraImageUrl?: string;
   }): Promise<void> {
     // Navigation only: device state and controls still come from observed Socket.IO data.
     const page = await this.openLocationPage(input.locationId, input.locationNames);
@@ -434,8 +437,14 @@ export class SmartThingsWebUiCommandExecutor {
       // observation for devices that already had an exact overview card.
       await openDeviceDetail(page, input.deviceName, input.roomName);
       if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
+      const thumbnailResult = input.cameraImageUrl
+        ? await requestCameraThumbnail(page, input.cameraImageUrl)
+        : undefined;
       await page.waitForTimeout?.(input.detailSettleMs ?? 1_500);
       if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
+      if (thumbnailResult && thumbnailResult !== "requested") {
+        throw new Error(`camera_thumbnail_${thumbnailResult}`);
+      }
     } finally {
       if (this.#backgroundInspectionPage === page) this.#backgroundInspectionPage = undefined;
       await page.close().catch(() => undefined);
@@ -968,6 +977,130 @@ export class SmartThingsWebUiCommandExecutor {
     } catch {
       // Diagnostics must never change command behavior.
     }
+  }
+}
+
+async function requestCameraThumbnail(
+  page: CommandPageLike,
+  observedImageUrl: string
+): Promise<"requested" | "unavailable" | "invalid" | "failed"> {
+  const imageUrl = safeCameraImageUrl(observedImageUrl);
+  if (!imageUrl) return "invalid";
+  if (!page.evaluate) return "unavailable";
+  try {
+    return await page.evaluate(
+      async (imageUrl): Promise<"requested" | "unavailable" | "failed"> => {
+        type WebpackRequire = {
+          c?: Record<string, { exports?: unknown }>;
+        };
+        type ThumbnailService = {
+          get?: (id: string, params: Record<string, never>) => unknown;
+        };
+        type NativeClient = {
+          service?: (name: string) => ThumbnailService;
+        };
+        const pageWindow = window as typeof window &
+          Record<PropertyKey, unknown> & {
+            webpackChunk_smartthings_cake?: Array<unknown>;
+          };
+        const serviceSymbol = Symbol.for(
+          "smartthings_web_bridge.api_camera_thumbnail_service"
+        );
+        let service = thumbnailService(pageWindow[serviceSymbol]);
+        service ??= findThumbnailService(
+          pageWindow[Symbol.for("smartthings_web_bridge.cake_client")]
+        );
+        if (!service) {
+          const chunks = pageWindow.webpackChunk_smartthings_cake;
+          if (!Array.isArray(chunks)) return "unavailable";
+          let runtimeRequire: WebpackRequire | undefined;
+          try {
+            chunks.push([
+              [
+                `smartthings_web_bridge_camera_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`
+              ],
+              {},
+              (candidate: WebpackRequire) => {
+                runtimeRequire = candidate;
+              }
+            ]);
+          } catch {
+            return "unavailable";
+          }
+          for (const module of Object.values(runtimeRequire?.c ?? {})) {
+            service = findThumbnailService(module?.exports);
+            if (service) break;
+          }
+        }
+        if (!service?.get) return "unavailable";
+        try {
+          Object.defineProperty(pageWindow, serviceSymbol, {
+            configurable: true,
+            value: service
+          });
+        } catch {
+          // A cache miss only affects speed; the authenticated request remains available.
+        }
+        try {
+          await withTimeout(Promise.resolve(service.get(imageUrl, {})), 5_000);
+          return "requested";
+        } catch {
+          return "failed";
+        }
+
+        function findThumbnailService(exports: unknown): ThumbnailService | undefined {
+          let candidates: unknown[];
+          try {
+            candidates = isPageRecord(exports)
+              ? [exports, ...Object.values(exports)]
+              : [exports];
+          } catch {
+            return undefined;
+          }
+          for (const candidate of candidates) {
+            try {
+              if (!isPageRecord(candidate) || typeof candidate.service !== "function") continue;
+              const possible = (candidate as NativeClient).service?.(
+                "api/camera/thumbnail"
+              );
+              if (possible && typeof possible.get === "function") return possible;
+            } catch {
+              // Search loaded clients only; never initialize or export authentication material.
+            }
+          }
+          return undefined;
+        }
+
+        function thumbnailService(value: unknown): ThumbnailService | undefined {
+          return isPageRecord(value) && typeof value.get === "function"
+            ? (value as ThumbnailService)
+            : undefined;
+        }
+
+        function isPageRecord(value: unknown): value is Record<string, unknown> {
+          return typeof value === "object" && value !== null && !Array.isArray(value);
+        }
+
+        async function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
+          return await new Promise<T>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error("timeout")), milliseconds);
+            promise.then(
+              (value) => {
+                clearTimeout(timeout);
+                resolve(value);
+              },
+              (error: unknown) => {
+                clearTimeout(timeout);
+                reject(error);
+              }
+            );
+          });
+        }
+      },
+      imageUrl
+    );
+  } catch {
+    return "failed";
   }
 }
 

@@ -1571,6 +1571,125 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(page.close).toHaveBeenCalledTimes(1);
   });
 
+  test("requests the observed camera thumbnail through the authenticated Cake client", async () => {
+    const page = new FakeCommandPage() as FakeCommandPage & {
+      evaluate: <Result, Argument>(
+        pageFunction: (argument: Argument) => Result | Promise<Result>,
+        argument: Argument
+      ) => Promise<Result>;
+    };
+    const get = vi.fn(async () => ({ ok: true }));
+    page.evaluate = capturedCameraClientEvaluate(get);
+    page.waitForTimeout = vi.fn(async () => undefined);
+    const manager = { openCommandPage: vi.fn(async () => page) };
+    const executor = new SmartThingsWebUiCommandExecutor(() => manager);
+    const cameraImageUrl =
+      "https://mediaserv.media1203.ec2.st-av.net/image?source_id=camera&image_id=still";
+
+    await executor.inspectDeviceDetails({
+      deviceName: "Home camera",
+      locationId: "loc_001",
+      detailSettleMs: 5_000,
+      cameraImageUrl
+    });
+
+    expect(get).toHaveBeenCalledWith(cameraImageUrl, {});
+    expect(page.waitForTimeout).toHaveBeenCalledWith(5_000);
+    expect(page.close).toHaveBeenCalledTimes(1);
+  });
+
+  test("recovers the camera thumbnail service from the loaded webpack cache", async () => {
+    const page = new FakeCommandPage() as FakeCommandPage & {
+      evaluate: <Result, Argument>(
+        pageFunction: (argument: Argument) => Result | Promise<Result>,
+        argument: Argument
+      ) => Promise<Result>;
+    };
+    const get = vi.fn(async () => ({ ok: true }));
+    page.evaluate = webpackCameraClientEvaluate(get);
+    page.waitForTimeout = vi.fn(async () => undefined);
+    const manager = { openCommandPage: vi.fn(async () => page) };
+    const executor = new SmartThingsWebUiCommandExecutor(() => manager);
+    const cameraImageUrl =
+      "https://mediaserv.media1203.ec2.st-av.net/image?source_id=camera&image_id=still";
+
+    await executor.inspectDeviceDetails({
+      deviceName: "Home camera",
+      locationId: "loc_001",
+      detailSettleMs: 5_000,
+      cameraImageUrl
+    });
+
+    expect(get).toHaveBeenCalledWith(cameraImageUrl, {});
+    expect(page.waitForTimeout).toHaveBeenCalledWith(5_000);
+    expect(page.close).toHaveBeenCalledTimes(1);
+  });
+
+  test("rejects unavailable camera thumbnail clients with a constant safe error", async () => {
+    const page = new FakeCommandPage() as FakeCommandPage & {
+      evaluate: <Result, Argument>(
+        pageFunction: (argument: Argument) => Result | Promise<Result>,
+        argument: Argument
+      ) => Promise<Result>;
+    };
+    page.evaluate = async (pageFunction, argument) => {
+      const previousWindow = (globalThis as { window?: unknown }).window;
+      (globalThis as { window?: unknown }).window = {};
+      try {
+        return await pageFunction(argument);
+      } finally {
+        (globalThis as { window?: unknown }).window = previousWindow;
+      }
+    };
+    page.waitForTimeout = vi.fn(async () => undefined);
+    const manager = { openCommandPage: vi.fn(async () => page) };
+    const executor = new SmartThingsWebUiCommandExecutor(() => manager);
+
+    await expect(
+      executor.inspectDeviceDetails({
+        deviceName: "Home camera",
+        locationId: "loc_001",
+        detailSettleMs: 5_000,
+        cameraImageUrl:
+          "https://mediaserv.media1203.ec2.st-av.net/image?source_id=camera&image_id=still"
+      })
+    ).rejects.toThrow("camera_thumbnail_unavailable");
+
+    expect(page.waitForTimeout).toHaveBeenCalledWith(5_000);
+    expect(page.close).toHaveBeenCalledTimes(1);
+  });
+
+  test("rejects untrusted camera thumbnail URLs before they reach the page", async () => {
+    const page = new FakeCommandPage() as FakeCommandPage & {
+      evaluate: <Result, Argument>(
+        pageFunction: (argument: Argument) => Result | Promise<Result>,
+        argument: Argument
+      ) => Promise<Result>;
+    };
+    const evaluate = vi.fn();
+    page.evaluate = async (pageFunction, argument) => {
+      evaluate(pageFunction, argument);
+      return undefined as never;
+    };
+    page.waitForTimeout = vi.fn(async () => undefined);
+    const manager = { openCommandPage: vi.fn(async () => page) };
+    const executor = new SmartThingsWebUiCommandExecutor(() => manager);
+
+    await expect(
+      executor.inspectDeviceDetails({
+        deviceName: "Home camera",
+        locationId: "loc_001",
+        detailSettleMs: 5_000,
+        cameraImageUrl:
+          "https://user:raw-secret@mediaserv.media1203.ec2.st-av.net/image"
+      })
+    ).rejects.toThrow("camera_thumbnail_invalid");
+
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(page.waitForTimeout).toHaveBeenCalledWith(5_000);
+    expect(page.close).toHaveBeenCalledTimes(1);
+  });
+
   test("tries the overview before the brittle room route during background discovery", async () => {
     const page = new FakeCommandPage();
     page.waitForTimeout = vi.fn(async () => undefined);
@@ -3696,6 +3815,67 @@ function capturedNativeClientEvaluate(
     };
     (globalThis as { window?: unknown }).window = {
       [Symbol.for("smartthings_web_bridge.cake_client")]: client
+    };
+    try {
+      return await pageFunction(argument);
+    } finally {
+      (globalThis as { window?: unknown }).window = previousWindow;
+    }
+  };
+}
+
+function capturedCameraClientEvaluate(
+  get: ReturnType<typeof vi.fn>
+): <Result, Argument>(
+  pageFunction: (argument: Argument) => Result | Promise<Result>,
+  argument: Argument
+) => Promise<Result> {
+  return async (pageFunction, argument) => {
+    const previousWindow = (globalThis as { window?: unknown }).window;
+    const client = {
+      service: vi.fn((name: string) => {
+        expect(name).toBe("api/camera/thumbnail");
+        return { get };
+      })
+    };
+    (globalThis as { window?: unknown }).window = {
+      [Symbol.for("smartthings_web_bridge.cake_client")]: client
+    };
+    try {
+      return await pageFunction(argument);
+    } finally {
+      (globalThis as { window?: unknown }).window = previousWindow;
+    }
+  };
+}
+
+function webpackCameraClientEvaluate(
+  get: ReturnType<typeof vi.fn>
+): <Result, Argument>(
+  pageFunction: (argument: Argument) => Result | Promise<Result>,
+  argument: Argument
+) => Promise<Result> {
+  return async (pageFunction, argument) => {
+    const previousWindow = (globalThis as { window?: unknown }).window;
+    const client = {
+      service: vi.fn((name: string) => {
+        expect(name).toBe("api/camera/thumbnail");
+        return { get };
+      })
+    };
+    const runtimeRequire = {
+      c: {
+        feathers: { exports: { A: client } }
+      }
+    };
+    const chunks: unknown[] = [];
+    chunks.push = ((entry: unknown[]) => {
+      const runtime = entry[2] as ((require: typeof runtimeRequire) => void) | undefined;
+      runtime?.(runtimeRequire);
+      return 1;
+    }) as typeof chunks.push;
+    (globalThis as { window?: unknown }).window = {
+      webpackChunk_smartthings_cake: chunks
     };
     try {
       return await pageFunction(argument);
