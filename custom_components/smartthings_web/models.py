@@ -759,6 +759,39 @@ MEDIA_ATTRIBUTES = {
     "volume",
 }
 
+MEDIA_DEVICE_TYPES = {
+    "ai_speaker",
+    "ai_speaker_lux_one",
+    "audio",
+    "av_receiver",
+    "media_player",
+    "soundbar",
+    "speaker",
+    "tv",
+}
+
+MEDIA_IDENTITY_TERMS = {
+    "ai speaker",
+    "audio",
+    "galaxy home mini",
+    "home mini",
+    "media player",
+    "soundbar",
+    "speaker",
+    "갤럭시 홈 미니",
+    "미디어",
+    "사운드바",
+    "스피커",
+    "홈 미니",
+}
+
+MEDIA_PLAYBACK_ATTRIBUTES = {
+    "audioTrackData",
+    "playbackStatus",
+    "supportedPlaybackCommands",
+    "supportedTrackControlCommands",
+}
+
 READ_ONLY_POWER_DEVICE_TYPES = {
     "clothing_care",
     "cooktop",
@@ -881,7 +914,12 @@ def is_media_device(device: BridgeDevice) -> bool:
     """Return whether a device has media-player state."""
     if _device_has_explicit_non_media_accessory_identity(device):
         return False
-    return _device_has_audio_volume_evidence(device) and _device_has_audio_mute_evidence(
+    if not (
+        _device_has_audio_volume_evidence(device)
+        and _device_has_audio_mute_evidence(device)
+    ):
+        return False
+    return _device_has_media_identity(device) or _device_has_media_playback_evidence(
         device
     )
 
@@ -1845,6 +1883,43 @@ def _device_has_explicit_non_media_accessory_identity(device: BridgeDevice) -> b
     if asset_type in NON_MEDIA_ACCESSORY_ASSET_TYPES:
         return True
     return device_type == "bled2d" and bool(asset_type)
+
+
+def _device_has_media_identity(device: BridgeDevice) -> bool:
+    device_type = _normalized_device_type(device.device_type)
+    asset_type = (
+        _normalized_device_type(device.presentation.asset_type)
+        if device.presentation
+        else ""
+    )
+    if device_type in MEDIA_DEVICE_TYPES or asset_type in MEDIA_DEVICE_TYPES:
+        return True
+    haystack = " ".join(
+        value.lower().replace("_", " ")
+        for value in (device.name, device.device_type, asset_type)
+        if isinstance(value, str)
+    )
+    return any(term in haystack for term in MEDIA_IDENTITY_TERMS)
+
+
+def _device_has_media_playback_evidence(device: BridgeDevice) -> bool:
+    if device_has_any_state(device, MEDIA_PLAYBACK_ATTRIBUTES):
+        return True
+    return any(
+        safe_observed_control(control)
+        and (
+            control.attribute in MEDIA_PLAYBACK_ATTRIBUTES
+            or control.capability in MEDIA_PLAYBACK_ATTRIBUTES
+            or _control_mentions(
+                control,
+                "playback",
+                "track",
+                "media",
+                "audioTrack",
+            )
+        )
+        for control in device.controls.values()
+    )
 
 
 def is_readonly_appliance_switch(device: BridgeDevice) -> bool:

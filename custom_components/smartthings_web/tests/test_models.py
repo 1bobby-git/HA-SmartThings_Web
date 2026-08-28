@@ -1156,6 +1156,57 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertEqual([control.control_id for control in number_controls(device)], ["alarm_volume"])
         self.assertFalse(sensor_state_owned_by_primary_domain(device, volume))
 
+    def test_plain_audio_accessory_volume_and_mute_is_not_media_player(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        device.name = "아리"
+        device.device_type = "accessory"
+        device.presentation = BridgeDevicePresentation(asset_type="accessory")
+        volume = BridgeState(
+            "main",
+            "audioVolume",
+            "volume",
+            6,
+            None,
+            "2026-08-24T21:10:00Z",
+        )
+        mute = BridgeState(
+            "main",
+            "audioMute",
+            "mute",
+            "unmuted",
+            None,
+            "2026-08-24T21:10:00Z",
+        )
+        device.states = {volume.key: volume, mute.key: mute}
+
+        self.assertFalse(is_media_device(device))
+
+    def test_galaxy_home_mini_identity_keeps_volume_and_mute_as_media_player(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        device.name = "갤럭시 홈 미니"
+        device.device_type = "ai_speaker_lux_one"
+        volume = BridgeState(
+            "main",
+            "audioVolume",
+            "volume",
+            20,
+            "%",
+            "2026-08-24T21:10:00Z",
+        )
+        mute = BridgeState(
+            "main",
+            "audioMute",
+            "mute",
+            "unmuted",
+            None,
+            "2026-08-24T21:10:00Z",
+        )
+        device.states = {volume.key: volume, mute.key: mute}
+
+        self.assertTrue(is_media_device(device))
+
     def test_refresh_controls_only_use_button_controls_with_refresh_mention(self) -> None:
         battery_state = BridgeState(
             "main",

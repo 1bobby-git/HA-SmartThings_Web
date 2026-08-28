@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.133
+
+- Require speaker/media identity or playback-track evidence in addition to volume and mute before creating a Home Assistant `media_player`, so accessory devices such as `아리` are not misclassified while Galaxy Home Mini and speaker devices remain media players.
+
 ## 0.1.132
 
 - Reject stale pushed state events before advancing the local inventory sequence, so an old `updatedAt` cannot mask the next valid event or prevent an immediate snapshot resynchronization.

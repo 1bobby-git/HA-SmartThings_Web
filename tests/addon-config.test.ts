@@ -10,20 +10,23 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("packages stale-event and camera sensor recovery as version 0.1.132", () => {
+  test("packages stale-event and accessory media classification as version 0.1.133", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.132");
+    expect(config.version).toBe("0.1.133");
     expect(config.homeassistant_api).toBe(true);
-    expect(packageMetadata.version).toBe("0.1.132");
-    expect(protocolMetadata.bridge_version).toBe("0.1.132");
+    expect(packageMetadata.version).toBe("0.1.133");
+    expect(protocolMetadata.bridge_version).toBe("0.1.133");
     expect(protocolMetadata.protocol_version).toBe(4);
-    expect(runtime).toContain('const bridgeVersion = "0.1.132";');
+    expect(runtime).toContain('const bridgeVersion = "0.1.133";');
     expect(runtime).not.toContain("confirmationStabilityMs: 500");
+    expect(changelog).toContain("## 0.1.133");
+    expect(changelog).toContain("volume and mute");
+    expect(changelog).toContain("Galaxy Home Mini");
     expect(changelog).toContain("## 0.1.132");
     expect(changelog).toContain("stale pushed state events");
     expect(changelog).toContain("signed camera media URLs");
