@@ -415,6 +415,9 @@ export class DeviceStore {
           }
           changed = true;
         }
+        for (const control of actionControls(source.actions ?? source.action)) {
+          changed = setActionControlIfChanged(device.controls, control) || changed;
+        }
       }
       return changed;
     }
@@ -447,9 +450,13 @@ export class DeviceStore {
         const state = stateFromSnapshot(row, this.#identifierRole);
         const deviceId = safeId(row.deviceId, "dev");
         const locationId = safeId(row.locationId, "loc");
-        if (!state || !deviceId || !locationId) continue;
+        const controls = actionControls(row.action);
+        if ((!state && controls.length === 0) || !deviceId || !locationId) continue;
         const device = this.#ensureDevice(deviceId, locationId);
-        changed = this.#setState(device, state) || changed;
+        if (state) changed = this.#setState(device, state) || changed;
+        for (const control of controls) {
+          changed = setActionControlIfChanged(device.controls, control) || changed;
+        }
       }
       return changed;
     }
@@ -1344,6 +1351,71 @@ function controlFromSwatch(row: Record<string, unknown>): BridgeDeviceControl | 
     max: nested?.max ?? nested?.maximum ?? nested?.maxValue,
     step: nested?.step ?? nested?.interval ?? nested?.increment
   });
+}
+
+function actionControls(value: unknown): BridgeDeviceControl[] {
+  const records = Array.isArray(value) ? value.map(asRecord) : [asRecord(value)];
+  const grouped = new Map<string, { input: Record<string, unknown>; commands: string[] }>();
+  for (const action of records) {
+    if (!action) continue;
+    const command = readString(action.command);
+    if (command !== "on" && command !== "off") continue;
+    const component = readString(action.componentId ?? action.component);
+    const capability = readString(action.capabilityId ?? action.capability);
+    const attribute = readString(action.attributeName ?? action.attribute);
+    if (attribute !== "switch") continue;
+    const key = `${component ?? ""}\u0000${capability ?? ""}\u0000${attribute}`;
+    const present = grouped.get(key);
+    if (present) {
+      if (!present.commands.includes(command)) present.commands.push(command);
+      continue;
+    }
+    grouped.set(key, {
+      input: {
+        id: `action:${component}:${capability}:${attribute}`,
+        kind: "toggle",
+        label: action.label ?? "Power",
+        component,
+        capability,
+        attribute
+      },
+      commands: [command]
+    });
+  }
+  const controls: BridgeDeviceControl[] = [];
+  for (const item of grouped.values()) {
+    const commandSet = new Set(item.commands);
+    const control = controlFromParts({
+      ...item.input,
+      commands: ["on", "off"].filter((command) => commandSet.has(command))
+    });
+    if (control) controls.push(control);
+  }
+  return controls;
+}
+
+function setActionControlIfChanged(
+  controls: Map<string, BridgeDeviceControl>,
+  control: BridgeDeviceControl
+): boolean {
+  const current = controls.get(control.id);
+  if (!current || !control.id.startsWith("action:")) {
+    return setIfChanged(controls, control.id, control);
+  }
+  const observedCommands = new Set([
+    ...(current.commands ?? []),
+    ...(control.commands ?? [])
+  ]);
+  const commands = ["on", "off"].filter((command) => observedCommands.has(command));
+  const merged = {
+    ...control,
+    label:
+      control.label === "Power" && current.label !== "Power"
+        ? current.label
+        : control.label,
+    ...(commands.length > 0 ? { commands } : {})
+  };
+  return setIfChanged(controls, control.id, merged);
 }
 
 function controlFromParts(input: Record<string, unknown> | undefined): BridgeDeviceControl | null {

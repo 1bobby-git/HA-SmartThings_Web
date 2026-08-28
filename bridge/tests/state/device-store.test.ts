@@ -797,6 +797,219 @@ describe("DeviceStore", () => {
     expect(listener).toHaveBeenCalledWith(expect.objectContaining({ type: "inventory" }));
   });
 
+  test("preserves observed switch actions from device cards as toggle controls", () => {
+    const store = new DeviceStore();
+    observeSnapshotState(store, {
+      componentId: "main",
+      capabilityId: "switch",
+      attributeName: "switch",
+      value: "off",
+      timestamp: "2026-08-24T22:59:02.000Z"
+    });
+    observeSnapshotState(store, {
+      componentId: "main",
+      capabilityId: "contactSensor",
+      attributeName: "contact",
+      value: "closed",
+      timestamp: "2026-08-24T22:59:02.000Z"
+    });
+
+    observeDeviceSnapshot(store, {
+      deviceId: "dev_001",
+      locationId: "loc_001",
+      roomId: "identifier_room",
+      deviceName: "Home Assistant 연동 스위치",
+      deviceTypeData: { type: "NONE" },
+      lottieData: {
+        icon: "https://app-asset.samsungiotcloud.com/assets/icons/published/switch/switch.json"
+      },
+      actions: [
+        {
+          capabilityId: "switch",
+          attributeName: "switch",
+          componentId: "main",
+          value: "off",
+          command: "on"
+        },
+        {
+          capabilityId: "switch",
+          attributeName: "switch",
+          componentId: "main",
+          value: "on",
+          command: "off"
+        }
+      ]
+    });
+
+    expect(store.snapshot().devices[0]).toMatchObject({
+      type: "switch",
+      states: expect.arrayContaining([
+        expect.objectContaining({ capability: "switch", attribute: "switch" }),
+        expect.objectContaining({ capability: "contactSensor", attribute: "contact" })
+      ]),
+      controls: [
+        {
+          id: "action:main:switch:switch",
+          kind: "toggle",
+          label: "Power",
+          component: "main",
+          capability: "switch",
+          attribute: "switch",
+          commands: ["on", "off"]
+        }
+      ]
+    });
+  });
+
+  test("preserves only the currently observed status switch action", () => {
+    const store = new DeviceStore();
+    store.observe(sentFrame('421["find","api/device/status",{}]'));
+
+    store.observe(
+      receivedFrame(
+        `431${JSON.stringify([
+          null,
+          [
+            {
+              deviceId: "dev_001",
+              locationId: "loc_001",
+              componentId: "main",
+              capabilityId: "switch",
+              attributeName: "switch",
+              value: "off",
+              timestamp: "2026-08-24T22:59:02.000Z",
+              action: {
+                componentId: "main",
+                capabilityId: "switch",
+                attributeName: "switch",
+                command: "on"
+              }
+            }
+          ]
+        ])}`
+      )
+    );
+
+    expect(store.snapshot().devices[0]?.controls).toEqual([
+      {
+        id: "action:main:switch:switch",
+        kind: "toggle",
+        label: "Power",
+        component: "main",
+        capability: "switch",
+        attribute: "switch",
+        commands: ["on"]
+      }
+    ]);
+  });
+
+  test("preserves a status switch action even when the row only has display state", () => {
+    const store = new DeviceStore();
+    store.observe(sentFrame('421["find","api/device/status",{}]'));
+
+    store.observe(
+      receivedFrame(
+        `431${JSON.stringify([
+          null,
+          [
+            {
+              deviceId: "dev_001",
+              locationId: "loc_001",
+              componentId: "main",
+              capabilityId: "switch",
+              attributeName: "switch",
+              state: {
+                label: "꺼짐",
+                active: false,
+                type: "inactivated",
+                icon: "https://client.smartthings.com/icons/oneui/oic.d.switch/off"
+              },
+              action: {
+                componentId: "main",
+                capabilityId: "switch",
+                attributeName: "switch",
+                command: "on"
+              }
+            }
+          ]
+        ])}`
+      )
+    );
+
+    expect(store.snapshot().devices[0]?.controls).toEqual([
+      {
+        id: "action:main:switch:switch",
+        kind: "toggle",
+        label: "Power",
+        component: "main",
+        capability: "switch",
+        attribute: "switch",
+        commands: ["on"]
+      }
+    ]);
+  });
+
+  test("accumulates both switch directions only after each action is observed", () => {
+    const store = new DeviceStore();
+    store.observe(sentFrame('421["find","api/device/status",{}]'));
+    store.observe(
+      receivedFrame(
+        `431${JSON.stringify([
+          null,
+          [
+            {
+              deviceId: "dev_001",
+              locationId: "loc_001",
+              componentId: "main",
+              capabilityId: "switch",
+              attributeName: "switch",
+              value: "off",
+              timestamp: "2026-08-24T22:59:02.000Z",
+              action: {
+                componentId: "main",
+                capabilityId: "switch",
+                attributeName: "switch",
+                command: "on"
+              }
+            }
+          ]
+        ])}`
+      )
+    );
+    store.observe(sentFrame('422["find","api/device/status",{}]'));
+    store.observe(
+      receivedFrame(
+        `432${JSON.stringify([
+          null,
+          [
+            {
+              deviceId: "dev_001",
+              locationId: "loc_001",
+              componentId: "main",
+              capabilityId: "switch",
+              attributeName: "switch",
+              value: "on",
+              timestamp: "2026-08-24T22:59:03.000Z",
+              action: {
+                componentId: "main",
+                capabilityId: "switch",
+                attributeName: "switch",
+                command: "off"
+              }
+            }
+          ]
+        ])}`
+      )
+    );
+
+    expect(store.snapshot().devices[0]?.controls).toEqual([
+      expect.objectContaining({
+        id: "action:main:switch:switch",
+        commands: ["on", "off"]
+      })
+    ]);
+  });
+
   test("creates a refresh button only from an observed Advanced refresh capability", () => {
     const store = new DeviceStore({
       normalizeAdvancedAlias: (kind, value) => {

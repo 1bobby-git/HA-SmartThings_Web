@@ -15,6 +15,7 @@ from .models import (
     BridgeDevice,
     BridgeState,
     SmartThingsWebRuntime,
+    control_supports_command,
     control_kind,
     safe_observed_control,
     safe_generic_toggle_control,
@@ -45,15 +46,20 @@ async def async_setup_entry(
                     and state.attribute not in {"switch", "mute", "windowShade"}
                     and safe_generic_toggle_control(control)
                 )
-                if (
-                    control is not None
-                    and safe_observed_control(control)
-                    and (primary_switch or generic_toggle)
-                    and unique_id not in known
-                ):
+                if (primary_switch or generic_toggle) and unique_id not in known:
+                    observed_control = (
+                        control
+                        if control is not None and safe_observed_control(control)
+                        else None
+                    )
                     known.add(unique_id)
                     entities.append(
-                        SmartThingsWebSwitch(runtime, device, state, control)
+                        SmartThingsWebSwitch(
+                            runtime,
+                            device,
+                            state,
+                            observed_control,
+                        )
                     )
         if entities:
             async_add_entities(entities)
@@ -82,9 +88,15 @@ class SmartThingsWebSwitch(SmartThingsWebEntity, SwitchEntity):
 
     @property
     def available(self) -> bool:
-        """Stay available only while the exact safe toggle still exists."""
+        """Expose pushed switch state even when its write control is absent."""
         device = self.runtime.inventory.devices.get(self.device_id)
         state = device.states.get(self.state_key) if device is not None else None
+        if (
+            device is not None
+            and state is not None
+            and control_kind(device, state) == "switch"
+        ):
+            return super().available
         control = (
             toggle_control_for_state(device, state)
             if device is not None and state is not None
@@ -130,6 +142,13 @@ class SmartThingsWebSwitch(SmartThingsWebEntity, SwitchEntity):
         )
         if control is None or not safe_observed_control(control):
             raise HomeAssistantError("SmartThings Web switch has no observed toggle control")
+        if control.commands and not control_supports_command(control, command):
+            current_is_on = self.is_on
+            if current_is_on is (command == "on"):
+                return
+            raise HomeAssistantError(
+                "SmartThings Web switch has not observed the requested toggle command"
+            )
         try:
             await self.runtime.client.async_execute_command(
                 target_type="device",

@@ -157,6 +157,37 @@ class SmartThingsWebBinarySensorTests(unittest.TestCase):
 
         self.assertEqual(candidates, [(power, BINARY_STATES["switch"])])
 
+    def test_plain_switch_keeps_contact_as_its_auxiliary_binary_sensor(self) -> None:
+        power = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "off",
+            None,
+            "2026-08-29T00:00:00Z",
+        )
+        contact = BridgeState(
+            "main",
+            "contactSensor",
+            "contact",
+            "closed",
+            None,
+            "2026-08-29T00:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_560",
+            "loc_001",
+            None,
+            "Home Assistant 연동 스위치",
+            "signage",
+            True,
+            states={power.key: power, contact.key: contact},
+        )
+
+        candidates = _binary_sensor_candidates(device)
+
+        self.assertEqual(candidates, [(contact, BINARY_STATES["contact"])])
+
 
 class SmartThingsWebBinarySensorSetupTests(unittest.IsolatedAsyncioTestCase):
     """Keep setup-time duplicate naming aligned with registry migration."""

@@ -835,13 +835,26 @@ function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest)
       }
       if (dangerousControl(control)) throw new SafeCommandError("unsupported_command");
       const hasExplicitCommand = Boolean(control.command || (control.commands?.length ?? 0) > 0);
-      if (hasExplicitCommand && !controlSupportsCommand(control, request.command, false)) {
-        throw new SafeCommandError("unsupported_command");
+      const supportsRequestedCommand =
+        !hasExplicitCommand || controlSupportsCommand(control, request.command, false);
+      if (!supportsRequestedCommand) {
+        const current = findState(
+          device,
+          control.component,
+          control.capability,
+          attribute
+        );
+        const desired = desiredValueFor(request.command, request.arguments, current);
+        if (!current || desired === undefined || !stateValuesEqual(current.value, desired)) {
+          throw new SafeCommandError("unsupported_command");
+        }
       }
       // Cake's captured toggle command exchanges use the canonical on/off token
       // even when the detail swatch omits a commands array. The observed toggle
       // identity still gates this path, so no unobserved writable control opens.
-      const nativeCommand = observedCommandFor(control, request.command) ?? request.command;
+      const nativeCommand = supportsRequestedCommand
+        ? observedCommandFor(control, request.command) ?? request.command
+        : undefined;
       return {
         ...request,
         attribute,

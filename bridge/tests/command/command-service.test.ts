@@ -233,6 +233,51 @@ describe("SafeCommandService", () => {
     });
   });
 
+  test("permits only an observed action direction except for a current-state no-op", async () => {
+    const store = readyDeviceStore(false);
+    observeDeviceDetails(store, [
+      detailSwatch("TOGGLE", "toggle", {
+        swatchId: "action:main:identifier_switch:switch",
+        label: "Power",
+        commands: ["on"]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async (input) => {
+        store.observe(
+          received(
+            deviceEventFrame(
+              input.command,
+              "2026-08-25T00:00:01Z"
+            )
+          )
+        );
+      })
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 1_000,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute(command("off", "request_action_noop_off"))
+    ).resolves.toMatchObject({ status: "already_confirmed" });
+    expect(executor.executeDeviceAction).not.toHaveBeenCalled();
+
+    await expect(
+      service.execute(command("on", "request_action_observed_on"))
+    ).resolves.toMatchObject({ status: "confirmed" });
+    expect(executor.executeDeviceAction).toHaveBeenCalledTimes(1);
+
+    await expect(
+      service.execute(command("off", "request_action_unseen_off"))
+    ).rejects.toMatchObject({ code: "unsupported_command" });
+    expect(executor.executeDeviceAction).toHaveBeenCalledTimes(1);
+  });
+
   test("deduplicates identical client request ids and rejects conflicting reuse", async () => {
     const store = readyDeviceStore();
     const executor: SafeCommandExecutor = {
