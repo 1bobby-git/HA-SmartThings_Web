@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.113
+
+- Replace the Home Assistant entity-registry feedback listener with bounded settling retries, preventing a registry feedback loop from retriggering cleanup and rotating generated IDs through numeric suffixes during startup.
+- Preserve observed Refresh controls while removing synthetic duplicates, and immediately reuse an entity ID released earlier in the same atomic migration pass.
+- Keep Socket.IO/SSE push as the primary state path and the same-session Advanced status read as an event-driven one-shot supplement; periodic SmartThings state polling remains disabled.
+
 ## 0.1.112
 
 - Keep alias cleanup compatible with HAOS's small temporary filesystem: remove mandatory startup `VACUUM`, commit the legacy transient-alias deletion and migration marker in one logical cleanup transaction, and let SQLite reuse freed pages without blocking Bridge startup.

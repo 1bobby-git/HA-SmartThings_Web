@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -38,6 +37,7 @@ from .models import (
     FIRMWARE_ATTRIBUTES,
     IMAGE_ATTRIBUTES,
     SmartThingsWebRuntime,
+    button_controls,
     entity_unique_id,
     firmware_states,
     is_fan_device,
@@ -152,34 +152,51 @@ def _subscribe_entity_registry_migration(
 ) -> object:
     """Repair generated entity IDs after dynamic platform discovery settles."""
     scheduled = False
+    active = True
+    delayed_handles: list[object] = []
     runtime = entry.runtime_data
 
     def run_migration() -> None:
         nonlocal scheduled
         scheduled = False
+        if not active:
+            return
         _migrate_entity_registry(hass, entry, runtime.inventory)
 
     def schedule_migration() -> None:
         nonlocal scheduled
-        if scheduled:
+        if not active or scheduled:
             return
         scheduled = True
         hass.loop.call_soon(run_migration)
 
-    unsubscribe_inventory = runtime.subscribe(schedule_migration)
-    unsubscribe_registry = None
-    listen = getattr(getattr(hass, "bus", None), "async_listen", None)
-    if callable(listen):
-        unsubscribe_registry = listen(
-            getattr(er, "EVENT_ENTITY_REGISTRY_UPDATED", "entity_registry_updated"),
-            lambda _event: schedule_migration(),
-        )
-    schedule_migration()
+    def schedule_settled_migrations() -> None:
+        """Run once now and twice after dynamic entity discovery can settle."""
+        for handle in delayed_handles:
+            cancel = getattr(handle, "cancel", None)
+            if callable(cancel):
+                cancel()
+        delayed_handles.clear()
+        schedule_migration()
+        call_later = getattr(hass.loop, "call_later", None)
+        if callable(call_later):
+            for delay in (0.5, 2.0):
+                handle = call_later(delay, schedule_migration)
+                if handle is not None:
+                    delayed_handles.append(handle)
+
+    unsubscribe_inventory = runtime.subscribe(schedule_settled_migrations)
+    schedule_settled_migrations()
 
     def unsubscribe() -> None:
+        nonlocal active
+        active = False
         unsubscribe_inventory()
-        if callable(unsubscribe_registry):
-            unsubscribe_registry()
+        for handle in delayed_handles:
+            cancel = getattr(handle, "cancel", None)
+            if callable(cancel):
+                cancel()
+        delayed_handles.clear()
 
     return unsubscribe
 
@@ -404,6 +421,8 @@ def _migrate_entity_registry(
         for state in device.states.values():
             expected_uids.add(entity_unique_id(device.device_id, state))
         expected_uids.add(f"{device.device_id}_refresh")
+        for control in button_controls(device):
+            expected_uids.add(f"{device.device_id}_button_{control.control_id}")
         for control in number_controls(device):
             expected_uids.add(f"{device.device_id}_number_{control.control_id}")
         if is_fan_device(device):
@@ -417,6 +436,15 @@ def _migrate_entity_registry(
 
     stale_duplicate_rows: list[object] = []
     removed_entity_ids: set[str] = set()
+
+    def remove_registry_entity(entity_id: str) -> None:
+        """Remove one row and release its ID for this same migration pass."""
+        if registry.async_get(entity_id) is None:
+            return
+        registry.async_remove(entity_id)
+        removed_entity_ids.add(entity_id)
+        current_entity_ids.discard(entity_id)
+
     for entity_entry in registry_entries:
         if entity_entry.platform != DOMAIN:
             continue
@@ -449,10 +477,8 @@ def _migrate_entity_registry(
             and "_number_" not in entity_uid
         ):
             stale_duplicate_rows.append(entity_entry)
-            removed_entity_ids.add(entity_entry.entity_id)
     for entity_entry in stale_duplicate_rows:
-        registry.async_remove(entity_entry.entity_id)
-        current_entity_ids.discard(entity_entry.entity_id)
+        remove_registry_entity(entity_entry.entity_id)
 
     for entity_entry in registry_entries:
         if entity_entry.platform != DOMAIN:
@@ -466,43 +492,43 @@ def _migrate_entity_registry(
             entity_entry.domain == Platform.SENSOR
             and entity_entry.unique_id in stale_firmware_sensor_ids
         ):
-            registry.async_remove(entity_entry.entity_id)
+            remove_registry_entity(entity_entry.entity_id)
             continue
         if (
             entity_entry.domain == Platform.SENSOR
             and entity_entry.unique_id in stale_event_sensor_ids
         ):
-            registry.async_remove(entity_entry.entity_id)
+            remove_registry_entity(entity_entry.entity_id)
             continue
         if (
             entity_entry.domain == Platform.SENSOR
             and entity_entry.unique_id in stale_null_sensor_ids
         ):
-            registry.async_remove(entity_entry.entity_id)
+            remove_registry_entity(entity_entry.entity_id)
             continue
         if (
             entity_entry.domain == Platform.UPDATE
             and entity_entry.unique_id in stale_null_update_ids
         ):
-            registry.async_remove(entity_entry.entity_id)
+            remove_registry_entity(entity_entry.entity_id)
             continue
         if (
             entity_entry.domain == Platform.SENSOR
             and entity_entry.unique_id in stale_primary_sensor_ids
         ):
-            registry.async_remove(entity_entry.entity_id)
+            remove_registry_entity(entity_entry.entity_id)
             continue
         if (
             entity_entry.domain == Platform.BUTTON
             and entity_entry.unique_id in synthetic_refresh_ids
         ):
-            registry.async_remove(entity_entry.entity_id)
+            remove_registry_entity(entity_entry.entity_id)
             continue
         if (
             entity_entry.domain == Platform.NUMBER
             and entity_entry.unique_id in stale_registry_number_ids
         ):
-            registry.async_remove(entity_entry.entity_id)
+            remove_registry_entity(entity_entry.entity_id)
             continue
         if (
             entity_entry.domain == Platform.NUMBER
@@ -513,7 +539,7 @@ def _migrate_entity_registry(
                 active_number_ids,
             )
         ):
-            registry.async_remove(entity_entry.entity_id)
+            remove_registry_entity(entity_entry.entity_id)
             continue
         if entity_entry.domain == Platform.NUMBER and entity_entry.unique_id in duplicate_number_ids:
             new_unique_id = old_to_new[entity_entry.unique_id]
@@ -521,22 +547,22 @@ def _migrate_entity_registry(
             if existing is None:
                 registry.async_update_entity(entity_entry.entity_id, new_unique_id=new_unique_id)
             else:
-                registry.async_remove(entity_entry.entity_id)
+                remove_registry_entity(entity_entry.entity_id)
             continue
         if entity_entry.domain == Platform.BINARY_SENSOR and entity_entry.unique_id in switch_ids:
-            registry.async_remove(entity_entry.entity_id)
+            remove_registry_entity(entity_entry.entity_id)
             continue
         if (
             entity_entry.domain == Platform.SWITCH
             and entity_entry.unique_id in primary_domain_switch_ids
         ):
-            registry.async_remove(entity_entry.entity_id)
+            remove_registry_entity(entity_entry.entity_id)
             continue
         if (
             entity_entry.domain == Platform.FAN
             and _stale_fan_unique_id(entity_entry.unique_id, current_device_ids, current_fan_ids)
         ):
-            registry.async_remove(entity_entry.entity_id)
+            remove_registry_entity(entity_entry.entity_id)
             continue
         if (
             entity_entry.domain == Platform.MEDIA_PLAYER
@@ -547,7 +573,7 @@ def _migrate_entity_registry(
                 current_media_ids,
             )
         ):
-            registry.async_remove(entity_entry.entity_id)
+            remove_registry_entity(entity_entry.entity_id)
             continue
         if (
             entity_entry.domain == Platform.IMAGE
@@ -558,7 +584,7 @@ def _migrate_entity_registry(
                 current_image_ids,
             )
         ):
-            registry.async_remove(entity_entry.entity_id)
+            remove_registry_entity(entity_entry.entity_id)
             continue
         if (
             entity_entry.domain == Platform.SENSOR
@@ -568,7 +594,7 @@ def _migrate_entity_registry(
                 current_image_ids,
             )
         ):
-            registry.async_remove(entity_entry.entity_id)
+            remove_registry_entity(entity_entry.entity_id)
             continue
         new_entity_id = _deduplicated_generated_entity_id(
             entity_entry,
@@ -789,9 +815,9 @@ def _room_prefixed_generated_entity_ids(
     name once carried the room prefix keep stale IDs like
     switch.deiteorum_status_home even after inventory names are corrected.
     Only this integration's own entities for known devices of the configured
-    location qualify, user renames are respected, and when the exact target
-    is already occupied (for example by another integration), numbered
-    fallbacks follow Home Assistant's own convention.
+    location qualify and user renames are respected. When the exact target is
+    already occupied (for example by another integration), the current ID is
+    retained instead of rotating through numbered fallbacks.
     """
     unique_id = getattr(entity_entry, "unique_id", "")
     candidate_slugs: list[str] = []
@@ -816,13 +842,6 @@ def _room_prefixed_generated_entity_ids(
     object_id = getattr(entity_entry, "entity_id", "").partition(".")[2]
     original_entity_id = getattr(entity_entry, "entity_id", "")
     candidates: list[str] = []
-    # Also collapse a stale numeric suffix now that its base name may be free
-    # again (e.g. status_home_2 -> status_home) after duplicate rows vanished.
-    number_match = re.fullmatch(r"([a-z0-9_]+?)_(\d)", object_id)
-    if number_match and number_match.group(1):
-        base = number_match.group(1)
-        candidates.append(f"{domain_part}.{base}")
-        candidates.extend(f"{domain_part}.{base}_{i}" for i in range(2, 10) if i != int(number_match.group(2)))
     for room_slug in candidate_slugs:
         room_prefix = f"{room_slug}_"
         if room_prefix == "_" or not object_id.startswith(room_prefix):
@@ -831,7 +850,6 @@ def _room_prefixed_generated_entity_ids(
         if not rest:
             continue
         candidates.append(f"{domain_part}.{rest}")
-        candidates.extend(f"{domain_part}.{rest}_{i}" for i in range(2, 10))
     seen: set[str] = set()
     ordered_unique: list[str] = []
     for candidate in candidates:
