@@ -530,19 +530,33 @@ def _migrate_entity_registry(
         removed_entity_ids.add(entity_id)
         current_entity_ids.discard(entity_id)
 
+    owner_device_cache: dict[str, object | None] = {}
+
+    def owner_device_for(entity_entry: object) -> object | None:
+        """Resolve the Bridge owner for this exact registry row."""
+        entity_uid = getattr(entity_entry, "unique_id", "")
+        if entity_uid in owner_device_cache:
+            return owner_device_cache[entity_uid]
+        owner_device = next(
+            (
+                device
+                for device in inventory.devices.values()
+                if device.location_id == entry.data[CONF_LOCATION_ID]
+                and (
+                    entity_uid == device.device_id
+                    or entity_uid.startswith(device.device_id + "_")
+                )
+            ),
+            None,
+        )
+        owner_device_cache[entity_uid] = owner_device
+        return owner_device
+
     for entity_entry in registry_entries:
         if entity_entry.platform != DOMAIN:
             continue
         entity_uid = entity_entry.unique_id
-        owner_device = next(
-            (
-                d
-                for d in inventory.devices.values()
-                if d.location_id == entry.data[CONF_LOCATION_ID]
-                and (entity_uid == d.device_id or entity_uid.startswith(d.device_id + "_"))
-            ),
-            None,
-        )
+        owner_device = owner_device_for(entity_entry)
         if (
             owner_device is not None
             and entity_uid not in expected_uids
@@ -572,6 +586,7 @@ def _migrate_entity_registry(
             # Already removed by the stale-duplicate pre-pass; the snapshot
             # list still carries it, and updating a removed row would crash.
             continue
+        owner_device = owner_device_for(entity_entry)
         registry_entity_id = entity_entry.entity_id
         if (
             entity_entry.domain == Platform.SENSOR

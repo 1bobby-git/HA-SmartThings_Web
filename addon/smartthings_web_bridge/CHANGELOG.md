@@ -7,6 +7,7 @@
 - Refreshes stale Restore entity ID metadata through Home Assistant's public registry API by clearing the old full `suggested_object_id` and preserving the local `object_id_base`, so restoring returns to the same single-room canonical ID instead of recreating `{room}_{room}_{device}`.
 - Prefers the name-aware Bridge binding over the anonymous HA device-registry fallback for the same room, preventing generated IDs from alternating between room-prefixed and room-free forms across migration passes.
 - Skips full entity-registry migration for ordinary value/timestamp-only inventory updates while retaining bounded settling whenever a device, state, control, room, or entity-value topology actually changes.
+- Resolves the owning Bridge device independently for every registry row, so a numbered ID such as `binary_sensor.hwajangsil_doeosenseo_contact_4` is reclaimed correctly even when hundreds of unrelated SmartThings Web entities follow it in Home Assistant's registry.
 
 ## 0.1.118
 

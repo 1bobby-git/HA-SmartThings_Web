@@ -1244,6 +1244,23 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             True,
             states={state.key: state},
         )
+        other_state = BridgeState(
+            "main",
+            "energyMeter",
+            "energy",
+            12.5,
+            "kWh",
+            "2026-08-28T06:00:00Z",
+        )
+        other_device = BridgeDevice(
+            "dev_g3",
+            "loc_001",
+            "room_kitchen",
+            "Jubang G3 Jeonweon",
+            "outlet",
+            True,
+            states={other_state.key: other_state},
+        )
         registry_entry = SimpleNamespace(
             entity_id="binary_sensor.hwajangsil_doeosenseo_contact_4",
             domain="binary_sensor",
@@ -1256,7 +1273,26 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             object_id_base="contact",
             suggested_object_id="hwajangsil_hwajangsil_doeosenseo_contact_4",
         )
-        registry = FakeRegistry([registry_entry])
+        registry = FakeRegistry(
+            [
+                registry_entry,
+                # Keep another SmartThings Web device last. The numbered-ID
+                # repair must resolve each row's owner instead of reusing the
+                # last owner left behind by the stale-row pre-pass.
+                SimpleNamespace(
+                    entity_id="sensor.jubang_g3_jeonweon_energy",
+                    domain="sensor",
+                    platform=DOMAIN,
+                    unique_id="dev_g3_main_energyMeter_energy",
+                    device_id="uuid_g3",
+                    name=None,
+                    disabled_by=None,
+                    original_name="Energy",
+                    object_id_base="energy",
+                    suggested_object_id=None,
+                ),
+            ]
+        )
         self.patch_registry(registry)
         inventory = BridgeInventory(
             sequence=1,
@@ -1264,8 +1300,14 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             bridge_version="0.1.119",
             protocol_version="4",
             locations={"loc_001": "Home"},
-            rooms={"room_bathroom": ("loc_001", "Hwajangsil")},
-            devices={device.device_id: device},
+            rooms={
+                "room_bathroom": ("loc_001", "Hwajangsil"),
+                "room_kitchen": ("loc_001", "Jubang"),
+            },
+            devices={
+                device.device_id: device,
+                other_device.device_id: other_device,
+            },
         )
         entry = SimpleNamespace(
             entry_id="entry_001",
