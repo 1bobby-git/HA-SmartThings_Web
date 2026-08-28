@@ -93,6 +93,10 @@ bridge_client_module.ReadOnlyBridgeClient = ReadOnlyBridgeClient  # type: ignore
 bridge_client_module.bridge_error_message = bridge_error_message  # type: ignore[attr-defined]
 sys.modules["smartthings_web.bridge_client"] = bridge_client_module
 
+sys.modules.pop("smartthings_web.button", None)
+if hasattr(package, "button"):
+    delattr(package, "button")
+
 from smartthings_web.button import SmartThingsWebButton, async_setup_entry  # noqa: E402
 from smartthings_web.models import BridgeControl, BridgeDevice, BridgeInventory, SmartThingsWebRuntime  # noqa: E402
 
