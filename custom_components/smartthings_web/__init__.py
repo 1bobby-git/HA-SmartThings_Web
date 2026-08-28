@@ -898,8 +898,10 @@ def _room_named_primary_entity_ids(
     Earlier releases replaced devices named exactly like their room with a
     localized type label. Existing primary entities therefore froze as opaque
     IDs such as ``media_player.3_4``. Only automatic primary-domain rows whose
-    stable unique ID proves the owning device are eligible. Once an ID is one
-    of the room-slug candidates, later migration passes leave it untouched.
+    stable unique ID proves the owning device are eligible. A legacy numeric
+    collision suffix is tried first, so ``3_4`` becomes ``geosil_4`` instead
+    of being renumbered to the first free candidate. Once an ID is one of the
+    room-slug candidates, later migration passes leave it untouched.
     """
     if getattr(entity_entry, "name", None) is not None:
         return []
@@ -918,9 +920,24 @@ def _room_named_primary_entity_ids(
     room_slug = _exact_room_named_device_slug(entity_entry, inventory)
     if device is None or room_slug is None:
         return []
-    base = f"{domain}.{room_slug}"
-    candidates = [base, *(f"{base}_{index}" for index in range(2, 100))]
     original_entity_id = getattr(entity_entry, "entity_id", "")
+    base = f"{domain}.{room_slug}"
+    object_id = original_entity_id.partition(".")[2]
+    suffix_parts = object_id.rsplit("_", 1)
+    preserved_suffix = (
+        int(suffix_parts[1])
+        if len(suffix_parts) == 2
+        and suffix_parts[1].isdigit()
+        and int(suffix_parts[1]) >= 2
+        else None
+    )
+    preferred = f"{base}_{preserved_suffix}" if preserved_suffix is not None else base
+    candidates = [preferred]
+    candidates.extend(
+        candidate
+        for candidate in [base, *(f"{base}_{index}" for index in range(2, 100))]
+        if candidate != preferred
+    )
     if original_entity_id in candidates:
         return []
     return [candidate for candidate in candidates if candidate not in current_entity_ids]

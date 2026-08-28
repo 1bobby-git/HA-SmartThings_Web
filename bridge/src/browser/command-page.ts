@@ -458,11 +458,11 @@ export class SmartThingsWebUiCommandExecutor {
     await this.#invalidateWarmPage();
     const page = await this.openLocationPage(input.locationId, input.locationNames);
     try {
-      let scene = page.getByRole("button", { name: exactName(input.sceneName) });
-      if ((await scene.count()) !== 1) {
-        scene = page.getByRole("button").filter({
-          has: page.getByText(input.sceneName, { exact: true })
-        });
+      let scene = await exactSceneControl(page, input.sceneName);
+      if (!scene) {
+        const automationsUrl = new URL("/installedapps", page.url()).toString();
+        await page.goto(automationsUrl, { waitUntil: "domcontentloaded" });
+        scene = await waitForExactSceneControl(page, input.sceneName);
       }
       await clickExactlyOne(scene);
     } finally {
@@ -1609,6 +1609,46 @@ function labelVariants(label: string): string[] {
     variants.push(...(localized[value.trim().toLowerCase()] ?? []));
   }
   return [...new Set(variants)];
+}
+
+async function exactSceneControl(
+  page: CommandControlSurface,
+  sceneName: string
+): Promise<CommandLocatorLike | undefined> {
+  const named = page.getByRole("button", { name: exactName(sceneName) });
+  const namedCount = await named.count();
+  if (namedCount > 1) throw new Error("command_control_ambiguous");
+  if (namedCount === 1) return named;
+
+  const labeled = page.getByRole("button").filter({
+    has: page.getByText(sceneName, { exact: true })
+  });
+  const labeledCount = await labeled.count();
+  if (labeledCount > 1) throw new Error("command_control_ambiguous");
+  return labeledCount === 1 ? labeled : undefined;
+}
+
+async function waitForExactSceneControl(
+  page: CommandControlSurface,
+  sceneName: string
+): Promise<CommandLocatorLike> {
+  const named = page.getByRole("button", { name: exactName(sceneName) });
+  try {
+    await named.first().waitFor({ state: "visible", timeout: 15_000 });
+  } catch {
+    const labeled = page.getByRole("button").filter({
+      has: page.getByText(sceneName, { exact: true })
+    });
+    try {
+      await labeled.first().waitFor({ state: "visible", timeout: 15_000 });
+    } catch {
+      throw new Error("command_control_not_found");
+    }
+    if ((await labeled.count()) !== 1) throw new Error("command_control_ambiguous");
+    return labeled;
+  }
+  if ((await named.count()) !== 1) throw new Error("command_control_ambiguous");
+  return named;
 }
 
 async function clickExactlyOne(control: CommandLocatorLike): Promise<void> {

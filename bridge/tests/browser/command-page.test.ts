@@ -3415,6 +3415,36 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(manager.openCommandPage).toHaveBeenCalledTimes(2);
   });
 
+  test("opens Automations when the exact scene is not pinned on the dashboard", async () => {
+    const page = new FakeCommandPage();
+    const missing = new FakeLocator(0, true);
+    const scene = new FakeLocator(1);
+    page.goto = vi.fn(async (url: string) => {
+      page.currentUrl = url;
+    });
+    page.getByText = vi.fn(() => missing);
+    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+      if (
+        role === "button" &&
+        options?.name instanceof RegExp &&
+        options.name.test("Away mode")
+      ) {
+        return page.currentUrl.endsWith("/installedapps") ? scene : missing;
+      }
+      return missing;
+    });
+    const manager = { openCommandPage: vi.fn(async () => page) };
+    const executor = new SmartThingsWebUiCommandExecutor(() => manager);
+
+    await executor.executeScene({ sceneName: "Away mode", locationId: "loc_001" });
+
+    expect(page.goto).toHaveBeenCalledWith(
+      "https://my.smartthings.com/installedapps",
+      { waitUntil: "domcontentloaded" }
+    );
+    expect(scene.click).toHaveBeenCalledTimes(1);
+  });
+
   test("preempts background detail discovery when a foreground command arrives", async () => {
     const discoveryPage = new FakeCommandPage();
     const commandPage = new FakeCommandPage();

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.115
+
+- Preserve the numeric collision suffix of an existing exact-room primary entity during migration, so `media_player.3_4` and `media_player.geosil_geosil_4` settle on `media_player.geosil_4` instead of being renumbered to `media_player.geosil_2`.
+- Keep the SmartThings device name `거실` intact; room-prefix cleanup applies only to the generated entity ID and never substitutes a generic type name such as `스피커`.
+- When a scene is not pinned on the location dashboard, open the authenticated SmartThings `Automations` route and execute exactly one matching routine card instead of failing with `command_control_not_found`.
+- Retain the push-first realtime path, bounded registry settling, observed device controls, and event-driven one-shot Advanced supplement without periodic SmartThings state polling.
+
 ## 0.1.114
 
 - Preserve a device name that is the exact SmartThings room name instead of replacing it with a localized device-type label such as `스피커`.

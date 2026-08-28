@@ -796,8 +796,6 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         registry = FakeRegistry(
             [
                 entity("media_player.geosil", "media_player", "official_living", platform="other"),
-                entity("media_player.geosil_2", "media_player", "other_living_2", platform="other"),
-                entity("media_player.geosil_3", "media_player", "other_living_3", platform="other"),
                 self._registry_entry(
                     "media_player.3_4",
                     "uuid_living_speaker",
