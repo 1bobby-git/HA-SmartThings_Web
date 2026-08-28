@@ -1524,8 +1524,25 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             ],
         )
         self.assertEqual(
+            [entry.object_id_base for entry in registry_entries],
+            [
+                "presence_부모님댁",
+                "presence_친정집",
+                "presence_home",
+                "presence_회사",
+            ],
+        )
+        self.assertEqual(
             custom_named_entry.entity_id,
             "binary_sensor.smartthings_device_dev_426_presence_custom",
+        )
+        self.assertEqual(
+            custom_named_entry.object_id_base,
+            "smartthings_device_dev_426_presence_custom",
+        )
+        self.assertEqual(
+            custom_named_entry.suggested_object_id,
+            "smartthings_device_dev_426_presence_custom",
         )
 
     def test_fallback_id_repair_uses_original_name_when_it_is_not_stale(self) -> None:
@@ -1594,6 +1611,11 @@ class EntityRegistryMigrationTests(unittest.TestCase):
                 )
             ],
         )
+        self.assertEqual(registry_entry.object_id_base, "presence_home")
+        self.assertEqual(
+            registry_entry.suggested_object_id,
+            "gyeongsugyi_s22_presence_home",
+        )
 
     def test_fallback_id_repair_uses_original_name_when_object_id_base_is_missing(self) -> None:
         """Repair stale original names even when HA omits object_id_base."""
@@ -1652,6 +1674,11 @@ class EntityRegistryMigrationTests(unittest.TestCase):
                     "binary_sensor.gyeongsugyi_s22_presence",
                 )
             ],
+        )
+        self.assertEqual(registry_entry.object_id_base, "presence")
+        self.assertEqual(
+            registry_entry.suggested_object_id,
+            "gyeongsugyi_s22_presence",
         )
 
     def test_fallback_id_repair_does_not_rename_to_an_occupied_target(self) -> None:
@@ -1719,6 +1746,14 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         self.assertEqual(
             stale_entry.entity_id,
             "binary_sensor.smartthings_device_dev_426_presence_3",
+        )
+        self.assertEqual(
+            stale_entry.object_id_base,
+            "smartthings_device_dev_426_presence_3",
+        )
+        self.assertEqual(
+            stale_entry.suggested_object_id,
+            "smartthings_device_dev_426_presence_3",
         )
 
     def test_reserved_state_id_does_not_abort_numbered_id_repair(self) -> None:

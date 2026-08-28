@@ -789,16 +789,34 @@ def _migrate_entity_registry(
                         registry_entity_id = room_free_entity_id
                         break
         current_registry_entry = registry.async_get(registry_entity_id)
+        metadata_entry = current_registry_entry or entity_entry
+        canonical_suggested_object_id = _canonical_registry_suggested_object_id(
+            inventory,
+            owner_device,
+            metadata_entry,
+            registry_entity_id,
+        )
+        canonical_object_id_base = _canonical_registry_object_id_base(
+            inventory,
+            owner_device,
+            metadata_entry,
+        )
+        if canonical_suggested_object_id is not None:
+            canonical_entity_id = (
+                f"{getattr(metadata_entry, 'domain', '')}.{canonical_suggested_object_id}"
+            )
+            if (
+                canonical_entity_id != getattr(metadata_entry, "entity_id", None)
+                and registry.async_get(canonical_entity_id) is not None
+            ):
+                canonical_suggested_object_id = None
+                canonical_object_id_base = None
         _refresh_generated_registry_metadata(
             registry,
             entry,
-            current_registry_entry or entity_entry,
-            _canonical_registry_suggested_object_id(
-                inventory,
-                owner_device,
-                current_registry_entry or entity_entry,
-                registry_entity_id,
-            ),
+            metadata_entry,
+            canonical_object_id_base,
+            canonical_suggested_object_id,
         )
         new_unique_id = old_to_new.get(entity_entry.unique_id)
         if new_unique_id is None:
@@ -952,6 +970,7 @@ def _refresh_generated_registry_metadata(
     registry: object,
     entry: SmartThingsWebConfigEntry,
     entity_entry: object,
+    canonical_object_id_base: str | None,
     canonical_suggested_object_id: str | None,
 ) -> None:
     """Repair generated restore hints through Home Assistant's public API."""
@@ -960,7 +979,6 @@ def _refresh_generated_registry_metadata(
         or getattr(entity_entry, "name", None) is not None
     ):
         return
-    object_id_base = getattr(entity_entry, "object_id_base", None)
     if canonical_suggested_object_id is None:
         return
     get_or_create = getattr(registry, "async_get_or_create", None)
@@ -972,9 +990,37 @@ def _refresh_generated_registry_metadata(
         getattr(entity_entry, "unique_id", ""),
         config_entry=entry,
         has_entity_name=True,
-        object_id_base=object_id_base,
+        object_id_base=canonical_object_id_base,
         suggested_object_id=canonical_suggested_object_id,
     )
+
+
+def _canonical_registry_object_id_base(
+    inventory: BridgeInventory,
+    device: object,
+    entity_entry: object,
+) -> str | None:
+    """Return the generated entity-local object ID base without stale fallbacks."""
+    unique_id = getattr(entity_entry, "unique_id", None)
+    device_id = getattr(device, "device_id", "")
+    state = next(
+        (
+            item
+            for item in getattr(device, "states", {}).values()
+            if entity_unique_id(device_id, item) == unique_id
+        ),
+        None,
+    )
+    if state is not None:
+        return slugify(_generated_registry_state_name(entity_entry, device, state)) or None
+    object_id_base = getattr(entity_entry, "object_id_base", None)
+    if (
+        isinstance(object_id_base, str)
+        and object_id_base.strip()
+        and not _fallback_state_name_base(object_id_base, device)
+    ):
+        return slugify(object_id_base) or None
+    return None
 
 
 def _remove_orphan_bridge_device_cards(
