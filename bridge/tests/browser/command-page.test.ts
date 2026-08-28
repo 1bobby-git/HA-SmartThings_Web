@@ -3415,7 +3415,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(manager.openCommandPage).toHaveBeenCalledTimes(2);
   });
 
-  test("opens Automations when the exact scene is not pinned on the dashboard", async () => {
+  test("opens the Automations route when the exact scene is not pinned on the dashboard", async () => {
     const page = new FakeCommandPage();
     const missing = new FakeLocator(0, true);
     const scene = new FakeLocator(1);
@@ -3429,7 +3429,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
         options?.name instanceof RegExp &&
         options.name.test("Away mode")
       ) {
-        return page.currentUrl.endsWith("/installedapps") ? scene : missing;
+        return page.currentUrl.endsWith("/automations") ? scene : missing;
       }
       return missing;
     });
@@ -3439,7 +3439,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     await executor.executeScene({ sceneName: "Away mode", locationId: "loc_001" });
 
     expect(page.goto).toHaveBeenCalledWith(
-      "https://my.smartthings.com/installedapps",
+      "https://my.smartthings.com/automations",
       { waitUntil: "domcontentloaded" }
     );
     expect(scene.click).toHaveBeenCalledTimes(1);

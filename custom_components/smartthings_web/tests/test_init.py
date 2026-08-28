@@ -922,6 +922,62 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         )
         unsubscribe()
 
+    def test_restores_room_token_that_belongs_to_the_smartthings_device_name(self) -> None:
+        """Remove only a template room prefix, never the device-name token."""
+        state = BridgeState(
+            "main",
+            "presenceSensor",
+            "presence",
+            "not present",
+            None,
+            "2026-08-28T00:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_presence",
+            "loc_001",
+            "room_small",
+            "Jageunbang Jaesilsenseo",
+            "presence_sensor",
+            True,
+            states={state.key: state},
+        )
+        registry = FakeRegistry(
+            [
+                entity(
+                    "binary_sensor.jaesilsenseo_presence",
+                    "binary_sensor",
+                    "dev_presence_main_presenceSensor_presence",
+                )
+            ]
+        )
+        self.patch_registry(registry)
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.118",
+            protocol_version="4",
+            locations={"loc_001": "Home"},
+            rooms={"room_small": ("loc_001", "Jageunbang")},
+            devices={device.device_id: device},
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_001"},
+        )
+
+        _migrate_entity_registry(object(), entry, inventory)
+        _migrate_entity_registry(object(), entry, inventory)
+
+        self.assertEqual(
+            registry.renamed,
+            [
+                (
+                    "binary_sensor.jaesilsenseo_presence",
+                    "binary_sensor.jageunbang_jaesilsenseo_presence",
+                )
+            ],
+        )
+
     def test_observed_refresh_reuses_id_freed_by_synthetic_refresh_cleanup(self) -> None:
         """Keep the real web button and reuse the entity ID freed in the same pass."""
         control_id = "advanced:refresh:identifier_main:identifier_ce45d79951c6"

@@ -398,14 +398,18 @@ def _migrate_entity_registry(
     # Longest-prefix order so the owning Bridge device ID can be resolved from
     # the entity unique_id alone; registry device rows use their own UUIDs.
     room_slug_prefixes = sorted(
-        ((device_id, slug) for device_id, slug in device_room_slugs.items() if slug),
+        (
+            (device_id, slug, slugify(inventory.devices[device_id].name) or None)
+            for device_id, slug in device_room_slugs.items()
+            if slug
+        ),
         key=lambda item: len(item[0]),
         reverse=True,
     )
     registry_uuid_room_slugs = _registry_uuid_room_slugs(hass, device_room_slugs)
     if registry_uuid_room_slugs:
         uuid_prefix_pairs = [
-            (uuid_key, slug)
+            (uuid_key, slug, None)
             for uuid_key, slugs in sorted(registry_uuid_room_slugs.items(), key=lambda i: -len(i[0]))
             for slug in slugs
         ]
@@ -831,31 +835,37 @@ def _registry_uuid_room_slugs(
 def _room_prefixed_generated_entity_ids(
     entity_entry: object,
     current_device_ids: set[str],
-    room_slug_prefixes: list[tuple[str, str]],
+    room_slug_prefixes: list[tuple[str, str, str | None]],
     current_entity_ids: set[str],
 ) -> list[str]:
-    """Candidate IDs dropping a frozen leading room-name slug.
+    """Candidate IDs repairing only a generated room-name template prefix.
 
     Entity IDs never regenerate on their own, so devices whose SmartThings
     name once carried the room prefix keep stale IDs like
     switch.deiteorum_status_home even after inventory names are corrected.
+    A room token that belongs to the SmartThings device name itself is kept;
+    for example ``작은방 재실센서`` remains
+    ``jageunbang_jaesilsenseo_presence``. Older migrations that removed that
+    token are repaired in the opposite direction.
     Only this integration's own entities for known devices of the configured
     location qualify and user renames are respected. When the exact target is
     already occupied (for example by another integration), the current ID is
     retained instead of rotating through numbered fallbacks.
     """
     unique_id = getattr(entity_entry, "unique_id", "")
-    candidate_slugs: list[str] = []
+    candidate_slugs: list[tuple[str, str | None]] = []
     direct_key = getattr(entity_entry, "device_id", None)
-    for device_key, device_slug in room_slug_prefixes:
+    for device_key, room_slug, device_name_slug in room_slug_prefixes:
         if direct_key and device_key == direct_key:
-            if device_slug not in candidate_slugs:
-                candidate_slugs.append(device_slug)
+            candidate = (room_slug, device_name_slug)
+            if candidate not in candidate_slugs:
+                candidate_slugs.append(candidate)
         elif unique_id == device_key or unique_id.startswith(f"{device_key}_"):
-            if device_slug not in candidate_slugs:
-                candidate_slugs.append(device_slug)
+            candidate = (room_slug, device_name_slug)
+            if candidate not in candidate_slugs:
+                candidate_slugs.append(candidate)
     if not any(
-        slug for slug in candidate_slugs
+        room_slug for room_slug, _device_name_slug in candidate_slugs
     ) and not any(
         unique_id == device_id or unique_id.startswith(f"{device_id}_")
         for device_id in current_device_ids
@@ -867,12 +877,39 @@ def _room_prefixed_generated_entity_ids(
     object_id = getattr(entity_entry, "entity_id", "").partition(".")[2]
     original_entity_id = getattr(entity_entry, "entity_id", "")
     candidates: list[str] = []
-    for room_slug in candidate_slugs:
+    for room_slug, device_name_slug in candidate_slugs:
         room_prefix = f"{room_slug}_"
-        if room_prefix == "_" or not object_id.startswith(room_prefix):
+        if room_prefix == "_":
+            continue
+        device_name_prefix = f"{device_name_slug}_" if device_name_slug else ""
+        device_name_has_room = bool(
+            device_name_slug
+            and (
+                device_name_slug == room_slug
+                or device_name_slug.startswith(room_prefix)
+            )
+        )
+        if device_name_has_room and (
+            object_id == device_name_slug
+            or object_id.startswith(device_name_prefix)
+        ):
+            continue
+        if device_name_has_room and device_name_slug is not None:
+            device_remainder = device_name_slug[len(room_prefix):]
+            if device_remainder and (
+                object_id == device_remainder
+                or object_id.startswith(f"{device_remainder}_")
+            ):
+                candidates.append(f"{domain_part}.{room_slug}_{object_id}")
+                continue
+        if not object_id.startswith(room_prefix):
             continue
         rest = object_id[len(room_prefix):]
         if not rest:
+            continue
+        if device_name_has_room and device_name_slug is not None and not (
+            rest == device_name_slug or rest.startswith(f"{device_name_slug}_")
+        ):
             continue
         candidates.append(f"{domain_part}.{rest}")
     seen: set[str] = set()

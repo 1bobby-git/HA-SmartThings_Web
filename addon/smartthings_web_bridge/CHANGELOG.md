@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.118
+
+- Follow the authenticated SmartThings 2.57.0 web application's actual `/automations` route when a scene is not pinned on the location dashboard, preventing exact scene execution from failing on the obsolete `/installedapps` path.
+- Remove only a room prefix injected by an older entity-ID template. When the SmartThings device name itself starts with its room, preserve and restore that token, so `작은방 재실센서` settles on `binary_sensor.jageunbang_jaesilsenseo_presence` instead of `binary_sensor.jaesilsenseo_presence`.
+- Keep exact single-scene matching and fail closed on missing or ambiguous controls; no official API, periodic SmartThings state polling, or DOM-derived state authority is introduced.
+
 ## 0.1.117
 
 - Keep the 72-hour HAOS soak collector measurable when the container runtime denies cgroup memory-file reads by falling back to the Bridge Node process RSS instead of recording every sample as `stats_response_invalid`.

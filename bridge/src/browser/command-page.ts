@@ -460,7 +460,7 @@ export class SmartThingsWebUiCommandExecutor {
     try {
       let scene = await exactSceneControl(page, input.sceneName);
       if (!scene) {
-        const automationsUrl = new URL("/installedapps", page.url()).toString();
+        const automationsUrl = new URL("/automations", page.url()).toString();
         await page.goto(automationsUrl, { waitUntil: "domcontentloaded" });
         scene = await waitForExactSceneControl(page, input.sceneName);
       }
