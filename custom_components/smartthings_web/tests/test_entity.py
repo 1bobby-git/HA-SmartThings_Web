@@ -229,7 +229,7 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(unrelated.write_count, 0)
         self.assertEqual(device_entity.write_count, 2)
 
-    def test_state_entities_share_device_presentation_artwork(self) -> None:
+    def test_state_entities_keep_platform_icons_while_primary_entity_uses_artwork(self) -> None:
         state = BridgeState(
             "main",
             "temperatureMeasurement",
@@ -263,10 +263,8 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             entity._attr_entity_picture, "https://client.smartthings.com/icons/oneui/contact/on"
         )
-        self.assertEqual(
-            state_entity._attr_entity_picture,
-            "https://client.smartthings.com/icons/oneui/contact/on",
-        )
+        self.assertNotIn("_attr_entity_picture", state_entity.__dict__)
+        self.assertNotIn("_attr_icon", state_entity.__dict__)
         self.assertNotIn("_attr_name", state_entity.__dict__)
 
     def test_device_info_display_name_only_rewrites_room_clone_names(self) -> None:
@@ -409,7 +407,7 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotIn("_attr_entity_picture", entity.__dict__)
         self.assertEqual(entity._attr_icon, "mdi:hub")
-        self.assertEqual(state_entity._attr_icon, "mdi:hub")
+        self.assertNotIn("_attr_icon", state_entity.__dict__)
         self.assertNotIn("_attr_entity_picture", state_entity.__dict__)
 
     def test_offline_laundry_appliance_keeps_pushed_state_entities_available(self) -> None:

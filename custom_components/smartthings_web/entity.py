@@ -138,7 +138,6 @@ class SmartThingsWebEntity(Entity):
             device,
             display_name=room_free_display_name(runtime, device),
         )
-        _attach_visuals(self, device)
 
     @property
     def available(self) -> bool:
@@ -216,10 +215,10 @@ class SmartThingsWebDeviceEntity(Entity):
 
 
 def _attach_visuals(entity: Entity, device: BridgeDevice) -> None:
-    """Attach the SmartThings presentation artwork (or a type icon) to an entity.
+    """Attach SmartThings artwork to a primary device entity.
 
-    Every entity of the device — including individual sensors — carries the
-    same unique artwork the my.smartthings.com list shows for the device.
+    State-backed sensors keep their platform device-class icons so temperature,
+    humidity, contact, battery, and similar rows remain distinguishable.
     """
     entity_picture = _entity_picture_for(device)
     if entity_picture is not None:

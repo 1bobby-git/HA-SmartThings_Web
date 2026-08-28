@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.108
+
+- Keep inventory restored from SQLite through Samsung-login, reconnect, and partial-response gaps. Retire unrefreshed aliases only after a complete consumer `api/device` snapshot; non-device snapshots, malformed acknowledgements, and partial Advanced enrichment can no longer delete current Home Assistant device cards.
+- Limit SmartThings presentation artwork to primary device entities so state-backed sensors keep their Home Assistant functional icons for temperature, humidity, battery, contact, motion, power, and similar values.
+- Remove the unused periodic Advanced polling configuration surface. Advanced remains a bounded one-shot, same-origin, read-only bootstrap enrichment path and never becomes SmartThings state polling.
+
 ## 0.1.107
 
 - Start non-mutating background detail discovery from the location overview, retaining the exact-room and search fallbacks when the card is absent. This avoids layout-drift failures that prevented value-only devices such as contact sensors from exposing their observed Refresh action, while foreground controls continue to require the strict exact-room path.

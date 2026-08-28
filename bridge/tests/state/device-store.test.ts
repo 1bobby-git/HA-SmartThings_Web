@@ -542,13 +542,120 @@ describe("DeviceStore", () => {
         deviceTypeData: { type: "switch" }
       };
       observeDeviceSnapshot(second, newSessionDevice);
-      // The second identical snapshot no longer changes anything, which is the
-      // moment the store knows the session has spoken and prunes restored
-      // devices the live session never refreshed.
-      observeDeviceSnapshot(second, newSessionDevice);
 
       const ids = second.snapshot().devices.map((device) => device.id);
       expect(ids).toEqual(["dev_aliasnew"]);
+      second.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
+  test("keeps restored devices when only non-device snapshots arrive", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-partial-session-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const first = new DeviceStore({ sqlitePath });
+      observeDeviceSnapshot(first, {
+        deviceId: "dev_cached",
+        locationId: "loc_001",
+        deviceName: "Cached sensor",
+        deviceTypeData: { type: "contact_sensor" }
+      });
+      first.close();
+
+      const second = new DeviceStore({ sqlitePath });
+      observeLocationSnapshot(second, {
+        locationId: "loc_001",
+        name: "Home"
+      });
+      observeLocationSnapshot(second, {
+        locationId: "loc_001",
+        name: "Home"
+      });
+
+      expect(second.snapshot().devices.map((device) => device.id)).toEqual(["dev_cached"]);
+      second.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
+  test("keeps restored devices when the consumer device snapshot is malformed", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-malformed-session-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const first = new DeviceStore({ sqlitePath });
+      observeDeviceSnapshot(first, {
+        deviceId: "dev_cached",
+        locationId: "loc_001",
+        deviceName: "Cached sensor",
+        deviceTypeData: { type: "contact_sensor" }
+      });
+      first.close();
+
+      const second = new DeviceStore({ sqlitePath });
+      second.observe(sentFrame('424["find","api/device",{}]'));
+      second.observe(receivedFrame('434["temporary snapshot error"]'));
+
+      expect(second.snapshot().devices.map((device) => device.id)).toEqual(["dev_cached"]);
+      second.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
+  test("keeps restored devices when Advanced enrichment is partial", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-partial-advanced-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const first = new DeviceStore({ sqlitePath });
+      observeDeviceSnapshot(first, {
+        deviceId: "dev_cached",
+        locationId: "loc_001",
+        deviceName: "Cached sensor",
+        deviceTypeData: { type: "contact_sensor" }
+      });
+      first.close();
+
+      const second = new DeviceStore({ sqlitePath });
+      second.observeAdvancedDeviceSnapshot({
+        items: [
+          {
+            deviceId: "dev_new",
+            locationId: "loc_001",
+            label: "New sensor",
+            deviceTypeName: "contact_sensor"
+          }
+        ]
+      });
+      second.observeAdvancedDeviceSnapshot({
+        items: [
+          {
+            deviceId: "dev_new",
+            locationId: "loc_001",
+            label: "New sensor",
+            deviceTypeName: "contact_sensor"
+          }
+        ]
+      });
+
+      expect(second.snapshot().devices.map((device) => device.id)).toEqual([
+        "dev_cached",
+        "dev_new"
+      ]);
       second.close();
     } finally {
       try {

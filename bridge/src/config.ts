@@ -5,7 +5,6 @@ export interface BridgeConfig {
   heartbeatIntervalMs: number;
   browserMaxRestarts: number;
   browserRetryDelayMs?: number;
-  advancedPollSeconds?: number;
 }
 
 export function readBridgeConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
@@ -15,25 +14,8 @@ export function readBridgeConfig(env: NodeJS.ProcessEnv = process.env): BridgeCo
     port: parsePort(env.STW_PORT ?? "8098"),
     heartbeatIntervalMs: parseHeartbeatInterval(env.STW_HEARTBEAT_INTERVAL_MS ?? "10000"),
     browserMaxRestarts: parseRestartCount(env.STW_BROWSER_MAX_RESTARTS ?? "3"),
-    browserRetryDelayMs: parseRetryDelay(env.STW_BROWSER_RETRY_DELAY_MS ?? "1000"),
-    advancedPollSeconds: parseAdvancedPollSeconds(
-      env.ADVANCED_POLL_SECONDS ?? env.STW_ADVANCED_POLL_SECONDS ?? "0"
-    )
+    browserRetryDelayMs: parseRetryDelay(env.STW_BROWSER_RETRY_DELAY_MS ?? "1000")
   };
-}
-
-function parseAdvancedPollSeconds(value: string): number {
-  const seconds = Number(value);
-  if (!Number.isInteger(seconds)) {
-    throw new Error("invalid bridge config: ADVANCED_POLL_SECONDS must be an integer (0 disables, or 15 to 3600)");
-  }
-  if (seconds === 0) {
-    return 0;
-  }
-  if (seconds < 15 || seconds > 3_600) {
-    throw new Error("invalid bridge config: ADVANCED_POLL_SECONDS must be 0 (disabled) or an integer from 15 to 3600");
-  }
-  return seconds;
 }
 
 function parseRetryDelay(value: string): number {
