@@ -605,21 +605,37 @@ def _migrate_entity_registry(
             current_device_ids,
             current_entity_ids,
         )
+        numbered_entity_id = _canonical_numbered_generated_entity_id(
+            entity_entry,
+            owner_device,
+            inventory,
+        )
+        if numbered_entity_id is not None:
+            new_entity_id = numbered_entity_id
         renamed_this_entry = False
         if new_entity_id is not None and registry.async_get(new_entity_id) is not None:
             new_entity_id = None
+        clear_suggested_object_id = bool(
+            owner_device is not None
+            and getattr(entity_entry, "name", None) is None
+            and getattr(entity_entry, "object_id_base", None)
+            and getattr(entity_entry, "suggested_object_id", None) is not None
+        )
         if (
-            new_entity_id is not None
+            (new_entity_id is not None or clear_suggested_object_id)
             and registry.async_get(registry_entity_id) is not None
         ):
-            registry.async_update_entity(
-                registry_entity_id,
-                new_entity_id=new_entity_id,
-            )
-            current_entity_ids.discard(registry_entity_id)
-            current_entity_ids.add(new_entity_id)
-            registry_entity_id = new_entity_id
-            renamed_this_entry = True
+            update_kwargs: dict[str, object] = {}
+            if new_entity_id is not None:
+                update_kwargs["new_entity_id"] = new_entity_id
+            if clear_suggested_object_id:
+                update_kwargs["suggested_object_id"] = None
+            registry.async_update_entity(registry_entity_id, **update_kwargs)
+            if new_entity_id is not None:
+                current_entity_ids.discard(registry_entity_id)
+                current_entity_ids.add(new_entity_id)
+                registry_entity_id = new_entity_id
+                renamed_this_entry = True
         if not renamed_this_entry:
             room_named_candidates = _room_named_primary_entity_ids(
                 entity_entry,
@@ -762,6 +778,74 @@ def _deduplicated_generated_entity_id(
         return None
     candidate = f"{domain}.{'_'.join(parts[1:])}"
     return candidate if candidate not in current_entity_ids else None
+
+
+def _canonical_numbered_generated_entity_id(
+    entity_entry: object,
+    device: object | None,
+    inventory: BridgeInventory,
+) -> str | None:
+    """Reclaim a free canonical ID from an HA collision-numbered variant.
+
+    Removed/orphaned registry rows remain reserved during entity creation, so
+    HA can initially allocate ``..._4`` even after this integration removes
+    the stale rows. An explicit registry rename may safely reclaim the now-free
+    canonical ID; active rows are still protected by the caller's global
+    registry lookup.
+    """
+    if device is None or getattr(entity_entry, "name", None) is not None:
+        return None
+    object_id_base = getattr(entity_entry, "object_id_base", None)
+    if not isinstance(object_id_base, str) or not object_id_base.strip():
+        return None
+    device_slug = _device_object_id_slug(inventory, device)
+    base_slug = slugify(object_id_base)
+    if not device_slug or not base_slug:
+        return None
+    canonical_object_id = (
+        device_slug
+        if device_slug == base_slug or device_slug.endswith(f"_{base_slug}")
+        else f"{device_slug}_{base_slug}"
+    )
+    domain = getattr(entity_entry, "domain", "") or ""
+    current_object_id = getattr(entity_entry, "entity_id", "").partition(".")[2]
+    numbered_prefix = f"{canonical_object_id}_"
+    if not current_object_id.startswith(numbered_prefix):
+        return None
+    collision_suffix = current_object_id[len(numbered_prefix):]
+    if not collision_suffix.isdigit() or int(collision_suffix) < 2:
+        return None
+    return f"{domain}.{canonical_object_id}"
+
+
+def _device_object_id_slug(
+    inventory: BridgeInventory,
+    device: object,
+) -> str | None:
+    """Return the device-name slug with at most one matching room token."""
+    device_name = str(getattr(device, "name", "")).strip()
+    device_slug = slugify(device_name)
+    room_id = getattr(device, "room_id", None)
+    if not room_id:
+        return device_slug or None
+    room = inventory.rooms.get(room_id)
+    if room is None or room[0] != getattr(device, "location_id", None):
+        return device_slug or None
+    room_name = room[1].strip()
+    room_slug = slugify(room_name)
+    if not room_name or not room_slug:
+        return device_slug or None
+    if device_name.casefold() == room_name.casefold():
+        return room_slug
+    if device_name.casefold().startswith(room_name.casefold()):
+        remainder = device_name[len(room_name):].strip(" _-")
+        remainder_slug = slugify(remainder)
+        if remainder_slug:
+            return f"{room_slug}_{remainder_slug}"
+    duplicate_prefix = f"{room_slug}_{room_slug}_"
+    if device_slug.startswith(duplicate_prefix):
+        return f"{room_slug}_{device_slug[len(duplicate_prefix):]}"
+    return device_slug or None
 
 
 def _registry_uuid_room_slugs(

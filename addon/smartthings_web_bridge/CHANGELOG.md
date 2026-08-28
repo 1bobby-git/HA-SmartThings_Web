@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.119
+
+- Fixed Home Assistant entity-ID generation so `has_entity_name` entities provide only their local suffix (`contact`, `temperature`, `refresh`, and similar) instead of feeding the full device name back into Home Assistant and creating duplicated room prefixes.
+- Reclaims a free canonical entity ID from collision-numbered variants such as `binary_sensor.hwajangsil_doeosenseo_contact_4` after stale/orphaned reservations are removed, while continuing to preserve active cross-integration collisions.
+- Clears stale duplicated `suggested_object_id` registry metadata so Home Assistant's Restore entity ID action returns to the same single-room canonical ID instead of recreating `{room}_{room}_{device}`.
+
 ## 0.1.118
 
 - Follow the authenticated SmartThings 2.57.0 web application's actual `/automations` route when a scene is not pinned on the location dashboard, preventing exact scene execution from failing on the obsolete `/installedapps` path.

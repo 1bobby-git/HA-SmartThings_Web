@@ -147,6 +147,7 @@ class FakeRegistry:
         self.removed: list[str] = []
         self.updated: list[tuple[str, str]] = []
         self.renamed: list[tuple[str, str]] = []
+        self.suggested_updates: list[tuple[str, str | None]] = []
 
     def async_remove(self, entity_id: str) -> None:
         self.removed.append(entity_id)
@@ -170,6 +171,7 @@ class FakeRegistry:
         *,
         new_unique_id: str | None = None,
         new_entity_id: str | None = None,
+        suggested_object_id: str | None | object = ...,
     ) -> None:
         entry = next((e for e in self.entries if e.entity_id == entity_id), None)
         if entry is None:
@@ -180,6 +182,9 @@ class FakeRegistry:
         if new_entity_id is not None:
             entry.entity_id = new_entity_id
             self.renamed.append((entity_id, new_entity_id))
+        if suggested_object_id is not ...:
+            entry.suggested_object_id = suggested_object_id
+            self.suggested_updates.append((entry.entity_id, suggested_object_id))
 
 
 class EntityRegistryMigrationTests(unittest.TestCase):
@@ -977,6 +982,123 @@ class EntityRegistryMigrationTests(unittest.TestCase):
                 )
             ],
         )
+
+    def test_reclaims_numbered_id_and_clears_stale_room_prefixed_suggestion(self) -> None:
+        """Deleted reservations must not freeze numbered or duplicated restore IDs."""
+        state = BridgeState(
+            "main",
+            "contactSensor",
+            "contact",
+            "closed",
+            None,
+            "2026-08-28T06:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_door",
+            "loc_001",
+            "room_bathroom",
+            "Hwajangsil Doeosenseo",
+            "contact_sensor",
+            True,
+            states={state.key: state},
+        )
+        registry_entry = SimpleNamespace(
+            entity_id="binary_sensor.hwajangsil_doeosenseo_contact_4",
+            domain="binary_sensor",
+            platform=DOMAIN,
+            unique_id="dev_door_main_contactSensor_contact",
+            device_id="uuid_door",
+            name=None,
+            disabled_by=None,
+            original_name="Contact",
+            object_id_base="contact",
+            suggested_object_id="hwajangsil_hwajangsil_doeosenseo_contact_4",
+        )
+        registry = FakeRegistry([registry_entry])
+        self.patch_registry(registry)
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.119",
+            protocol_version="4",
+            locations={"loc_001": "Home"},
+            rooms={"room_bathroom": ("loc_001", "Hwajangsil")},
+            devices={device.device_id: device},
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_001"},
+        )
+
+        _migrate_entity_registry(object(), entry, inventory)
+        _migrate_entity_registry(object(), entry, inventory)
+
+        self.assertEqual(
+            registry.renamed,
+            [
+                (
+                    "binary_sensor.hwajangsil_doeosenseo_contact_4",
+                    "binary_sensor.hwajangsil_doeosenseo_contact",
+                )
+            ],
+        )
+        self.assertIsNone(registry_entry.suggested_object_id)
+        self.assertEqual(
+            registry.suggested_updates,
+            [("binary_sensor.hwajangsil_doeosenseo_contact", None)],
+        )
+
+    def test_preserves_user_named_numbered_id_and_restore_suggestion(self) -> None:
+        """Never reinterpret a user-named registry row as generated cleanup."""
+        state = BridgeState(
+            "main",
+            "contactSensor",
+            "contact",
+            "closed",
+            None,
+            "2026-08-28T06:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_door",
+            "loc_001",
+            "room_bathroom",
+            "Hwajangsil Doeosenseo",
+            "contact_sensor",
+            True,
+            states={state.key: state},
+        )
+        registry_entry = SimpleNamespace(
+            entity_id="binary_sensor.my_bathroom_contact_4",
+            domain="binary_sensor",
+            platform=DOMAIN,
+            unique_id="dev_door_main_contactSensor_contact",
+            device_id="uuid_door",
+            name="My Bathroom Contact",
+            disabled_by=None,
+            original_name="Contact",
+            object_id_base="contact",
+            suggested_object_id="my_bathroom_contact_4",
+        )
+        registry = FakeRegistry([registry_entry])
+        self.patch_registry(registry)
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}),
+            BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.119",
+                protocol_version="4",
+                locations={"loc_001": "Home"},
+                rooms={"room_bathroom": ("loc_001", "Hwajangsil")},
+                devices={device.device_id: device},
+            ),
+        )
+
+        self.assertEqual(registry.renamed, [])
+        self.assertEqual(registry.suggested_updates, [])
+        self.assertEqual(registry_entry.suggested_object_id, "my_bathroom_contact_4")
 
     def test_observed_refresh_reuses_id_freed_by_synthetic_refresh_cleanup(self) -> None:
         """Keep the real web button and reuse the entity ID freed in the same pass."""
