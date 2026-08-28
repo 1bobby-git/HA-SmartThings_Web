@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Sequence
 
 from homeassistant.config_entries import ConfigEntry
@@ -1149,12 +1150,21 @@ def _generated_registry_state_name(
     state: object,
 ) -> str:
     """Return the entity-local name that current setup would suggest."""
-    base = getattr(entity_entry, "object_id_base", None)
-    if not isinstance(base, str) or not base.strip():
-        base = getattr(entity_entry, "original_name", None)
-    if not isinstance(base, str) or not base.strip():
-        base = str(getattr(state, "attribute", ""))
-    base = base.strip()
+    base = None
+    for candidate in (
+        getattr(entity_entry, "object_id_base", None),
+        getattr(entity_entry, "original_name", None),
+    ):
+        if (
+            isinstance(candidate, str)
+            and candidate.strip()
+            and not _fallback_state_name_base(candidate, device)
+        ):
+            base = candidate
+            break
+    if base is None:
+        base = _readable_registry_state_attribute(state)
+    base = _normalized_registry_state_name_base(base.strip(), state)
     siblings = [
         item
         for item in getattr(device, "states", {}).values()
@@ -1169,6 +1179,61 @@ def _generated_registry_state_name(
     if name.startswith(prefix) and name.endswith(")"):
         return f"{base} {name[len(prefix):-1]}"
     return name
+
+
+def _normalized_registry_state_name_base(base: str, state: object) -> str:
+    """Remove stale role suffixes before current sibling disambiguation runs."""
+    for qualifier in _registry_state_qualifier_names(state):
+        for suffix in (f" ({qualifier})", f" {qualifier}", f"_{qualifier}", f"-{qualifier}"):
+            if base.casefold().endswith(suffix.casefold()):
+                trimmed = base[: -len(suffix)].strip()
+                if trimmed:
+                    return trimmed
+    return base
+
+
+def _registry_state_qualifier_names(state: object) -> tuple[str, ...]:
+    """Return readable role/name tokens that HA may have persisted in old bases."""
+    names: list[str] = []
+    for field_name in (
+        "component_role",
+        "capability_role",
+        "component",
+        "capability",
+    ):
+        value = getattr(state, field_name, None)
+        if not isinstance(value, str):
+            continue
+        normalized = value.strip()
+        if not normalized or normalized.lower().startswith("identifier_"):
+            continue
+        if field_name in {"component_role", "component"} and normalized.lower() == "main":
+            continue
+        normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", normalized)
+        normalized = re.sub(r"[_-]+", " ", normalized).strip()
+        if normalized and normalized not in names:
+            names.append(normalized.title())
+    return tuple(names)
+
+
+def _fallback_state_name_base(value: str, device: object) -> bool:
+    """Return whether a registry name base came from the early fallback ID."""
+    device_id = getattr(device, "device_id", "")
+    fallback_object_id = slugify(f"SmartThings device {device_id}") or ""
+    value_object_id = slugify(value) or value.strip().lower().replace(" ", "_")
+    return bool(
+        fallback_object_id
+        and (
+            value_object_id == fallback_object_id
+            or value_object_id.startswith(f"{fallback_object_id}_")
+        )
+    )
+
+
+def _readable_registry_state_attribute(state: object) -> str:
+    """Return a clean state attribute token for generated object IDs."""
+    attribute = str(getattr(state, "attribute", "")).strip()
+    return attribute or "state"
 
 
 def _registry_uuid_room_slugs(
