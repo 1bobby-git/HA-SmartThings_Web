@@ -279,8 +279,10 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         )
 
     def test_stale_sequence_and_timestamp_cannot_overwrite_current_state(self) -> None:
+        latest = inventory(12, 22, "2026-08-24T21:12:00Z")
+        client = FakeClient(latest)
         runtime = SmartThingsWebRuntime(
-            FakeClient(),
+            client,
             "loc_001",
             inventory(10, 20, "2026-08-24T21:10:00Z"),
         )
@@ -291,8 +293,15 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertFalse(
             asyncio.run(runtime.handle_event(state_event(11, 10, "2026-08-24T21:09:00Z")))
         )
-        self.assertEqual(runtime.inventory.sequence, 11)
+        self.assertEqual(runtime.inventory.sequence, 10)
         self.assertEqual(sensor_value(runtime), 20)
+
+        self.assertTrue(
+            asyncio.run(runtime.handle_event(state_event(12, 99, "2026-08-24T21:12:00Z")))
+        )
+        self.assertEqual(client.calls, 1)
+        self.assertEqual(runtime.inventory.sequence, 12)
+        self.assertEqual(sensor_value(runtime), 22)
 
     def test_repeated_button_events_with_the_same_timestamp_keep_each_sequence(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")

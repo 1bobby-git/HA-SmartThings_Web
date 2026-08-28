@@ -10,20 +10,24 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("packages switch entity recovery as version 0.1.131", () => {
+  test("packages stale-event and camera sensor recovery as version 0.1.132", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.131");
+    expect(config.version).toBe("0.1.132");
     expect(config.homeassistant_api).toBe(true);
-    expect(packageMetadata.version).toBe("0.1.131");
-    expect(protocolMetadata.bridge_version).toBe("0.1.131");
+    expect(packageMetadata.version).toBe("0.1.132");
+    expect(protocolMetadata.bridge_version).toBe("0.1.132");
     expect(protocolMetadata.protocol_version).toBe(4);
-    expect(runtime).toContain('const bridgeVersion = "0.1.131";');
+    expect(runtime).toContain('const bridgeVersion = "0.1.132";');
     expect(runtime).not.toContain("confirmationStabilityMs: 500");
+    expect(changelog).toContain("## 0.1.132");
+    expect(changelog).toContain("stale pushed state events");
+    expect(changelog).toContain("signed camera media URLs");
+    expect(changelog).toContain("deterministic secondary-switch naming");
     expect(changelog).toContain("## 0.1.131");
     expect(changelog).toContain("secondary switch channels");
     expect(changelog).toContain("fallback entity IDs");

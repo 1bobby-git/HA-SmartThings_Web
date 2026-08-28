@@ -38,7 +38,6 @@ from .models import (
     BridgeInventory,
     FIRMWARE_ATTRIBUTES,
     IMAGE_ATTRIBUTES,
-    STATE_ROLE_DISPLAY_NAMES,
     SmartThingsWebRuntime,
     button_controls,
     disambiguated_state_names,
@@ -49,6 +48,7 @@ from .models import (
     is_media_device,
     number_controls,
     room_free_display_name,
+    secondary_switch_name_overrides,
     sensor_state_allowed,
     sensor_state_owned_by_primary_domain,
     state_has_entity_value,
@@ -1039,7 +1039,7 @@ def _canonical_registry_suggested_object_id(
     )
     if state is not None:
         entity_name = _generated_registry_state_name(entity_entry, device, state)
-        secondary_switch_role = _secondary_switch_role_name(state)
+        secondary_switch_role = secondary_switch_name_overrides(device).get(state.key)
         if (
             domain_value == Platform.SWITCH
             and getattr(state, "attribute", None) == "switch"
@@ -1105,7 +1105,7 @@ def _canonical_registry_object_id_base(
         None,
     )
     if state is not None:
-        secondary_switch_role = _secondary_switch_role_name(state)
+        secondary_switch_role = secondary_switch_name_overrides(device).get(state.key)
         if (
             getattr(entity_entry, "domain", "") == Platform.SWITCH
             and getattr(state, "attribute", None) == "switch"
@@ -1274,7 +1274,7 @@ def _canonical_generated_state_entity_id(
         return None
     if getattr(state, "attribute", None) != "switch":
         return None
-    role = _secondary_switch_role_name(state)
+    role = secondary_switch_name_overrides(device).get(state.key)
     if role is None:
         return None
     entity_name = role
@@ -1283,27 +1283,6 @@ def _canonical_generated_state_entity_id(
         return None
     target = f"{domain}.{object_id}"
     return target if target != getattr(entity_entry, "entity_id", "") else None
-
-
-def _secondary_switch_role_name(state: object) -> str | None:
-    """Return the current generated name suffix for a secondary switch channel."""
-    role = getattr(state, "component_role", None) or getattr(state, "component", None)
-    if not isinstance(role, str):
-        return None
-    normalized = role.strip()
-    if (
-        not normalized
-        or normalized.lower() == "main"
-        or normalized.lower().startswith("identifier_")
-    ):
-        return None
-    known_role = STATE_ROLE_DISPLAY_NAMES.get(normalized.lower())
-    if known_role is not None:
-        return known_role
-    normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", normalized)
-    normalized = re.sub(r"[_-]+", " ", normalized).strip()
-    return normalized.title() or None
-
 
 def _stale_fallback_generated_entity_id(
     entity_entry: object,

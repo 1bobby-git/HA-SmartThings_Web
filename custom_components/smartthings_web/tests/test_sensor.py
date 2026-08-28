@@ -115,7 +115,11 @@ from smartthings_web.models import (  # noqa: E402
     BridgeState,
     SmartThingsWebRuntime,
 )
-from smartthings_web.sensor import SENSOR_STATES, SmartThingsWebSensor  # noqa: E402
+from smartthings_web.sensor import (  # noqa: E402
+    SENSOR_STATES,
+    SmartThingsWebSensor,
+    async_setup_entry,
+)
 
 
 class SmartThingsWebSensorTests(unittest.TestCase):
@@ -225,6 +229,53 @@ class SmartThingsWebSensorTests(unittest.TestCase):
             "KST-9: 2026/04/01 11:28 LQI: 184 RSSI: -95dbm",
         )
         self.assertEqual(sensor.extra_state_attributes, {"value": {"lqi": 184, "rssi": -95}})
+
+
+class SmartThingsWebSensorSetupTests(unittest.IsolatedAsyncioTestCase):
+    """Keep camera byte URLs out of ordinary sensor entities."""
+
+    async def test_camera_image_url_state_does_not_create_regular_sensor(self) -> None:
+        image = BridgeState(
+            "main",
+            "imageCapture",
+            "image",
+            (
+                "https://mediaserv.media101.ec2.st-av.net/image?"
+                "source_id=identifier_ec035b365f6&image_id=identifier_9734f6cd4606"
+            ),
+            None,
+            "2026-08-29T00:00:00Z",
+        )
+        capture_time = BridgeState(
+            "main",
+            "imageCapture",
+            "captureTime",
+            "2026-08-29T00:00:00Z",
+            None,
+            "2026-08-29T00:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_camera",
+            "loc_001",
+            None,
+            "홈카메라 360",
+            "camera",
+            True,
+            states={image.key: image, capture_time.key: capture_time},
+        )
+        inventory = BridgeInventory(
+            1, True, "0.1.132", "4:test", {}, {}, {device.device_id: device}
+        )
+        runtime = SmartThingsWebRuntime(object(), "loc_001", inventory)
+        entry = SimpleNamespace(
+            runtime_data=runtime,
+            async_on_unload=lambda _callback: None,
+        )
+        added: list[SmartThingsWebSensor] = []
+
+        await async_setup_entry(object(), entry, added.extend)
+
+        self.assertEqual([entity.state_key[2] for entity in added], ["captureTime"])
 
 
 if __name__ == "__main__":

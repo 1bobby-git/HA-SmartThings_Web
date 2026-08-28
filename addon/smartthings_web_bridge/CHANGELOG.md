@@ -1,11 +1,17 @@
 # Changelog
 
+## 0.1.132
+
+- Reject stale pushed state events before advancing the local inventory sequence, so an old `updatedAt` cannot mask the next valid event or prevent an immediate snapshot resynchronization.
+- Keep signed camera media URLs out of regular sensor entities while preserving the dedicated Home Assistant `image` entity and safe capture metadata sensors.
+- Use one deterministic secondary-switch naming rule for both new entity creation and registry restoration, including identifier-only channels that must remain distinct as `스위치 2`, `스위치 3`, and later.
+- Use one deterministic secondary-switch naming path for entity creation and registry repair, including identifier-only switch channels that fall back to `스위치 2`, `스위치 3`, and later slots.
+
 ## 0.1.131
 
 - Keep ordinary on/off devices with auxiliary contact state exposed as primary Home Assistant `switch` entities while retaining their contact state as a separate binary sensor.
 - Give secondary switch channels stable generated names such as `스위치 2` and migrate restored duplicate room-prefixed IDs onto those distinct channel IDs.
 - Rebase current-state `smartthings_device_dev_*` fallback entity IDs even when a user display name is set, while preserving that display name and leaving unrelated custom rows untouched.
-- Keep signed camera media URLs out of regular sensor states while preserving the dedicated Home Assistant `image` entity and safe capture metadata sensors.
 
 ## 0.1.130
 

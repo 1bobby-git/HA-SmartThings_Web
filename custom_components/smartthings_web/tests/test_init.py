@@ -1663,6 +1663,120 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             "geosil_ganjeobdeung_스위치_3",
         )
 
+    def test_rebases_identifier_only_secondary_switch_components_by_order(self) -> None:
+        """Keep registry repair aligned with generated unreadable switch names."""
+        states = [
+            BridgeState(
+                component,
+                f"identifier_capability_{component}",
+                "switch",
+                "off",
+                None,
+                "2026-08-29T00:00:00Z",
+                component_role=role,
+            )
+            for component, role in (
+                ("main", "main"),
+                ("identifier_component_b", "identifier_role_b"),
+                ("identifier_component_a", "identifier_role_a"),
+            )
+        ]
+        device = BridgeDevice(
+            "dev_lamp_identifier",
+            "loc_001",
+            "room_living",
+            "Geosil Ganjeobdeung",
+            "switch",
+            True,
+            states={state.key: state for state in states},
+        )
+        registry_entries = [
+            SimpleNamespace(
+                entity_id="switch.geosil_ganjeobdeung",
+                domain="switch",
+                platform=DOMAIN,
+                unique_id=(
+                    "dev_lamp_identifier_main_"
+                    "identifier_capability_main_switch"
+                ),
+                device_id="uuid_lamp_identifier",
+                name=None,
+                disabled_by=None,
+                original_name=None,
+                object_id_base=None,
+                suggested_object_id="geosil_ganjeobdeung",
+            ),
+            SimpleNamespace(
+                entity_id="switch.geosil_geosil_ganjeobdeung",
+                domain="switch",
+                platform=DOMAIN,
+                unique_id=(
+                    "dev_lamp_identifier_identifier_component_a_"
+                    "identifier_capability_identifier_component_a_switch"
+                ),
+                device_id="uuid_lamp_identifier",
+                name=None,
+                disabled_by=None,
+                original_name=None,
+                object_id_base=None,
+                suggested_object_id="geosil_geosil_ganjeobdeung",
+            ),
+            SimpleNamespace(
+                entity_id="switch.geosil_ganjeobdeung_2",
+                domain="switch",
+                platform=DOMAIN,
+                unique_id=(
+                    "dev_lamp_identifier_identifier_component_b_"
+                    "identifier_capability_identifier_component_b_switch"
+                ),
+                device_id="uuid_lamp_identifier",
+                name=None,
+                disabled_by=None,
+                original_name=None,
+                object_id_base=None,
+                suggested_object_id="geosil_ganjeobdeung_2",
+            ),
+        ]
+        registry = FakeRegistry(registry_entries)
+        self.patch_registry(registry)
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.132",
+            protocol_version="4",
+            locations={"loc_001": "Home"},
+            rooms={"room_living": ("loc_001", "Geosil")},
+            devices={device.device_id: device},
+        )
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}),
+            inventory,
+        )
+
+        self.assertCountEqual(
+            registry.renamed,
+            [
+                (
+                    "switch.geosil_geosil_ganjeobdeung",
+                    "switch.geosil_ganjeobdeung_스위치_2",
+                ),
+                (
+                    "switch.geosil_ganjeobdeung_2",
+                    "switch.geosil_ganjeobdeung_스위치_3",
+                ),
+            ],
+        )
+        self.assertEqual(
+            registry_entries[1].suggested_object_id,
+            "geosil_ganjeobdeung_스위치_2",
+        )
+        self.assertEqual(
+            registry_entries[2].suggested_object_id,
+            "geosil_ganjeobdeung_스위치_3",
+        )
+
     def test_rebased_role_metadata_does_not_accumulate_transliterated_suffixes(self) -> None:
         """Keep HA-transliterated role suffixes stable across repeated setup passes."""
         state_specs = [

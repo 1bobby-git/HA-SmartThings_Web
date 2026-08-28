@@ -15,11 +15,11 @@ from .models import (
     BridgeDevice,
     BridgeState,
     SmartThingsWebRuntime,
-    _readable_state_token,
     control_supports_command,
     control_kind,
     safe_observed_control,
     safe_generic_toggle_control,
+    secondary_switch_name_overrides,
     toggle_control_for_state,
 )
 
@@ -38,7 +38,7 @@ async def async_setup_entry(
         for device in runtime.inventory.devices.values():
             if device.location_id != runtime.location_id:
                 continue
-            name_overrides = _secondary_switch_name_overrides(device)
+            name_overrides = secondary_switch_name_overrides(device)
             for state in device.states.values():
                 unique_id = "_".join((device.device_id, *state.key))
                 control = toggle_control_for_state(device, state)
@@ -181,23 +181,3 @@ class SmartThingsWebSwitch(SmartThingsWebEntity, SwitchEntity):
             )
         except BridgeClientError as err:
             raise HomeAssistantError(bridge_error_message("switch command", err)) from err
-
-
-def _secondary_switch_name_overrides(
-    device: BridgeDevice,
-) -> dict[tuple[str, str, str], str]:
-    secondary_switches = [
-        state
-        for state in device.states.values()
-        if control_kind(device, state) == "switch"
-        and state.attribute == "switch"
-        and (state.component_role or state.component).strip().lower() != "main"
-    ]
-    names: dict[tuple[str, str, str], str] = {}
-    for index, state in enumerate(sorted(secondary_switches, key=lambda item: item.key), 2):
-        role_name = _readable_state_token(
-            state.component_role or state.component,
-            "component",
-        )
-        names[state.key] = role_name if role_name is not None else f"스위치 {index}"
-    return names

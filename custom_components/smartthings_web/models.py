@@ -337,7 +337,6 @@ class SmartThingsWebRuntime:
             and not state_has_entity_value(current)
             and state_has_entity_value(state)
         )
-        self.inventory.sequence = sequence
         repeated_event = (
             current is not None
             and state.attribute in EVENT_ATTRIBUTES
@@ -345,6 +344,7 @@ class SmartThingsWebRuntime:
         )
         if current is not None and not _state_is_newer(state, current) and not repeated_event:
             return False
+        self.inventory.sequence = sequence
         device.states[state.key] = state
         self._notify_listeners(
             device_ids={device_id},
@@ -575,6 +575,27 @@ def disambiguated_state_names(
             qualifiers = [str(index) for index in range(1, len(ordered) + 1)]
         for state, qualifier in zip(ordered, qualifiers, strict=True):
             names[state.key] = f"{base_name} ({qualifier})"
+    return names
+
+
+def secondary_switch_name_overrides(
+    device: BridgeDevice,
+) -> dict[tuple[str, str, str], str]:
+    """Return generated names for secondary switch channels on one device."""
+    secondary_switches = [
+        state
+        for state in device.states.values()
+        if control_kind(device, state) == "switch"
+        and state.attribute == "switch"
+        and (state.component_role or state.component).strip().lower() != "main"
+    ]
+    names: dict[tuple[str, str, str], str] = {}
+    for index, state in enumerate(sorted(secondary_switches, key=lambda item: item.key), 2):
+        role_name = _readable_state_token(
+            state.component_role or state.component,
+            "component",
+        )
+        names[state.key] = role_name if role_name is not None else f"스위치 {index}"
     return names
 
 
