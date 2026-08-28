@@ -10,6 +10,13 @@ const EXPECTED_BRIDGE_SWITCH_COMPONENT = "main";
 const EXPECTED_BRIDGE_SWITCH_CAPABILITY = "switch";
 const EXPECTED_BRIDGE_SWITCH_ATTRIBUTE = "switch";
 
+export interface BridgeStateBinding {
+  deviceId: string;
+  component: string;
+  capability: string;
+  attribute: string;
+}
+
 export interface HomeAssistantState {
   entityId: string;
   state: string;
@@ -58,6 +65,8 @@ export interface LiveControlEventBenchmarkOptions {
   cycles: number;
   ha: HomeAssistantEventControlClient;
   bridge?: BridgeSseBenchmarkClient;
+  bridgeStateBinding?: BridgeStateBinding;
+  /** Legacy canonical binding retained for older callers and fixtures. */
   bridgeDeviceId?: string;
   clock?: LiveControlEventBenchmarkClock;
   waitTimeoutMs?: number;
@@ -174,10 +183,8 @@ export async function runLiveControlEventBenchmark(
   validateEntityAllowed(options.entityId, options.allowedEntityIds);
   validateCycles(options.cycles);
   if (!options.execute) throw new Error("live_control_event_benchmark_execute_required");
-  if (
-    options.bridge &&
-    (!options.bridgeDeviceId || !SAFE_BRIDGE_DEVICE_ID.test(options.bridgeDeviceId))
-  ) {
+  const bridgeStateBinding = options.bridge ? resolveBridgeStateBinding(options) : undefined;
+  if (options.bridge && bridgeStateBinding === undefined) {
     throw new Error("live_control_event_benchmark_arguments_invalid");
   }
 
@@ -208,7 +215,7 @@ export async function runLiveControlEventBenchmark(
       bridgeSubscription = await options.bridge.subscribeEvents((event) => {
         const sequence = sanitizeBridgeSequence(event);
         if (sequence !== undefined) bridgeSequences.push(sequence);
-        const sanitized = sanitizeBridgeEvent(event, options.bridgeDeviceId!);
+        const sanitized = sanitizeBridgeEvent(event, bridgeStateBinding!);
         if (sanitized) bridgeEvents.push(sanitized);
       });
     }
@@ -469,7 +476,7 @@ function sanitizeHaEvent(
 
 function sanitizeBridgeEvent(
   event: unknown,
-  expectedDeviceId: string
+  binding: BridgeStateBinding
 ): SafeBridgeEventObservation | undefined {
   if (!isRecord(event)) return undefined;
   const state = isRecord(event.state) ? event.state : event;
@@ -479,12 +486,12 @@ function sanitizeBridgeEvent(
   if (
     event.schemaVersion !== 1 ||
     event.type !== "state" ||
-    event.deviceId !== expectedDeviceId ||
+    event.deviceId !== binding.deviceId ||
     !Number.isSafeInteger(event.sequence) ||
     Number(event.sequence) < 0 ||
-    component !== EXPECTED_BRIDGE_SWITCH_COMPONENT ||
-    capability !== EXPECTED_BRIDGE_SWITCH_CAPABILITY ||
-    attribute !== EXPECTED_BRIDGE_SWITCH_ATTRIBUTE ||
+    component !== binding.component ||
+    capability !== binding.capability ||
+    attribute !== binding.attribute ||
     (state.value !== "on" && state.value !== "off") ||
     !isSafeTimestamp(event.receivedAt) ||
     !isSafeTimestamp(state.updatedAt)
@@ -522,13 +529,35 @@ function findBridgeEvent(
   return events.find(
     (event) =>
       event.value === targetState &&
-      event.component === EXPECTED_BRIDGE_SWITCH_COMPONENT &&
-      event.capability === EXPECTED_BRIDGE_SWITCH_CAPABILITY &&
-      event.attribute === EXPECTED_BRIDGE_SWITCH_ATTRIBUTE &&
       Date.parse(event.receivedAt) >= Date.parse(serviceRequestedAt) &&
       Date.parse(event.updatedAt ?? "") >= Date.parse(serviceRequestedAt) &&
       (afterSequence === undefined || event.sequence > afterSequence)
   );
+}
+
+function resolveBridgeStateBinding(
+  options: LiveControlEventBenchmarkOptions
+): BridgeStateBinding | undefined {
+  const binding = options.bridgeStateBinding ?? (
+    options.bridgeDeviceId === undefined
+      ? undefined
+      : {
+          deviceId: options.bridgeDeviceId,
+          component: EXPECTED_BRIDGE_SWITCH_COMPONENT,
+          capability: EXPECTED_BRIDGE_SWITCH_CAPABILITY,
+          attribute: EXPECTED_BRIDGE_SWITCH_ATTRIBUTE
+        }
+  );
+  if (
+    binding === undefined ||
+    !SAFE_BRIDGE_DEVICE_ID.test(binding.deviceId) ||
+    !SAFE_TOKEN.test(binding.component) ||
+    !SAFE_TOKEN.test(binding.capability) ||
+    binding.attribute !== EXPECTED_BRIDGE_SWITCH_ATTRIBUTE
+  ) {
+    return undefined;
+  }
+  return { ...binding };
 }
 
 function bridgeWithRequestTiming(

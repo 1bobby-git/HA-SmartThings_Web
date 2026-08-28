@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  resolveBridgeStateBindingFromInventory
+} from "../tools/haos-live-control-event-benchmark.js";
+import {
   DEFAULT_LIVE_CONTROL_EVENT_ENTITY_ID,
   createLiveControlEventBenchmarkPreview,
   runLiveControlEventBenchmark,
@@ -11,6 +14,34 @@ import {
 } from "../tools/haos-live-control-event-benchmark-core.js";
 
 describe("HAOS live control event benchmark", () => {
+  test("resolves the exact Bridge state key represented by the HA entity registry", () => {
+    const binding = resolveBridgeStateBindingFromInventory(
+      {
+        devices: [
+          {
+            id: "dev_410",
+            states: [
+              {
+                component: "identifier_cd4f3cfbf2aa",
+                capability: "identifier_74292182f118",
+                attribute: "switch",
+                value: "off"
+              }
+            ]
+          }
+        ]
+      },
+      "dev_410_identifier_cd4f3cfbf2aa_identifier_74292182f118_switch"
+    );
+
+    expect(binding).toEqual({
+      deviceId: "dev_410",
+      component: "identifier_cd4f3cfbf2aa",
+      capability: "identifier_74292182f118",
+      attribute: "switch"
+    });
+  });
+
   test("previews the allowlisted target without subscribing or calling services", async () => {
     const calls: string[] = [];
     const preview = await createLiveControlEventBenchmarkPreview({
@@ -180,6 +211,57 @@ describe("HAOS live control event benchmark", () => {
 
     expect(result.transitions[0]?.bridge?.sequence).toBe(42);
     expect(result.transitions[1]?.bridge?.sequence).toBe(43);
+  });
+
+  test("matches the exact registry state key when Bridge identifiers replace main and switch", async () => {
+    const calls: string[] = [];
+    const component = "identifier_cd4f3cfbf2aa";
+    const capability = "identifier_74292182f118";
+    const bridgeEvents = [
+      bridgeEvent(42, "on", "2026-08-27T00:00:00.240Z", "2026-08-27T00:00:00.210Z", {
+        component,
+        capability
+      }),
+      bridgeEvent(43, "off", "2026-08-27T00:00:00.440Z", "2026-08-27T00:00:00.410Z", {
+        component,
+        capability
+      })
+    ];
+
+    const result = await runLiveControlEventBenchmark({
+      entityId: DEFAULT_LIVE_CONTROL_EVENT_ENTITY_ID,
+      allowedEntityIds: [DEFAULT_LIVE_CONTROL_EVENT_ENTITY_ID],
+      execute: true,
+      cycles: 1,
+      ha: eventHaClient({
+        calls,
+        states: [
+          haState("off", "2026-08-27T00:00:00.000Z"),
+          haState("off", "2026-08-27T00:00:00.900Z")
+        ],
+        events: [
+          haEvent("on", "2026-08-27T00:00:00.260Z", "2026-08-27T00:00:00.270Z"),
+          haEvent("off", "2026-08-27T00:00:00.460Z", "2026-08-27T00:00:00.470Z")
+        ]
+      }),
+      bridge: bridgeClient(calls, bridgeEvents),
+      bridgeStateBinding: {
+        deviceId: "dev_123",
+        component,
+        capability,
+        attribute: "switch"
+      },
+      clock: fixedClock([
+        "2026-08-27T00:00:00.100Z",
+        "2026-08-27T00:00:00.200Z",
+        "2026-08-27T00:00:00.250Z",
+        "2026-08-27T00:00:00.400Z",
+        "2026-08-27T00:00:00.450Z",
+        "2026-08-27T00:00:00.800Z"
+      ])
+    });
+
+    expect(result.transitions.map((transition) => transition.bridge?.sequence)).toEqual([42, 43]);
   });
 
   test("turns the allowlisted switch back off in finally when event wait fails", async () => {

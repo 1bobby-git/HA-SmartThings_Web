@@ -7,6 +7,7 @@ import {
   DEFAULT_LIVE_CONTROL_EVENT_ENTITY_ID,
   createLiveControlEventBenchmarkPreview,
   runLiveControlEventBenchmark,
+  type BridgeStateBinding,
   type BridgeSseBenchmarkClient,
   type HaStateChangedEvent,
   type HomeAssistantEventControlClient
@@ -55,10 +56,15 @@ async function main(): Promise<void> {
   await mkdir(outputDirectory, { recursive: true });
   const bridgeToken = await readOptionalToken(options.bridgeTokenFile);
   if (!bridgeToken) throw new Error("live_control_event_benchmark_bridge_token_missing");
-  const bridgeDeviceId = await readBridgeDeviceIdFromEntityRegistry(
+  const bridgeEntityUniqueId = await readBridgeEntityUniqueIdFromEntityRegistry(
     options.haWsUrl,
     haToken,
     options.entityId
+  );
+  const bridgeStateBinding = await readBridgeStateBindingFromInventory(
+    options.bridgeUrl,
+    bridgeToken,
+    bridgeEntityUniqueId
   );
   const bridge = createBridgeSseClient(options.bridgeUrl, bridgeToken);
   const result = await runLiveControlEventBenchmark({
@@ -68,7 +74,7 @@ async function main(): Promise<void> {
     cycles: options.cycles,
     ha,
     bridge,
-    bridgeDeviceId,
+    bridgeStateBinding,
     waitTimeoutMs: options.waitTimeoutMs,
     pollIntervalMs: options.pollIntervalMs,
     ...(options.baselineHaObservedAfterRequestMs === undefined
@@ -240,7 +246,7 @@ async function readBridgeEvents(
   }
 }
 
-async function readBridgeDeviceIdFromEntityRegistry(
+async function readBridgeEntityUniqueIdFromEntityRegistry(
   websocketUrl: string,
   token: string | undefined,
   entityId: string
@@ -252,12 +258,60 @@ async function readBridgeDeviceIdFromEntityRegistry(
     const response = await waitForHaResponse(socket, id);
     const result = isRecord(response.result) ? response.result : undefined;
     const uniqueId = typeof result?.unique_id === "string" ? result.unique_id : "";
-    const match = uniqueId.match(/(?:^|_)(dev_[A-Za-z0-9]{3,64})(?:_|$)/u);
-    if (!match?.[1]) throw new Error("live_control_event_benchmark_bridge_device_id_missing");
-    return match[1];
+    if (!/^dev_[A-Za-z0-9]{3,64}_[A-Za-z0-9_.:-]{1,448}$/u.test(uniqueId)) {
+      throw new Error("live_control_event_benchmark_bridge_state_binding_missing");
+    }
+    return uniqueId;
   } finally {
     socket.close();
   }
+}
+
+async function readBridgeStateBindingFromInventory(
+  baseUrl: string,
+  token: string,
+  entityUniqueId: string
+): Promise<BridgeStateBinding> {
+  const response = await fetch(`${baseUrl}/api/v1/inventory`, {
+    headers: { authorization: `Bearer ${token}` }
+  });
+  if (!response.ok) {
+    throw new Error("live_control_event_benchmark_bridge_inventory_failed");
+  }
+  return resolveBridgeStateBindingFromInventory(await response.json(), entityUniqueId);
+}
+
+export function resolveBridgeStateBindingFromInventory(
+  value: unknown,
+  entityUniqueId: string
+): BridgeStateBinding {
+  if (!/^dev_[A-Za-z0-9]{3,64}_[A-Za-z0-9_.:-]{1,448}$/u.test(entityUniqueId)) {
+    throw new Error("live_control_event_benchmark_bridge_state_binding_missing");
+  }
+  const root = isRecord(value) ? value : undefined;
+  const devices = Array.isArray(root?.devices) ? root.devices : [];
+  const matches: BridgeStateBinding[] = [];
+  for (const candidate of devices) {
+    const device = isRecord(candidate) ? candidate : undefined;
+    const deviceId = typeof device?.id === "string" ? device.id : "";
+    const states = Array.isArray(device?.states) ? device.states : [];
+    for (const item of states) {
+      const state = isRecord(item) ? item : undefined;
+      const component = typeof state?.component === "string" ? state.component : "";
+      const capability = typeof state?.capability === "string" ? state.capability : "";
+      const attribute = typeof state?.attribute === "string" ? state.attribute : "";
+      if (
+        attribute === "switch" &&
+        `${deviceId}_${component}_${capability}_${attribute}` === entityUniqueId
+      ) {
+        matches.push({ deviceId, component, capability, attribute });
+      }
+    }
+  }
+  if (matches.length !== 1) {
+    throw new Error("live_control_event_benchmark_bridge_state_binding_missing");
+  }
+  return matches[0]!;
 }
 
 async function openHaWebSocket(url: string, token: string | undefined): Promise<WebSocket> {

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.116
+
+- Resolve the live control benchmark against the entity registry's exact normalized Bridge state key, including aliased component and capability identifiers, so pushed ON/OFF transitions are measured instead of being discarded as canonical-name mismatches.
+- Keep benchmark matching push-first and exact to one entity state without adding SmartThings state polling.
+
 ## 0.1.115
 
 - Preserve the numeric collision suffix of an existing exact-room primary entity during migration, so `media_player.3_4` and `media_player.geosil_geosil_4` settle on `media_player.geosil_4` instead of being renumbered to `media_player.geosil_2`.
