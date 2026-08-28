@@ -1190,7 +1190,22 @@ describe("DeviceStore", () => {
       sceneId: "identifier_scenegoodnight",
       locationId: "loc_001",
       name: "Good night",
-      updatedAt: "2026-08-24T21:01:00.000Z"
+      updatedAt: "2026-08-24T21:01:00.000Z",
+      actions: [
+        {
+          command: {
+            devices: ["dev_001"],
+            commands: [
+              {
+                component: "main",
+                capability: "identifier_switch",
+                command: "on",
+                arguments: []
+              }
+            ]
+          }
+        }
+      ]
     });
 
     expect(store.snapshot()).toMatchObject({
@@ -1208,7 +1223,16 @@ describe("DeviceStore", () => {
           id: "identifier_scenegoodnight",
           locationId: "loc_001",
           name: "Good night",
-          updatedAt: "2026-08-24T21:01:00.000Z"
+          updatedAt: "2026-08-24T21:01:00.000Z",
+          expectedStates: [
+            {
+              deviceId: "dev_001",
+              component: "main",
+              capability: "identifier_switch",
+              attribute: "switch",
+              value: "on"
+            }
+          ]
         }
       ]
     });
@@ -1216,6 +1240,107 @@ describe("DeviceStore", () => {
     expect(listener).toHaveBeenLastCalledWith(
       expect.objectContaining({ type: "inventory", sequence: 2 })
     );
+  });
+
+  test("unwraps typed scene action arguments into primitive expected states", () => {
+    const store = new DeviceStore();
+    observeSceneSnapshot(store, {
+      sceneId: "identifier_scenemedia",
+      locationId: "loc_001",
+      name: "Volume preset",
+      updatedAt: "2026-08-24T21:01:00.000Z",
+      actions: [
+        {
+          command: {
+            devices: ["dev_001"],
+            commands: [
+              {
+                component: "main",
+                capability: "identifier_audioVolume",
+                command: "setVolume",
+                arguments: [{ integer: 64, type: "integer" }]
+              },
+              {
+                component: "main",
+                capability: "identifier_thermostatMode",
+                command: "setThermostatMode",
+                arguments: [{ string: "eco", type: "string" }]
+              }
+            ]
+          }
+        }
+      ]
+    });
+
+    expect(store.snapshot().scenes[0]?.expectedStates).toEqual([
+      {
+        deviceId: "dev_001",
+        component: "main",
+        capability: "identifier_audioVolume",
+        attribute: "volume",
+        value: 64
+      },
+      {
+        deviceId: "dev_001",
+        component: "main",
+        capability: "identifier_thermostatMode",
+        attribute: "thermostatMode",
+        value: "eco"
+      }
+    ]);
+  });
+
+  test("normalizes raw scene action component and capability tokens like states", () => {
+    const aliases: Record<string, string> = {
+      main: "identifier_main",
+      switch: "identifier_switch",
+      audioVolume: "identifier_audioVolume"
+    };
+    const store = new DeviceStore({ normalizeStateToken: (value) => aliases[value] ?? value });
+    observeSceneSnapshot(store, {
+      sceneId: "identifier_sceneraw",
+      locationId: "loc_001",
+      name: "Raw scene",
+      updatedAt: "2026-08-24T21:01:00.000Z",
+      actions: [
+        {
+          command: {
+            devices: ["dev_001"],
+            commands: [
+              {
+                component: "main",
+                capability: "switch",
+                command: "on",
+                arguments: []
+              },
+              {
+                component: "main",
+                capability: "audioVolume",
+                command: "setVolume",
+                arguments: [{ integer: 64, type: "integer" }]
+              }
+            ]
+          }
+        }
+      ]
+    });
+
+    expect(store.snapshot().scenes[0]?.expectedStates).toEqual([
+      {
+        deviceId: "dev_001",
+        component: "identifier_main",
+        capability: "identifier_audioVolume",
+        attribute: "volume",
+        value: 64
+      },
+      {
+        deviceId: "dev_001",
+        component: "identifier_main",
+        capability: "identifier_switch",
+        attribute: "switch",
+        value: "on"
+      }
+    ]);
   });
 
   test("captures api/location get rows that expose id instead of locationId", () => {
@@ -1385,7 +1510,22 @@ describe("DeviceStore", () => {
         sceneId: "identifier_scenegoodnight",
         locationId: "loc_001",
         name: "Good night",
-        updatedAt: "2026-08-24T21:01:00.000Z"
+        updatedAt: "2026-08-24T21:01:00.000Z",
+        actions: [
+          {
+            command: {
+              devices: ["dev_001"],
+              commands: [
+                {
+                  component: "main",
+                  capability: "identifier_switch",
+                  command: "on",
+                  arguments: []
+                }
+              ]
+            }
+          }
+        ]
       });
       const beforeRestart = first.snapshot();
       first.close();

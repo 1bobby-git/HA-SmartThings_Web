@@ -74,6 +74,15 @@ export interface BridgeScene {
   locationId: string;
   name: string;
   updatedAt: string | null;
+  expectedStates?: BridgeSceneExpectedState[];
+}
+
+export interface BridgeSceneExpectedState {
+  deviceId: string;
+  component: string;
+  capability: string;
+  attribute: string;
+  value: BridgeJsonValue;
 }
 
 export interface BridgeInventory {
@@ -351,12 +360,14 @@ export class DeviceStore {
         const locationId = safeId(row.locationId ?? row.location_id ?? meta?.locationId, "loc");
         const name = safeName(row.name ?? row.sceneName ?? row.scene_name);
         if (!id || !locationId || !name) continue;
+        const expectedStates = sceneExpectedStates(row.actions, this.#normalizeStateToken);
         changed =
           setIfChanged(this.#scenes, id, {
             id,
             locationId,
             name,
-            updatedAt: validTimestamp(row.updatedAt ?? row.updated_at ?? row.timestamp ?? row.dateUpdated ?? meta?.dateUpdated)
+            updatedAt: validTimestamp(row.updatedAt ?? row.updated_at ?? row.timestamp ?? row.dateUpdated ?? meta?.dateUpdated),
+            ...(expectedStates.length > 0 ? { expectedStates } : {})
           }) || changed;
       }
       return changed;
@@ -937,8 +948,15 @@ function parsePersistedInventory(value: unknown): BridgeInventory | undefined {
       const locationId = safeId(item?.locationId, "loc");
       const name = safeName(item?.name);
       const updatedAt = item?.updatedAt === null ? null : validTimestamp(item?.updatedAt);
+      const expectedStates = parseStoredSceneExpectedStates(item?.expectedStates);
       if (!id || !locationId || !name || updatedAt === undefined) return undefined;
-      scenes.push({ id, locationId, name, updatedAt });
+      scenes.push({
+        id,
+        locationId,
+        name,
+        updatedAt,
+        ...(expectedStates.length > 0 ? { expectedStates } : {})
+      });
     }
   }
   return {
@@ -1627,6 +1645,132 @@ function safeRole(value: unknown): string | undefined {
 
 function safeToken(value: string | null): value is string {
   return value !== null && TOKEN_PATTERN.test(value);
+}
+
+function sceneExpectedStates(
+  actions: unknown,
+  normalizeStateToken: StateTokenNormalizer
+): BridgeSceneExpectedState[] {
+  if (!Array.isArray(actions)) return [];
+  const found = new Map<string, BridgeSceneExpectedState>();
+  const visit = (value: unknown, inheritedDevices: string[] = []): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, inheritedDevices);
+      return;
+    }
+    const record = asRecord(value);
+    if (!record) return;
+    const ownDevice = safeId(
+      record.deviceId ?? record.device_id ?? record.device ?? record.targetDeviceId,
+      "dev"
+    );
+    const listedDevices = arrayOfDeviceIds(record.devices ?? record.deviceIds);
+    const nextDevices = listedDevices.length > 0 ? listedDevices : ownDevice ? [ownDevice] : inheritedDevices;
+    const component = normalizeToken(readString(record.component ?? record.componentId), normalizeStateToken);
+    const capability = normalizeToken(readString(record.capability ?? record.capabilityId), normalizeStateToken);
+    const directAttribute = safeToken(readString(record.attribute ?? record.attributeName))
+      ? (readString(record.attribute ?? record.attributeName) as string)
+      : undefined;
+    const command = safeToken(readString(record.command ?? record.commandName))
+      ? (readString(record.command ?? record.commandName) as string)
+      : undefined;
+    const args = Array.isArray(record.arguments) ? record.arguments : [];
+    const directValue =
+      record.value !== undefined
+        ? record.value
+        : record.targetValue !== undefined
+          ? record.targetValue
+          : undefined;
+    const derived = sceneActionState(directAttribute, directValue, command, args);
+    if (nextDevices.length > 0 && component && capability && derived) {
+      for (const deviceId of nextDevices) {
+        const expected = {
+          deviceId,
+          component,
+          capability,
+          attribute: derived.attribute,
+          value: derived.value
+        };
+        found.set(
+          `${expected.deviceId}\u0000${expected.component}\u0000${expected.capability}\u0000${expected.attribute}`,
+          expected
+        );
+      }
+    }
+    for (const nested of ["action", "actions", "command", "commands", "if", "then", "else"]) {
+      if (record[nested] !== undefined) visit(record[nested], nextDevices);
+    }
+  };
+  visit(actions);
+  return [...found.values()].sort((left, right) =>
+    `${left.deviceId}:${left.component}:${left.capability}:${left.attribute}`.localeCompare(
+      `${right.deviceId}:${right.component}:${right.capability}:${right.attribute}`
+    )
+  );
+}
+
+function sceneActionState(
+  attribute: string | undefined,
+  value: unknown,
+  command: string | undefined,
+  args: unknown[]
+): { attribute: string; value: BridgeJsonValue } | undefined {
+  const unwrappedValue = unwrapSceneTypedValue(value);
+  if (attribute && isBridgeJsonValue(unwrappedValue)) return { attribute, value: unwrappedValue };
+  if (!command) return undefined;
+  if (command === "on" || command === "off") return { attribute: "switch", value: command };
+  const first = unwrapSceneTypedValue(args[0]);
+  if (command === "setLevel" && isBridgeJsonValue(first)) return { attribute: "level", value: first };
+  if (command === "setVolume" && isBridgeJsonValue(first)) return { attribute: "volume", value: first };
+  if (command === "setFanMode" && isBridgeJsonValue(first)) return { attribute: "fanMode", value: first };
+  if (command === "setThermostatMode" && isBridgeJsonValue(first)) return { attribute: "thermostatMode", value: first };
+  if (command === "setCoolingSetpoint" && isBridgeJsonValue(first)) return { attribute: "coolingSetpoint", value: first };
+  if (command === "setHeatingSetpoint" && isBridgeJsonValue(first)) return { attribute: "heatingSetpoint", value: first };
+  return undefined;
+}
+
+function unwrapSceneTypedValue(value: unknown): unknown {
+  const record = asRecord(value);
+  if (!record) return value;
+  const type = readString(record.type);
+  if (type === "integer" || type === "number" || type === "decimal") {
+    const raw = record.integer ?? record.number ?? record.decimal ?? record.value;
+    return typeof raw === "number" && Number.isFinite(raw) ? raw : value;
+  }
+  if (type === "string") return typeof record.string === "string" ? record.string : value;
+  if (type === "boolean") return typeof record.boolean === "boolean" ? record.boolean : value;
+  return value;
+}
+
+function arrayOfDeviceIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => safeId(item, "dev")).filter((item): item is string => item !== null);
+}
+
+function parseStoredSceneExpectedStates(value: unknown): BridgeSceneExpectedState[] {
+  if (!Array.isArray(value)) return [];
+  const parsed: BridgeSceneExpectedState[] = [];
+  for (const raw of value) {
+    const item = asRecord(raw);
+    const deviceId = safeId(item?.deviceId, "dev");
+    const component = safeToken(readString(item?.component)) ? (item?.component as string) : undefined;
+    const capability = safeId(item?.capability, "identifier");
+    const attribute = safeToken(readString(item?.attribute)) ? (item?.attribute as string) : undefined;
+    if (!deviceId || !component || !capability || !attribute || !isBridgeJsonValue(item?.value)) {
+      return [];
+    }
+    parsed.push({ deviceId, component, capability, attribute, value: item.value });
+  }
+  return parsed;
+}
+
+function isBridgeJsonValue(value: unknown): value is BridgeJsonValue {
+  if (value === null) return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "boolean" || typeof value === "string") return true;
+  if (Array.isArray(value)) return value.every(isBridgeJsonValue);
+  const record = asRecord(value);
+  return record ? Object.values(record).every(isBridgeJsonValue) : false;
 }
 
 function validTimestamp(value: unknown): string | null {

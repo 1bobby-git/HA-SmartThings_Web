@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.127
+
+- Confirm SmartThings scene execution only from explicit scene action state expectations parsed from the observed `api/scene` snapshot, instead of accepting any newer same-location device event.
+- Persist sanitized expected scene states across Bridge restarts and fail closed with a confirmation timeout when a scene exposes no safe device/component/capability/value expectation.
+
 ## 0.1.126
 
 - Publish a sanitized `type: "image"` SSE event whenever authenticated camera image cache bytes are atomically persisted, carrying only the public device alias, cache sequence, content type, and capture timestamp.

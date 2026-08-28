@@ -1201,9 +1201,23 @@ describe("SafeCommandService", () => {
     })).resolves.toMatchObject({ status: "confirmed" });
   });
 
-  test("executes scenes only after a newer device event in the same location", async () => {
+  test("executes scenes only after a newer matching action state", async () => {
     const store = readyDeviceStore();
-    observeSceneSnapshot(store);
+    observeSceneSnapshot(store, [
+      {
+        command: {
+          devices: ["dev_001"],
+          commands: [
+            {
+              component: "main",
+              capability: "identifier_switch",
+              command: "on",
+              arguments: []
+            }
+          ]
+        }
+      }
+    ]);
     const service = new SafeCommandService({
       devices: store,
       status: connectedStatus(),
@@ -1223,6 +1237,157 @@ describe("SafeCommandService", () => {
       arguments: [],
       clientRequestId: "request_013"
     })).resolves.toMatchObject({ confirmation: "device_event" });
+  });
+
+  test("does not confirm scenes from unrelated same-location device traffic", async () => {
+    const store = readyDeviceStore();
+    observeSceneSnapshot(store, [
+      {
+        command: {
+          devices: ["dev_001"],
+          commands: [
+            {
+              component: "main",
+              capability: "identifier_switch",
+              command: "on",
+              arguments: []
+            }
+          ]
+        }
+      }
+    ]);
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: {
+        executeScene: vi.fn(async () => {
+          store.observe(received(deviceEventFrame("open", "2026-08-25T00:00:01Z", "contact")));
+        })
+      },
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute({
+      targetType: "scene",
+      targetId: "identifier_scene001",
+      command: "execute",
+      arguments: [],
+      clientRequestId: "request_019"
+    })).rejects.toMatchObject({ code: "command_confirmation_timeout" });
+  });
+
+  test("confirms scene typed action arguments from primitive push values", async () => {
+    const store = readyDeviceStore();
+    observeSceneSnapshot(store, [
+      {
+        command: {
+          devices: ["dev_001"],
+          commands: [
+            {
+              component: "main",
+              capability: "identifier_switch",
+              command: "setVolume",
+              arguments: [{ integer: 64, type: "integer" }]
+            },
+            {
+              component: "main",
+              capability: "identifier_thermostatMode",
+              command: "setThermostatMode",
+              arguments: [{ string: "eco", type: "string" }]
+            }
+          ]
+        }
+      }
+    ]);
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: {
+        executeScene: vi.fn(async () => {
+          store.observe(received(deviceEventFrame(64, "2026-08-25T00:00:01Z", "volume")));
+        })
+      },
+      timeoutMs: 1_000,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute({
+      targetType: "scene",
+      targetId: "identifier_scene001",
+      command: "execute",
+      arguments: [],
+      clientRequestId: "request_021"
+    })).resolves.toMatchObject({ confirmation: "device_event" });
+  });
+
+  test("confirms raw normalized scene action tokens against normalized push states", async () => {
+    const aliases: Record<string, string> = {
+      main: "identifier_main",
+      switch: "identifier_switch",
+      audioVolume: "identifier_audioVolume"
+    };
+    const store = readyDeviceStore(true, (value) => aliases[value] ?? value);
+    observeSceneSnapshot(store, [
+      {
+        command: {
+          devices: ["dev_001"],
+          commands: [
+            {
+              component: "main",
+              capability: "switch",
+              command: "on",
+              arguments: []
+            },
+            {
+              component: "main",
+              capability: "audioVolume",
+              command: "setVolume",
+              arguments: [{ integer: 64, type: "integer" }]
+            }
+          ]
+        }
+      }
+    ]);
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: {
+        executeScene: vi.fn(async () => {
+          store.observe(received(deviceEventFrame(64, "2026-08-25T00:00:01Z", "volume", "dev_001", "audioVolume")));
+        })
+      },
+      timeoutMs: 1_000,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute({
+      targetType: "scene",
+      targetId: "identifier_scene001",
+      command: "execute",
+      arguments: [],
+      clientRequestId: "request_022"
+    })).resolves.toMatchObject({ confirmation: "device_event" });
+  });
+
+  test("fails closed when scene actions do not expose an expected state", async () => {
+    const store = readyDeviceStore();
+    observeSceneSnapshot(store);
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: { executeScene: vi.fn(async () => undefined) },
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute({
+      targetType: "scene",
+      targetId: "identifier_scene001",
+      command: "execute",
+      arguments: [],
+      clientRequestId: "request_020"
+    })).rejects.toMatchObject({ code: "command_confirmation_timeout" });
   });
 
   test("confirms location alarm commands from newer security arm-state inventory", async () => {
@@ -1314,8 +1479,11 @@ function connectedStatus(): RuntimeStatusStore {
   });
 }
 
-function readyDeviceStore(withToggle = true): DeviceStore {
-  const store = new DeviceStore();
+function readyDeviceStore(
+  withToggle = true,
+  normalizeStateToken?: (value: string) => string
+): DeviceStore {
+  const store = new DeviceStore({ ...(normalizeStateToken ? { normalizeStateToken } : {}) });
   store.observe(sent('421["find","api/device",{}]'));
   store.observe(
     received(
@@ -1397,11 +1565,17 @@ function deviceEventFrame(
   ])}`;
 }
 
-function observeSceneSnapshot(store: DeviceStore): void {
+function observeSceneSnapshot(store: DeviceStore, actions?: unknown[]): void {
   store.observe(sent('422["find","api/scene",{}]'));
   store.observe(
     received(
-      '432[null,[{"sceneId":"identifier_scene001","locationId":"loc_001","name":"Movie","updatedAt":"2026-08-25T00:00:00Z"}]]'
+      `432[null,[${JSON.stringify({
+        sceneId: "identifier_scene001",
+        locationId: "loc_001",
+        name: "Movie",
+        updatedAt: "2026-08-25T00:00:00Z",
+        ...(actions ? { actions } : {})
+      })}]]`
     )
   );
 }

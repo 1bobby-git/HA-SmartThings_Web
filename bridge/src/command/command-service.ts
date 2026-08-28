@@ -3,6 +3,7 @@ import type {
   BridgeDeviceState,
   BridgeDeviceStoreEvent,
   BridgeJsonValue,
+  BridgeSceneExpectedState,
   DeviceStore
 } from "../state/device-store.js";
 import type { RuntimeStatusStore } from "../state/runtime-state.js";
@@ -290,9 +291,11 @@ export class SafeCommandService {
     if (request.command !== "execute" || request.arguments.length !== 0) throw new SafeCommandError("unsupported_command");
     const scene = snapshot.scenes.find((candidate) => candidate.id === request.targetId);
     if (!scene) throw new SafeCommandError("device_not_found");
-    const confirmation = waitForAnyDeviceEventInLocation({
+    const expectedStates = scene.expectedStates ?? [];
+    if (expectedStates.length === 0) throw new SafeCommandError("command_confirmation_timeout");
+    const confirmation = waitForSceneExpectedStates({
       devices: this.options.devices,
-      locationId: scene.locationId,
+      expectedStates,
       afterSequence: snapshot.sequence,
       resync: this.options.resync
     });
@@ -452,16 +455,31 @@ function waitForState(options: { devices: DeviceStore; request: SafeCommandReque
   });
 }
 
-function waitForAnyDeviceEventInLocation(options: { devices: DeviceStore; locationId: string; afterSequence: number; resync: () => Promise<unknown> }): ConfirmationWait {
+function waitForSceneExpectedStates(options: {
+  devices: DeviceStore;
+  expectedStates: BridgeSceneExpectedState[];
+  afterSequence: number;
+  resync: () => Promise<unknown>;
+}): ConfirmationWait {
+  const matchesState = (state: BridgeDeviceState, deviceId: string): boolean =>
+    options.expectedStates.some(
+      (expected) =>
+        expected.deviceId === deviceId &&
+        expected.component === state.component &&
+        expected.capability === state.capability &&
+        expected.attribute === state.attribute &&
+        stateValuesEqual(state.value, expected.value)
+    );
+  const matchesSnapshot = (): boolean =>
+    options.devices.snapshot().devices.some((device) =>
+      device.states.some((state) => matchesState(state, device.id))
+    );
   return waitForPredicate({
     devices: options.devices,
     afterSequence: options.afterSequence,
     resync: options.resync,
-    matches: (event) => {
-      if (event.type !== "state") return false;
-      const device = options.devices.snapshot().devices.find((candidate) => candidate.id === event.deviceId);
-      return device?.locationId === options.locationId;
-    }
+    matches: (event) => event.type === "state" && matchesState(event.state, event.deviceId),
+    matchesSnapshot
   });
 }
 
