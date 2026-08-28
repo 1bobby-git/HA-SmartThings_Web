@@ -8,7 +8,7 @@ import re
 from collections.abc import Sequence
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import ATTR_RESTORED, STATE_UNAVAILABLE, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
@@ -585,6 +585,7 @@ def _migrate_entity_registry(
         remove_registry_entity(entity_entry.entity_id)
 
     _relocate_primary_name_collisions(
+        hass,
         registry,
         registry_entries,
         inventory,
@@ -606,6 +607,7 @@ def _migrate_entity_registry(
         if candidate_target is not None:
             fallback_repair_rows.append((candidate_entry, candidate_target))
     _repair_numbered_fallback_entity_ids(
+        hass,
         registry,
         fallback_repair_rows,
         current_entity_ids,
@@ -758,7 +760,7 @@ def _migrate_entity_registry(
             and registry.async_get(registry_entity_id) is not None
         ):
             if _rename_generated_registry_entity(
-                registry, registry_entity_id, new_entity_id
+                hass, registry, registry_entity_id, new_entity_id
             ):
                 current_entity_ids.discard(registry_entity_id)
                 current_entity_ids.add(new_entity_id)
@@ -778,7 +780,7 @@ def _migrate_entity_registry(
                     and registry.async_get(registry_entity_id) is not None
                 ):
                     if _rename_generated_registry_entity(
-                        registry, registry_entity_id, room_named_entity_id
+                        hass, registry, registry_entity_id, room_named_entity_id
                     ):
                         current_entity_ids.discard(registry_entity_id)
                         current_entity_ids.add(room_named_entity_id)
@@ -803,7 +805,7 @@ def _migrate_entity_registry(
                     and registry.async_get(registry_entity_id) is not None
                 ):
                     if _rename_generated_registry_entity(
-                        registry, registry_entity_id, room_free_entity_id
+                        hass, registry, registry_entity_id, room_free_entity_id
                     ):
                         current_entity_ids.discard(registry_entity_id)
                         current_entity_ids.add(room_free_entity_id)
@@ -871,6 +873,7 @@ def _migrate_entity_registry(
 
 
 def _rename_generated_registry_entity(
+    hass: HomeAssistant,
     registry: object,
     current_entity_id: str,
     new_entity_id: str,
@@ -879,6 +882,16 @@ def _rename_generated_registry_entity(
     try:
         registry.async_update_entity(current_entity_id, new_entity_id=new_entity_id)
     except ValueError:
+        if _remove_stale_restored_state(hass, registry, new_entity_id):
+            try:
+                registry.async_update_entity(
+                    current_entity_id,
+                    new_entity_id=new_entity_id,
+                )
+            except ValueError:
+                pass
+            else:
+                return True
         _LOGGER.warning(
             "Could not restore SmartThings Web entity ID %s to %s because Home "
             "Assistant has reserved the target ID",
@@ -889,7 +902,28 @@ def _rename_generated_registry_entity(
     return True
 
 
+def _remove_stale_restored_state(
+    hass: HomeAssistant,
+    registry: object,
+    entity_id: str,
+) -> bool:
+    """Remove an unavailable restored state that no registry row owns."""
+    states = getattr(hass, "states", None)
+    if states is None or registry.async_get(entity_id) is not None:
+        return False
+    state = states.get(entity_id)
+    if (
+        state is None
+        or getattr(state, "state", None) != STATE_UNAVAILABLE
+        or getattr(state, "attributes", {}).get(ATTR_RESTORED) is not True
+    ):
+        return False
+    states.async_remove(entity_id)
+    return True
+
+
 def _repair_numbered_fallback_entity_ids(
+    hass: HomeAssistant,
     registry: object,
     fallback_rows: Sequence[tuple[object, str]],
     current_entity_ids: set[str],
@@ -917,6 +951,7 @@ def _repair_numbered_fallback_entity_ids(
             if candidate in reserved or registry.async_get(candidate) is not None:
                 continue
             if not _rename_generated_registry_entity(
+                hass,
                 registry,
                 current_entity_id,
                 candidate,
@@ -931,6 +966,7 @@ def _repair_numbered_fallback_entity_ids(
 
 
 def _relocate_primary_name_collisions(
+    hass: HomeAssistant,
     registry: object,
     registry_entries: Sequence[object],
     inventory: BridgeInventory,
@@ -991,7 +1027,7 @@ def _relocate_primary_name_collisions(
             if candidate in current_entity_ids or registry.async_get(candidate) is not None:
                 continue
             if not _rename_generated_registry_entity(
-                registry, current_entity_id, candidate
+                hass, registry, current_entity_id, candidate
             ):
                 continue
             current_entity_ids.discard(current_entity_id)

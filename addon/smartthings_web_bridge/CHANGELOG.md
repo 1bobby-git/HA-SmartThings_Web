@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.134
+
+- Reclaim canonical Home Assistant entity IDs that are blocked only by an unowned, restored `unavailable` state, while preserving live states and registry-owned IDs.
+
 ## 0.1.133
 
 - Require speaker/media identity or playback-track evidence in addition to volume and mute before creating a Home Assistant `media_player`, so accessory devices such as `아리` are not misclassified while Galaxy Home Mini and speaker devices remain media players.

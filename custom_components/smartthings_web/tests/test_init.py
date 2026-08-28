@@ -50,6 +50,8 @@ def _install_homeassistant_stubs() -> None:
         SWITCH = "switch"
         UPDATE = "update"
 
+    const.ATTR_RESTORED = "restored"  # type: ignore[attr-defined]
+    const.STATE_UNAVAILABLE = "unavailable"  # type: ignore[attr-defined]
     const.Platform = Platform  # type: ignore[attr-defined]
     sys.modules["homeassistant.const"] = const
 
@@ -2635,8 +2637,25 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         registry = ReservedStateRegistry([registry_entry])
         self.patch_registry(registry)
 
+        class ActiveStates:
+            def __init__(self) -> None:
+                self.removed: list[str] = []
+
+            def get(self, entity_id: str) -> object | None:
+                if entity_id != "binary_sensor.hwajangsil_doeosenseo_contact":
+                    return None
+                return SimpleNamespace(
+                    state="on",
+                    attributes={"restored": True},
+                )
+
+            def async_remove(self, entity_id: str) -> None:
+                self.removed.append(entity_id)
+
+        active_states = ActiveStates()
+
         _migrate_entity_registry(
-            object(),
+            SimpleNamespace(states=active_states),
             SimpleNamespace(
                 entry_id="entry_001",
                 data={CONF_LOCATION_ID: "loc_001"},
@@ -2656,6 +2675,105 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             registry_entry.entity_id,
             "binary_sensor.hwajangsil_doeosenseo_contact_4",
         )
+        self.assertEqual(
+            registry_entry.suggested_object_id,
+            "hwajangsil_doeosenseo_contact",
+        )
+        self.assertEqual(active_states.removed, [])
+
+    def test_reclaims_numbered_id_after_restored_state_reservation(self) -> None:
+        """Remove only a stale restored state before reclaiming the canonical ID."""
+        canonical_entity_id = "binary_sensor.hwajangsil_doeosenseo_contact"
+        state = BridgeState(
+            "main",
+            "contactSensor",
+            "contact",
+            "closed",
+            None,
+            "2026-08-28T06:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_door",
+            "loc_001",
+            "room_bathroom",
+            "Hwajangsil Doeosenseo",
+            "contact_sensor",
+            True,
+            states={state.key: state},
+        )
+        registry_entry = SimpleNamespace(
+            entity_id=f"{canonical_entity_id}_4",
+            domain="binary_sensor",
+            platform=DOMAIN,
+            unique_id="dev_door_main_contactSensor_contact",
+            device_id="uuid_door",
+            name=None,
+            disabled_by=None,
+            original_name="Contact",
+            object_id_base="contact",
+            suggested_object_id=None,
+        )
+
+        class FakeStates:
+            def __init__(self) -> None:
+                self.values = {
+                    canonical_entity_id: SimpleNamespace(
+                        state="unavailable",
+                        attributes={"restored": True},
+                    )
+                }
+                self.removed: list[str] = []
+
+            def get(self, entity_id: str) -> object | None:
+                return self.values.get(entity_id)
+
+            def async_remove(self, entity_id: str) -> None:
+                self.removed.append(entity_id)
+                self.values.pop(entity_id, None)
+
+        fake_states = FakeStates()
+
+        class RestoredStateRegistry(FakeRegistry):
+            def async_update_entity(
+                self,
+                entity_id: str,
+                *,
+                new_unique_id: str | None = None,
+                new_entity_id: str | None = None,
+            ) -> None:
+                if (
+                    new_entity_id == canonical_entity_id
+                    and fake_states.get(canonical_entity_id) is not None
+                ):
+                    raise ValueError("entity id is already reserved")
+                super().async_update_entity(
+                    entity_id,
+                    new_unique_id=new_unique_id,
+                    new_entity_id=new_entity_id,
+                )
+
+        registry = RestoredStateRegistry([registry_entry])
+        self.patch_registry(registry)
+
+        _migrate_entity_registry(
+            SimpleNamespace(states=fake_states),
+            SimpleNamespace(
+                entry_id="entry_001",
+                data={CONF_LOCATION_ID: "loc_001"},
+            ),
+            BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.134",
+                protocol_version="4",
+                locations={"loc_001": "Home"},
+                rooms={"room_bathroom": ("loc_001", "Hwajangsil")},
+                devices={device.device_id: device},
+            ),
+        )
+
+        self.assertEqual(fake_states.removed, [canonical_entity_id])
+        self.assertEqual(registry_entry.entity_id, canonical_entity_id)
         self.assertEqual(
             registry_entry.suggested_object_id,
             "hwajangsil_doeosenseo_contact",
