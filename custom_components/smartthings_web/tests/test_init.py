@@ -1290,6 +1290,84 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         )
         self.assertEqual(registry_entry.object_id_base, "contact")
 
+    def test_live_door_id_repairs_missing_room_then_reclaims_numbered_suffix(self) -> None:
+        """Settle the observed live ID on one room token with no collision suffix."""
+        state = BridgeState(
+            "main",
+            "contactSensor",
+            "contact",
+            "closed",
+            None,
+            "2026-08-28T06:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_396",
+            "loc_001",
+            "room_bathroom",
+            "Hwajangsil Doeosenseo",
+            "contact_sensor",
+            True,
+            states={state.key: state},
+        )
+        registry_entry = SimpleNamespace(
+            entity_id="binary_sensor.doeosenseo_contact_4",
+            domain="binary_sensor",
+            platform=DOMAIN,
+            unique_id="dev_396_main_contactSensor_contact",
+            device_id="uuid_door",
+            name=None,
+            disabled_by=None,
+            original_name="Contact",
+            object_id_base="contact",
+            suggested_object_id=None,
+        )
+        registry = FakeRegistry([registry_entry])
+        self.patch_registry(registry)
+        integration.dr.async_get = lambda _hass: SimpleNamespace(
+            devices=[
+                SimpleNamespace(
+                    id="uuid_door",
+                    identifiers={(DOMAIN, "dev_396")},
+                    area_id=None,
+                )
+            ]
+        )
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.119",
+            protocol_version="4",
+            locations={"loc_001": "Home"},
+            rooms={"room_bathroom": ("loc_001", "Hwajangsil")},
+            devices={device.device_id: device},
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_001"},
+        )
+
+        _migrate_entity_registry(object(), entry, inventory)
+        _migrate_entity_registry(object(), entry, inventory)
+        _migrate_entity_registry(object(), entry, inventory)
+
+        self.assertEqual(
+            registry.renamed,
+            [
+                (
+                    "binary_sensor.doeosenseo_contact_4",
+                    "binary_sensor.hwajangsil_doeosenseo_contact_4",
+                ),
+                (
+                    "binary_sensor.hwajangsil_doeosenseo_contact_4",
+                    "binary_sensor.hwajangsil_doeosenseo_contact",
+                ),
+            ],
+        )
+        self.assertEqual(
+            registry_entry.entity_id,
+            "binary_sensor.hwajangsil_doeosenseo_contact",
+        )
+
     def test_preserves_user_named_numbered_id_and_restore_suggestion(self) -> None:
         """Never reinterpret a user-named registry row as generated cleanup."""
         state = BridgeState(
