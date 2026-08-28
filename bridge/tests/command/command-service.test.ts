@@ -336,6 +336,26 @@ describe("SafeCommandService", () => {
     expect(executor.executeDeviceAction).not.toHaveBeenCalled();
   });
 
+  test("rejects commands when the SmartThings push stream is stale before UI interaction", async () => {
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => undefined)
+    };
+    const status = connectedStatus();
+    status.update({ lastPushAtMs: Date.now() - 120_001 });
+    const service = new SafeCommandService({
+      devices: readyDeviceStore(),
+      status,
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute(command("on", "request_stale_push"))).rejects.toMatchObject({
+      code: "bridge_not_connected"
+    });
+    expect(executor.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
   test("times out without push confirmation and requests a full resync", async () => {
     const store = readyDeviceStore();
     const resync = vi.fn(async () => undefined);
@@ -1732,7 +1752,11 @@ function connectedStatus(): RuntimeStatusStore {
       parserHealthy: true,
       initialSnapshotComplete: true,
       dbAvailable: true,
-      heartbeatAtMs: now
+      heartbeatAtMs: now,
+      initialSnapshotCompletedAtMs: now,
+      lastSnapshotAtMs: now,
+      lastParserSuccessAtMs: now,
+      lastPushAtMs: now
     }
   });
 }

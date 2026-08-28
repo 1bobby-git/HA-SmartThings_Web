@@ -6,6 +6,7 @@ import type {
   BridgeSceneExpectedState,
   DeviceStore
 } from "../state/device-store.js";
+import { createHealthReport } from "../server/health.js";
 import type { RuntimeStatusStore } from "../state/runtime-state.js";
 
 export interface SafeCommandRequest {
@@ -204,7 +205,7 @@ export class SafeCommandService {
 
   async #execute(request: SafeCommandRequest): Promise<SafeCommandResult> {
     const runtime = this.options.status.getSnapshot();
-    if (runtime.state !== "CONNECTED" || !runtime.pushConnected || !runtime.parserHealthy || !runtime.initialSnapshotComplete) {
+    if (runtime.state !== "CONNECTED" || !createHealthReport(runtime).ready) {
       throw new SafeCommandError("bridge_not_connected");
     }
     const snapshot = this.options.devices.snapshot();

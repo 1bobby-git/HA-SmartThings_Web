@@ -688,6 +688,254 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertTrue(is_fan_device(device))
         self.assertTrue(is_image_device(device))
 
+    def test_primary_domain_ownership_keeps_unrelated_state_sensors(self) -> None:
+        def state(
+            component: str,
+            capability: str,
+            attribute: str,
+            value: object,
+            unit: str | None = None,
+            *,
+            role: str | None = None,
+        ) -> BridgeState:
+            return BridgeState(
+                component,
+                capability,
+                attribute,
+                value,
+                unit,
+                "2026-08-28T00:00:00Z",
+                component_role=role,
+            )
+
+        def device(
+            device_id: str,
+            name: str,
+            device_type: str,
+            *,
+            asset_type: str | None = None,
+        ) -> BridgeDevice:
+            return BridgeDevice(
+                device_id,
+                "loc_001",
+                None,
+                name,
+                device_type,
+                True,
+                presentation=(
+                    BridgeDevicePresentation(asset_type=asset_type)
+                    if asset_type
+                    else None
+                ),
+            )
+
+        cases = [
+            (
+                "speaker",
+                device("speaker_001", "Kitchen Speaker", "speaker"),
+                state("main", "audioVolume", "volume", 15, "%"),
+                state("main", "battery", "battery", 81, "%"),
+                [state("main", "audioMute", "mute", "unmuted")],
+            ),
+            (
+                "camera",
+                device("camera_001", "Home Camera", "camera_security"),
+                state("main", "imageCapture", "image", "metadata"),
+                state(
+                    "main",
+                    "legendabsolute60149.signalMetrics",
+                    "signalMetrics",
+                    {"rssi": -63, "lqi": 99},
+                ),
+                [],
+            ),
+            (
+                "fan-like appliance",
+                device("purifier_001", "Air Purifier", "air_purifier"),
+                state("main", "fanMode", "fanMode", "auto"),
+                state("main", "dustSensor", "fineDustLevel", 7, "ug/m3"),
+                [],
+            ),
+            (
+                "refrigerator/freezer",
+                device("fridge_001", "Kitchen Refrigerator", "refrigerator"),
+                state("main", "thermostatMode", "thermostatMode", "cool"),
+                state(
+                    "identifier_component_freezer",
+                    "temperatureMeasurement",
+                    "temperature",
+                    -18,
+                    "C",
+                    role="freezer",
+                ),
+                [
+                    state(
+                        "identifier_component_fridge",
+                        "temperatureMeasurement",
+                        "temperature",
+                        3,
+                        "C",
+                        role="fridge",
+                    )
+                ],
+            ),
+            (
+                "hub",
+                device("hub_001", "SmartThings Hub", "hub"),
+                state("main", "healthCheck", "healthStatus", "online"),
+                state(
+                    "main",
+                    "legendabsolute60149.signalMetrics",
+                    "signalMetrics",
+                    {"rssi": -55, "lqi": 100},
+                ),
+                [],
+            ),
+            (
+                "sensor",
+                device("sensor_001", "Multipurpose Sensor", "multipurpose_sensor_1"),
+                state("main", "contactSensor", "contact", "closed"),
+                state("main", "battery", "battery", 92, "%"),
+                [],
+            ),
+            (
+                "dryer",
+                device("dryer_001", "Laundry Dryer", "dryer", asset_type="dryer"),
+                state("main", "switch", "switch", "off"),
+                state("main", "dryerOperatingState", "machineState", "stop"),
+                [],
+            ),
+            (
+                "dishwasher",
+                device(
+                    "dishwasher_001",
+                    "Dishwasher",
+                    "dishwasher",
+                    asset_type="dishwasher",
+                ),
+                state("main", "switch", "switch", "off"),
+                state("main", "dishwasherOperatingState", "machineState", "ready"),
+                [],
+            ),
+        ]
+
+        for label, current_device, primary, retained, extra in cases:
+            with self.subTest(case=label):
+                states = [primary, retained, *extra]
+                current_device.states = {item.key: item for item in states}
+
+                self.assertFalse(
+                    sensor_state_owned_by_primary_domain(current_device, retained)
+                )
+                self.assertTrue(
+                    sensor_state_allowed(
+                        retained.attribute,
+                        image_device=is_image_device(current_device),
+                    )
+                )
+                attributes = primary_state_attributes(
+                    current_device, {retained.attribute}
+                )
+                expected_count = sum(
+                    1 for item in states if item.attribute == retained.attribute
+                )
+                self.assertEqual(len(attributes), expected_count)
+                self.assertIn(retained.value, attributes.values())
+
+    def test_representative_devices_keep_expected_domain_classification(self) -> None:
+        cases = [
+            ("dryer", "dryer", False, False, False, False, False, True),
+            ("dishwasher", "dishwasher", False, False, False, False, False, True),
+            ("refrigerator", "refrigerator", False, False, False, False, False, False),
+            ("hub", "hub", False, False, False, False, False, False),
+            ("sensor", "multipurpose_sensor_1", False, False, False, False, False, False),
+            ("speaker", "speaker", True, False, False, False, False, False),
+            ("camera", "camera_security", False, True, False, False, False, False),
+            ("air purifier", "air_purifier", False, False, True, False, False, False),
+        ]
+
+        for (
+            label,
+            device_type,
+            media,
+            image,
+            fan,
+            cover,
+            climate,
+            readonly_power,
+        ) in cases:
+            with self.subTest(device=label):
+                device = BridgeDevice(
+                    f"{label.replace(' ', '_')}_001",
+                    "loc_001",
+                    None,
+                    label.title(),
+                    device_type,
+                    True,
+                    presentation=BridgeDevicePresentation(asset_type=device_type),
+                )
+                states = [
+                    BridgeState(
+                        "main",
+                        "battery",
+                        "battery",
+                        80,
+                        "%",
+                        "2026-08-28T00:00:00Z",
+                    )
+                ]
+                if media:
+                    states.extend(
+                        [
+                            BridgeState(
+                                "main",
+                                "audioVolume",
+                                "volume",
+                                20,
+                                "%",
+                                "2026-08-28T00:00:00Z",
+                            ),
+                            BridgeState(
+                                "main",
+                                "audioMute",
+                                "mute",
+                                "unmuted",
+                                None,
+                                "2026-08-28T00:00:00Z",
+                            ),
+                        ]
+                    )
+                if image:
+                    states.append(
+                        BridgeState(
+                            "main",
+                            "imageCapture",
+                            "image",
+                            "metadata",
+                            None,
+                            "2026-08-28T00:00:00Z",
+                        )
+                    )
+                if fan:
+                    states.append(
+                        BridgeState(
+                            "main",
+                            "fanMode",
+                            "fanMode",
+                            "auto",
+                            None,
+                            "2026-08-28T00:00:00Z",
+                        )
+                    )
+                device.states = {state.key: state for state in states}
+
+                self.assertEqual(is_media_device(device), media)
+                self.assertEqual(is_image_device(device), image)
+                self.assertEqual(is_fan_device(device), fan)
+                self.assertEqual(is_cover_device(device), cover)
+                self.assertEqual(is_climate_device(device), climate)
+                self.assertEqual(is_readonly_appliance_switch(device), readonly_power)
+
     def test_window_sensor_image_artifacts_do_not_create_camera_or_metadata_sensors(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")
         device = current.devices["dev_001"]

@@ -28,6 +28,11 @@ export interface BrowserObserverOptions {
     payload: ArrayBuffer | ArrayBufferView,
     connectionId: string
   ) => void;
+  onSmartThingsWebSocketFrame?: (
+    direction: "sent" | "received",
+    url: string,
+    connectionId: string
+  ) => void;
   onSmartThingsWebSocketClose?: (url: string, connectionId: string) => void;
 }
 
@@ -61,11 +66,18 @@ export function installBrowserObserver(
 
   context.on("websocket", (socket) => {
     const connectionId = `pw_ws_${nextWebsocketConnectionId++}`;
-    write(sink, redact, "playwright-websocket", { url: callString(socket, "url"), connectionId });
+    const socketUrl = callString(socket, "url");
+    write(sink, redact, "playwright-websocket", { url: socketUrl, connectionId });
     if (hasOn(socket)) {
       socket.on("framesent", (frame) => {
         observeRawTextFrame(options.onRawWebSocketFrame, "sent", frame, connectionId);
         observeRawBinaryFrame(options.onRawWebSocketBinaryFrame, "sent", frame, connectionId);
+        observeSmartThingsWebSocketFrame(
+          options.onSmartThingsWebSocketFrame,
+          "sent",
+          socketUrl,
+          connectionId
+        );
         write(sink, redact, "playwright-websocket-frame", {
           direction: "sent",
           connectionId,
@@ -75,6 +87,12 @@ export function installBrowserObserver(
       socket.on("framereceived", (frame) => {
         observeRawTextFrame(options.onRawWebSocketFrame, "received", frame, connectionId);
         observeRawBinaryFrame(options.onRawWebSocketBinaryFrame, "received", frame, connectionId);
+        observeSmartThingsWebSocketFrame(
+          options.onSmartThingsWebSocketFrame,
+          "received",
+          socketUrl,
+          connectionId
+        );
         write(sink, redact, "playwright-websocket-frame", {
           direction: "received",
           connectionId,
@@ -108,6 +126,20 @@ export function installBrowserObserver(
   }
 
   context.on("page", (page) => attachPage(page, sink, redact, observedPages));
+}
+
+function observeSmartThingsWebSocketFrame(
+  observer: BrowserObserverOptions["onSmartThingsWebSocketFrame"],
+  direction: "sent" | "received",
+  url: string | undefined,
+  connectionId: string
+): void {
+  if (!observer || !isSmartThingsSocketIoUrl(url)) return;
+  try {
+    observer(direction, url, connectionId);
+  } catch {
+    // Liveness diagnostics must never interrupt the sanitized capture pipeline.
+  }
 }
 
 function observeRawBinaryFrame(

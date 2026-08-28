@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.130
+
+- Recover an authenticated SmartThings Socket.IO connection automatically when received frames stop beyond the existing push-freshness boundary, invalidating the old snapshot before reloading the keeper so Home Assistant performs a full resynchronization.
+- Track liveness only from the exact SmartThings Socket.IO transport across Playwright and CDP observers, so unrelated WebSocket traffic cannot hide a stale push connection.
+- Reject device, scene, and Home Monitor commands immediately when the push stream is no longer fresh, before any browser-side action can run.
+
 ## 0.1.129
 
 - Replace stale `smartthings_device_dev_*` entity IDs with stable readable numbered IDs when same-name devices or other integrations already occupy the canonical target.

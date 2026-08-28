@@ -45,7 +45,7 @@ export interface HealthReport {
 }
 
 const DEFAULT_HEARTBEAT_FRESH_MS = 31_000;
-const DEFAULT_PUSH_FRESH_MS = 120_000;
+export const DEFAULT_PUSH_FRESH_MS = 120_000;
 
 export function createHealthReport(
   snapshot: RuntimeStatusSnapshot,

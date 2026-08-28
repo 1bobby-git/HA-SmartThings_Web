@@ -215,6 +215,30 @@ describe("installBrowserObserver", () => {
     );
   });
 
+  test("reports liveness frames only for the SmartThings Socket.IO transport", () => {
+    const context = new Emitter();
+    const onSmartThingsWebSocketFrame = vi.fn();
+    installBrowserObserver(context, { write: vi.fn() }, (value) => value, {
+      onSmartThingsWebSocketFrame
+    });
+    const smartThings = new Emitter() as Emitter & { url: () => string };
+    smartThings.url = () => "wss://my.smartthings.com/socket.io/?EIO=4&transport=websocket";
+    const unrelated = new Emitter() as Emitter & { url: () => string };
+    unrelated.url = () => "wss://example.test/socket.io/";
+
+    context.emit("websocket", smartThings);
+    context.emit("websocket", unrelated);
+    smartThings.emit("framereceived", { payload: "2" });
+    unrelated.emit("framereceived", { payload: "unrelated" });
+
+    expect(onSmartThingsWebSocketFrame).toHaveBeenCalledOnce();
+    expect(onSmartThingsWebSocketFrame).toHaveBeenCalledWith(
+      "received",
+      "wss://my.smartthings.com/socket.io/?EIO=4&transport=websocket",
+      "pw_ws_1"
+    );
+  });
+
   test("redacts Playwright websocket text before byte bounding and persistence", async () => {
     await withPersistedCaptures((store, redact) => {
       const context = new Emitter();

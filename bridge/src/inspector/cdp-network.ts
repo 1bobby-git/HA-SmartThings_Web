@@ -29,6 +29,11 @@ export interface CdpNetworkOptions {
     payload: ArrayBuffer | ArrayBufferView,
     connectionId: string
   ) => void;
+  onSmartThingsWebSocketFrame?: (
+    direction: "sent" | "received",
+    url: string,
+    connectionId: string
+  ) => void;
   onSmartThingsWebSocketClose?: (url: string, connectionId: string) => void;
 }
 
@@ -82,6 +87,13 @@ export async function installCdpNetworkObserver(
   session.on("Network.webSocketFrameSent", (payload) => {
     observeRawTextFrame(options.onRawWebSocketFrame, "sent", payload, sessionScope);
     observeRawBinaryFrame(options.onRawWebSocketBinaryFrame, "sent", payload, sessionScope);
+    observeSmartThingsWebSocketFrame(
+      options.onSmartThingsWebSocketFrame,
+      "sent",
+      payload,
+      trackedWebSockets,
+      sessionScope
+    );
     write(sink, redact, "cdp-websocket-frame", {
       direction: "sent",
       ...connectionMetadata(payload, sessionScope),
@@ -91,6 +103,13 @@ export async function installCdpNetworkObserver(
   session.on("Network.webSocketFrameReceived", (payload) => {
     observeRawTextFrame(options.onRawWebSocketFrame, "received", payload, sessionScope);
     observeRawBinaryFrame(options.onRawWebSocketBinaryFrame, "received", payload, sessionScope);
+    observeSmartThingsWebSocketFrame(
+      options.onSmartThingsWebSocketFrame,
+      "received",
+      payload,
+      trackedWebSockets,
+      sessionScope
+    );
     write(sink, redact, "cdp-websocket-frame", {
       direction: "received",
       ...connectionMetadata(payload, sessionScope),
@@ -152,6 +171,24 @@ export async function installCdpNetworkObserver(
       });
     }
   });
+}
+
+function observeSmartThingsWebSocketFrame(
+  observer: CdpNetworkOptions["onSmartThingsWebSocketFrame"],
+  direction: "sent" | "received",
+  payload: unknown,
+  trackedWebSockets: Map<string, string>,
+  sessionScope: string
+): void {
+  if (!observer) return;
+  const requestId = readString(payload, "requestId");
+  const url = requestId ? trackedWebSockets.get(requestId) : undefined;
+  if (!requestId || !url || !isSmartThingsSocketIoUrl(url)) return;
+  try {
+    observer(direction, url, `${sessionScope}:${requestId}`);
+  } catch {
+    // Liveness diagnostics must never interrupt the sanitized capture pipeline.
+  }
 }
 
 function observeAdvancedDeviceSnapshot(

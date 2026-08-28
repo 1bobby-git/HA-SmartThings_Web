@@ -654,6 +654,54 @@ describe("createBridgeRuntime", () => {
     });
   });
 
+  test("recovers a stale-but-open authenticated SmartThings socket after received frames stop", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const root = createTempRoot();
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    const context = new FakeContext([keeper]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        config: {
+          dataDir: root,
+          host: "127.0.0.1",
+          port: 0,
+          heartbeatIntervalMs: 1_000,
+          browserMaxRestarts: 2,
+          browserRetryDelayMs: 0
+        },
+        chromium: { launchPersistentContext: vi.fn(async () => context) }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    keeper.goto.mockClear();
+    runtime.status.update({
+      authenticated: true,
+      keeperPresent: true,
+      pushConnected: true,
+      parserHealthy: true,
+      initialSnapshotComplete: true,
+      lastPushAtMs: 10_000,
+      state: "CONNECTED"
+    });
+
+    const unrelatedSocket = new FakeEmitter() as FakeEmitter & { url: () => string };
+    unrelatedSocket.url = () => "wss://example.test/socket.io/";
+    await context.emit("websocket", unrelatedSocket);
+    await vi.advanceTimersByTimeAsync(119_000);
+    await unrelatedSocket.emit("framereceived", { payload: "unrelated-keepalive" });
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(keeper.goto).toHaveBeenCalledTimes(1);
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      pushConnected: false,
+      parserHealthy: false,
+      initialSnapshotComplete: false,
+      state: "DISCOVERING_PROTOCOL"
+    });
+  });
+
   test("marks snapshot complete only after all real ACK categories and becomes ready after push", async () => {
     vi.useFakeTimers();
     const root = createTempRoot();

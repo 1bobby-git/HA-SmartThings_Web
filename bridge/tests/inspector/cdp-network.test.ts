@@ -260,6 +260,38 @@ describe("installCdpNetworkObserver", () => {
     );
   });
 
+  test("reports liveness frames only for the tracked SmartThings Socket.IO transport", async () => {
+    const session = new FakeSession();
+    const onSmartThingsWebSocketFrame = vi.fn();
+    await installCdpNetworkObserver(session, { write: vi.fn() }, (value) => value, {
+      onSmartThingsWebSocketFrame
+    });
+    await session.emit("Network.webSocketCreated", {
+      requestId: "smartthings-socket",
+      url: "wss://my.smartthings.com/socket.io/?EIO=4&transport=websocket"
+    });
+    await session.emit("Network.webSocketCreated", {
+      requestId: "other-socket",
+      url: "wss://example.test/socket.io/"
+    });
+
+    await session.emit("Network.webSocketFrameReceived", {
+      requestId: "smartthings-socket",
+      response: { payloadData: "2", opcode: 1 }
+    });
+    await session.emit("Network.webSocketFrameReceived", {
+      requestId: "other-socket",
+      response: { payloadData: "unrelated", opcode: 1 }
+    });
+
+    expect(onSmartThingsWebSocketFrame).toHaveBeenCalledOnce();
+    expect(onSmartThingsWebSocketFrame).toHaveBeenCalledWith(
+      "received",
+      "wss://my.smartthings.com/socket.io/?EIO=4&transport=websocket",
+      expect.stringMatching(/:smartthings-socket$/u)
+    );
+  });
+
   test("redacts CDP opcode-1 websocket payloadData before byte bounding and persistence", async () => {
     await withPersistedCaptures(async (store, redact) => {
       const session = new FakeSession();
