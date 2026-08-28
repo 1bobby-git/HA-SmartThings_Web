@@ -513,6 +513,13 @@ export class DeviceStore {
         changed = this.#mergeStateRoles(device, state) || changed;
         changed = this.#setState(device, state) || changed;
       }
+      for (const control of advancedDeviceControls(
+        row.components,
+        this.#identifierRole,
+        this.#normalizeAdvancedAlias
+      )) {
+        changed = setIfChanged(device.controls, control.id, control) || changed;
+      }
     }
     return changed;
   }
@@ -1046,6 +1053,47 @@ function advancedArrayDeviceStates(
         }, identifierRole);
         if (state) result.push(state);
       }
+    }
+  }
+  return result;
+}
+
+function advancedDeviceControls(
+  value: unknown,
+  identifierRole: IdentifierRoleResolver,
+  normalizeAdvancedAlias: AdvancedAliasNormalizer
+): BridgeDeviceControl[] {
+  if (!Array.isArray(value)) return [];
+  const result: BridgeDeviceControl[] = [];
+  for (const componentValue of value) {
+    const componentRow = asRecord(componentValue);
+    if (!componentRow) continue;
+    const component = normalizedAdvancedId(
+      componentRow.id ?? componentRow.componentId,
+      "identifier",
+      normalizeAdvancedAlias
+    );
+    if (!component || !Array.isArray(componentRow.capabilities)) continue;
+    for (const capabilityValue of componentRow.capabilities) {
+      const capabilityRow = asRecord(capabilityValue);
+      if (!capabilityRow) continue;
+      const capability = normalizedAdvancedId(
+        capabilityRow.id ?? capabilityRow.capabilityId,
+        "identifier",
+        normalizeAdvancedAlias
+      );
+      if (!capability || identifierRole(capability) !== "refresh") continue;
+      const control = controlFromParts({
+        id: `advanced:refresh:${component}:${capability}`,
+        kind: "button",
+        label: "Refresh",
+        component,
+        capability,
+        attribute: "refresh",
+        command: "refresh",
+        commands: ["refresh"]
+      });
+      if (control) result.push(control);
     }
   }
   return result;

@@ -420,6 +420,64 @@ describe("installCdpNetworkObserver", () => {
     expect(JSON.stringify(advanced.mock.calls)).not.toContain("raw-device-001");
   });
 
+  test("offers raw Advanced snapshots only to the explicit in-memory observer before sanitization", async () => {
+    const session = new FakeSession();
+    const write = vi.fn();
+    const advanced = vi.fn();
+    const rawAdvanced = vi.fn();
+    session.bodyResult = {
+      body: JSON.stringify({
+        items: [
+          {
+            deviceId: "raw-window-device",
+            components: [{ id: "main", capabilities: [{ id: "refresh" }] }]
+          }
+        ]
+      }),
+      base64Encoded: false
+    };
+    const redact = vi.fn((value: unknown) =>
+      JSON.parse(
+        JSON.stringify(value)
+          .replaceAll("raw-window-device", "dev_window")
+          .replaceAll('"main"', '"identifier_main"')
+          .replaceAll('"refresh"', '"identifier_refresh"')
+      )
+    );
+
+    await installCdpNetworkObserver(session, { write }, redact, {
+      onRawSmartThingsAdvancedDeviceSnapshot: rawAdvanced,
+      onSmartThingsAdvancedDeviceSnapshot: advanced
+    });
+    await session.emit("Network.requestWillBeSent", {
+      requestId: "advanced-refresh",
+      request: { method: "GET" }
+    });
+    await session.emit("Network.responseReceived", {
+      requestId: "advanced-refresh",
+      response: {
+        mimeType: "application/json",
+        url: "https://my.smartthings.com/advanced/cupcake-api/api/devices?includeStatus=true"
+      },
+      type: "Fetch"
+    });
+    await session.emit("Network.loadingFinished", { requestId: "advanced-refresh" });
+
+    expect(rawAdvanced).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [expect.objectContaining({ deviceId: "raw-window-device" })]
+      })
+    );
+    expect(advanced).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [expect.objectContaining({ deviceId: "dev_window" })]
+      }),
+      expect.stringContaining("/advanced/cupcake-api/api/devices")
+    );
+    expect(JSON.stringify(advanced.mock.calls)).not.toContain("raw-window-device");
+    expect(JSON.stringify(write.mock.calls)).not.toContain("raw-window-device");
+  });
+
   test("emits same-origin Advanced hub device snapshots for read-only enrichment", async () => {
     const session = new FakeSession();
     const write = vi.fn();

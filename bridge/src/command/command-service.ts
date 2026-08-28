@@ -137,6 +137,7 @@ interface SafeCommandServiceOptions {
   status: RuntimeStatusStore;
   executor: SafeCommandExecutor;
   timeoutMs: number;
+  resyncAfterMs?: number;
   confirmationStabilityMs?: number;
   resync: () => Promise<unknown>;
 }
@@ -272,7 +273,7 @@ export class SafeCommandService {
       confirmation.cancel();
       throw commandError(error);
     }
-    confirmation.startTimeout(this.options.timeoutMs);
+    confirmation.startTimeout(this.options.timeoutMs, this.options.resyncAfterMs);
     const evidence = await confirmation.result;
     return confirmed(
       request.clientRequestId,
@@ -302,7 +303,7 @@ export class SafeCommandService {
       confirmation.cancel();
       throw commandError(error);
     }
-    confirmation.startTimeout(this.options.timeoutMs);
+    confirmation.startTimeout(this.options.timeoutMs, this.options.resyncAfterMs);
     return confirmed(request.clientRequestId, (await confirmation.result).sequence, "device_event");
   }
 
@@ -330,7 +331,7 @@ export class SafeCommandService {
       confirmation.cancel();
       throw commandError(error);
     }
-    confirmation.startTimeout(this.options.timeoutMs);
+    confirmation.startTimeout(this.options.timeoutMs, this.options.resyncAfterMs);
     return confirmed(
       request.clientRequestId,
       (await confirmation.result).sequence,
@@ -490,7 +491,7 @@ function waitForLocationArmState(options: { devices: DeviceStore; locationId: st
 interface ConfirmationWait {
   result: Promise<ConfirmationEvidence>;
   cancel: () => void;
-  startTimeout: (timeoutMs: number) => void;
+  startTimeout: (timeoutMs: number, resyncAfterMs?: number) => void;
 }
 
 interface ConfirmationEvidence {
@@ -503,7 +504,9 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
   let interactionComplete = false;
   let unsubscribe: () => void = () => undefined;
   let timer: NodeJS.Timeout | undefined;
+  let resyncTimer: NodeJS.Timeout | undefined;
   let stabilityTimer: NodeJS.Timeout | undefined;
+  let resyncPromise: Promise<void> | undefined;
   let pendingEvidence: ConfirmationEvidence | undefined;
   let rejectResult: (error: SafeCommandError) => void = () => undefined;
   let resolveResult: (evidence: ConfirmationEvidence) => void = () => undefined;
@@ -511,6 +514,7 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
     if (settled) return;
     settled = true;
     if (timer) clearTimeout(timer);
+    if (resyncTimer) clearTimeout(resyncTimer);
     if (stabilityTimer) clearTimeout(stabilityTimer);
     unsubscribe();
   };
@@ -552,37 +556,58 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
       resolvePending();
     });
   });
+  const settleFromSnapshot = async (): Promise<boolean> => {
+    if (settled || options.matchesSnapshot?.() !== true) return settled;
+    const stabilityMs = Math.max(0, options.stabilityMs ?? 0);
+    if (stabilityMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, stabilityMs));
+      if (settled || options.matchesSnapshot?.() !== true) return settled;
+    }
+    const sequence = options.devices.snapshot().sequence;
+    if (sequence <= options.afterSequence) return false;
+    cleanup();
+    resolveResult({ sequence, source: "inventory_snapshot" });
+    return true;
+  };
+  const resyncAndCheck = (): Promise<void> => {
+    if (!resyncPromise) {
+      resyncPromise = options
+        .resync()
+        .catch(() => undefined)
+        .then(async () => {
+          await settleFromSnapshot();
+        });
+    }
+    return resyncPromise;
+  };
   return {
     result,
-    startTimeout: (timeoutMs) => {
+    startTimeout: (timeoutMs, resyncAfterMs) => {
       if (settled || timer) return;
       interactionComplete = true;
       resolvePending();
       if (settled) return;
+      const hasEarlyResync =
+        resyncAfterMs !== undefined &&
+        Number.isFinite(resyncAfterMs) &&
+        resyncAfterMs >= 0 &&
+        resyncAfterMs < timeoutMs;
+      if (hasEarlyResync) {
+        resyncTimer = setTimeout(() => {
+          resyncTimer = undefined;
+          void resyncAndCheck();
+        }, resyncAfterMs);
+      }
       timer = setTimeout(() => {
         timer = undefined;
-        void options
-          .resync()
-          .catch(() => undefined)
-          .then(async () => {
-            if (settled) return;
-            const stabilityMs = Math.max(0, options.stabilityMs ?? 0);
-            if (stabilityMs > 0 && options.matchesSnapshot?.() === true) {
-              await new Promise<void>((resolve) => setTimeout(resolve, stabilityMs));
-              if (settled) return;
-            }
-            const sequence = options.devices.snapshot().sequence;
-            if (
-              sequence > options.afterSequence &&
-              options.matchesSnapshot?.() === true
-            ) {
-              cleanup();
-              resolveResult({ sequence, source: "inventory_snapshot" });
-              return;
-            }
-            cleanup();
-            rejectResult(new SafeCommandError("command_confirmation_timeout"));
-          });
+        const finalCheck = hasEarlyResync
+          ? settleFromSnapshot()
+          : resyncAndCheck().then(() => settleFromSnapshot());
+        void finalCheck.then((confirmedBySnapshot) => {
+          if (settled || confirmedBySnapshot) return;
+          cleanup();
+          rejectResult(new SafeCommandError("command_confirmation_timeout"));
+        });
       }, timeoutMs);
     },
     cancel: () => {

@@ -74,6 +74,22 @@ describe("KeeperPageManager", () => {
     });
   });
 
+  test("can request only the complete status endpoint for a command-time refresh", async () => {
+    const page = new FakePage("https://my.smartthings.com/location/loc-home");
+    const statusUrl = ADVANCED_DEVICE_SNAPSHOT_URLS[1];
+
+    const snapshots = await fetchAdvancedDeviceSnapshots(page, [statusUrl]);
+
+    expect(page.evaluateCalls).toHaveLength(1);
+    expect(page.evaluateCalls[0]?.[1]).toEqual([statusUrl]);
+    expect(snapshots).toEqual([
+      {
+        url: statusUrl,
+        items: [{ deviceId: "device-0" }]
+      }
+    ]);
+  });
+
   test("prunes unrelated restored tabs before choosing one keeper", async () => {
     const location = new FakePage("https://my.smartthings.com/location/restored-home");
     const login = new FakePage("https://account.samsung.com/accounts/v1/ST/signInGate");

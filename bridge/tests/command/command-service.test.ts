@@ -308,6 +308,107 @@ describe("SafeCommandService", () => {
     expect(resync).toHaveBeenCalledTimes(1);
   });
 
+  test("runs one on-demand snapshot refresh before the final timeout and keeps listening for push", async () => {
+    vi.useFakeTimers();
+    const store = readyDeviceStore();
+    const resync = vi.fn(async () => undefined);
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: { executeDeviceAction: vi.fn(async () => undefined) },
+      timeoutMs: 30_000,
+      resyncAfterMs: 1_000,
+      resync
+    });
+
+    try {
+      const result = service.execute(command("on", "request_advanced_refresh"));
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(resync).toHaveBeenCalledTimes(1);
+
+      store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:03Z")));
+      await expect(result).resolves.toMatchObject({
+        status: "confirmed",
+        confirmation: "device_event"
+      });
+      expect(resync).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("accepts matching state from the one-shot Advanced snapshot refresh", async () => {
+    vi.useFakeTimers();
+    const store = readyDeviceStore();
+    const resync = vi.fn(async () => {
+      store.observeAdvancedDeviceSnapshot({
+        items: [
+          {
+            deviceId: "dev_001",
+            locationId: "loc_001",
+            status: {
+              components: {
+                main: {
+                  identifier_switch: {
+                    switch: {
+                      value: "on",
+                      timestamp: "2026-08-25T00:00:04Z"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      });
+    });
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: { executeDeviceAction: vi.fn(async () => undefined) },
+      timeoutMs: 30_000,
+      resyncAfterMs: 1_000,
+      resync
+    });
+
+    try {
+      const result = service.execute(command("on", "request_advanced_confirm"));
+      await vi.advanceTimersByTimeAsync(1_001);
+      await expect(result).resolves.toMatchObject({
+        status: "confirmed",
+        confirmation: "inventory_snapshot"
+      });
+      expect(resync).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("enforces the final confirmation timeout even when the early snapshot refresh hangs", async () => {
+    vi.useFakeTimers();
+    const store = readyDeviceStore();
+    const never = new Promise<void>(() => undefined);
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: { executeDeviceAction: vi.fn(async () => undefined) },
+      timeoutMs: 30_000,
+      resyncAfterMs: 1_000,
+      resync: vi.fn(() => never)
+    });
+
+    try {
+      let failure: unknown;
+      void service.execute(command("on", "request_hanging_refresh")).catch((error) => {
+        failure = error;
+      });
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(failure).toMatchObject({ code: "command_confirmation_timeout" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("accepts the requested switch state from the timeout full snapshot resync", async () => {
     const store = readyDeviceStore();
     const resync = vi.fn(async () => {

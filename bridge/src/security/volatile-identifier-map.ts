@@ -20,6 +20,7 @@ const SEMANTIC_IDENTIFIER_ROLES = new Set([
   "onedoor",
   "pantry-01",
   "pantry-02",
+  "refresh",
   "setup",
   "smartthings-findnode",
   "smartthings-hub",
@@ -52,6 +53,36 @@ export class VolatileIdentifierMap {
     }
     if (decoded.kind === "engine_open" || decoded.kind === "socket_connect") {
       this.#walk(decoded.data);
+    }
+  }
+
+  observeRawAdvancedDeviceSnapshot(value: unknown): void {
+    const root = isRecord(value) ? value : undefined;
+    const rows = Array.isArray(value)
+      ? value
+      : Array.isArray(root?.items)
+        ? root.items
+        : Array.isArray(root?.devices)
+          ? root.devices
+          : Array.isArray(root?.data)
+            ? root.data
+            : [];
+    for (const rowValue of rows) {
+      if (!isRecord(rowValue)) continue;
+      const deviceId = firstString(rowValue.deviceId, rowValue.device_id);
+      if (deviceId) this.#remember("device", deviceId);
+      if (!Array.isArray(rowValue.components)) continue;
+      for (const componentValue of rowValue.components) {
+        if (!isRecord(componentValue)) continue;
+        const component = firstString(componentValue.id, componentValue.componentId);
+        if (component) this.#remember("identifier", component);
+        if (!Array.isArray(componentValue.capabilities)) continue;
+        for (const capabilityValue of componentValue.capabilities) {
+          if (!isRecord(capabilityValue)) continue;
+          const capability = firstString(capabilityValue.id, capabilityValue.capabilityId);
+          if (capability) this.#remember("identifier", capability);
+        }
+      }
     }
   }
 
@@ -138,4 +169,8 @@ export class VolatileIdentifierMap {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  return values.find((value): value is string => typeof value === "string");
 }

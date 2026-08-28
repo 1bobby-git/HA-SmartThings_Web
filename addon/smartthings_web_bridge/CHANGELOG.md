@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.110
+
+- Preserve the raw semantic identity of the authenticated Advanced `refresh` capability in memory only, then expose its observed control as the missing Home Assistant Refresh button for contact sensors without inventing controls from state attributes.
+- After a web command, keep Socket.IO push as the primary confirmation path while issuing one serialized, same-session Advanced status GET after one second. A matching redacted snapshot can confirm the command immediately; the request is event-driven rather than periodic and never leaves the authenticated web origin or requires developer credentials.
+- Extend the final confirmation window to 30 seconds without allowing a hung Advanced refresh to bypass that deadline.
+
 ## 0.1.109
 
 - Allow the packaged live verification tool to read Home Assistant state and subscribe to state changes through the Supervisor-provided API token.

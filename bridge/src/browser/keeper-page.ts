@@ -24,7 +24,8 @@ export interface BrowserContextLike {
 }
 
 export async function fetchAdvancedDeviceSnapshots(
-  page: BrowserPageLike
+  page: BrowserPageLike,
+  urls: readonly string[] = ADVANCED_DEVICE_SNAPSHOT_URLS
 ): Promise<unknown[]> {
   if (!page.evaluate) return [];
   try {
@@ -43,7 +44,7 @@ export async function fetchAdvancedDeviceSnapshots(
         }
         return result;
       },
-      [...ADVANCED_DEVICE_SNAPSHOT_URLS]
+      [...urls]
     );
     return Array.isArray(snapshots) ? snapshots : [];
   } catch {

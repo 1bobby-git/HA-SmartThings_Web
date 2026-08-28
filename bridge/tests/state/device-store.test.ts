@@ -704,6 +704,53 @@ describe("DeviceStore", () => {
     expect(listener).toHaveBeenCalledWith(expect.objectContaining({ type: "inventory" }));
   });
 
+  test("creates a refresh button only from an observed Advanced refresh capability", () => {
+    const store = new DeviceStore({
+      normalizeAdvancedAlias: (kind, value) => {
+        if (kind === "device") return "dev_001";
+        if (kind === "location") return "loc_001";
+        return `identifier_${value}`;
+      },
+      identifierRole: (value) =>
+        value === "identifier_refresh" ? "refresh" : undefined
+    });
+    observeDeviceSnapshot(store, {
+      deviceId: "dev_001",
+      locationId: "loc_001",
+      deviceName: "거실 창문센서",
+      roomId: "identifier_room",
+      deviceTypeData: { type: "contact_sensor" }
+    });
+
+    store.observeAdvancedDeviceSnapshot({
+      items: [
+        {
+          deviceId: "raw-device",
+          locationId: "raw-location",
+          components: [
+            {
+              id: "main",
+              capabilities: [{ id: "refresh", status: {} }]
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(store.snapshot().devices[0]?.controls).toEqual([
+      {
+        id: "advanced:refresh:identifier_main:identifier_refresh",
+        kind: "button",
+        label: "Refresh",
+        component: "identifier_main",
+        capability: "identifier_refresh",
+        attribute: "refresh",
+        command: "refresh",
+        commands: ["refresh"]
+      }
+    ]);
+  });
+
   test("merges advanced status components as states and keeps newer values", () => {
     const store = new DeviceStore({
       identifierRole: (value) =>

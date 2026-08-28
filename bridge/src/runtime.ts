@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import type { BrowserContextLike, BrowserPageLike } from "./browser/keeper-page.js";
 import { installCakeClientCapture } from "./browser/cake-client-capture.js";
 import {
+  ADVANCED_DEVICE_SNAPSHOT_URLS,
   KeeperPageManager,
   fetchAdvancedDeviceSnapshots
 } from "./browser/keeper-page.js";
@@ -67,7 +68,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.109";
+const bridgeVersion = "0.1.110";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -133,6 +134,28 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   const physicalActionProbe = new PhysicalActionCorrelationProbe();
   let currentContext: ObservableContext | undefined;
   let currentKeeperManager: KeeperPageManager | undefined;
+  let commandSnapshotRefresh: Promise<void> | undefined;
+  const refreshCommandSnapshot = (): Promise<void> => {
+    if (commandSnapshotRefresh) return commandSnapshotRefresh;
+    commandSnapshotRefresh = (async () => {
+      const keeper = currentKeeperManager?.currentKeeper();
+      if (!keeper || classifySmartThingsUrl(keeper.url()) !== "smartthings_location") {
+        throw new Error("command_browser_unavailable");
+      }
+      const snapshots = await fetchAdvancedDeviceSnapshots(keeper, [
+        ADVANCED_DEVICE_SNAPSHOT_URLS[1]
+      ]);
+      if (snapshots.length === 0) throw new Error("advanced_snapshot_unavailable");
+      for (const snapshot of snapshots) {
+        volatileIdentifiers.observeRawAdvancedDeviceSnapshot(snapshot);
+        devices.observeAdvancedDeviceSnapshot(redactor(snapshot));
+      }
+      log.info(`command_diag:advanced_snapshot_refreshed:${snapshots.length}`);
+    })().finally(() => {
+      commandSnapshotRefresh = undefined;
+    });
+    return commandSnapshotRefresh;
+  };
   const commandExecutor = new SmartThingsWebUiCommandExecutor(
     () => currentKeeperManager,
     (rawLocationId) =>
@@ -148,12 +171,9 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     devices,
     status,
     executor: commandExecutor,
-    timeoutMs: 15_000,
-    resync: async () => {
-      const keeperManager = currentKeeperManager;
-      if (!keeperManager) throw new Error("command_browser_unavailable");
-      await keeperManager.recoverKeeper();
-    }
+    timeoutMs: 30_000,
+    resyncAfterMs: 1_000,
+    resync: refreshCommandSnapshot
   });
   const getProbeEvidence = () =>
     probeEvidenceFrom(
@@ -653,6 +673,9 @@ async function installCdpForPage(
   try {
     const session = await context.newCDPSession(page);
     await installCdpNetworkObserver(session, sink, redact, {
+      onRawSmartThingsAdvancedDeviceSnapshot: (snapshot) => {
+        volatileIdentifiers.observeRawAdvancedDeviceSnapshot(snapshot);
+      },
       onRawWebSocketFrame: (direction, payload, connectionId) => {
         volatileIdentifiers.observeRawWebSocketFrame(direction, payload);
         cameraImages.observeRawWebSocketFrame(direction, payload, connectionId);
@@ -719,6 +742,7 @@ async function observeAdvancedSnapshotPage(
     } else if (page) {
       const snapshots = await fetchAdvancedDeviceSnapshots(page);
       for (const snapshot of snapshots) {
+        volatileIdentifiers.observeRawAdvancedDeviceSnapshot(snapshot);
         onAdvancedDeviceSnapshot(
           redact(snapshot),
           "https://my.smartthings.com/advanced/cupcake-api/api/devices"

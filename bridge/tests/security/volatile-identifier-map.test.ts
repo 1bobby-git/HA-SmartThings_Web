@@ -94,6 +94,31 @@ describe("VolatileIdentifierMap", () => {
     expect(identifiers.semanticIdentifierRole("identifier_private-token-value")).toBeUndefined();
   });
 
+  test("maps refresh semantics from the raw Advanced component inventory", () => {
+    const identifiers = new VolatileIdentifierMap((kind, raw) =>
+      kind === "device" ? `dev_${raw}` : `identifier_${raw.replace(".", "_")}`
+    );
+
+    identifiers.observeRawAdvancedDeviceSnapshot({
+      items: [
+        {
+          deviceId: "window-device",
+          components: [
+            {
+              id: "main",
+              capabilities: [{ id: "refresh", status: {} }]
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(identifiers.rawDeviceId("dev_window-device")).toBe("window-device");
+    expect(identifiers.rawIdentifier("identifier_main")).toBe("main");
+    expect(identifiers.rawIdentifier("identifier_refresh")).toBe("refresh");
+    expect(identifiers.semanticIdentifierRole("identifier_refresh")).toBe("refresh");
+  });
+
   test("maps a device from a full snapshot larger than the diagnostic capture text limit", () => {
     const identifiers = new VolatileIdentifierMap((kind, raw) =>
       kind === "device" ? `dev_${raw}` : `identifier_${raw}`

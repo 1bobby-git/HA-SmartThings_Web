@@ -18,6 +18,7 @@ export interface CdpSessionLike {
 export interface CdpNetworkOptions {
   responseBodyLimitBytes?: number;
   onSmartThingsAdvancedDeviceSnapshot?: (snapshot: unknown, url: string) => void;
+  onRawSmartThingsAdvancedDeviceSnapshot?: (snapshot: unknown) => void;
   onRawWebSocketFrame?: (
     direction: "sent" | "received",
     payload: string,
@@ -138,7 +139,8 @@ export async function installCdpNetworkObserver(
         response,
         body,
         redact,
-        options.onSmartThingsAdvancedDeviceSnapshot
+        options.onSmartThingsAdvancedDeviceSnapshot,
+        options.onRawSmartThingsAdvancedDeviceSnapshot
       );
       write(sink, redact, "cdp-response-body", normalizeBody(response, requestId, body, limit, redact));
     } catch {
@@ -156,10 +158,11 @@ function observeAdvancedDeviceSnapshot(
   response: TrackedResponse | undefined,
   body: { body?: string; base64Encoded?: boolean } | undefined,
   redact: Redact,
-  observer: CdpNetworkOptions["onSmartThingsAdvancedDeviceSnapshot"]
+  observer: CdpNetworkOptions["onSmartThingsAdvancedDeviceSnapshot"],
+  rawObserver: CdpNetworkOptions["onRawSmartThingsAdvancedDeviceSnapshot"]
 ): void {
   if (
-    !observer ||
+    (!observer && !rawObserver) ||
     body?.base64Encoded === true ||
     typeof body?.body !== "string" ||
     response?.method !== "GET" ||
@@ -170,7 +173,12 @@ function observeAdvancedDeviceSnapshot(
   }
   try {
     const parsed = JSON.parse(body.body) as unknown;
-    observer(redact(parsed), response?.url ?? "");
+    try {
+      rawObserver?.(parsed);
+    } catch {
+      // Raw identifiers are optional, in-memory acceleration hints only.
+    }
+    observer?.(redact(parsed), response?.url ?? "");
   } catch {
     // Advanced metadata is opportunistic enrichment; malformed JSON must not interrupt capture.
   }
