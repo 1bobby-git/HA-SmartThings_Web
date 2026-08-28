@@ -521,6 +521,44 @@ describe("DeviceStore", () => {
     expect(store.snapshot().devices[0]).not.toHaveProperty("presentation");
   });
 
+  test("prunes restored devices the new browser session never refreshes", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-prune-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const first = new DeviceStore({ sqlitePath });
+      observeDeviceSnapshot(first, {
+        deviceId: "dev_aliasold",
+        locationId: "loc_001",
+        deviceName: "Presence switch",
+        deviceTypeData: { type: "switch" }
+      });
+      first.close();
+
+      const second = new DeviceStore({ sqlitePath });
+      const newSessionDevice = {
+        deviceId: "dev_aliasnew",
+        locationId: "loc_001",
+        deviceName: "Presence switch",
+        deviceTypeData: { type: "switch" }
+      };
+      observeDeviceSnapshot(second, newSessionDevice);
+      // The second identical snapshot no longer changes anything, which is the
+      // moment the store knows the session has spoken and prunes restored
+      // devices the live session never refreshed.
+      observeDeviceSnapshot(second, newSessionDevice);
+
+      const ids = second.snapshot().devices.map((device) => device.id);
+      expect(ids).toEqual(["dev_aliasnew"]);
+      second.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
   test("merges same-origin advanced device metadata without creating controls", () => {
     const store = new DeviceStore();
     observeDeviceSnapshot(store, {

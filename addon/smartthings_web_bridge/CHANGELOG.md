@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.106
+
+- Devices restored from a previous browser session now start as unconfirmed: the live session must refresh them (whole snapshots, detail sweeps, or the advanced refresh poll) or they are pruned after a grace period. This stops one physical device from splitting into old-alias and new-alias cards whenever the session is rebuilt.
+- Registry repair now also detaches this config entry from Bridge device cards that no longer match any current inventory device and have no active entities, letting Home Assistant retire the leftover card automatically.
+
 ## 0.1.105
 
 - Fix a startup crash in the registry repair: rows already removed by the stale-duplicate pre-pass are now skipped, and every rename/update verifies the row still exists before writing (KeyError on removed IDs, e.g. climate.boilreo_2).

@@ -579,6 +579,72 @@ def _migrate_entity_registry(
         existing = registry.async_get_entity_id(entity_entry.domain, DOMAIN, new_unique_id)
         if existing is None and registry.async_get(registry_entity_id) is not None:
             registry.async_update_entity(registry_entity_id, new_unique_id=new_unique_id)
+    _remove_orphan_bridge_device_cards(hass, entry, inventory, registry_entries, removed_entity_ids)
+
+
+def _remove_orphan_bridge_device_cards(
+    hass: object,
+    entry: SmartThingsWebConfigEntry,
+    inventory: BridgeInventory,
+    registry_entries: list[object],
+    removed_entity_ids: set[str],
+) -> None:
+    """Detach config-entry links for Bridge device cards the session replaced.
+
+    When the Bridge assigns a fresh alias to a physical device, the previous
+    session's card lingers with zero entities. Removing this config entry from
+    such a card lets Home Assistant retire it automatically once nothing else
+    references it, so one physical device keeps exactly one card.
+    """
+    device_registry = dr.async_get(hass)
+    if device_registry is None:
+        return
+    current_device_ids = {
+        device.device_id
+        for device in inventory.devices.values()
+        if device.location_id == entry.data[CONF_LOCATION_ID]
+    }
+    active_refs: set[str] = set()
+    for entity_entry in registry_entries:
+        if entity_entry.entity_id in removed_entity_ids:
+            continue
+        device_id = getattr(entity_entry, "device_id", None)
+        if device_id:
+            active_refs.add(device_id)
+    for row in _iter_device_registry_rows(device_registry):
+        if entry.entry_id not in (getattr(row, "config_entries", None) or set()):
+            continue
+        row_identifiers = getattr(row, "identifiers", None) or set()
+        ours = [
+            ident[1]
+            for ident in row_identifiers
+            if isinstance(ident, tuple) and len(ident) >= 2 and ident[0] == DOMAIN
+        ]
+        if not ours:
+            continue
+        row_id = getattr(row, "id", None)
+        if not row_id or row_id in active_refs:
+            continue
+        if any(bridge_id in current_device_ids for bridge_id in ours):
+            continue
+        update_device = getattr(device_registry, "async_update_device", None)
+        if callable(update_device):
+            try:
+                update_device(row_id, remove_config_entry=entry.entry_id)
+            except TypeError:
+                pass
+
+
+def _iter_device_registry_rows(device_registry: object) -> list[object]:
+    """Return device rows for either plain dicts or live registry wrappers."""
+    raw_devices = getattr(device_registry, "devices", None)
+    if raw_devices is None:
+        return []
+    from collections.abc import Mapping as _Mapping
+
+    if isinstance(raw_devices, _Mapping):
+        return list(raw_devices.values())
+    return [row for row in raw_devices if hasattr(row, "identifiers")]
 
 
 def _deduplicated_generated_entity_id(

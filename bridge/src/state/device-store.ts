@@ -136,6 +136,7 @@ const ID_PATTERN = /^(?:loc|dev|identifier)_[A-Za-z0-9]{3,64}$/u;
 const TOKEN_PATTERN = /^[A-Za-z0-9_.:-]{1,160}$/u;
 const INVENTORY_PERSIST_COALESCE_MS = 25;
 const INVENTORY_PERSIST_RETRY_MS = 250;
+const SESSION_PRUNE_GRACE_MS = 120_000;
 const CAMERA_IMAGE_ATTRIBUTES = new Set([
   "captureTime",
   "clip",
@@ -159,6 +160,8 @@ export class DeviceStore {
   #persistTimer: ReturnType<typeof setTimeout> | undefined;
   #persistPending = false;
   #sequence = 0;
+  #sessionPendingDeviceIds: Set<string> | undefined;
+  #sessionPruneTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(options: {
     normalizeStateToken?: StateTokenNormalizer;
@@ -182,7 +185,20 @@ export class DeviceStore {
         )
       `);
       const restored = this.#loadPersistedInventory();
-      if (restored) this.#restore(restored);
+      if (restored) {
+        this.#restore(restored);
+        // Devices restored from a previous session start as unconfirmed; the
+        // live session must refresh them (or the grace timer below fires)
+        // before they stay in the inventory. This is what keeps one physical
+        // device from splitting into old-alias and new-alias cards whenever
+        // the browser session is rebuilt.
+        this.#sessionPendingDeviceIds = new Set(restored.devices.map((d) => d.id));
+        this.#sessionPruneTimer = setTimeout(() => {
+          this.#sessionPruneTimer = undefined;
+          this.#pruneUnrefreshedDevices();
+        }, SESSION_PRUNE_GRACE_MS);
+        this.#sessionPruneTimer.unref();
+      }
     }
   }
 
@@ -218,7 +234,7 @@ export class DeviceStore {
         return;
       }
       this.#pending.delete(key);
-      if (this.#applySnapshot(pending.query, snapshotBody(decoded.args))) {
+      if (this.#applySnapshot(pending.query, snapshotBody(decoded.args)) || this.#pruneUnrefreshedDevices()) {
         const sequence = this.#nextSequence();
         this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
         this.#schedulePersist();
@@ -277,7 +293,7 @@ export class DeviceStore {
   }
 
   observeAdvancedDeviceSnapshot(body: unknown): void {
-    if (this.#applyAdvancedDeviceSnapshot(body)) {
+    if (this.#applyAdvancedDeviceSnapshot(body) || this.#pruneUnrefreshedDevices()) {
       const sequence = this.#nextSequence();
       this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
       this.#schedulePersist();
@@ -288,6 +304,10 @@ export class DeviceStore {
     if (this.#persistTimer !== undefined) {
       clearTimeout(this.#persistTimer);
       this.#persistTimer = undefined;
+    }
+    if (this.#sessionPruneTimer !== undefined) {
+      clearTimeout(this.#sessionPruneTimer);
+      this.#sessionPruneTimer = undefined;
     }
     try {
       this.#flushPersist();
@@ -573,6 +593,7 @@ export class DeviceStore {
   }
 
   #ensureDevice(id: string, locationId: string): MutableDevice {
+    this.#sessionPendingDeviceIds?.delete(id);
     const existing = this.#devices.get(id);
     if (existing) {
       if (existing.locationId !== locationId) existing.locationId = locationId;
@@ -644,6 +665,25 @@ export class DeviceStore {
         // One failed local client must not interrupt browser capture.
       }
     }
+  }
+
+  #pruneUnrefreshedDevices(): boolean {
+    const pending = this.#sessionPendingDeviceIds;
+    if (pending === undefined) {
+      return false;
+    }
+    this.#sessionPendingDeviceIds = undefined;
+    if (this.#sessionPruneTimer !== undefined) {
+      clearTimeout(this.#sessionPruneTimer);
+      this.#sessionPruneTimer = undefined;
+    }
+    if (pending.size === 0) {
+      return false;
+    }
+    for (const id of pending) {
+      this.#devices.delete(id);
+    }
+    return true;
   }
 
   #loadPersistedInventory(): BridgeInventory | undefined {
