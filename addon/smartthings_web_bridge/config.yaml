@@ -1,7 +1,7 @@
 name: SmartThings Web Bridge
 slug: smartthings_web_bridge
 description: Headed Chromium bridge for observing SmartThings Web traffic from Home Assistant.
-version: 0.1.108
+version: 0.1.109
 url: https://github.com/1bobby-git/HA-SmartThings_Web
 startup: services
 boot: auto
@@ -10,6 +10,7 @@ ingress: true
 ingress_port: 8099
 ingress_stream: true
 panel_admin: true
+homeassistant_api: true
 watchdog: http://[HOST]:[PORT:8099]/health/live
 arch:
   - amd64

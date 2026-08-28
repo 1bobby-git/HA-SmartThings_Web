@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.109
+
+- Allow the packaged live verification tool to read Home Assistant state and subscribe to state changes through the Supervisor-provided API token.
+
 ## 0.1.108
 
 - Keep inventory restored from SQLite through Samsung-login, reconnect, and partial-response gaps. Retire unrefreshed aliases only after a complete consumer `api/device` snapshot; non-device snapshots, malformed acknowledgements, and partial Advanced enrichment can no longer delete current Home Assistant device cards.
