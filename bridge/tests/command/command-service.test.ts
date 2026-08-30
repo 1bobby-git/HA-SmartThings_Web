@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 
 import {
   SafeCommandService,
+  type CommandResyncEvidence,
   type SafeCommandExecutor
 } from "../../src/command/command-service.js";
 import type { SanitizedCaptureRecord } from "../../src/state/capture-store.js";
@@ -112,8 +113,9 @@ describe("SafeCommandService", () => {
   test("does not let timeout resync bypass the configured stability window", async () => {
     vi.useFakeTimers();
     const store = readyDeviceStore();
-    const resync = vi.fn(async () => {
+    const resync = vi.fn(async (): Promise<CommandResyncEvidence | undefined> => {
       store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:01Z")));
+      return undefined;
     });
     const service = new SafeCommandService({
       devices: store,
@@ -405,7 +407,7 @@ describe("SafeCommandService", () => {
   test("accepts matching state from the one-shot Advanced snapshot refresh", async () => {
     vi.useFakeTimers();
     const store = readyDeviceStore();
-    const resync = vi.fn(async () => {
+    const resync = vi.fn(async (): Promise<CommandResyncEvidence | undefined> => {
       store.observeAdvancedDeviceSnapshot({
         items: [
           {
@@ -426,6 +428,7 @@ describe("SafeCommandService", () => {
           }
         ]
       });
+      return undefined;
     });
     const service = new SafeCommandService({
       devices: store,
@@ -452,7 +455,7 @@ describe("SafeCommandService", () => {
   test("enforces the final confirmation timeout even when the early snapshot refresh hangs", async () => {
     vi.useFakeTimers();
     const store = readyDeviceStore();
-    const never = new Promise<void>(() => undefined);
+    const never = new Promise<CommandResyncEvidence | undefined>(() => undefined);
     const service = new SafeCommandService({
       devices: store,
       status: connectedStatus(),
@@ -476,13 +479,14 @@ describe("SafeCommandService", () => {
 
   test("accepts the requested switch state from the timeout full snapshot resync", async () => {
     const store = readyDeviceStore();
-    const resync = vi.fn(async () => {
+    const resync = vi.fn(async (): Promise<CommandResyncEvidence | undefined> => {
       store.observe(sent('429["find","api/device/status",{}]'));
       store.observe(
         received(
           '439[null,[{"deviceId":"dev_001","locationId":"loc_001","componentId":"main","capabilityId":"identifier_switch","attributeName":"switch","value":"on","unit":null,"timestamp":"2026-08-25T00:00:02Z"}]]'
         )
       );
+      return undefined;
     });
     const service = new SafeCommandService({
       devices: store,
@@ -1236,15 +1240,7 @@ describe("SafeCommandService", () => {
 
   test("confirms refresh without caller-supplied component metadata from any newer device state", async () => {
     const store = readyDeviceStore();
-    observeDeviceDetails(store, [
-      detailSwatch("BUTTON", "button", {
-        swatchId: "identifier_refresh",
-        label: "Refresh",
-        attributeName: "refresh",
-        command: "refresh",
-        commands: ["refresh"]
-      })
-    ]);
+    observeRefreshControl(store);
     const service = new SafeCommandService({
       devices: store,
       status: connectedStatus(),
@@ -1264,6 +1260,254 @@ describe("SafeCommandService", () => {
       arguments: [],
       clientRequestId: "request_018"
     })).resolves.toMatchObject({ status: "confirmed" });
+  });
+
+  test("confirms refresh from the bounded post-command authoritative snapshot", async () => {
+    const store = readyDeviceStore();
+    observeRefreshControl(store);
+    const resync = vi.fn(async () => ({ authoritativeSnapshot: true }));
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: { executeDeviceAction: vi.fn(async () => undefined) },
+      timeoutMs: 50,
+      resyncAfterMs: 0,
+      resync
+    });
+
+    await expect(service.execute(refreshCommand("request_refresh_snapshot"))).resolves.toMatchObject({
+      status: "confirmed",
+      confirmation: "inventory_snapshot"
+    });
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps generic press commands on newer device-event confirmation only", async () => {
+    const store = readyDeviceStore();
+    observeDeviceDetails(store, [
+      detailSwatch("BUTTON", "button", {
+        swatchId: "identifier_button001",
+        label: "Ping",
+        attributeName: "button",
+        commands: ["press"]
+      })
+    ]);
+    const resync = vi.fn(async () => ({ authoritativeSnapshot: true }));
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: { executeDeviceAction: vi.fn(async () => undefined) },
+      timeoutMs: 10,
+      resyncAfterMs: 0,
+      resync
+    });
+
+    await expect(service.execute(deviceCommand("press", "request_press_no_snapshot", {
+      attribute: "button",
+      arguments: [],
+      controlId: "identifier_button001"
+    }))).rejects.toMatchObject({ code: "command_confirmation_timeout" });
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    {
+      name: "on",
+      setup: (store: DeviceStore) => store,
+      request: () => command("on", "request_no_stateless_on")
+    },
+    {
+      name: "off",
+      setup: (store: DeviceStore) => {
+        store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:00.500Z")));
+        return store;
+      },
+      request: () => command("off", "request_no_stateless_off")
+    },
+    {
+      name: "setNumber slider",
+      setup: (store: DeviceStore) => {
+        observeDeviceDetails(store, [
+          detailSwatch("SLIDER", "slider", {
+            swatchId: "identifier_frequency_snapshot",
+            label: "Detection frequency",
+            attributeName: "detectionFrequency",
+            min: 0,
+            max: 3600
+          })
+        ]);
+        return store;
+      },
+      request: () => deviceCommand("setNumber", "request_no_stateless_number", {
+        attribute: "detectionFrequency",
+        arguments: [42],
+        controlId: "identifier_frequency_snapshot"
+      })
+    },
+    {
+      name: "setVolume slider",
+      setup: (store: DeviceStore) => {
+        observeDeviceDetails(store, [
+          detailSwatch("SLIDER", "slider", {
+            swatchId: "identifier_volume_snapshot",
+            label: "Volume",
+            attributeName: "volume",
+            min: 0,
+            max: 100
+          })
+        ]);
+        return store;
+      },
+      request: () => deviceCommand("setVolume", "request_no_stateless_volume", {
+        attribute: "volume",
+        arguments: [12],
+        controlId: "identifier_volume_snapshot"
+      })
+    },
+    {
+      name: "media",
+      setup: (store: DeviceStore) => {
+        observeDeviceDetails(store, [
+          detailSwatch("BUTTON", "button", {
+            swatchId: "identifier_play_snapshot",
+            label: "Play",
+            capabilityId: "identifier_mediaPlayback",
+            attributeName: "playbackStatus",
+            commands: ["play"]
+          })
+        ]);
+        return store;
+      },
+      request: () => deviceCommand("play", "request_no_stateless_media", {
+        attribute: "playbackStatus",
+        arguments: [],
+        capability: "identifier_mediaPlayback",
+        controlId: "identifier_play_snapshot"
+      })
+    },
+    {
+      name: "cover button",
+      setup: (store: DeviceStore) => {
+        observeDeviceDetails(store, [
+          detailSwatch("BUTTON", "button", {
+            swatchId: "identifier_open_snapshot",
+            label: "Open shade",
+            attributeName: "windowShade",
+            commands: ["openShade"]
+          })
+        ]);
+        return store;
+      },
+      request: () => deviceCommand("openShade", "request_no_stateless_cover", {
+        attribute: "windowShade",
+        arguments: [],
+        controlId: "identifier_open_snapshot"
+      })
+    },
+    {
+      name: "setPosition cover slider",
+      setup: (store: DeviceStore) => {
+        observeDeviceDetails(store, [
+          detailSwatch("SLIDER", "slider", {
+            swatchId: "identifier_position_snapshot",
+            label: "Shade level",
+            attributeName: "shadeLevel",
+            command: "setPosition",
+            min: 0,
+            max: 100
+          })
+        ]);
+        return store;
+      },
+      request: () => deviceCommand("setPosition", "request_no_stateless_position", {
+        attribute: "shadeLevel",
+        arguments: [45],
+        controlId: "identifier_position_snapshot"
+      })
+    },
+    {
+      name: "setOption",
+      setup: (store: DeviceStore) => {
+        observeDeviceDetails(store, [
+          detailSwatch("ENUMERATED", "enumerated", {
+            swatchId: "identifier_mode_snapshot",
+            label: "Mode",
+            attributeName: "mode",
+            command: "setMode",
+            options: ["eco", "auto"]
+          })
+        ]);
+        return store;
+      },
+      request: () => deviceCommand("setOption", "request_no_stateless_option", {
+        attribute: "mode",
+        arguments: ["eco"],
+        controlId: "identifier_mode_snapshot"
+      })
+    }
+  ])("does not let %s use the stateless refresh snapshot policy", async ({ setup, request }) => {
+    const store = setup(readyDeviceStore());
+    const resync = vi.fn(async () => ({ authoritativeSnapshot: true }));
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: { executeDeviceAction: vi.fn(async () => undefined) },
+      timeoutMs: 10,
+      resyncAfterMs: 0,
+      resync
+    });
+
+    await expect(service.execute(request())).rejects.toMatchObject({
+      code: "command_confirmation_timeout"
+    });
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    ["unavailable", async () => ({ authoritativeSnapshot: false })],
+    ["failed", async () => {
+      throw new Error("advanced_snapshot_unavailable");
+    }]
+  ])("times out when refresh resync is %s", async (_name, resyncImpl) => {
+    const store = readyDeviceStore();
+    observeRefreshControl(store);
+    const resync = vi.fn(resyncImpl);
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: { executeDeviceAction: vi.fn(async () => undefined) },
+      timeoutMs: 10,
+      resyncAfterMs: 0,
+      resync
+    });
+
+    await expect(service.execute(refreshCommand("request_refresh_resync_fail"))).rejects.toMatchObject({
+      code: "command_confirmation_timeout"
+    });
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not resync or confirm refresh when browser execution fails", async () => {
+    const store = readyDeviceStore();
+    observeRefreshControl(store);
+    const resync = vi.fn(async () => ({ authoritativeSnapshot: true }));
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: {
+        executeDeviceAction: vi.fn(async () => {
+          throw new Error("native ack failed");
+        })
+      },
+      timeoutMs: 50,
+      resyncAfterMs: 0,
+      resync
+    });
+
+    await expect(service.execute(refreshCommand("request_refresh_exec_fail"))).rejects.toMatchObject({
+      code: "command_execution_failed"
+    });
+    expect(resync).not.toHaveBeenCalled();
   });
 
   test("executes scenes only after a newer matching action state", async () => {
@@ -1306,13 +1550,14 @@ describe("SafeCommandService", () => {
 
   test("does not confirm multi-action scenes until every expected state is observed or snapshotted", async () => {
     const store = readyDeviceStore();
-    const resync = vi.fn(async () => {
+    const resync = vi.fn(async (): Promise<CommandResyncEvidence | undefined> => {
       store.observe(sent('425["find","api/device/status",{}]'));
       store.observe(
         received(
           '435[null,[{"deviceId":"dev_001","locationId":"loc_001","componentId":"main","capabilityId":"identifier_switch","attributeName":"switch","value":"on","unit":null,"timestamp":"2026-08-25T00:00:03Z"},{"deviceId":"dev_002","locationId":"loc_001","componentId":"main","capabilityId":"identifier_audioVolume","attributeName":"volume","value":64,"unit":null,"timestamp":"2026-08-25T00:00:03Z"}]]'
         )
       );
+      return undefined;
     });
     observeSceneSnapshot(store, [
       {
@@ -1430,7 +1675,7 @@ describe("SafeCommandService", () => {
         }
       }
     ]);
-    const resync = vi.fn(async () => {
+    const resync = vi.fn(async (): Promise<CommandResyncEvidence | undefined> => {
       store.observe(sent('425["find","api/device/status",{}]'));
       store.observe(
         received(
@@ -1441,6 +1686,7 @@ describe("SafeCommandService", () => {
       sequenceAfterB = store.currentSequence();
       await new Promise((resolve) => setTimeout(resolve, 5));
       store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:04Z", "switch", "dev_001")));
+      return undefined;
     });
     const service = new SafeCommandService({
       devices: store,
@@ -1490,13 +1736,14 @@ describe("SafeCommandService", () => {
         }
       }
     ]);
-    const resync = vi.fn(async () => {
+    const resync = vi.fn(async (): Promise<CommandResyncEvidence | undefined> => {
       store.observe(sent('425["find","api/device/status",{}]'));
       store.observe(
         received(
           '435[null,[{"deviceId":"dev_001","locationId":"loc_001","componentId":"main","capabilityId":"identifier_switch","attributeName":"switch","value":"on","unit":null,"timestamp":"2026-08-25T00:00:01Z"},{"deviceId":"dev_001","locationId":"loc_001","componentId":"main","capabilityId":"identifier_audioVolume","attributeName":"volume","value":64,"unit":null,"timestamp":"2026-08-25T00:00:01Z"},{"deviceId":"dev_002","locationId":"loc_001","componentId":"main","capabilityId":"identifier_switch","attributeName":"switch","value":"on","unit":null,"timestamp":"2026-08-25T00:00:01Z"},{"deviceId":"dev_002","locationId":"loc_001","componentId":"main","capabilityId":"identifier_audioVolume","attributeName":"volume","value":64,"unit":null,"timestamp":"2026-08-25T00:00:01Z"}]]'
         )
       );
+      return undefined;
     });
     const service = new SafeCommandService({
       devices: store,
@@ -1720,6 +1967,16 @@ function command(value: "on" | "off", clientRequestId: string) {
   };
 }
 
+function refreshCommand(clientRequestId: string) {
+  return {
+    targetType: "device",
+    targetId: "dev_001",
+    command: "refresh",
+    arguments: [],
+    clientRequestId
+  };
+}
+
 function deviceCommand(
   commandName: string,
   clientRequestId: string,
@@ -1794,6 +2051,18 @@ function readyDeviceStore(
     ]);
   }
   return store;
+}
+
+function observeRefreshControl(store: DeviceStore): void {
+  observeDeviceDetails(store, [
+    detailSwatch("BUTTON", "button", {
+      swatchId: "identifier_refresh",
+      label: "Refresh",
+      attributeName: "refresh",
+      command: "refresh",
+      commands: ["refresh"]
+    })
+  ]);
 }
 
 function observeDeviceDetails(store: DeviceStore, rows: Record<string, unknown>[]): void {

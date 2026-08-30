@@ -76,9 +76,11 @@ class FakePage extends FakeEmitter {
     this.onGoto?.();
     this.currentUrl = url;
   });
+  readonly evaluate = vi.fn(async () => this.advancedSnapshots);
   readonly close = vi.fn(async () => {
     this.closed = true;
   });
+  advancedSnapshots: unknown[] = [];
 
   constructor(
     public currentUrl: string,
@@ -315,6 +317,115 @@ describe("createBridgeRuntime", () => {
         (page) => !page.closed && page.url() !== "https://my.smartthings.com/advanced"
       )
     ).toHaveLength(2);
+  });
+
+  test("confirms refresh commands from authoritative Advanced resync evidence", async () => {
+    const root = createTempRoot();
+    const keeper = new FakePage("https://my.smartthings.com/location/raw-location-001");
+    keeper.advancedSnapshots = [
+      {
+        items: [
+          {
+            deviceId: "raw-command-device-001",
+            locationId: "raw-location-001",
+            label: "Safe plug",
+            status: {
+              components: {
+                main: {
+                  switch: {
+                    switch: {
+                      value: "off",
+                      timestamp: "2026-08-25T00:00:02Z"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    ];
+    const context = new FakeContext([keeper]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, { chromium: { launchPersistentContext: vi.fn(async () => context) } })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    const socket = await attachRuntimeSocket(context);
+    await emitCompleteSnapshot(socket);
+    await emitFirstDeviceEvent(socket);
+    await socket.emit("framereceived", {
+      payload: buildDeviceEventFrame({
+        eventId: "command-event-refresh-000",
+        deviceId: "raw-command-device-001",
+        capability: "switch",
+        attribute: "switch",
+        value: "off",
+        stateChange: true,
+        eventTime: "2026-08-25T00:00:00Z"
+      })
+    });
+    await socket.emit("framesent", {
+      payload: `429${JSON.stringify(["get", "api/device", "raw-command-device-001", {}])}`
+    });
+    await socket.emit("framereceived", {
+      payload: `439${JSON.stringify([
+        null,
+        {
+          data: [
+            {
+              type: "BUTTON",
+              button: {
+                deviceId: "raw-command-device-001",
+                locationId: "raw-location-001",
+                swatchId: "raw-refresh-button",
+                componentId: "main",
+                capabilityId: "refresh",
+                attributeName: "refresh",
+                label: "Refresh",
+                command: "refresh",
+                commands: ["refresh"]
+              }
+            }
+          ]
+        }
+      ])}`
+    });
+
+    const baseUrl = `http://127.0.0.1:${runtime.port}`;
+    const token = await exchangeBridgeToken(baseUrl);
+    const headers = { authorization: `Bearer ${token}` };
+    const inventory = await fetch(`${baseUrl}/api/v1/inventory`, { headers }).then(
+      (response) => response.json() as Promise<{
+        devices: Array<{
+          controls?: Array<{ attribute: string; command?: string; id: string }>;
+          id: string;
+        }>;
+      }>
+    );
+    const target = inventory.devices.find((device) =>
+      device.controls?.some((control) => control.attribute === "refresh" && control.command === "refresh")
+    );
+    expect(target).toBeDefined();
+
+    const response = await fetch(`${baseUrl}/api/v1/commands`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({
+        targetType: "device",
+        targetId: target?.id,
+        command: "refresh",
+        arguments: [],
+        clientRequestId: "request_refresh_haos_001"
+      })
+    });
+    const responseBody = await response.json();
+
+    expect({ status: response.status, body: responseBody }).toMatchObject({
+      status: 200,
+      body: { status: "confirmed", confirmation: "inventory_snapshot" }
+    });
+    expect(keeper.evaluate).toHaveBeenCalled();
   });
 
   test("emits path-free startup stage markers in order", async () => {

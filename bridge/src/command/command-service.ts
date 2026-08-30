@@ -94,6 +94,10 @@ export interface SafeCommandExecutor {
   }): Promise<void>;
 }
 
+export interface CommandResyncEvidence {
+  authoritativeSnapshot: boolean;
+}
+
 export type SafeCommandErrorCode =
   | "invalid_body"
   | "unknown_key"
@@ -141,7 +145,7 @@ interface SafeCommandServiceOptions {
   timeoutMs: number;
   resyncAfterMs?: number;
   confirmationStabilityMs?: number;
-  resync: () => Promise<unknown>;
+  resync: () => Promise<CommandResyncEvidence | undefined>;
 }
 
 interface DedupeEntry {
@@ -234,7 +238,14 @@ export class SafeCommandService {
     const desired = matchAny ? undefined : desiredValueFor(effective.command, effective.arguments, state);
     if (!matchAny && desired === undefined) throw new SafeCommandError("invalid_arguments");
     if (state && desired !== undefined && stateValuesEqual(state.value, desired)) return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
-    const confirmation = matchAny
+    const confirmation = effective.command === "refresh"
+      ? waitForRefreshCommand({
+          devices: this.options.devices,
+          deviceId: effective.targetId,
+          afterSequence: snapshot.sequence,
+          resync: this.options.resync
+        })
+      : matchAny
       ? waitForAnyDeviceEvent({
           devices: this.options.devices,
           deviceId: effective.targetId,
@@ -420,7 +431,9 @@ function findState(device: BridgeDevice, component: string, capability: string, 
   return device.states.find((state) => state.component === component && state.capability === capability && state.attribute === attribute);
 }
 
-function waitForState(options: { devices: DeviceStore; request: SafeCommandRequest; attribute: string; desired: BridgeJsonValue | undefined; afterSequence: number; stabilityMs: number; resync: () => Promise<unknown> }): ConfirmationWait {
+type CommandResync = () => Promise<CommandResyncEvidence | undefined>;
+
+function waitForState(options: { devices: DeviceStore; request: SafeCommandRequest; attribute: string; desired: BridgeJsonValue | undefined; afterSequence: number; stabilityMs: number; resync: CommandResync }): ConfirmationWait {
   const snapshotMatches = () => {
     if (options.desired === undefined) return false;
     const device = options.devices
@@ -465,7 +478,7 @@ function waitForSceneExpectedStates(options: {
   devices: DeviceStore;
   expectedStates: BridgeSceneExpectedState[];
   afterSequence: number;
-  resync: () => Promise<unknown>;
+  resync: CommandResync;
 }): ConfirmationWait {
   const expectedByKey = new Map(options.expectedStates.map((expected) => [sceneExpectedStateKey(expected), expected]));
   const observed = new Set<string>();
@@ -527,7 +540,7 @@ function waitForAnyDeviceEvent(options: {
   devices: DeviceStore;
   deviceId: string;
   afterSequence: number;
-  resync: () => Promise<unknown>;
+  resync: CommandResync;
 }): ConfirmationWait {
   return waitForPredicate({
     devices: options.devices,
@@ -537,7 +550,24 @@ function waitForAnyDeviceEvent(options: {
   });
 }
 
-function waitForLocationArmState(options: { devices: DeviceStore; locationId: string; desired: string; afterSequence: number; resync: () => Promise<unknown> }): ConfirmationWait {
+function waitForRefreshCommand(options: {
+  devices: DeviceStore;
+  deviceId: string;
+  afterSequence: number;
+  resync: CommandResync;
+}): ConfirmationWait {
+  return waitForPredicate({
+    devices: options.devices,
+    afterSequence: options.afterSequence,
+    resync: options.resync,
+    matches: (event) => event.type === "state" && event.deviceId === options.deviceId,
+    acceptsResyncEvidence: (evidence) =>
+      evidence?.authoritativeSnapshot === true &&
+      options.devices.snapshot().devices.some((device) => device.id === options.deviceId)
+  });
+}
+
+function waitForLocationArmState(options: { devices: DeviceStore; locationId: string; desired: string; afterSequence: number; resync: CommandResync }): ConfirmationWait {
   return waitForPredicate({
     devices: options.devices,
     afterSequence: options.afterSequence,
@@ -557,7 +587,7 @@ interface ConfirmationEvidence {
   source: "event" | "inventory_snapshot";
 }
 
-function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: () => Promise<unknown>; matches: (event: BridgeDeviceStoreEvent) => boolean; invalidates?: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean; stabilityMs?: number }): ConfirmationWait {
+function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: CommandResync; matches: (event: BridgeDeviceStoreEvent) => boolean; invalidates?: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean; acceptsResyncEvidence?: (evidence: CommandResyncEvidence | undefined) => boolean; stabilityMs?: number }): ConfirmationWait {
   let settled = false;
   let interactionComplete = false;
   let unsubscribe: () => void = () => undefined;
@@ -627,12 +657,22 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
     resolveResult({ sequence, source: "inventory_snapshot" });
     return true;
   };
+  const settleFromResyncEvidence = (evidence: CommandResyncEvidence | undefined): boolean => {
+    if (settled || options.acceptsResyncEvidence?.(evidence) !== true) return settled;
+    cleanup();
+    resolveResult({
+      sequence: options.devices.snapshot().sequence,
+      source: "inventory_snapshot"
+    });
+    return true;
+  };
   const resyncAndCheck = (): Promise<void> => {
     if (!resyncPromise) {
       resyncPromise = options
         .resync()
         .catch(() => undefined)
-        .then(async () => {
+        .then(async (evidence) => {
+          if (settleFromResyncEvidence(evidence)) return;
           await settleFromSnapshot();
         });
     }

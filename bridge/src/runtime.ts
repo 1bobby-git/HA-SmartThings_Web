@@ -10,7 +10,10 @@ import {
 import { BrowserSupervisor } from "./browser/browser-supervisor.js";
 import { SmartThingsWebUiCommandExecutor } from "./browser/command-page.js";
 import { DeviceDetailDiscovery } from "./browser/device-detail-discovery.js";
-import { SafeCommandService } from "./command/command-service.js";
+import {
+  SafeCommandService,
+  type CommandResyncEvidence
+} from "./command/command-service.js";
 import {
   launchSmartThingsPersistentContext,
   type ChromiumLauncher
@@ -149,8 +152,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   let currentContext: ObservableContext | undefined;
   let currentKeeperManager: KeeperPageManager | undefined;
   let recoverCurrentPushSocket: (() => void) | undefined;
-  let commandSnapshotRefresh: Promise<void> | undefined;
-  const refreshCommandSnapshot = (): Promise<void> => {
+  let commandSnapshotRefresh: Promise<CommandResyncEvidence> | undefined;
+  const refreshCommandSnapshot = (): Promise<CommandResyncEvidence> => {
     if (commandSnapshotRefresh) return commandSnapshotRefresh;
     commandSnapshotRefresh = (async () => {
       const keeper = currentKeeperManager?.currentKeeper();
@@ -168,6 +171,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         cameraImages.observeInventory(devices.snapshot());
       }
       log.info(`command_diag:advanced_snapshot_refreshed:${snapshots.length}`);
+      return { authoritativeSnapshot: true };
     })().finally(() => {
       commandSnapshotRefresh = undefined;
     });
