@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.141
+
+- Keep the authenticated SmartThings location session warm with a bounded same-origin `/location` GET after the Bridge has been fully `CONNECTED` and ready for five minutes.
+- Do not navigate, reload, inspect DOM state, read cookies, or call Advanced/device/scene/command endpoints for session maintenance.
+- Skip the touch while commands, warm command pages, detail discovery, physical probes, non-isolated browser pages, login pages, or stale browser contexts are present.
+
 ## 0.1.140
 
 - Defer restored-device pruning after Bridge restart until both a complete consumer snapshot and an exact whole Advanced snapshot agree inside the same snapshot epoch.

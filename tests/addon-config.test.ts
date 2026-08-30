@@ -10,21 +10,25 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("packages restart restored-inventory pruning fixes as version 0.1.140", () => {
+  test("packages authenticated-session touch fixes as version 0.1.141", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.140");
+    expect(config.version).toBe("0.1.141");
     expect(config.homeassistant_api).toBe(true);
-    expect(packageMetadata.version).toBe("0.1.140");
-    expect(protocolMetadata.bridge_version).toBe("0.1.140");
+    expect(packageMetadata.version).toBe("0.1.141");
+    expect(protocolMetadata.bridge_version).toBe("0.1.141");
     expect(protocolMetadata.protocol_version).toBe(4);
-    expect(runtime).toContain('const bridgeVersion = "0.1.140";');
+    expect(runtime).toContain('const bridgeVersion = "0.1.141";');
     expect(runtime).not.toContain("AUTHENTICATED_KEEPER_KEEPALIVE_MS");
     expect(runtime).not.toContain("confirmationStabilityMs: 500");
+    expect(changelog).toContain("## 0.1.141");
+    expect(changelog).toContain("same-origin `/location` GET");
+    expect(changelog).toContain("Do not navigate, reload, inspect DOM state, read cookies");
+    expect(changelog).toContain("Skip the touch while commands");
     expect(changelog).toContain("## 0.1.140");
     expect(changelog).toContain("same snapshot epoch");
     expect(changelog).toContain("preserve restored exact controls");
