@@ -1583,6 +1583,268 @@ describe("SafeCommandService", () => {
     })).resolves.toMatchObject({ confirmation: "device_event" });
   });
 
+  test("confirms an already-satisfied scene only after execution and authoritative resync", async () => {
+    const store = readyDeviceStore();
+    store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:00.500Z")));
+    observeSceneSnapshot(store, [
+      {
+        command: {
+          devices: ["dev_001"],
+          commands: [
+            {
+              component: "main",
+              capability: "identifier_switch",
+              command: "on",
+              arguments: []
+            }
+          ]
+        }
+      }
+    ]);
+    let sceneCompletedAtMs = 0;
+    const executeScene = vi.fn(async () => {
+      sceneCompletedAtMs = Date.now();
+    });
+    const resync = vi.fn(async () => ({ authoritativeSnapshot: true, startedAtMs: sceneCompletedAtMs }));
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: { executeScene },
+      timeoutMs: 50,
+      resyncAfterMs: 0,
+      resync
+    });
+
+    await expect(service.execute({
+      targetType: "scene",
+      targetId: "identifier_scene001",
+      command: "execute",
+      arguments: [],
+      clientRequestId: "request_scene_presatisfied_snapshot"
+    })).resolves.toMatchObject({
+      status: "confirmed",
+      confirmation: "inventory_snapshot"
+    });
+    expect(executeScene).toHaveBeenCalledTimes(1);
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  test("rejects already-satisfied scene snapshot evidence that started before execution completed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const store = readyDeviceStore();
+    store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:00.500Z")));
+    observeSceneSnapshot(store, [
+      {
+        command: {
+          devices: ["dev_001"],
+          commands: [
+            {
+              component: "main",
+              capability: "identifier_switch",
+              command: "on",
+              arguments: []
+            }
+          ]
+        }
+      }
+    ]);
+    const resync = vi.fn(async (): Promise<CommandResyncEvidence | undefined> => {
+      store.observe(sent('425["find","api/device/status",{}]'));
+      store.observe(
+        received(
+          '435[null,[{"deviceId":"dev_001","locationId":"loc_001","componentId":"main","capabilityId":"identifier_switch","attributeName":"switch","value":"on","unit":null,"timestamp":"2026-08-25T00:00:02Z"}]]'
+        )
+      );
+      return { authoritativeSnapshot: true, startedAtMs: 1_000 };
+    });
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: {
+        executeScene: vi.fn(async () => {
+          vi.setSystemTime(2_000);
+        })
+      },
+      timeoutMs: 10,
+      resyncAfterMs: 0,
+      resync
+    });
+
+    try {
+      const result = service.execute({
+        targetType: "scene",
+        targetId: "identifier_scene001",
+        command: "execute",
+        arguments: [],
+        clientRequestId: "request_scene_stale_snapshot"
+      });
+      const rejected = expect(result).rejects.toMatchObject({
+        code: "command_confirmation_timeout"
+      });
+      await vi.advanceTimersByTimeAsync(11);
+      await rejected;
+      expect(resync).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("keeps matching scene event evidence that arrives during insufficient post-action resync", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const store = readyDeviceStore();
+    store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:00.500Z")));
+    observeSceneSnapshot(store, [
+      {
+        command: {
+          devices: ["dev_001"],
+          commands: [
+            {
+              component: "main",
+              capability: "identifier_switch",
+              command: "on",
+              arguments: []
+            }
+          ]
+        }
+      }
+    ]);
+    const resync = vi.fn(async (): Promise<CommandResyncEvidence | undefined> => {
+      store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:02Z")));
+      return { authoritativeSnapshot: true, startedAtMs: 1_000 };
+    });
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: {
+        executeScene: vi.fn(async () => {
+          vi.setSystemTime(2_000);
+        })
+      },
+      timeoutMs: 30,
+      resync
+    });
+
+    try {
+      const result = service.execute({
+        targetType: "scene",
+        targetId: "identifier_scene001",
+        command: "execute",
+        arguments: [],
+        clientRequestId: "request_scene_resync_event_preserved"
+      });
+      await vi.advanceTimersByTimeAsync(31);
+      await expect(result).resolves.toMatchObject({
+        status: "confirmed",
+        confirmation: "device_event"
+      });
+      expect(resync).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("keeps waiting when an already-satisfied scene resync no longer matches every expected state", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const store = readyDeviceStore();
+    store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:00.500Z")));
+    observeSceneSnapshot(store, [
+      {
+        command: {
+          devices: ["dev_001"],
+          commands: [
+            {
+              component: "main",
+              capability: "identifier_switch",
+              command: "on",
+              arguments: []
+            }
+          ]
+        }
+      }
+    ]);
+    const resync = vi.fn(async (): Promise<CommandResyncEvidence | undefined> => {
+      store.observe(received(deviceEventFrame("off", "2026-08-25T00:00:02Z")));
+      setTimeout(() => {
+        store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:03Z")));
+      }, 5);
+      return { authoritativeSnapshot: true, startedAtMs: 2_000 };
+    });
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: {
+        executeScene: vi.fn(async () => {
+          vi.setSystemTime(2_000);
+        })
+      },
+      timeoutMs: 30,
+      resync
+    });
+
+    try {
+      const result = service.execute({
+        targetType: "scene",
+        targetId: "identifier_scene001",
+        command: "execute",
+        arguments: [],
+        clientRequestId: "request_scene_resync_mismatch_then_event"
+      });
+      await vi.advanceTimersByTimeAsync(6);
+      await expect(result).resolves.toMatchObject({
+        status: "confirmed",
+        confirmation: "device_event"
+      });
+      expect(resync).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("does not resync or confirm an already-satisfied scene when execution fails", async () => {
+    const store = readyDeviceStore();
+    store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:00.500Z")));
+    observeSceneSnapshot(store, [
+      {
+        command: {
+          devices: ["dev_001"],
+          commands: [
+            {
+              component: "main",
+              capability: "identifier_switch",
+              command: "on",
+              arguments: []
+            }
+          ]
+        }
+      }
+    ]);
+    const resync = vi.fn(async () => ({ authoritativeSnapshot: true, startedAtMs: Date.now() }));
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: {
+        executeScene: vi.fn(async () => {
+          throw new Error("scene click failed");
+        })
+      },
+      timeoutMs: 50,
+      resyncAfterMs: 0,
+      resync
+    });
+
+    await expect(service.execute({
+      targetType: "scene",
+      targetId: "identifier_scene001",
+      command: "execute",
+      arguments: [],
+      clientRequestId: "request_scene_exec_fail"
+    })).rejects.toMatchObject({ code: "command_execution_failed" });
+    expect(resync).not.toHaveBeenCalled();
+  });
+
   test("does not confirm multi-action scenes until every expected state is observed or snapshotted", async () => {
     const store = readyDeviceStore();
     const resync = vi.fn(async (): Promise<CommandResyncEvidence | undefined> => {

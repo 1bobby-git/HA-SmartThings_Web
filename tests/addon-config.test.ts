@@ -256,6 +256,25 @@ describe("Home Assistant add-on metadata", () => {
     expect(dockerfile).not.toMatch(/EXPOSE\s+(5900|6080)\b/);
   });
 
+  test("sets Bridge proxy timeouts below Home Assistant's client boundary", () => {
+    const nginx = readText("addon/smartthings_web_bridge/rootfs/etc/nginx/nginx.conf");
+    const bridgeProxyBlocks = [...nginx.matchAll(/server\s*{[\s\S]*?listen\s+(?:8099|8100);[\s\S]*?location\s+\/\s*{([\s\S]*?)^\s*}/gm)];
+    const novncWebsocketBlocks = [...nginx.matchAll(/location\s+=\s+\/novnc(?:-ui)?\/websockify\s*{([\s\S]*?)^\s*}/gm)];
+    const timeoutSeconds = 85;
+    const homeAssistantClientTimeoutSeconds = 90;
+
+    expect(bridgeProxyBlocks).toHaveLength(2);
+    for (const [, block] of bridgeProxyBlocks) {
+      expect(block).toContain(`proxy_read_timeout ${timeoutSeconds}s;`);
+      expect(block).toContain(`proxy_send_timeout ${timeoutSeconds}s;`);
+    }
+    expect(timeoutSeconds).toBeLessThan(homeAssistantClientTimeoutSeconds);
+    for (const [, block] of novncWebsocketBlocks) {
+      expect(block).not.toContain("proxy_read_timeout");
+      expect(block).not.toContain("proxy_send_timeout");
+    }
+  });
+
   test("declares expected services, dependencies, and add-on entrypoint", () => {
     const serviceRoot = "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d";
     const bundleRoot = "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/user-bundles.d/user";

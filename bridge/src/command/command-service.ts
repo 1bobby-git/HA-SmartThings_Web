@@ -306,7 +306,8 @@ export class SafeCommandService {
     if (!scene) throw new SafeCommandError("device_not_found");
     const expectedStates = scene.expectedStates ?? [];
     if (expectedStates.length === 0) throw new SafeCommandError("command_confirmation_timeout");
-    const confirmation = waitForSceneExpectedStates({
+    const alreadySatisfied = sceneExpectedStatesMatchSnapshot(snapshot, expectedStates);
+    let confirmation = waitForSceneExpectedStates({
       devices: this.options.devices,
       expectedStates,
       afterSequence: snapshot.sequence,
@@ -318,6 +319,24 @@ export class SafeCommandService {
     } catch (error) {
       confirmation.cancel();
       throw commandError(error);
+    }
+    const sceneCompletedAtMs = Date.now();
+    if (alreadySatisfied) {
+      const evidence = await this.options.resync().catch(() => undefined);
+      if (
+        evidence?.authoritativeSnapshot === true &&
+        typeof evidence.startedAtMs === "number" &&
+        evidence.startedAtMs >= sceneCompletedAtMs &&
+        sceneExpectedStatesMatchSnapshot(this.options.devices.snapshot(), expectedStates)
+      ) {
+        confirmation.cancel();
+        return confirmed(
+          request.clientRequestId,
+          this.options.devices.snapshot().sequence,
+          "inventory_snapshot"
+        );
+      }
+      confirmation.ignoreInventoryEvidenceThrough(this.options.devices.snapshot().sequence);
     }
     confirmation.startTimeout(this.options.timeoutMs, this.options.resyncAfterMs);
     const evidence = await confirmation.result;
@@ -529,6 +548,24 @@ function waitForSceneExpectedStates(options: {
   });
 }
 
+function sceneExpectedStatesMatchSnapshot(
+  snapshot: ReturnType<DeviceStore["snapshot"]>,
+  expectedStates: readonly BridgeSceneExpectedState[]
+): boolean {
+  return expectedStates.every((expected) =>
+    snapshot.devices.some((device) =>
+      device.id === expected.deviceId &&
+      device.states.some(
+        (state) =>
+          state.component === expected.component &&
+          state.capability === expected.capability &&
+          state.attribute === expected.attribute &&
+          stateValuesEqual(state.value, expected.value)
+      )
+    )
+  );
+}
+
 function sceneExpectedStateKey(expected: BridgeSceneExpectedState): string {
   return sceneStateKey(expected.deviceId, expected.component, expected.capability, expected.attribute);
 }
@@ -582,6 +619,7 @@ function waitForLocationArmState(options: { devices: DeviceStore; locationId: st
 interface ConfirmationWait {
   result: Promise<ConfirmationEvidence>;
   cancel: () => void;
+  ignoreInventoryEvidenceThrough: (sequence: number) => void;
   startTimeout: (timeoutMs: number, resyncAfterMs?: number, minResyncStartedAtMs?: number) => void;
 }
 
@@ -599,6 +637,7 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
   let stabilityTimer: NodeJS.Timeout | undefined;
   let resyncPromise: Promise<void> | undefined;
   let pendingEvidence: ConfirmationEvidence | undefined;
+  let ignoredInventorySequence = options.afterSequence;
   let rejectResult: (error: SafeCommandError) => void = () => undefined;
   let resolveResult: (evidence: ConfirmationEvidence) => void = () => undefined;
   const cleanup = () => {
@@ -611,6 +650,10 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
   };
   const resolvePending = () => {
     if (settled || !interactionComplete || !pendingEvidence) return;
+    if (pendingEvidence.source === "inventory_snapshot" && pendingEvidence.sequence <= ignoredInventorySequence) {
+      pendingEvidence = undefined;
+      return;
+    }
     if ((options.stabilityMs ?? 0) > 0) {
       if (stabilityTimer) clearTimeout(stabilityTimer);
       stabilityTimer = setTimeout(() => {
@@ -655,7 +698,7 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
       if (settled || options.matchesSnapshot?.() !== true) return settled;
     }
     const sequence = options.devices.snapshot().sequence;
-    if (sequence <= options.afterSequence) return false;
+    if (sequence <= Math.max(options.afterSequence, ignoredInventorySequence)) return false;
     cleanup();
     resolveResult({ sequence, source: "inventory_snapshot" });
     return true;
@@ -715,6 +758,12 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
       cleanup();
       rejectResult(new SafeCommandError("command_execution_failed"));
       void result.catch(() => undefined);
+    },
+    ignoreInventoryEvidenceThrough: (sequence) => {
+      ignoredInventorySequence = Math.max(ignoredInventorySequence, sequence);
+      if (pendingEvidence?.source === "inventory_snapshot" && pendingEvidence.sequence <= ignoredInventorySequence) {
+        pendingEvidence = undefined;
+      }
     }
   };
 }
