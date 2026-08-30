@@ -835,18 +835,28 @@ async function observeAdvancedSnapshotPage(
 export function isWholeAdvancedDevicesSnapshotUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    return (
-      url.origin === "https://my.smartthings.com" &&
-      url.pathname === "/advanced/cupcake-api/api/devices" &&
-      url.searchParams.get("type") !== "HUB" &&
-      url.searchParams.get("includeStatus") === "true" &&
-      !url.searchParams.has("max") &&
-      !url.searchParams.has("page") &&
-      !url.searchParams.has("isNext")
+    const expected = new URL(
+      ADVANCED_DEVICE_SNAPSHOT_URLS[1],
+      "https://my.smartthings.com"
     );
+    if (url.origin !== expected.origin || url.pathname !== expected.pathname) {
+      return false;
+    }
+    const actualEntries = [...url.searchParams.entries()].sort(compareSearchParam);
+    const expectedEntries = [...expected.searchParams.entries()].sort(compareSearchParam);
+    return JSON.stringify(actualEntries) === JSON.stringify(expectedEntries);
   } catch {
     return false;
   }
+}
+
+function compareSearchParam(
+  left: readonly [string, string],
+  right: readonly [string, string]
+): number {
+  return left[0] === right[0]
+    ? left[1].localeCompare(right[1])
+    : left[0].localeCompare(right[0]);
 }
 
 function createStatusCapturePipeline(

@@ -214,6 +214,31 @@ describe("createBridgeRuntime", () => {
     ).toBe(false);
   });
 
+  test.each([
+    ["deviceId filter", "&deviceId=dev_001"],
+    ["locationId filter", "&locationId=loc_001"],
+    ["groupId filter", "&groupId=group_001"],
+    ["non-HUB type filter", "&type=LIGHT"],
+    ["extra unknown filter", "&unexpected=true"],
+    ["max pagination filter", "&max=200"],
+    ["page pagination filter", "&page=1"],
+    ["isNext pagination filter", "&isNext=true"]
+  ])("rejects filtered Advanced device snapshot URLs for restored pruning: %s", (_label, suffix) => {
+    expect(
+      isWholeAdvancedDevicesSnapshotUrl(
+        `https://my.smartthings.com${ADVANCED_DEVICE_SNAPSHOT_URLS[1]}${suffix}`
+      )
+    ).toBe(false);
+  });
+
+  test("recognizes the whole Advanced URL regardless of query parameter order", () => {
+    const reversed = new URL(`https://my.smartthings.com${ADVANCED_DEVICE_SNAPSHOT_URLS[1]}`);
+    const params = [...reversed.searchParams.entries()].reverse();
+    reversed.search = new URLSearchParams(params).toString();
+
+    expect(isWholeAdvancedDevicesSnapshotUrl(reversed.toString())).toBe(true);
+  });
+
   test("wires the authenticated command API through an isolated UI page and push confirmation", async () => {
     const root = createTempRoot();
     const context = new FakeContext([
