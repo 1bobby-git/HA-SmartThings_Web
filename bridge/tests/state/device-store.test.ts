@@ -635,9 +635,139 @@ describe("DeviceStore", () => {
         deviceTypeData: { type: "switch" }
       };
       observeDeviceSnapshot(second, newSessionDevice);
+      second.observeAdvancedDeviceSnapshot(
+        {
+          items: [
+            {
+              deviceId: "dev_aliasnew",
+              locationId: "loc_001",
+              label: "Presence switch",
+              deviceTypeName: "switch"
+            }
+          ]
+        },
+        { authoritativeWholeSnapshot: true }
+      );
 
       const ids = second.snapshot().devices.map((device) => device.id);
       expect(ids).toEqual(["dev_aliasnew"]);
+      second.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
+  test("keeps restored devices until both consumer and whole Advanced snapshots arrive", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-dual-snapshot-session-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const first = new DeviceStore({ sqlitePath });
+      observeDeviceSnapshot(first, {
+        deviceId: "dev_cached",
+        locationId: "loc_001",
+        deviceName: "Cached switch",
+        deviceTypeData: { type: "switch" },
+        actions: [
+          {
+            componentId: "main",
+            capabilityId: "switch",
+            attributeName: "switch",
+            command: "on"
+          }
+        ]
+      });
+      first.close();
+
+      const second = new DeviceStore({ sqlitePath });
+      observeDeviceSnapshot(second, {
+        deviceId: "dev_new",
+        locationId: "loc_001",
+        deviceName: "New switch",
+        deviceTypeData: { type: "switch" }
+      });
+
+      expect(second.snapshot().devices.map((device) => device.id)).toEqual([
+        "dev_cached",
+        "dev_new"
+      ]);
+      second.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
+  test("keeps restored controls when whole Advanced still contains a consumer-missing device", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-advanced-presence-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const first = new DeviceStore({ sqlitePath });
+      observeDeviceSnapshot(first, {
+        deviceId: "dev_cached",
+        locationId: "loc_001",
+        deviceName: "Cached switch",
+        deviceTypeData: { type: "switch" },
+        actions: [
+          {
+            componentId: "main",
+            capabilityId: "switch",
+            attributeName: "switch",
+            command: "on"
+          }
+        ]
+      });
+      first.close();
+
+      const second = new DeviceStore({ sqlitePath });
+      observeDeviceSnapshot(second, {
+        deviceId: "dev_new",
+        locationId: "loc_001",
+        deviceName: "New switch",
+        deviceTypeData: { type: "switch" }
+      });
+      second.observeAdvancedDeviceSnapshot(
+        {
+          items: [
+            {
+              deviceId: "dev_cached",
+              locationId: "loc_001",
+              label: "Cached switch",
+              deviceTypeName: "switch"
+            },
+            {
+              deviceId: "dev_new",
+              locationId: "loc_001",
+              label: "New switch",
+              deviceTypeName: "switch"
+            }
+          ]
+        },
+        { authoritativeWholeSnapshot: true }
+      );
+
+      const cached = second.snapshot().devices.find((device) => device.id === "dev_cached");
+      expect(second.snapshot().devices.map((device) => device.id)).toEqual([
+        "dev_cached",
+        "dev_new"
+      ]);
+      expect(cached?.controls).toEqual([
+        {
+          id: "action:main:switch:switch",
+          kind: "toggle",
+          label: "Power",
+          component: "main",
+          capability: "switch",
+          attribute: "switch",
+          commands: ["on"]
+        }
+      ]);
       second.close();
     } finally {
       try {
@@ -700,6 +830,70 @@ describe("DeviceStore", () => {
       second.observe(receivedFrame('434["temporary snapshot error"]'));
 
       expect(second.snapshot().devices.map((device) => device.id)).toEqual(["dev_cached"]);
+      second.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
+  test("ignores restored presence from malformed consumer device snapshots before pruning", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-malformed-presence-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const first = new DeviceStore({ sqlitePath });
+      observeDeviceSnapshot(first, {
+        deviceId: "dev_cached",
+        locationId: "loc_001",
+        deviceName: "Cached sensor",
+        deviceTypeData: { type: "contact_sensor" }
+      });
+      first.close();
+
+      const second = new DeviceStore({ sqlitePath });
+      second.observe(sentFrame('424["find","api/device",{}]'));
+      second.observe(
+        receivedFrame(
+          `434${JSON.stringify([
+            null,
+            [
+              {
+                basic: {
+                  deviceId: "dev_cached",
+                  locationId: "loc_001",
+                  deviceName: "Cached sensor",
+                  deviceTypeData: { type: "contact_sensor" }
+                }
+              },
+              { broken: true }
+            ]
+          ])}`
+        )
+      );
+      observeDeviceSnapshot(second, {
+        deviceId: "dev_new",
+        locationId: "loc_001",
+        deviceName: "New sensor",
+        deviceTypeData: { type: "contact_sensor" }
+      });
+      second.observeAdvancedDeviceSnapshot(
+        {
+          items: [
+            {
+              deviceId: "dev_new",
+              locationId: "loc_001",
+              label: "New sensor",
+              deviceTypeName: "contact_sensor"
+            }
+          ]
+        },
+        { authoritativeWholeSnapshot: true }
+      );
+
+      expect(second.snapshot().devices.map((device) => device.id)).toEqual(["dev_new"]);
       second.close();
     } finally {
       try {

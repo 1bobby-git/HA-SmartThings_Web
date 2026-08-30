@@ -358,8 +358,10 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
               physicalActionProbe.snapshot(getProbeEvidence()).state !== "armed"
             );
           },
-          (snapshot) => {
-            devices.observeAdvancedDeviceSnapshot(snapshot);
+          (snapshot, url) => {
+            devices.observeAdvancedDeviceSnapshot(snapshot, {
+              authoritativeWholeSnapshot: isWholeAdvancedDevicesSnapshotUrl(url)
+            });
             cameraImages.observeInventory(devices.snapshot());
           }
         );

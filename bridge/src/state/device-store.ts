@@ -109,6 +109,9 @@ type StateTokenNormalizer = (value: string) => string;
 type IdentifierRoleResolver = (alias: string) => string | undefined;
 type AdvancedAliasKind = "device" | "location" | "identifier";
 type AdvancedAliasNormalizer = (kind: AdvancedAliasKind, value: string) => string;
+type AdvancedDeviceSnapshotOptions = {
+  authoritativeWholeSnapshot?: boolean;
+};
 type SnapshotQuery =
   | "api/location"
   | "api/scene"
@@ -171,6 +174,8 @@ export class DeviceStore {
   #persistPending = false;
   #sequence = 0;
   #sessionPendingDeviceIds: Set<string> | undefined;
+  #sessionConsumerDeviceSnapshotSeen = false;
+  #sessionWholeAdvancedDeviceSnapshotSeen = false;
 
   constructor(options: {
     normalizeStateToken?: StateTokenNormalizer;
@@ -241,7 +246,11 @@ export class DeviceStore {
       const authoritativeDeviceSnapshot =
         pending.query === "api/device" && isCompleteDeviceSnapshot(body);
       const changed = this.#applySnapshot(pending.query, body);
-      const pruned = authoritativeDeviceSnapshot && this.#pruneUnrefreshedDevices();
+      if (authoritativeDeviceSnapshot) {
+        this.#sessionConsumerDeviceSnapshotSeen = true;
+        this.#observeConsumerDeviceSnapshotPresence(body);
+      }
+      const pruned = this.#pruneUnrefreshedDevicesIfReady();
       if (changed || pruned) {
         const sequence = this.#nextSequence();
         this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
@@ -303,10 +312,18 @@ export class DeviceStore {
 
   reset(): void {
     this.#pending.clear();
+    this.#sessionConsumerDeviceSnapshotSeen = false;
+    this.#sessionWholeAdvancedDeviceSnapshotSeen = false;
   }
 
-  observeAdvancedDeviceSnapshot(body: unknown): void {
-    if (this.#applyAdvancedDeviceSnapshot(body)) {
+  observeAdvancedDeviceSnapshot(body: unknown, options: AdvancedDeviceSnapshotOptions = {}): void {
+    const authoritativeWholeSnapshot = options.authoritativeWholeSnapshot === true;
+    const changed = this.#applyAdvancedDeviceSnapshot(body, authoritativeWholeSnapshot);
+    if (authoritativeWholeSnapshot && advancedDeviceRows(body)) {
+      this.#sessionWholeAdvancedDeviceSnapshotSeen = true;
+    }
+    const pruned = this.#pruneUnrefreshedDevicesIfReady();
+    if (changed || pruned) {
       const sequence = this.#nextSequence();
       this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
       this.#schedulePersist();
@@ -475,7 +492,7 @@ export class DeviceStore {
     return changed;
   }
 
-  #applyAdvancedDeviceSnapshot(body: unknown): boolean {
+  #applyAdvancedDeviceSnapshot(body: unknown, observeRestoredPresence = false): boolean {
     const rows = advancedDeviceRows(body);
     if (!rows) {
       return false;
@@ -493,6 +510,9 @@ export class DeviceStore {
         this.#normalizeAdvancedAlias
       );
       if (!id || !locationId) continue;
+      if (observeRestoredPresence) {
+        this.#sessionPendingDeviceIds?.delete(id);
+      }
       const device = this.#ensureDevice(id, locationId);
       const nextName = safeName(
         row.label ?? row.name ?? row.deviceLabel ?? row.deviceName
@@ -645,7 +665,6 @@ export class DeviceStore {
   }
 
   #ensureDevice(id: string, locationId: string): MutableDevice {
-    this.#sessionPendingDeviceIds?.delete(id);
     const existing = this.#devices.get(id);
     if (existing) {
       if (existing.locationId !== locationId) existing.locationId = locationId;
@@ -732,9 +751,12 @@ export class DeviceStore {
     }
   }
 
-  #pruneUnrefreshedDevices(): boolean {
+  #pruneUnrefreshedDevicesIfReady(): boolean {
     const pending = this.#sessionPendingDeviceIds;
     if (pending === undefined) {
+      return false;
+    }
+    if (!this.#sessionConsumerDeviceSnapshotSeen || !this.#sessionWholeAdvancedDeviceSnapshotSeen) {
       return false;
     }
     this.#sessionPendingDeviceIds = undefined;
@@ -745,6 +767,18 @@ export class DeviceStore {
       this.#devices.delete(id);
     }
     return true;
+  }
+
+  #observeConsumerDeviceSnapshotPresence(body: unknown): void {
+    const rows = snapshotRows(body);
+    if (!rows) return;
+    for (const card of rows) {
+      const source = firstRecord(card.basic, card.cloud, card.camera);
+      const id = safeId(source?.deviceId, "dev");
+      if (id) {
+        this.#sessionPendingDeviceIds?.delete(id);
+      }
+    }
   }
 
   #loadPersistedInventory(): BridgeInventory | undefined {
