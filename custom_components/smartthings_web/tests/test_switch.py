@@ -149,6 +149,24 @@ def _one_direction_device() -> tuple[BridgeDevice, BridgeState]:
     return device, state
 
 
+def _duplicate_toggle_device() -> tuple[BridgeDevice, BridgeState, str]:
+    """Mirror Cake inventory that exposes action and detail aliases for one toggle."""
+    device, state = _device(with_control=True)
+    action_control_id = (
+        "action:identifier_cd4f3cfbf2aa:identifier_74292182f118:switch"
+    )
+    device.controls[action_control_id] = BridgeControl(
+        action_control_id,
+        "toggle",
+        "Power",
+        component=state.component,
+        capability=state.capability,
+        attribute=state.attribute,
+        commands=("on", "off"),
+    )
+    return device, state, action_control_id
+
+
 def _multi_component_switch_device(
     components: tuple[tuple[str, str], ...] = (
         ("main", "main"),
@@ -335,6 +353,49 @@ class SmartThingsWebSwitchTests(unittest.IsolatedAsyncioTestCase):
             command="on",
             arguments=[],
         )
+
+    async def test_duplicate_detail_alias_uses_canonical_observed_action(self) -> None:
+        device, state, action_control_id = _duplicate_toggle_device()
+        state.value = "on"
+        client = SimpleNamespace(async_execute_command=AsyncMock())
+        entity = SmartThingsWebSwitch(_runtime(device, client), device, state)
+
+        await entity.async_turn_off()
+
+        client.async_execute_command.assert_awaited_once_with(
+            target_type="device",
+            target_id="dev_560",
+            component="identifier_cd4f3cfbf2aa",
+            capability="identifier_74292182f118",
+            attribute="switch",
+            control_id=action_control_id,
+            control_label="Power",
+            command="off",
+            arguments=[],
+        )
+
+    async def test_unrelated_duplicate_detail_toggles_remain_fail_closed(self) -> None:
+        device, state = _device(with_control=True)
+        second_control_id = "identifier_second_detail_toggle"
+        device.controls[second_control_id] = BridgeControl(
+            second_control_id,
+            "toggle",
+            "Secondary power",
+            component=state.component,
+            capability=state.capability,
+            attribute=state.attribute,
+            commands=("on", "off"),
+        )
+        client = SimpleNamespace(async_execute_command=AsyncMock())
+        entity = SmartThingsWebSwitch(_runtime(device, client), device, state)
+
+        with self.assertRaisesRegex(
+            HomeAssistantError,
+            "has no observed toggle control",
+        ):
+            await entity.async_turn_on()
+
+        client.async_execute_command.assert_not_awaited()
 
     async def test_single_observed_direction_rejects_unseen_opposite_command(self) -> None:
         device, state = _one_direction_device()

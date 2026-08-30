@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.135
+
+- Reconcile Cake's duplicate action and detail-swatch aliases for one pushed toggle by selecting the unique observed action identity, while keeping unrelated duplicate controls fail-closed.
+
 ## 0.1.134
 
 - Reclaim canonical Home Assistant entity IDs that are blocked only by an unowned, restored `unavailable` state, while preserving live states and registry-owned IDs.

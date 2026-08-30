@@ -488,7 +488,17 @@ def toggle_control_for_state(
         and control.capability == state.capability
         and control.attribute == state.attribute
     ]
-    return matches[0] if len(matches) == 1 else None
+    if len(matches) == 1:
+        return matches[0]
+    # Cake can describe the same physical toggle twice: once as the exact
+    # device action and once as its detail-page swatch. The action identity is
+    # deterministic and preserves the observed command directions. Prefer it
+    # only when it is itself unique; unrelated duplicate swatches remain
+    # fail-closed.
+    action_matches = [
+        control for control in matches if control.control_id.startswith("action:")
+    ]
+    return action_matches[0] if len(action_matches) == 1 else None
 
 
 def safe_generic_toggle_control(control: BridgeControl) -> bool:
