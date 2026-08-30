@@ -152,10 +152,9 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   let currentContext: ObservableContext | undefined;
   let currentKeeperManager: KeeperPageManager | undefined;
   let recoverCurrentPushSocket: (() => void) | undefined;
-  let commandSnapshotRefresh: Promise<CommandResyncEvidence> | undefined;
   const refreshCommandSnapshot = (): Promise<CommandResyncEvidence> => {
-    if (commandSnapshotRefresh) return commandSnapshotRefresh;
-    commandSnapshotRefresh = (async () => {
+    return (async () => {
+      const startedAtMs = Date.now();
       const keeper = currentKeeperManager?.currentKeeper();
       if (!keeper || classifySmartThingsUrl(keeper.url()) !== "smartthings_location") {
         throw new Error("command_browser_unavailable");
@@ -171,11 +170,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         cameraImages.observeInventory(devices.snapshot());
       }
       log.info(`command_diag:advanced_snapshot_refreshed:${snapshots.length}`);
-      return { authoritativeSnapshot: true };
-    })().finally(() => {
-      commandSnapshotRefresh = undefined;
-    });
-    return commandSnapshotRefresh;
+      return { authoritativeSnapshot: true, startedAtMs };
+    })();
   };
   const commandExecutor = new SmartThingsWebUiCommandExecutor(
     () => currentKeeperManager,

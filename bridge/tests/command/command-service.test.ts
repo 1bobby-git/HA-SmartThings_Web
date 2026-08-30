@@ -1265,7 +1265,7 @@ describe("SafeCommandService", () => {
   test("confirms refresh from the bounded post-command authoritative snapshot", async () => {
     const store = readyDeviceStore();
     observeRefreshControl(store);
-    const resync = vi.fn(async () => ({ authoritativeSnapshot: true }));
+    const resync = vi.fn(async () => ({ authoritativeSnapshot: true, startedAtMs: Date.now() }));
     const service = new SafeCommandService({
       devices: store,
       status: connectedStatus(),
@@ -1282,6 +1282,41 @@ describe("SafeCommandService", () => {
     expect(resync).toHaveBeenCalledTimes(1);
   });
 
+  test("rejects refresh snapshot evidence that started before browser execution completed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const store = readyDeviceStore();
+    observeRefreshControl(store);
+    const resync = vi.fn(async () => ({
+      authoritativeSnapshot: true,
+      startedAtMs: 1_000
+    }));
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: {
+        executeDeviceAction: vi.fn(async () => {
+          vi.setSystemTime(2_000);
+        })
+      },
+      timeoutMs: 10,
+      resyncAfterMs: 0,
+      resync
+    });
+
+    try {
+      const result = service.execute(refreshCommand("request_refresh_stale_snapshot"));
+      const rejected = expect(result).rejects.toMatchObject({
+        code: "command_confirmation_timeout"
+      });
+      await vi.advanceTimersByTimeAsync(11);
+      await rejected;
+      expect(resync).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("keeps generic press commands on newer device-event confirmation only", async () => {
     const store = readyDeviceStore();
     observeDeviceDetails(store, [
@@ -1292,7 +1327,7 @@ describe("SafeCommandService", () => {
         commands: ["press"]
       })
     ]);
-    const resync = vi.fn(async () => ({ authoritativeSnapshot: true }));
+    const resync = vi.fn(async () => ({ authoritativeSnapshot: true, startedAtMs: Date.now() }));
     const service = new SafeCommandService({
       devices: store,
       status: connectedStatus(),
@@ -1447,7 +1482,7 @@ describe("SafeCommandService", () => {
     }
   ])("does not let %s use the stateless refresh snapshot policy", async ({ setup, request }) => {
     const store = setup(readyDeviceStore());
-    const resync = vi.fn(async () => ({ authoritativeSnapshot: true }));
+    const resync = vi.fn(async () => ({ authoritativeSnapshot: true, startedAtMs: Date.now() }));
     const service = new SafeCommandService({
       devices: store,
       status: connectedStatus(),
@@ -1464,7 +1499,7 @@ describe("SafeCommandService", () => {
   });
 
   test.each([
-    ["unavailable", async () => ({ authoritativeSnapshot: false })],
+    ["unavailable", async () => ({ authoritativeSnapshot: false, startedAtMs: Date.now() })],
     ["failed", async () => {
       throw new Error("advanced_snapshot_unavailable");
     }]
@@ -1490,7 +1525,7 @@ describe("SafeCommandService", () => {
   test("does not resync or confirm refresh when browser execution fails", async () => {
     const store = readyDeviceStore();
     observeRefreshControl(store);
-    const resync = vi.fn(async () => ({ authoritativeSnapshot: true }));
+    const resync = vi.fn(async () => ({ authoritativeSnapshot: true, startedAtMs: Date.now() }));
     const service = new SafeCommandService({
       devices: store,
       status: connectedStatus(),

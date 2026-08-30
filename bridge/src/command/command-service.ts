@@ -96,6 +96,7 @@ export interface SafeCommandExecutor {
 
 export interface CommandResyncEvidence {
   authoritativeSnapshot: boolean;
+  startedAtMs: number;
 }
 
 export type SafeCommandErrorCode =
@@ -238,7 +239,7 @@ export class SafeCommandService {
     const desired = matchAny ? undefined : desiredValueFor(effective.command, effective.arguments, state);
     if (!matchAny && desired === undefined) throw new SafeCommandError("invalid_arguments");
     if (state && desired !== undefined && stateValuesEqual(state.value, desired)) return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
-    const confirmation = effective.command === "refresh"
+    const wait = effective.command === "refresh"
       ? waitForRefreshCommand({
           devices: this.options.devices,
           deviceId: effective.targetId,
@@ -246,12 +247,12 @@ export class SafeCommandService {
           resync: this.options.resync
         })
       : matchAny
-      ? waitForAnyDeviceEvent({
-          devices: this.options.devices,
-          deviceId: effective.targetId,
-          afterSequence: snapshot.sequence,
-          resync: this.options.resync
-        })
+        ? waitForAnyDeviceEvent({
+            devices: this.options.devices,
+            deviceId: effective.targetId,
+            afterSequence: snapshot.sequence,
+            resync: this.options.resync
+          })
       : waitForState({
           devices: this.options.devices,
           request: effective,
@@ -283,11 +284,11 @@ export class SafeCommandService {
         ...(effective.nativeCommand ? { nativeCommand: effective.nativeCommand } : {})
       });
     } catch (error) {
-      confirmation.cancel();
+      wait.cancel();
       throw commandError(error);
     }
-    confirmation.startTimeout(this.options.timeoutMs, this.options.resyncAfterMs);
-    const evidence = await confirmation.result;
+    wait.startTimeout(this.options.timeoutMs, this.options.resyncAfterMs, Date.now());
+    const evidence = await wait.result;
     return confirmed(
       request.clientRequestId,
       evidence.sequence,
@@ -561,8 +562,10 @@ function waitForRefreshCommand(options: {
     afterSequence: options.afterSequence,
     resync: options.resync,
     matches: (event) => event.type === "state" && event.deviceId === options.deviceId,
-    acceptsResyncEvidence: (evidence) =>
+    acceptsResyncEvidence: (evidence, minStartedAtMs) =>
       evidence?.authoritativeSnapshot === true &&
+      typeof evidence.startedAtMs === "number" &&
+      (minStartedAtMs === undefined || evidence.startedAtMs >= minStartedAtMs) &&
       options.devices.snapshot().devices.some((device) => device.id === options.deviceId)
   });
 }
@@ -579,7 +582,7 @@ function waitForLocationArmState(options: { devices: DeviceStore; locationId: st
 interface ConfirmationWait {
   result: Promise<ConfirmationEvidence>;
   cancel: () => void;
-  startTimeout: (timeoutMs: number, resyncAfterMs?: number) => void;
+  startTimeout: (timeoutMs: number, resyncAfterMs?: number, minResyncStartedAtMs?: number) => void;
 }
 
 interface ConfirmationEvidence {
@@ -587,7 +590,7 @@ interface ConfirmationEvidence {
   source: "event" | "inventory_snapshot";
 }
 
-function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: CommandResync; matches: (event: BridgeDeviceStoreEvent) => boolean; invalidates?: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean; acceptsResyncEvidence?: (evidence: CommandResyncEvidence | undefined) => boolean; stabilityMs?: number }): ConfirmationWait {
+function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: CommandResync; matches: (event: BridgeDeviceStoreEvent) => boolean; invalidates?: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean; acceptsResyncEvidence?: (evidence: CommandResyncEvidence | undefined, minStartedAtMs?: number) => boolean; stabilityMs?: number }): ConfirmationWait {
   let settled = false;
   let interactionComplete = false;
   let unsubscribe: () => void = () => undefined;
@@ -657,8 +660,8 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
     resolveResult({ sequence, source: "inventory_snapshot" });
     return true;
   };
-  const settleFromResyncEvidence = (evidence: CommandResyncEvidence | undefined): boolean => {
-    if (settled || options.acceptsResyncEvidence?.(evidence) !== true) return settled;
+  const settleFromResyncEvidence = (evidence: CommandResyncEvidence | undefined, minStartedAtMs: number | undefined): boolean => {
+    if (settled || options.acceptsResyncEvidence?.(evidence, minStartedAtMs) !== true) return settled;
     cleanup();
     resolveResult({
       sequence: options.devices.snapshot().sequence,
@@ -666,13 +669,13 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
     });
     return true;
   };
-  const resyncAndCheck = (): Promise<void> => {
+  const resyncAndCheck = (minStartedAtMs?: number): Promise<void> => {
     if (!resyncPromise) {
       resyncPromise = options
         .resync()
         .catch(() => undefined)
         .then(async (evidence) => {
-          if (settleFromResyncEvidence(evidence)) return;
+          if (settleFromResyncEvidence(evidence, minStartedAtMs)) return;
           await settleFromSnapshot();
         });
     }
@@ -680,7 +683,7 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
   };
   return {
     result,
-    startTimeout: (timeoutMs, resyncAfterMs) => {
+    startTimeout: (timeoutMs, resyncAfterMs, minResyncStartedAtMs) => {
       if (settled || timer) return;
       interactionComplete = true;
       resolvePending();
@@ -693,14 +696,14 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
       if (hasEarlyResync) {
         resyncTimer = setTimeout(() => {
           resyncTimer = undefined;
-          void resyncAndCheck();
+          void resyncAndCheck(minResyncStartedAtMs);
         }, resyncAfterMs);
       }
       timer = setTimeout(() => {
         timer = undefined;
         const finalCheck = hasEarlyResync
           ? settleFromSnapshot()
-          : resyncAndCheck().then(() => settleFromSnapshot());
+          : resyncAndCheck(minResyncStartedAtMs).then(() => settleFromSnapshot());
         void finalCheck.then((confirmedBySnapshot) => {
           if (settled || confirmedBySnapshot) return;
           cleanup();
