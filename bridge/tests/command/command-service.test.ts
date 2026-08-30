@@ -1684,7 +1684,7 @@ describe("SafeCommandService", () => {
       });
       await vi.advanceTimersByTimeAsync(11);
       await rejected;
-      expect(resync).toHaveBeenCalledTimes(2);
+      expect(resync).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -1739,6 +1739,55 @@ describe("SafeCommandService", () => {
         status: "confirmed",
         confirmation: "device_event"
       });
+      expect(resync).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("times out an already-satisfied scene when post-action resync hangs", async () => {
+    vi.useFakeTimers();
+    const store = readyDeviceStore();
+    store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:00.500Z")));
+    observeSceneSnapshot(store, [
+      {
+        command: {
+          devices: ["dev_001"],
+          commands: [
+            {
+              component: "main",
+              capability: "identifier_switch",
+              command: "on",
+              arguments: []
+            }
+          ]
+        }
+      }
+    ]);
+    const never = new Promise<CommandResyncEvidence | undefined>(() => undefined);
+    const resync = vi.fn(() => never);
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: { executeScene: vi.fn(async () => undefined) },
+      timeoutMs: 30,
+      resync
+    });
+
+    try {
+      let failure: unknown;
+      void service.execute({
+        targetType: "scene",
+        targetId: "identifier_scene001",
+        command: "execute",
+        arguments: [],
+        clientRequestId: "request_scene_hanging_resync"
+      }).catch((error) => {
+        failure = error;
+      });
+      await vi.advanceTimersByTimeAsync(31);
+      await Promise.resolve();
+      expect(failure).toMatchObject({ code: "command_confirmation_timeout" });
       expect(resync).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();

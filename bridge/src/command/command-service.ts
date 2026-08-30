@@ -307,11 +307,21 @@ export class SafeCommandService {
     const expectedStates = scene.expectedStates ?? [];
     if (expectedStates.length === 0) throw new SafeCommandError("command_confirmation_timeout");
     const alreadySatisfied = sceneExpectedStatesMatchSnapshot(snapshot, expectedStates);
-    let confirmation = waitForSceneExpectedStates({
+    const confirmation = waitForSceneExpectedStates({
       devices: this.options.devices,
       expectedStates,
       afterSequence: snapshot.sequence,
-      resync: this.options.resync
+      resync: this.options.resync,
+      ...(alreadySatisfied
+        ? {
+            confirmInventoryEvents: false,
+            acceptsResyncEvidence: (evidence, minStartedAtMs) =>
+              evidence?.authoritativeSnapshot === true &&
+              typeof evidence.startedAtMs === "number" &&
+              (minStartedAtMs === undefined || evidence.startedAtMs >= minStartedAtMs) &&
+              sceneExpectedStatesMatchSnapshot(this.options.devices.snapshot(), expectedStates)
+          }
+        : {})
     });
     try {
       if (!this.options.executor.executeScene) throw new SafeCommandError("command_execution_failed");
@@ -320,25 +330,11 @@ export class SafeCommandService {
       confirmation.cancel();
       throw commandError(error);
     }
-    const sceneCompletedAtMs = Date.now();
-    if (alreadySatisfied) {
-      const evidence = await this.options.resync().catch(() => undefined);
-      if (
-        evidence?.authoritativeSnapshot === true &&
-        typeof evidence.startedAtMs === "number" &&
-        evidence.startedAtMs >= sceneCompletedAtMs &&
-        sceneExpectedStatesMatchSnapshot(this.options.devices.snapshot(), expectedStates)
-      ) {
-        confirmation.cancel();
-        return confirmed(
-          request.clientRequestId,
-          this.options.devices.snapshot().sequence,
-          "inventory_snapshot"
-        );
-      }
-      confirmation.ignoreInventoryEvidenceThrough(this.options.devices.snapshot().sequence);
-    }
-    confirmation.startTimeout(this.options.timeoutMs, this.options.resyncAfterMs);
+    confirmation.startTimeout(
+      this.options.timeoutMs,
+      alreadySatisfied ? 0 : this.options.resyncAfterMs,
+      alreadySatisfied ? Date.now() : undefined
+    );
     const evidence = await confirmation.result;
     return confirmed(
       request.clientRequestId,
@@ -499,6 +495,8 @@ function waitForSceneExpectedStates(options: {
   expectedStates: BridgeSceneExpectedState[];
   afterSequence: number;
   resync: CommandResync;
+  confirmInventoryEvents?: boolean;
+  acceptsResyncEvidence?: (evidence: CommandResyncEvidence | undefined, minStartedAtMs?: number) => boolean;
 }): ConfirmationWait {
   const expectedByKey = new Map(options.expectedStates.map((expected) => [sceneExpectedStateKey(expected), expected]));
   const observed = new Set<string>();
@@ -537,14 +535,19 @@ function waitForSceneExpectedStates(options: {
     resync: options.resync,
     matches: (event) =>
       event.type === "inventory"
-        ? rebuildObservedFromSnapshot()
+        ? options.confirmInventoryEvents !== false && rebuildObservedFromSnapshot()
         : updateObserved(event.state, event.deviceId) === "match" &&
           observed.size === expectedByKey.size,
     invalidates: (event) =>
       event.type === "inventory"
-        ? !rebuildObservedFromSnapshot()
+        ? options.confirmInventoryEvents !== false && !rebuildObservedFromSnapshot()
         : updateObserved(event.state, event.deviceId) === "mismatch",
-    matchesSnapshot: rebuildObservedFromSnapshot
+    ...(options.confirmInventoryEvents === false
+      ? {}
+      : { matchesSnapshot: rebuildObservedFromSnapshot }),
+    ...(options.acceptsResyncEvidence
+      ? { acceptsResyncEvidence: options.acceptsResyncEvidence }
+      : {})
   });
 }
 
@@ -619,7 +622,6 @@ function waitForLocationArmState(options: { devices: DeviceStore; locationId: st
 interface ConfirmationWait {
   result: Promise<ConfirmationEvidence>;
   cancel: () => void;
-  ignoreInventoryEvidenceThrough: (sequence: number) => void;
   startTimeout: (timeoutMs: number, resyncAfterMs?: number, minResyncStartedAtMs?: number) => void;
 }
 
@@ -637,7 +639,6 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
   let stabilityTimer: NodeJS.Timeout | undefined;
   let resyncPromise: Promise<void> | undefined;
   let pendingEvidence: ConfirmationEvidence | undefined;
-  let ignoredInventorySequence = options.afterSequence;
   let rejectResult: (error: SafeCommandError) => void = () => undefined;
   let resolveResult: (evidence: ConfirmationEvidence) => void = () => undefined;
   const cleanup = () => {
@@ -650,10 +651,6 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
   };
   const resolvePending = () => {
     if (settled || !interactionComplete || !pendingEvidence) return;
-    if (pendingEvidence.source === "inventory_snapshot" && pendingEvidence.sequence <= ignoredInventorySequence) {
-      pendingEvidence = undefined;
-      return;
-    }
     if ((options.stabilityMs ?? 0) > 0) {
       if (stabilityTimer) clearTimeout(stabilityTimer);
       stabilityTimer = setTimeout(() => {
@@ -698,7 +695,7 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
       if (settled || options.matchesSnapshot?.() !== true) return settled;
     }
     const sequence = options.devices.snapshot().sequence;
-    if (sequence <= Math.max(options.afterSequence, ignoredInventorySequence)) return false;
+    if (sequence <= options.afterSequence) return false;
     cleanup();
     resolveResult({ sequence, source: "inventory_snapshot" });
     return true;
@@ -758,12 +755,6 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
       cleanup();
       rejectResult(new SafeCommandError("command_execution_failed"));
       void result.catch(() => undefined);
-    },
-    ignoreInventoryEvidenceThrough: (sequence) => {
-      ignoredInventorySequence = Math.max(ignoredInventorySequence, sequence);
-      if (pendingEvidence?.source === "inventory_snapshot" && pendingEvidence.sequence <= ignoredInventorySequence) {
-        pendingEvidence = undefined;
-      }
     }
   };
 }
