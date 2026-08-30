@@ -76,6 +76,33 @@ describe("DeviceDetailDiscovery", () => {
     });
   });
 
+  test("keeps the bounded detail sweep active when a primary switch lacks its exact toggle", async () => {
+    const inspectDeviceDetails = vi.fn(async () => undefined);
+    const discovery = new DeviceDetailDiscovery({
+      inventory: () => switchWithUnrelatedButtonInventory(),
+      inspector: { inspectDeviceDetails },
+      canInspect: () => true,
+      maxAttempts: 2
+    });
+
+    expect(await discovery.runOne()).toBe("inspected");
+    expect(await discovery.runOne()).toBe("inspected");
+    expect(await discovery.runOne()).toBe("idle");
+    expect(inspectDeviceDetails).toHaveBeenCalledTimes(2);
+  });
+
+  test("stops inspecting once every pushed primary switch has an exact toggle", async () => {
+    const inspectDeviceDetails = vi.fn(async () => undefined);
+    const discovery = new DeviceDetailDiscovery({
+      inventory: () => switchWithExactToggleInventory(),
+      inspector: { inspectDeviceDetails },
+      canInspect: () => true
+    });
+
+    expect(await discovery.runOne()).toBe("inspected");
+    expect(await discovery.runOne()).toBe("idle");
+  });
+
   test("prioritizes refresh-worthy value-only devices over generic undiscovered devices", async () => {
     const inspectDeviceDetails = vi.fn(async () => undefined);
     const discovery = new DeviceDetailDiscovery({
@@ -485,6 +512,78 @@ function refreshOnlyControlInventory(): BridgeInventory {
       }
     ],
     scenes: []
+  };
+}
+
+function switchWithUnrelatedButtonInventory(): BridgeInventory {
+  return {
+    schemaVersion: 1,
+    sequence: 1,
+    locations: [{ id: "loc_001", name: "Home" }],
+    rooms: [],
+    devices: [
+      {
+        id: "dev_switch",
+        locationId: "loc_001",
+        roomId: null,
+        name: "Living room switch",
+        type: "switch",
+        online: true,
+        states: [
+          {
+            component: "main",
+            capability: "switch",
+            attribute: "switch",
+            value: "off",
+            unit: null,
+            updatedAt: "2026-08-28T00:00:00Z"
+          }
+        ],
+        controls: [
+          {
+            id: "refresh",
+            kind: "button",
+            label: "Refresh",
+            component: "main",
+            capability: "refresh",
+            attribute: "refresh",
+            command: "refresh"
+          },
+          {
+            id: "identify",
+            kind: "button",
+            label: "Identify",
+            component: "main",
+            capability: "legendabsolute60149.identify",
+            attribute: "identify",
+            command: "identify"
+          }
+        ]
+      }
+    ],
+    scenes: []
+  };
+}
+
+function switchWithExactToggleInventory(): BridgeInventory {
+  const inventory = switchWithUnrelatedButtonInventory();
+  return {
+    ...inventory,
+    devices: inventory.devices.map((device) => ({
+      ...device,
+      controls: [
+        ...(device.controls ?? []),
+        {
+          id: "toggle:main:switch:switch",
+          kind: "toggle" as const,
+          label: "Power",
+          component: "main",
+          capability: "switch",
+          attribute: "switch",
+          command: "on"
+        }
+      ]
+    }))
   };
 }
 

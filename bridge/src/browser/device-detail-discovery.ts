@@ -103,7 +103,7 @@ export class DeviceDetailDiscovery {
     const attempts = this.#attempts.get(device.id) ?? 0;
     if (attempts >= this.#maxAttempts) return false;
     if (attempts === 0) return true;
-    return !hasActionableControl(device) || isCameraImageDevice(device);
+    return !discoveryComplete(device) || isCameraImageDevice(device);
   }
 }
 
@@ -123,6 +123,27 @@ function hasActionableControl(device: BridgeDevice): boolean {
   return (device.controls ?? []).some(
     (control) => control.kind !== "value" && !isRefreshControl(control)
   );
+}
+
+function discoveryComplete(device: BridgeDevice): boolean {
+  return hasActionableControl(device) && hasExactPrimaryToggle(device);
+}
+
+function hasExactPrimaryToggle(device: BridgeDevice): boolean {
+  const controls = device.controls ?? [];
+  return device.states
+    .filter((state) => state.attribute === "switch")
+    .every((state) => {
+      const matches = controls.filter(
+        (control) =>
+          control.kind === "toggle" &&
+          control.component === state.component &&
+          control.capability === state.capability &&
+          control.attribute === state.attribute
+      );
+      const actionMatches = matches.filter((control) => control.id.startsWith("action:"));
+      return matches.length === 1 || (matches.length > 1 && actionMatches.length === 1);
+    });
 }
 
 function isRefreshControl(control: NonNullable<BridgeDevice["controls"]>[number]): boolean {
