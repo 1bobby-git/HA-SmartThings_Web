@@ -10,25 +10,25 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("packages authenticated keeper keepalive as version 0.1.136", () => {
+  test("packages safe persistent-session restoration as version 0.1.137", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.136");
+    expect(config.version).toBe("0.1.137");
     expect(config.homeassistant_api).toBe(true);
-    expect(packageMetadata.version).toBe("0.1.136");
-    expect(protocolMetadata.bridge_version).toBe("0.1.136");
+    expect(packageMetadata.version).toBe("0.1.137");
+    expect(protocolMetadata.bridge_version).toBe("0.1.137");
     expect(protocolMetadata.protocol_version).toBe(4);
-    expect(runtime).toContain('const bridgeVersion = "0.1.136";');
-    expect(runtime).toContain("AUTHENTICATED_KEEPER_KEEPALIVE_MS = 600_000");
+    expect(runtime).toContain('const bridgeVersion = "0.1.137";');
+    expect(runtime).not.toContain("AUTHENTICATED_KEEPER_KEEPALIVE_MS");
     expect(runtime).not.toContain("confirmationStabilityMs: 500");
+    expect(changelog).toContain("## 0.1.137");
+    expect(changelog).toContain("without rewriting browser preference files");
+    expect(changelog).toContain("instead of forcing a periodic navigation");
     expect(changelog).toContain("## 0.1.136");
-    expect(changelog).toContain("authenticated SmartThings keeper page every 10 minutes");
-    expect(changelog).toContain("Chromium profile for session restore before launch");
-    expect(changelog).toContain("without adding SmartThings state polling");
     expect(changelog).toContain("## 0.1.135");
     expect(changelog).toContain("duplicate action and detail-swatch aliases");
     expect(changelog).toContain("unrelated duplicate controls fail-closed");

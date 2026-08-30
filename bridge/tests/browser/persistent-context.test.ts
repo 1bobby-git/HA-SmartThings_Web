@@ -66,49 +66,11 @@ describe("persistent Chromium context", () => {
   });
 
   test("delegates to Playwright launchPersistentContext without headless mode", async () => {
-    const launchPersistentContext = vi.fn().mockResolvedValue({ ok: true });
-    const chromium = { launchPersistentContext };
-
-    const result = await launchSmartThingsPersistentContext(
-      chromium,
-      {
-        dataDir: "/data",
-        profileDir: "/data/chromium-profile",
-        downloadDir: "/data/downloads"
-      }
-    );
-
-    expect(result).toEqual({ ok: true });
-    expect(launchPersistentContext).toHaveBeenCalledWith(
-      "/data/chromium-profile",
-      expect.objectContaining({ headless: false })
-    );
-  });
-
-  test("marks an existing profile for session restore before launching Chromium", async () => {
-    const root = mkdtempSync(join(tmpdir(), "stw-persistent-restore-"));
+    const root = mkdtempSync(join(tmpdir(), "stw-persistent-launch-"));
     try {
-      const profileDir = join(root, "chromium-profile");
-      const preferencesPath = join(profileDir, "Default", "Preferences");
-      mkdirSync(join(profileDir, "Default"), { recursive: true });
-      writeFileSync(
-        preferencesPath,
-        JSON.stringify({
-          browser: { check_default_browser: false },
-          profile: { exited_cleanly: true, exit_type: "Normal" },
-          session: { restore_on_startup: 4 }
-        }),
-        { encoding: "utf8" }
-      );
-      const launchPersistentContext = vi.fn(async () => {
-        const preferences = JSON.parse(readFileSync(preferencesPath, "utf8")) as {
-          browser?: { check_default_browser?: boolean };
-          profile?: { exited_cleanly?: boolean; exit_type?: string };
-          session?: { restore_on_startup?: number };
-        };
-        return preferences;
-      });
+      const launchPersistentContext = vi.fn().mockResolvedValue({ ok: true });
       const chromium = { launchPersistentContext };
+      const profileDir = join(root, "chromium-profile");
 
       const result = await launchSmartThingsPersistentContext(chromium, {
         dataDir: root,
@@ -116,11 +78,38 @@ describe("persistent Chromium context", () => {
         downloadDir: join(root, "downloads")
       });
 
-      expect(result).toMatchObject({
+      expect(result).toEqual({ ok: true });
+      expect(launchPersistentContext).toHaveBeenCalledWith(
+        profileDir,
+        expect.objectContaining({ headless: false })
+      );
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("leaves Chromium preferences untouched before launching the dedicated profile", async () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-persistent-restore-"));
+    try {
+      const profileDir = join(root, "chromium-profile");
+      const preferencesPath = join(profileDir, "Default", "Preferences");
+      mkdirSync(join(profileDir, "Default"), { recursive: true });
+      const originalPreferences = JSON.stringify({
         browser: { check_default_browser: false },
-        profile: { exited_cleanly: false, exit_type: "Crashed" },
-        session: { restore_on_startup: 1 }
+        profile: { exited_cleanly: true, exit_type: "Normal" },
+        session: { restore_on_startup: 4 }
       });
+      writeFileSync(preferencesPath, originalPreferences, { encoding: "utf8" });
+      const launchPersistentContext = vi.fn().mockResolvedValue({ ok: true });
+      const chromium = { launchPersistentContext };
+
+      await launchSmartThingsPersistentContext(chromium, {
+        dataDir: root,
+        profileDir,
+        downloadDir: join(root, "downloads")
+      });
+
+      expect(readFileSync(preferencesPath, "utf8")).toBe(originalPreferences);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

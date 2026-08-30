@@ -702,7 +702,7 @@ describe("createBridgeRuntime", () => {
     });
   });
 
-  test("periodically refreshes an authenticated keeper to keep the Samsung web session active", async () => {
+  test("does not navigate a healthy authenticated keeper merely because it has been idle", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     const root = createTempRoot();
@@ -727,25 +727,23 @@ describe("createBridgeRuntime", () => {
     runtime.status.update({
       authenticated: true,
       keeperPresent: true,
-      pushConnected: false,
-      parserHealthy: false,
-      initialSnapshotComplete: false,
-      state: "DISCOVERING_PROTOCOL"
+      pushConnected: true,
+      parserHealthy: true,
+      initialSnapshotComplete: true,
+      lastPushAtMs: 10_000,
+      state: "CONNECTED"
     });
 
-    await vi.advanceTimersByTimeAsync(599_000);
+    for (let index = 0; index < 6; index += 1) {
+      await vi.advanceTimersByTimeAsync(99_000);
+      runtime.status.update({ lastPushAtMs: Date.now() });
+    }
+    await vi.advanceTimersByTimeAsync(6_000);
+
     expect(keeper.goto).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    expect(keeper.goto).toHaveBeenCalledTimes(1);
-    expect(keeper.goto).toHaveBeenCalledWith(
-      "https://my.smartthings.com/location/loc-synthetic-001",
-      { waitUntil: "domcontentloaded" }
-    );
     expect(runtime.status.getSnapshot()).toMatchObject({
       authenticated: true,
-      state: "DISCOVERING_PROTOCOL",
+      state: "CONNECTED",
       urlCategory: "smartthings_location"
     });
   });

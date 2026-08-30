@@ -1,5 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, relative, resolve } from "node:path";
 
 export interface PersistentContextPaths {
   dataDir: string;
@@ -92,62 +91,5 @@ export async function launchSmartThingsPersistentContext(
   paths: PersistentContextPaths
 ): Promise<unknown> {
   const launch = createPersistentContextLaunch(paths);
-  preparePersistentSessionRestore(launch.userDataDir);
   return chromium.launchPersistentContext(launch.userDataDir, launch.options);
-}
-
-export function preparePersistentSessionRestore(profileDir: string): void {
-  const normalizedProfileDir = normalizeBridgePath(profileDir);
-  const defaultProfileDir = join(normalizedProfileDir, "Default");
-  const preferencesPath = join(defaultProfileDir, "Preferences");
-  let preferences: Record<string, unknown> = {};
-  try {
-    const parsed = JSON.parse(readFileSync(preferencesPath, "utf8")) as unknown;
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return;
-    }
-    preferences = parsed as Record<string, unknown>;
-  } catch (error) {
-    if (!isNodeErrorCode(error, "ENOENT")) {
-      return;
-    }
-  }
-
-  const profile =
-    typeof preferences.profile === "object" &&
-    preferences.profile !== null &&
-    !Array.isArray(preferences.profile)
-      ? preferences.profile
-      : {};
-  const session =
-    typeof preferences.session === "object" &&
-    preferences.session !== null &&
-    !Array.isArray(preferences.session)
-      ? preferences.session
-      : {};
-
-  preferences.profile = {
-    ...profile,
-    exited_cleanly: false,
-    exit_type: "Crashed"
-  };
-  preferences.session = {
-    ...session,
-    restore_on_startup: 1
-  };
-
-  mkdirSync(defaultProfileDir, { recursive: true, mode: 0o700 });
-  writeFileSync(preferencesPath, `${JSON.stringify(preferences)}\n`, {
-    encoding: "utf8",
-    mode: 0o600
-  });
-}
-
-function isNodeErrorCode(error: unknown, code: string): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === code
-  );
 }

@@ -77,8 +77,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.136";
-const AUTHENTICATED_KEEPER_KEEPALIVE_MS = 600_000;
+const bridgeVersion = "0.1.137";
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -151,7 +150,6 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   let currentKeeperManager: KeeperPageManager | undefined;
   let recoverCurrentPushSocket: (() => void) | undefined;
   let commandSnapshotRefresh: Promise<void> | undefined;
-  let lastAuthenticatedKeeperKeepaliveAtMs = 0;
   const refreshCommandSnapshot = (): Promise<void> => {
     if (commandSnapshotRefresh) return commandSnapshotRefresh;
     commandSnapshotRefresh = (async () => {
@@ -262,7 +260,6 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       log.warn("smartthings_websocket_stale_recovery");
       recoverCurrentPushSocket();
     }
-    void refreshAuthenticatedKeeperSession();
     void reconcileActiveKeeper();
   }, deps.config.heartbeatIntervalMs);
   const detailDiscoveryInterval = setInterval(() => {
@@ -369,7 +366,6 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         currentContext = context;
         currentKeeperManager = keeperManager;
         recoverCurrentPushSocket = recoverSmartThingsWebSocket;
-        lastAuthenticatedKeeperKeepaliveAtMs = Date.now();
         detailDiscovery.reset();
         assigned = true;
         return context;
@@ -456,32 +452,6 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       log.warn("keeper_reconcile_failed");
     }
   };
-
-  async function refreshAuthenticatedKeeperSession(): Promise<void> {
-    const keeperManager = currentKeeperManager;
-    const context = currentContext;
-    const generation = activeContextGeneration;
-    if (stopped || !keeperManager || !context) {
-      return;
-    }
-    const now = Date.now();
-    if (now - lastAuthenticatedKeeperKeepaliveAtMs < AUTHENTICATED_KEEPER_KEEPALIVE_MS) {
-      return;
-    }
-    const keeper = keeperManager.currentKeeper();
-    if (!keeper || classifySmartThingsUrl(keeper.url()) !== "smartthings_location") {
-      return;
-    }
-    lastAuthenticatedKeeperKeepaliveAtMs = now;
-    try {
-      const refreshed = await keeperManager.recoverKeeper();
-      if (generation === activeContextGeneration && context === currentContext && !stopped) {
-        status.update(keeperStatusWithoutConnectedState(refreshed.url(), status.getSnapshot().state));
-      }
-    } catch {
-      log.warn("keeper_session_keepalive_failed");
-    }
-  }
 
   const browserStartup = restartBrowser().catch(() => {
     log.error("browser_startup_failed");
@@ -1103,21 +1073,6 @@ function statusForKeeperUrl(value: string): RuntimeStatusPatch {
     return { authenticated: true, state: "DISCOVERING_PROTOCOL", urlCategory };
   }
   return { authenticated: false, state: "PAGE_LOADING", urlCategory };
-}
-
-function keeperStatusWithoutConnectedState(
-  value: string,
-  currentState: RuntimeStatusSnapshot["state"]
-): RuntimeStatusPatch {
-  const keeperStatus = statusForKeeperUrl(value);
-  if (
-    keeperStatus.authenticated === true &&
-    ["SYNCING", "CONNECTED", "STALE", "PROTOCOL_CHANGED"].includes(currentState)
-  ) {
-    const { state: _state, ...withoutState } = keeperStatus;
-    return withoutState;
-  }
-  return keeperStatus;
 }
 
 function safeBrowserVersion(value: string | undefined): string {

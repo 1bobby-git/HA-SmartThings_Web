@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.137
+
+- Keep restart-time login restoration on Chromium's dedicated persistent profile and existing `--restore-last-session` path without rewriting browser preference files or pretending the previous exit crashed.
+- Leave a healthy authenticated keeper and in-flight controls untouched instead of forcing a periodic navigation that can interrupt SmartThings Web commands and push recovery.
+
 ## 0.1.136
 
 - Refresh the authenticated SmartThings keeper page every 10 minutes so the Samsung web session stays active during long idle periods without adding SmartThings state polling.
