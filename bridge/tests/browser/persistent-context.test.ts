@@ -1,3 +1,7 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, test, vi } from "vitest";
 
 import {
@@ -79,5 +83,46 @@ describe("persistent Chromium context", () => {
       "/data/chromium-profile",
       expect.objectContaining({ headless: false })
     );
+  });
+
+  test("marks an existing profile for session restore before launching Chromium", async () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-persistent-restore-"));
+    try {
+      const profileDir = join(root, "chromium-profile");
+      const preferencesPath = join(profileDir, "Default", "Preferences");
+      mkdirSync(join(profileDir, "Default"), { recursive: true });
+      writeFileSync(
+        preferencesPath,
+        JSON.stringify({
+          browser: { check_default_browser: false },
+          profile: { exited_cleanly: true, exit_type: "Normal" },
+          session: { restore_on_startup: 4 }
+        }),
+        { encoding: "utf8" }
+      );
+      const launchPersistentContext = vi.fn(async () => {
+        const preferences = JSON.parse(readFileSync(preferencesPath, "utf8")) as {
+          browser?: { check_default_browser?: boolean };
+          profile?: { exited_cleanly?: boolean; exit_type?: string };
+          session?: { restore_on_startup?: number };
+        };
+        return preferences;
+      });
+      const chromium = { launchPersistentContext };
+
+      const result = await launchSmartThingsPersistentContext(chromium, {
+        dataDir: root,
+        profileDir,
+        downloadDir: join(root, "downloads")
+      });
+
+      expect(result).toMatchObject({
+        browser: { check_default_browser: false },
+        profile: { exited_cleanly: false, exit_type: "Crashed" },
+        session: { restore_on_startup: 1 }
+      });
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 });

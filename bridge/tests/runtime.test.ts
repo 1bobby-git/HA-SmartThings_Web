@@ -702,6 +702,54 @@ describe("createBridgeRuntime", () => {
     });
   });
 
+  test("periodically refreshes an authenticated keeper to keep the Samsung web session active", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const root = createTempRoot();
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    const context = new FakeContext([keeper]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        config: {
+          dataDir: root,
+          host: "127.0.0.1",
+          port: 0,
+          heartbeatIntervalMs: 1_000,
+          browserMaxRestarts: 2,
+          browserRetryDelayMs: 0
+        },
+        chromium: { launchPersistentContext: vi.fn(async () => context) }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    keeper.goto.mockClear();
+    runtime.status.update({
+      authenticated: true,
+      keeperPresent: true,
+      pushConnected: false,
+      parserHealthy: false,
+      initialSnapshotComplete: false,
+      state: "DISCOVERING_PROTOCOL"
+    });
+
+    await vi.advanceTimersByTimeAsync(599_000);
+    expect(keeper.goto).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(keeper.goto).toHaveBeenCalledTimes(1);
+    expect(keeper.goto).toHaveBeenCalledWith(
+      "https://my.smartthings.com/location/loc-synthetic-001",
+      { waitUntil: "domcontentloaded" }
+    );
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      authenticated: true,
+      state: "DISCOVERING_PROTOCOL",
+      urlCategory: "smartthings_location"
+    });
+  });
+
   test("marks snapshot complete only after all real ACK categories and becomes ready after push", async () => {
     vi.useFakeTimers();
     const root = createTempRoot();

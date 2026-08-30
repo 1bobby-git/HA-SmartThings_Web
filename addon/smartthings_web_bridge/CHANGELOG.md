@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.136
+
+- Refresh the authenticated SmartThings keeper page every 10 minutes so the Samsung web session stays active during long idle periods without adding SmartThings state polling.
+- Mark the dedicated Chromium profile for session restore before launch so a clean Bridge restart reopens the prior SmartThings web session instead of losing session-only Samsung login state.
+
 ## 0.1.135
 
 - Reconcile Cake's duplicate action and detail-swatch aliases for one pushed toggle by selecting the unique observed action identity, while keeping unrelated duplicate controls fail-closed.
