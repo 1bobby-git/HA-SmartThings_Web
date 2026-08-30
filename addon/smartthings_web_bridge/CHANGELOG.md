@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.139
+
+- Preserve restart-time status snapshot switch controls when SmartThings Web reports plural `actions` with observed `commands` or `supportedCommands`, so safe on/off devices are not left uncontrollable until later detail discovery.
+- Continue to ignore non-switch action lists and non-`on`/`off` commands for Home Assistant control discovery.
+
 ## 0.1.138
 
 - Add bounded exact primary-toggle discovery that stays active until each pushed primary switch has one exact primary-toggle control or one unique `action:` alias, so unrelated buttons no longer close discovery early.
