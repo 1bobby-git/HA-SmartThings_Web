@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.138
+
+- Add bounded exact primary-toggle discovery that stays active until each pushed primary switch has one exact primary-toggle control or one unique `action:` alias, so unrelated buttons no longer close discovery early.
+- Confirm observed Refresh actions only after the exact web action is followed by a post-action authoritative snapshot; a bare dispatcher ACK still does not count as success.
+- Require already-satisfied scene execution once, then confirm only from a post-action authoritative snapshot that still matches every expected state.
+- Add the nginx 85-second timeout ladder for Bridge proxy requests, keeping it below Home Assistant's 90-second client boundary while leaving noVNC websocket proxying unchanged.
+- Retain the authenticated SmartThings Web session boundary: no official SmartThings API client, cookie replay, periodic SmartThings state polling, or DOM-derived state authority is added.
+
 ## 0.1.137
 
 - Keep restart-time login restoration on Chromium's dedicated persistent profile and existing `--restore-last-session` path without rewriting browser preference files or pretending the previous exit crashed.

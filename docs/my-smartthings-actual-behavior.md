@@ -205,6 +205,17 @@ session expiry, not evidence that the profile was replaced. The add-on keeps
 liveness and Ingress available while readiness and inventory synchronization
 remain blocked until the user completes manual browser reauthentication.
 
+The 0.1.138 candidate is prepared locally only. It keeps exact-control
+commands inside the authenticated SmartThings Web session and tightens local
+confirmation rules: bounded detail discovery remains active until a pushed
+primary switch has its exact toggle, Refresh is confirmed only after the exact
+web action is followed by an authoritative post-action snapshot, and an
+already-satisfied scene still executes once before post-action snapshot
+confirmation. The nginx Bridge proxy timeout is explicitly 85 seconds, below
+Home Assistant's 90-second client boundary. HAOS 0.1.138 live deployment is
+pending, so no current live readiness, control, scene, or 72-hour durability
+claim is made here.
+
 The supplied capture was labelled safe but still contained account-related
 metadata inside a third-party feature-delivery URL. It was therefore treated as
 sensitive local evidence and was not added to the repository.
