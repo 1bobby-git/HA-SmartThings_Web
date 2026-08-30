@@ -450,7 +450,7 @@ export class DeviceStore {
         const state = stateFromSnapshot(row, this.#identifierRole);
         const deviceId = safeId(row.deviceId, "dev");
         const locationId = safeId(row.locationId, "loc");
-        const controls = actionControls(row.action);
+        const controls = actionControls(row.actions ?? row.action);
         if ((!state && controls.length === 0) || !deviceId || !locationId) continue;
         const device = this.#ensureDevice(deviceId, locationId);
         if (state) changed = this.#setState(device, state) || changed;
@@ -1358,16 +1358,22 @@ function actionControls(value: unknown): BridgeDeviceControl[] {
   const grouped = new Map<string, { input: Record<string, unknown>; commands: string[] }>();
   for (const action of records) {
     if (!action) continue;
-    const command = readString(action.command);
-    if (command !== "on" && command !== "off") continue;
     const component = readString(action.componentId ?? action.component);
     const capability = readString(action.capabilityId ?? action.capability);
     const attribute = readString(action.attributeName ?? action.attribute);
     if (attribute !== "switch") continue;
+    const commands = [
+      readString(action.command),
+      ...tokenList(action.commands),
+      ...tokenList(action.supportedCommands)
+    ].filter((command): command is "on" | "off" => command === "on" || command === "off");
+    if (commands.length === 0) continue;
     const key = `${component ?? ""}\u0000${capability ?? ""}\u0000${attribute}`;
     const present = grouped.get(key);
     if (present) {
-      if (!present.commands.includes(command)) present.commands.push(command);
+      for (const command of commands) {
+        if (!present.commands.includes(command)) present.commands.push(command);
+      }
       continue;
     }
     grouped.set(key, {
@@ -1379,7 +1385,7 @@ function actionControls(value: unknown): BridgeDeviceControl[] {
         capability,
         attribute
       },
-      commands: [command]
+      commands
     });
   }
   const controls: BridgeDeviceControl[] = [];

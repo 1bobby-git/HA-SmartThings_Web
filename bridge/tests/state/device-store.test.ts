@@ -903,6 +903,56 @@ describe("DeviceStore", () => {
     ]);
   });
 
+  test("preserves status switch controls from plural actions command lists", () => {
+    const store = new DeviceStore();
+    store.observe(sentFrame('421["find","api/device/status",{}]'));
+
+    store.observe(
+      receivedFrame(
+        `431${JSON.stringify([
+          null,
+          [
+            {
+              deviceId: "dev_001",
+              locationId: "loc_001",
+              componentId: "main",
+              capabilityId: "switch",
+              attributeName: "switch",
+              value: "off",
+              timestamp: "2026-08-30T14:00:00.000Z",
+              actions: [
+                {
+                  componentId: "main",
+                  capabilityId: "switch",
+                  attributeName: "switch",
+                  commands: ["on", "off", "refresh"]
+                },
+                {
+                  componentId: "main",
+                  capabilityId: "switchLevel",
+                  attributeName: "level",
+                  commands: ["on", "off"]
+                }
+              ]
+            }
+          ]
+        ])}`
+      )
+    );
+
+    expect(store.snapshot().devices[0]?.controls).toEqual([
+      {
+        id: "action:main:switch:switch",
+        kind: "toggle",
+        label: "Power",
+        component: "main",
+        capability: "switch",
+        attribute: "switch",
+        commands: ["on", "off"]
+      }
+    ]);
+  });
+
   test("preserves a status switch action even when the row only has display state", () => {
     const store = new DeviceStore();
     store.observe(sentFrame('421["find","api/device/status",{}]'));
