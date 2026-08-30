@@ -78,11 +78,25 @@ class FakePage extends FakeEmitter {
     this.onGoto?.();
     this.currentUrl = url;
   });
-  readonly evaluate = vi.fn(async () => this.advancedSnapshots);
+  readonly evaluate = vi.fn(async (pageFunction?: unknown, argument?: unknown) => {
+    this.evaluateCalls.push([pageFunction, argument]);
+    if (
+      typeof argument === "object" &&
+      argument !== null &&
+      (argument as { path?: unknown }).path === "/location"
+    ) {
+      await this.onSessionTouch?.();
+      return this.sessionTouchOutcome;
+    }
+    return this.advancedSnapshots;
+  });
   readonly close = vi.fn(async () => {
     this.closed = true;
   });
+  readonly evaluateCalls: unknown[][] = [];
   advancedSnapshots: unknown[] = [];
+  sessionTouchOutcome: "ok" | "reauth" | "failed" = "ok";
+  onSessionTouch: (() => void | Promise<void>) | undefined;
 
   constructor(
     public currentUrl: string,
@@ -896,6 +910,324 @@ describe("createBridgeRuntime", () => {
       authenticated: true,
       state: "CONNECTED",
       urlCategory: "smartthings_location"
+    });
+  });
+
+  test("periodically touches a ready authenticated keeper without navigation or state churn", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const root = createTempRoot();
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    const context = new FakeContext([keeper]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        config: {
+          dataDir: root,
+          host: "127.0.0.1",
+          port: 0,
+          heartbeatIntervalMs: 1_000,
+          browserMaxRestarts: 2,
+          browserRetryDelayMs: 0
+        },
+        chromium: { launchPersistentContext: vi.fn(async () => context) }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    keeper.goto.mockClear();
+    keeper.evaluate.mockClear();
+    keeper.evaluateCalls.length = 0;
+    runtime.status.update({
+      authenticated: true,
+      keeperPresent: true,
+      pushConnected: true,
+      parserHealthy: true,
+      initialSnapshotComplete: true,
+      lastPushAtMs: Date.now(),
+      lastEventAtMs: Date.now(),
+      lastParserSuccessAtMs: Date.now(),
+      lastSnapshotAtMs: Date.now(),
+      state: "CONNECTED"
+    });
+    const beforeTouchStatus = runtime.status.getSnapshot();
+
+    await vi.advanceTimersByTimeAsync(119_000);
+    runtime.status.update({ lastPushAtMs: Date.now() });
+    await vi.advanceTimersByTimeAsync(119_000);
+    runtime.status.update({ lastPushAtMs: Date.now() });
+    await vi.advanceTimersByTimeAsync(61_000);
+    runtime.status.update({ lastPushAtMs: Date.now() });
+    expect(keeper.evaluateCalls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(keeper.goto).not.toHaveBeenCalled();
+    expect(keeper.evaluateCalls).toHaveLength(1);
+    expect(keeper.evaluateCalls[0]?.[1]).toMatchObject({ path: "/location" });
+    expect(String(keeper.evaluateCalls[0]?.[0])).not.toMatch(
+      /cupcake-api|api\/devices|api\/device|api\/scene|command|cookie|localStorage|sessionStorage|document/i
+    );
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      authenticated: true,
+      lastEventAtMs: beforeTouchStatus.lastEventAtMs,
+      lastSnapshotAtMs: beforeTouchStatus.lastSnapshotAtMs,
+      state: "CONNECTED"
+    });
+  });
+
+  test("skips periodic touch while the keeper is on Samsung login", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const root = createTempRoot();
+    const keeper = new FakePage("https://account.samsung.com/accounts/v1/ST/signInGate");
+    const context = new FakeContext([keeper]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        config: {
+          dataDir: root,
+          host: "127.0.0.1",
+          port: 0,
+          heartbeatIntervalMs: 1_000,
+          browserMaxRestarts: 2,
+          browserRetryDelayMs: 0
+        },
+        chromium: { launchPersistentContext: vi.fn(async () => context) }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    keeper.goto.mockClear();
+    keeper.evaluate.mockClear();
+    runtime.status.update({
+      authenticated: true,
+      keeperPresent: true,
+      pushConnected: true,
+      parserHealthy: true,
+      initialSnapshotComplete: true,
+      lastPushAtMs: Date.now(),
+      lastParserSuccessAtMs: Date.now(),
+      lastSnapshotAtMs: Date.now(),
+      state: "CONNECTED"
+    });
+
+    await vi.advanceTimersByTimeAsync(301_000);
+
+    expect(keeper.evaluate).not.toHaveBeenCalled();
+    expect(keeper.goto).not.toHaveBeenCalled();
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      authenticated: false,
+      state: "LOGIN_REQUIRED",
+      urlCategory: "samsung_login"
+    });
+  });
+
+  test("marks login required when session touch observes an auth redirect", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const root = createTempRoot();
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    keeper.sessionTouchOutcome = "reauth";
+    const context = new FakeContext([keeper]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        config: {
+          dataDir: root,
+          host: "127.0.0.1",
+          port: 0,
+          heartbeatIntervalMs: 1_000,
+          browserMaxRestarts: 2,
+          browserRetryDelayMs: 0
+        },
+        chromium: { launchPersistentContext: vi.fn(async () => context) }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    runtime.status.update({
+      authenticated: true,
+      keeperPresent: true,
+      pushConnected: true,
+      parserHealthy: true,
+      initialSnapshotComplete: true,
+      lastPushAtMs: Date.now(),
+      lastParserSuccessAtMs: Date.now(),
+      lastSnapshotAtMs: Date.now(),
+      state: "CONNECTED"
+    });
+
+    await vi.advanceTimersByTimeAsync(119_000);
+    runtime.status.update({ lastPushAtMs: Date.now() });
+    await vi.advanceTimersByTimeAsync(119_000);
+    runtime.status.update({ lastPushAtMs: Date.now() });
+    await vi.advanceTimersByTimeAsync(63_000);
+
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      authenticated: false,
+      state: "LOGIN_REQUIRED",
+      urlCategory: "smartthings_location"
+    });
+  });
+
+  test("ignores a stale session touch outcome after the browser context is replaced", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const root = createTempRoot();
+    const firstKeeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    firstKeeper.sessionTouchOutcome = "reauth";
+    const firstContext = new FakeContext([firstKeeper]);
+    const secondKeeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-002");
+    const secondContext = new FakeContext([secondKeeper]);
+    firstKeeper.onSessionTouch = async () => {
+      await firstContext.emit("close", undefined);
+    };
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        config: {
+          dataDir: root,
+          host: "127.0.0.1",
+          port: 0,
+          heartbeatIntervalMs: 1_000,
+          browserMaxRestarts: 2,
+          browserRetryDelayMs: 0
+        },
+        chromium: {
+          launchPersistentContext: vi
+            .fn()
+            .mockResolvedValueOnce(firstContext)
+            .mockResolvedValueOnce(secondContext)
+        }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    runtime.status.update({
+      authenticated: true,
+      keeperPresent: true,
+      pushConnected: true,
+      parserHealthy: true,
+      initialSnapshotComplete: true,
+      lastPushAtMs: Date.now(),
+      lastParserSuccessAtMs: Date.now(),
+      lastSnapshotAtMs: Date.now(),
+      state: "CONNECTED"
+    });
+
+    await vi.advanceTimersByTimeAsync(119_000);
+    runtime.status.update({ lastPushAtMs: Date.now() });
+    await vi.advanceTimersByTimeAsync(119_000);
+    runtime.status.update({ lastPushAtMs: Date.now() });
+    await vi.advanceTimersByTimeAsync(63_000);
+
+    expect(firstKeeper.evaluateCalls).toHaveLength(1);
+    expect(runtime.status.getSnapshot()).not.toMatchObject({
+      authenticated: false,
+      state: "LOGIN_REQUIRED"
+    });
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      keeperPresent: true,
+      urlCategory: "smartthings_location"
+    });
+  });
+
+  test("keeps connected state and writes only a fixed warning when session touch fails", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const root = createTempRoot();
+    const log = {
+      error: vi.fn(),
+      warn: vi.fn(),
+      info: vi.fn()
+    };
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    keeper.sessionTouchOutcome = "failed";
+    const context = new FakeContext([keeper]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        config: {
+          dataDir: root,
+          host: "127.0.0.1",
+          port: 0,
+          heartbeatIntervalMs: 1_000,
+          browserMaxRestarts: 2,
+          browserRetryDelayMs: 0
+        },
+        chromium: { launchPersistentContext: vi.fn(async () => context) },
+        log
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    runtime.status.update({
+      authenticated: true,
+      keeperPresent: true,
+      pushConnected: true,
+      parserHealthy: true,
+      initialSnapshotComplete: true,
+      lastPushAtMs: Date.now(),
+      lastParserSuccessAtMs: Date.now(),
+      lastSnapshotAtMs: Date.now(),
+      state: "CONNECTED"
+    });
+
+    await vi.advanceTimersByTimeAsync(119_000);
+    runtime.status.update({ lastPushAtMs: Date.now() });
+    await vi.advanceTimersByTimeAsync(119_000);
+    runtime.status.update({ lastPushAtMs: Date.now() });
+    await vi.advanceTimersByTimeAsync(63_000);
+
+    expect(log.warn).toHaveBeenCalledWith("session_touch_failed");
+    expect(JSON.stringify(log.warn.mock.calls)).not.toMatch(/token|secret|cookie|session=|http/i);
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      authenticated: true,
+      state: "CONNECTED"
+    });
+  });
+
+  test("skips periodic touch while browser isolation is busy", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const root = createTempRoot();
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    const extraPage = new FakePage("https://my.smartthings.com/location/loc-synthetic-001/device");
+    const context = new FakeContext([keeper, extraPage]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        config: {
+          dataDir: root,
+          host: "127.0.0.1",
+          port: 0,
+          heartbeatIntervalMs: 1_000,
+          browserMaxRestarts: 2,
+          browserRetryDelayMs: 0
+        },
+        chromium: { launchPersistentContext: vi.fn(async () => context) }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    extraPage.closed = false;
+    context.existingPages.push(extraPage);
+    runtime.status.update({
+      authenticated: true,
+      keeperPresent: true,
+      pushConnected: true,
+      parserHealthy: true,
+      initialSnapshotComplete: true,
+      lastPushAtMs: Date.now(),
+      lastParserSuccessAtMs: Date.now(),
+      lastSnapshotAtMs: Date.now(),
+      state: "CONNECTED"
+    });
+
+    await vi.advanceTimersByTimeAsync(119_000);
+    runtime.status.update({ lastPushAtMs: Date.now() });
+    await vi.advanceTimersByTimeAsync(119_000);
+    runtime.status.update({ lastPushAtMs: Date.now() });
+    await vi.advanceTimersByTimeAsync(63_000);
+
+    expect(keeper.evaluateCalls).toEqual([]);
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      authenticated: true,
+      state: "CONNECTED"
     });
   });
 

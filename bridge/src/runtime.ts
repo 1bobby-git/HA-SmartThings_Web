@@ -6,7 +6,8 @@ import {
   ADVANCED_DEVICE_SNAPSHOT_URLS,
   KeeperPageManager,
   fetchAdvancedDeviceSnapshotEntries,
-  fetchAdvancedDeviceSnapshots
+  fetchAdvancedDeviceSnapshots,
+  type SessionTouchOutcome
 } from "./browser/keeper-page.js";
 import { BrowserSupervisor } from "./browser/browser-supervisor.js";
 import { SmartThingsWebUiCommandExecutor } from "./browser/command-page.js";
@@ -82,6 +83,7 @@ type ObservableContext = BrowserContextLike & {
 };
 
 const bridgeVersion = "0.1.140";
+const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -153,6 +155,9 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   let currentContext: ObservableContext | undefined;
   let currentKeeperManager: KeeperPageManager | undefined;
   let recoverCurrentPushSocket: (() => void) | undefined;
+  let sessionTouchInFlight = false;
+  let sessionTouchReadySinceMs: number | undefined;
+  let lastSessionTouchAttemptAtMs = 0;
   const refreshCommandSnapshot = (): Promise<CommandResyncEvidence> => {
     return (async () => {
       const startedAtMs = Date.now();
@@ -208,6 +213,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         report.ready &&
         report.details.state === "CONNECTED" &&
         !commandExecutor.hasWarmCommandPage() &&
+        !commandExecutor.hasForegroundOperation() &&
+        !sessionTouchInFlight &&
         isProbeBrowserIsolated(currentContext, currentKeeperManager) &&
         physicalActionProbe.snapshot(getProbeEvidence()).state !== "armed"
       );
@@ -262,6 +269,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       recoverCurrentPushSocket();
     }
     void reconcileActiveKeeper();
+    void touchAuthenticatedSessionIfDue();
   }, deps.config.heartbeatIntervalMs);
   const detailDiscoveryInterval = setInterval(() => {
     void detailDiscovery.runOne().then((result) => {
@@ -355,6 +363,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
               keeperManager === currentKeeperManager &&
               report.ready &&
               !commandExecutor.hasWarmCommandPage() &&
+              !commandExecutor.hasForegroundOperation() &&
+              !sessionTouchInFlight &&
               isProbeBrowserIsolated(context, keeperManager) &&
               physicalActionProbe.snapshot(getProbeEvidence()).state !== "armed"
             );
@@ -454,6 +464,71 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     } catch {
       log.warn("keeper_reconcile_failed");
     }
+  };
+
+  const touchAuthenticatedSessionIfDue = async () => {
+    const keeperManager = currentKeeperManager;
+    const context = currentContext;
+    const generation = activeContextGeneration;
+    const snapshot = status.getSnapshot();
+    const now = Date.now();
+    const keeper = keeperManager?.currentKeeper();
+    const readyForTouch =
+      !stopped &&
+      keeperManager !== undefined &&
+      context !== undefined &&
+      generation === activeContextGeneration &&
+      createHealthReport(snapshot).ready &&
+      snapshot.state === "CONNECTED" &&
+      snapshot.authenticated &&
+      snapshot.keeperPresent &&
+      classifySmartThingsUrl(keeper?.url() ?? "") === "smartthings_location";
+    if (!readyForTouch) {
+      sessionTouchReadySinceMs = undefined;
+      return;
+    }
+    sessionTouchReadySinceMs ??= now;
+    if (
+      now - sessionTouchReadySinceMs < SESSION_TOUCH_INTERVAL_MS ||
+      now - lastSessionTouchAttemptAtMs < SESSION_TOUCH_INTERVAL_MS ||
+      sessionTouchInFlight ||
+      commandExecutor.hasForegroundOperation() ||
+      commandExecutor.hasWarmCommandPage() ||
+      detailDiscovery.isRunning() ||
+      !isProbeBrowserIsolated(context, keeperManager) ||
+      physicalActionProbe.snapshot(getProbeEvidence()).state === "armed"
+    ) {
+      return;
+    }
+    lastSessionTouchAttemptAtMs = now;
+    sessionTouchInFlight = true;
+    try {
+      const outcome = await keeperManager.touchAuthenticatedSession();
+      if (
+        stopped ||
+        generation !== activeContextGeneration ||
+        context !== currentContext ||
+        keeperManager !== currentKeeperManager
+      ) {
+        return;
+      }
+      handleSessionTouchOutcome(outcome);
+    } finally {
+      sessionTouchInFlight = false;
+    }
+  };
+
+  const handleSessionTouchOutcome = (outcome: SessionTouchOutcome) => {
+    if (outcome === "ok") return;
+    if (outcome === "reauth") {
+      sessionTouchReadySinceMs = undefined;
+      status.update({
+        authenticated: false,
+        state: "LOGIN_REQUIRED"
+      });
+      return;
+    }
+    log.warn("session_touch_failed");
   };
 
   const browserStartup = restartBrowser().catch(() => {

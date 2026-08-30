@@ -17,6 +17,7 @@ class FakePage {
     this.currentUrl = url;
   });
   readonly evaluateCalls: unknown[][] = [];
+  executeEvaluate = false;
 
   constructor(public currentUrl: string, public closed = false) {}
 
@@ -33,6 +34,20 @@ class FakePage {
     argument: Argument
   ): Promise<Result> {
     this.evaluateCalls.push([pageFunction, argument]);
+    if (this.executeEvaluate) {
+      const globals = globalThis as unknown as { location?: Location | URL };
+      const previousLocation = globals.location;
+      globals.location = new URL(this.currentUrl);
+      try {
+        return await pageFunction(argument);
+      } finally {
+        if (previousLocation) {
+          globals.location = previousLocation;
+        } else {
+          delete globals.location;
+        }
+      }
+    }
     const urls = argument as string[];
     return urls.map((url, index) => ({
       url: `https://my.smartthings.com${url}`,
@@ -267,6 +282,66 @@ describe("KeeperPageManager", () => {
     expect(keeper).toBe(login);
     expect(login.goto).not.toHaveBeenCalled();
     expect(context.created).toHaveLength(0);
+  });
+
+  test("touches an authenticated keeper with a same-origin non-navigation GET", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, type: "basic" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    keeper.executeEvaluate = true;
+    const manager = new KeeperPageManager(new FakeContext([keeper]));
+
+    const outcome = await manager.touchAuthenticatedSession();
+
+    expect(outcome).toBe("ok");
+    expect(keeper.goto).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith("/location", {
+      cache: "no-store",
+      credentials: "same-origin",
+      method: "GET",
+      redirect: "manual",
+      signal: expect.any(AbortSignal)
+    });
+    expect(String(keeper.evaluateCalls[0]?.[0])).not.toMatch(
+      /cupcake-api|api\/devices|api\/device|api\/scene|command|cookie|localStorage|sessionStorage|document/i
+    );
+  });
+
+  test("does not touch a Samsung login page", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const login = new FakePage("https://account.samsung.com/accounts/v1/ST/signInGate");
+    const manager = new KeeperPageManager(new FakeContext([login]));
+    await manager.ensureKeeper();
+
+    const outcome = await manager.touchAuthenticatedSession();
+
+    expect(outcome).toBe("reauth");
+    expect(login.goto).not.toHaveBeenCalled();
+    expect(login.evaluateCalls).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("fails closed when the session touch is redirected to authentication", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 302, type: "opaqueredirect" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    keeper.executeEvaluate = true;
+    const manager = new KeeperPageManager(new FakeContext([keeper]));
+
+    await expect(manager.touchAuthenticatedSession()).resolves.toBe("reauth");
+    expect(keeper.goto).not.toHaveBeenCalled();
+  });
+
+  test("reports a fixed failure for network or server touch errors", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 500, type: "basic" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    keeper.executeEvaluate = true;
+    const manager = new KeeperPageManager(new FakeContext([keeper]));
+
+    await expect(manager.touchAuthenticatedSession()).resolves.toBe("failed");
+    expect(keeper.goto).not.toHaveBeenCalled();
   });
 
   test("recovers arbitrary drift on the tracked keeper", async () => {

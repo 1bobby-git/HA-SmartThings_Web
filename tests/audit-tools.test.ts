@@ -107,6 +107,34 @@ describe("api-free production audit", () => {
 
     expect(auditSmartThingsApiFree({ cwd: root })).toEqual([]);
   });
+
+  test("allows the bounded same-origin keeper session touch only on the keeper page", () => {
+    const root = seededTempDir();
+    write(
+      root,
+      "bridge/src/browser/keeper-page.ts",
+      `
+      export async function touch() {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 5000);
+        try {
+          // api-free-audit: authenticated-page-same-origin-read-only-session-touch
+          return await fetch("/location", {
+            cache: "no-store",
+            credentials: "same-origin",
+            method: "GET",
+            redirect: "manual",
+            signal: controller.signal
+          });
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+      `
+    );
+
+    expect(auditSmartThingsApiFree({ cwd: root })).toEqual([]);
+  });
 });
 
 describe("secret production scan", () => {

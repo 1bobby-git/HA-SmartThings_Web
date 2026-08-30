@@ -50,6 +50,10 @@ export class DeviceDetailDiscovery {
     return this.#lastFailure;
   }
 
+  isRunning(): boolean {
+    return this.#running;
+  }
+
   async runOne(): Promise<DeviceDetailDiscoveryResult> {
     if (this.#running) return "busy";
     if (!this.options.canInspect()) return "blocked";

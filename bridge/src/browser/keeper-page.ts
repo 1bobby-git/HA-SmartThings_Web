@@ -1,5 +1,7 @@
 export const KEEPER_URL = "https://my.smartthings.com/location";
 export const ADVANCED_URL = "https://my.smartthings.com/advanced";
+const SESSION_TOUCH_PATH = "/location";
+const SESSION_TOUCH_TIMEOUT_MS = 5_000;
 export const ADVANCED_DEVICE_SNAPSHOT_URLS = [
   "/advanced/cupcake-api/api/devices?type=HUB",
   "/advanced/cupcake-api/api/devices?includeHealth=true&includeStatus=true&includeGroups=true&includeUserDevices=true&includeAllowedActions=true&includeRestricted=true",
@@ -27,6 +29,8 @@ export interface AdvancedDeviceSnapshotEntry {
   url: string;
   snapshot: unknown;
 }
+
+export type SessionTouchOutcome = "ok" | "reauth" | "failed";
 
 export async function fetchAdvancedDeviceSnapshots(
   page: BrowserPageLike,
@@ -151,6 +155,53 @@ export class KeeperPageManager {
     const target = isConcreteLocationUrl(keeper.url()) ? keeper.url() : KEEPER_URL;
     await keeper.goto(target, { waitUntil: "domcontentloaded" });
     return keeper;
+  }
+
+  async touchAuthenticatedSession(
+    timeoutMs = SESSION_TOUCH_TIMEOUT_MS
+  ): Promise<SessionTouchOutcome> {
+    const keeper = this.currentKeeper() ?? await this.reconcileRestoredPages();
+    if (!keeper) return "failed";
+    const url = keeper.url();
+    if (isSamsungLoginUrl(url)) return "reauth";
+    if (!isKeeperSettledUrl(url) || !keeper.evaluate) return "failed";
+    try {
+      return await keeper.evaluate(
+        async ({ path, timeout }) => {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), timeout);
+          try {
+            // api-free-audit: authenticated-page-same-origin-read-only-session-touch
+            const response = await fetch(path, {
+              cache: "no-store",
+              credentials: "same-origin",
+              method: "GET",
+              redirect: "manual",
+              signal: controller.signal
+            });
+            if (
+              response.type === "opaqueredirect" ||
+              response.status === 401 ||
+              response.status === 403 ||
+              (response.status >= 300 && response.status < 400)
+            ) {
+              return "reauth";
+            }
+            return response.ok ? "ok" : "failed";
+          } catch {
+            return "failed";
+          } finally {
+            clearTimeout(timer);
+          }
+        },
+        {
+          path: SESSION_TOUCH_PATH,
+          timeout: Math.max(1, Math.min(SESSION_TOUCH_TIMEOUT_MS, timeoutMs))
+        }
+      );
+    } catch {
+      return "failed";
+    }
   }
 
   async openAdvancedPage(

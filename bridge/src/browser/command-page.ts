@@ -167,6 +167,10 @@ export class SmartThingsWebUiCommandExecutor {
     return true;
   }
 
+  hasForegroundOperation(): boolean {
+    return this.#foregroundOperationCount > 0;
+  }
+
   async executeSwitch(input: {
     deviceName: string;
     locationId: string;

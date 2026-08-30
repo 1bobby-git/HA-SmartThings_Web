@@ -120,9 +120,17 @@ function isApiFinding(
   if (
     rule === "direct-http-client" &&
     relativePath === "bridge/src/browser/keeper-page.ts" &&
-    /authenticated-page-same-origin-read-only-get/u.test(nearby(lines, index)) &&
+    /authenticated-page-same-origin-read-only-(?:get|session-touch)/u.test(nearby(lines, index)) &&
     /credentials:\s*"same-origin"/u.test(nearby(lines, index)) &&
     /method:\s*"GET"/u.test(nearby(lines, index))
+  ) {
+    return false;
+  }
+  if (
+    rule === "playwright-network-mutation" &&
+    relativePath === "bridge/src/browser/keeper-page.ts" &&
+    /\bcontroller\.abort\(\)/u.test(line) &&
+    /authenticated-page-same-origin-read-only-session-touch/u.test(lines.join("\n"))
   ) {
     return false;
   }
