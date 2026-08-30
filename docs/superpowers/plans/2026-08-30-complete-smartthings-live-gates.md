@@ -272,11 +272,13 @@ Commit only scene/timeout files and tests.
 - Update: `docs/my-smartthings-actual-behavior.md`
 - Update: `docs/feasibility-report.md`
 
-- [x] **Step 1: Bump every release surface to 0.1.138, then prepare the restart parser repair as 0.1.139**
+- [x] **Step 1: Bump every release surface to 0.1.138, then prepare the restart parser repair as 0.1.139 and the restored-pruning repair as 0.1.140**
 
 Add a changelog entry covering exact-primary-toggle discovery, Refresh post-snapshot confirmation, scene post-snapshot confirmation, and explicit ingress timeouts. Keep the API-free/cookie-free safety statement.
 
 Live 0.1.138 restart testing exposed one additional observed-shape gap: `api/device/status` can report plural `actions` with `commands` or `supportedCommands` lists. Preserve only observed on/off switch commands from that shape and package the repair as 0.1.139 so deployment evidence remains version-exact.
+
+Live 0.1.139 restart testing reached live, ready, `CONNECTED` operation, but the immediate post-restart status response covered 206 IDs and omitted the safe target; the restored target device remained present without controls. Package the follow-up as 0.1.140: defer restored-device pruning until both complete consumer and exact whole Advanced snapshots agree inside the same epoch, preserve restored exact controls when the consumer snapshot omits a device still present in Advanced, preserve actual fallback URLs, and reset epoch flags.
 
 - [x] **Step 2: Run the complete local gate**
 
@@ -296,11 +298,11 @@ git diff --check
 
 Use a fresh spec-compliance reviewer, then a fresh code-quality reviewer. Resolve every important finding and re-run targeted/full tests.
 
-Fresh independent spec and code-quality reviews approved the 0.1.139 parser and release diff. The complete local gate passed with 766 JavaScript tests and 207 Home Assistant tests.
+Fresh independent spec and code-quality reviews approved the 0.1.139 parser and release diff. The complete 0.1.139 local gate passed with 766 JavaScript tests and 207 Home Assistant tests. The 0.1.140 release-preparation gate passed with 775 JavaScript tests, 207 Home Assistant tests, typecheck, build, API-free audit, secret scan, fixture audit, add-on packaging, and diff check.
 
 - [ ] **Step 4: Merge to main, push, and deploy with backup**
 
-Fast-forward `main` only after the worktree is clean and reviewed. Back up `/addons/smartthings_web_bridge` under `/config/.smartthings_web_backups/`, install 0.1.139, rebuild, and verify the running package version and source hash.
+Fast-forward `main` only after the worktree is clean and reviewed. HAOS currently has 0.1.139 installed. Back up `/addons/smartthings_web_bridge` under `/config/.smartthings_web_backups/`, install 0.1.140, rebuild, and verify the running package version and source hash.
 
 - [ ] **Step 5: Verify realtime and command behavior on HAOS**
 
@@ -326,7 +328,7 @@ Record only sanitized aggregate timings, sequence evidence, versions, and target
 
 **Files:**
 - No repository source change unless verification uncovers a bug.
-- Runtime artifacts: `/data/soak/20260830-0.1.139-72h`
+- Runtime artifacts: `/data/soak/20260831-0.1.140-72h`
 
 - [ ] **Step 1: Check for an existing collector**
 
@@ -338,7 +340,7 @@ Inside the HAOS add-on host, verify there is no live `haos-soak.js` process and 
 node dist/tools/haos-soak.js --local-bridge \
   --duration-hours 72 \
   --interval-seconds 300 \
-  --output-dir /data/soak/20260830-0.1.139-72h
+  --output-dir /data/soak/20260831-0.1.140-72h
 ```
 
 Run it detached without restarting the add-on. Confirm `run.json`, `status.json`, `.collector.lock`, and the first successful sample. If the add-on restarts, resume only the same directory with the same arguments.
@@ -349,7 +351,7 @@ Require at least 865 successful samples, no failures, stable inventory, non-regr
 
 ```sh
 node dist/tools/haos-soak-deployment-gate.js \
-  --run-dir /data/soak/20260830-0.1.139-72h
+  --run-dir /data/soak/20260831-0.1.140-72h
 ```
 
 - [ ] **Step 4: Report the proof boundary**

@@ -205,12 +205,19 @@ session expiry, not evidence that the profile was replaced. The add-on keeps
 liveness and Ingress available while readiness and inventory synchronization
 remain blocked until the user completes manual browser reauthentication.
 
-The 0.1.139 candidate is prepared locally only. It keeps the 0.1.138
-exact-control confirmation rules and additionally preserves restart-time status
-snapshot switch controls when SmartThings Web reports plural `actions` with
-observed `commands` or `supportedCommands`. HAOS 0.1.139 live deployment is
-pending, so no current 0.1.139 live readiness, control, scene, or 72-hour
-durability claim is made here.
+The 0.1.139 candidate was deployed and reached live, ready, `CONNECTED`
+operation after restart, but the immediate post-restart status response covered
+206 device IDs and omitted the safe target. The target device existed in the
+restored inventory without controls, so the restart-time control gap remained.
+
+The 0.1.140 candidate is prepared locally only. It keeps the 0.1.139 status
+action parser repair and additionally defers restored-device pruning until both
+a complete consumer snapshot and an exact whole Advanced snapshot agree inside
+the same inventory epoch. Restored exact controls are preserved for devices that
+are absent from the consumer snapshot but still present in the same-epoch
+Advanced snapshot, actual fallback URLs remain intact, and restart epoch flags
+are reset. HAOS 0.1.140 live deployment is pending, so no current 0.1.140 live
+readiness, control, scene, or 72-hour durability claim is made here.
 
 The supplied capture was labelled safe but still contained account-related
 metadata inside a third-party feature-delivery URL. It was therefore treated as

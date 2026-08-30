@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.140
+
+- Defer restored-device pruning after Bridge restart until both a complete consumer snapshot and an exact whole Advanced snapshot agree inside the same snapshot epoch.
+- Keep restored inventory and preserve restored exact controls for devices absent from the consumer snapshot but still present in the same-epoch Advanced snapshot, while resetting epoch flags on restart.
+- Preserve actual fallback URLs during restart recovery and retain the observed-only, API-free, no-polling safety boundary.
+
 ## 0.1.139
 
 - Preserve restart-time status snapshot switch controls when SmartThings Web reports plural `actions` with observed `commands` or `supportedCommands`, so safe on/off devices are not left uncontrollable until later detail discovery.
