@@ -4,6 +4,7 @@ import {
   ADVANCED_DEVICE_SNAPSHOT_URLS,
   KEEPER_URL,
   KeeperPageManager,
+  fetchAdvancedDeviceSnapshotEntries,
   fetchAdvancedDeviceSnapshots
 } from "../../src/browser/keeper-page.js";
 
@@ -34,8 +35,11 @@ class FakePage {
     this.evaluateCalls.push([pageFunction, argument]);
     const urls = argument as string[];
     return urls.map((url, index) => ({
-      url,
-      items: [{ deviceId: `device-${index}` }]
+      url: `https://my.smartthings.com${url}`,
+      snapshot: {
+        url,
+        items: [{ deviceId: `device-${index}` }]
+      }
     })) as Result;
   }
 }
@@ -86,6 +90,23 @@ describe("KeeperPageManager", () => {
       {
         url: statusUrl,
         items: [{ deviceId: "device-0" }]
+      }
+    ]);
+  });
+
+  test("preserves the absolute Advanced URL with each fallback snapshot", async () => {
+    const page = new FakePage("https://my.smartthings.com/advanced");
+    const statusUrl = ADVANCED_DEVICE_SNAPSHOT_URLS[1];
+
+    const entries = await fetchAdvancedDeviceSnapshotEntries(page, [statusUrl]);
+
+    expect(entries).toEqual([
+      {
+        url: `https://my.smartthings.com${statusUrl}`,
+        snapshot: {
+          url: statusUrl,
+          items: [{ deviceId: "device-0" }]
+        }
       }
     ]);
   });

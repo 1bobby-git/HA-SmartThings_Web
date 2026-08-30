@@ -7,8 +7,10 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   classifySmartThingsUrl,
   createBridgeRuntime,
+  isWholeAdvancedDevicesSnapshotUrl,
   type BridgeRuntimeDependencies
 } from "../src/runtime.js";
+import { ADVANCED_DEVICE_SNAPSHOT_URLS } from "../src/browser/keeper-page.js";
 import type { PhysicalActionProbeSnapshot } from "../src/inspector/physical-action-correlation-probe.js";
 import {
   PROTOCOL_CONTRACT_FINGERPRINT,
@@ -199,6 +201,19 @@ function createDeps(
 }
 
 describe("createBridgeRuntime", () => {
+  test("recognizes the fallback whole Advanced device snapshot URL", () => {
+    expect(
+      isWholeAdvancedDevicesSnapshotUrl(
+        `https://my.smartthings.com${ADVANCED_DEVICE_SNAPSHOT_URLS[1]}`
+      )
+    ).toBe(true);
+    expect(
+      isWholeAdvancedDevicesSnapshotUrl(
+        `https://my.smartthings.com${ADVANCED_DEVICE_SNAPSHOT_URLS[0]}`
+      )
+    ).toBe(false);
+  });
+
   test("wires the authenticated command API through an isolated UI page and push confirmation", async () => {
     const root = createTempRoot();
     const context = new FakeContext([

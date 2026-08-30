@@ -312,6 +312,10 @@ export class DeviceStore {
 
   reset(): void {
     this.#pending.clear();
+    this.resetSnapshotSession();
+  }
+
+  resetSnapshotSession(): void {
     this.#sessionConsumerDeviceSnapshotSeen = false;
     this.#sessionWholeAdvancedDeviceSnapshotSeen = false;
   }
@@ -510,9 +514,7 @@ export class DeviceStore {
         this.#normalizeAdvancedAlias
       );
       if (!id || !locationId) continue;
-      if (observeRestoredPresence) {
-        this.#sessionPendingDeviceIds?.delete(id);
-      }
+      if (observeRestoredPresence) this.#confirmRestoredDevice(id);
       const device = this.#ensureDevice(id, locationId);
       const nextName = safeName(
         row.label ?? row.name ?? row.deviceLabel ?? row.deviceName
@@ -776,9 +778,13 @@ export class DeviceStore {
       const source = firstRecord(card.basic, card.cloud, card.camera);
       const id = safeId(source?.deviceId, "dev");
       if (id) {
-        this.#sessionPendingDeviceIds?.delete(id);
+        this.#confirmRestoredDevice(id);
       }
     }
+  }
+
+  #confirmRestoredDevice(id: string): void {
+    this.#sessionPendingDeviceIds?.delete(id);
   }
 
   #loadPersistedInventory(): BridgeInventory | undefined {

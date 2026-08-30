@@ -5,6 +5,7 @@ import { installCakeClientCapture } from "./browser/cake-client-capture.js";
 import {
   ADVANCED_DEVICE_SNAPSHOT_URLS,
   KeeperPageManager,
+  fetchAdvancedDeviceSnapshotEntries,
   fetchAdvancedDeviceSnapshots
 } from "./browser/keeper-page.js";
 import { BrowserSupervisor } from "./browser/browser-supervisor.js";
@@ -809,13 +810,13 @@ async function observeAdvancedSnapshotPage(
     if (wholeSnapshotSeen) {
       await new Promise((resolve) => setTimeout(resolve, 1_000));
     } else if (page) {
-      const snapshots = await fetchAdvancedDeviceSnapshots(page);
-      for (const snapshot of snapshots) {
+      const snapshots = await fetchAdvancedDeviceSnapshotEntries(page);
+      for (const { snapshot, url } of snapshots) {
         volatileIdentifiers.observeRawAdvancedDeviceSnapshot(snapshot);
         cameraImages.observeRawAdvancedDeviceSnapshot(snapshot);
         onAdvancedDeviceSnapshot(
           redact(snapshot),
-          "https://my.smartthings.com/advanced/cupcake-api/api/devices"
+          url
         );
       }
       if (snapshots.length === 0) {
@@ -831,7 +832,7 @@ async function observeAdvancedSnapshotPage(
   }
 }
 
-function isWholeAdvancedDevicesSnapshotUrl(value: string): boolean {
+export function isWholeAdvancedDevicesSnapshotUrl(value: string): boolean {
   try {
     const url = new URL(value);
     return (
@@ -865,6 +866,7 @@ function createStatusCapturePipeline(
   return {
     resetSnapshotSession: () => {
       physicalActionProbe.fail("runtime_restarted");
+      devices.resetSnapshotSession();
       analyzer.resetSnapshotSession();
       protocolFingerprintObserved = false;
     },

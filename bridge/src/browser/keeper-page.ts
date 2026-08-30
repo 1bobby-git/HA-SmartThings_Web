@@ -23,15 +23,28 @@ export interface BrowserContextLike {
   newPage(): Promise<BrowserPageLike>;
 }
 
+export interface AdvancedDeviceSnapshotEntry {
+  url: string;
+  snapshot: unknown;
+}
+
 export async function fetchAdvancedDeviceSnapshots(
   page: BrowserPageLike,
   urls: readonly string[] = ADVANCED_DEVICE_SNAPSHOT_URLS
 ): Promise<unknown[]> {
+  const entries = await fetchAdvancedDeviceSnapshotEntries(page, urls);
+  return entries.map((entry) => entry.snapshot);
+}
+
+export async function fetchAdvancedDeviceSnapshotEntries(
+  page: BrowserPageLike,
+  urls: readonly string[] = ADVANCED_DEVICE_SNAPSHOT_URLS
+): Promise<AdvancedDeviceSnapshotEntry[]> {
   if (!page.evaluate) return [];
   try {
-    const snapshots = await page.evaluate(
+    const entries = await page.evaluate(
       async (urls) => {
-        const result: unknown[] = [];
+        const result: { url: string; snapshot: unknown }[] = [];
         for (const url of urls) {
           // api-free-audit: authenticated-page-same-origin-read-only-get
           const response = await fetch(url, {
@@ -40,13 +53,32 @@ export async function fetchAdvancedDeviceSnapshots(
             cache: "no-store"
           });
           if (!response.ok) continue;
-          result.push(await response.json());
+          result.push({
+            url: new URL(url, location.origin).toString(),
+            snapshot: await response.json()
+          });
         }
         return result;
       },
       [...urls]
     );
-    return Array.isArray(snapshots) ? snapshots : [];
+    if (!Array.isArray(entries)) return [];
+    return entries
+      .map((entry, index) => {
+        const record =
+          typeof entry === "object" && entry !== null
+            ? entry as Record<string, unknown>
+            : undefined;
+        return typeof record?.url === "string" && "snapshot" in record
+          ? { url: record.url, snapshot: record.snapshot }
+          : typeof urls[index] === "string"
+            ? {
+                url: new URL(urls[index], "https://my.smartthings.com").toString(),
+                snapshot: entry
+              }
+            : undefined;
+      })
+      .filter((entry): entry is AdvancedDeviceSnapshotEntry => entry !== undefined);
   } catch {
     return [];
   }
