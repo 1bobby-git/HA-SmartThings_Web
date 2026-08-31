@@ -124,6 +124,7 @@ describe("AdvancedInventoryAdapter", () => {
           { items: [] }
         ],
         ["/advanced/cupcake-api/api/rules?locationId=location-a", { items: [] }],
+        ["/advanced/cupcake-api/clientv1/rules?locationId=location-a", { items: [] }],
         ["/advanced/cupcake-api/clientv3/scenes?locationId=location-a", { items: [] }],
         ["/advanced/cupcake-api/api/hubdevices/hub-a", { id: "hub-a" }],
         ["/advanced/cupcake-api/api/hubdevices/hub-a/drivers", { items: [] }]
@@ -139,11 +140,12 @@ describe("AdvancedInventoryAdapter", () => {
       adapter.getCapabilityDefinition("custom.test", 2),
       adapter.getDeviceHistory("device-a", "location-a"),
       adapter.getRules("location-a"),
+      adapter.getClientRules("location-a"),
       adapter.getScenes("location-a"),
       adapter.getHub("hub-a"),
       adapter.getHubDrivers("hub-a")
     ]);
 
-    expect(session.requests).toHaveLength(10);
+    expect(session.requests).toHaveLength(11);
   });
 });

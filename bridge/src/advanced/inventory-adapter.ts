@@ -138,6 +138,13 @@ export class AdvancedInventoryAdapter {
     return this.getObject("rules", withQuery(advancedEndpoints.rules(), { locationId }));
   }
 
+  getClientRules(locationId: string): Promise<unknown> {
+    return this.getObject(
+      "rules",
+      withQuery(advancedEndpoints.clientRules(), { locationId })
+    );
+  }
+
   getScenes(locationId: string): Promise<unknown> {
     return this.getObject("scenes", withQuery(advancedEndpoints.scenes(), { locationId }));
   }
