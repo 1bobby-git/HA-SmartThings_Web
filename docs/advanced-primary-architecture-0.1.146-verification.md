@@ -33,6 +33,7 @@ AuthenticatedSmartThingsSession
 - 완전히 병합한 결과만 authoritative snapshot으로 적용한다.
 - capability 정의는 `(capabilityId, version)`으로 캐시하며 custom capability와 argument type/enum/range를 검증한다.
 - normalized state에는 `ADVANCED_SNAPSHOT`, `LOCATION_EVENT`, `COMMAND_STATUS_RECHECK`, `DOM_FALLBACK` source 계약을 추가했다.
+- owner/profile/presentation, parent/child, restricted/group, hub/driver, preference-key metadata를 redacted optional model로 저장하고 재시작 후 복원한다.
 
 ## 5. Advanced 명령 경로
 
@@ -41,6 +42,7 @@ AuthenticatedSmartThingsSession
 - capability version을 DeviceStore에서 command adapter까지 전달한다.
 - 인증·권한·timeout·HTTP·parser 오류는 fallback하지 않는다. 명시적 unsupported만 다음 경로로 진행한다.
 - receipt/event의 commandId가 모두 존재하면 일치해야 하며, commandId가 없으면 나머지 identity와 eventTime으로 확인한다.
+- capability schema가 허용한 token-safe 표준/custom command는 coordinator의 legacy allowlist로 차단하지 않는다.
 
 ## 6. `/location`에 유지한 기능
 
@@ -69,11 +71,11 @@ Advanced가 지원되면 DOM을 호출하지 않는다. Advanced가 unsupported�
 
 2026-08-31 최종 로컬 실행:
 
-- `npm test -- --reporter=dot`: 67 files, 849 tests passed
-- Python unittest discovery: 224 tests passed
+- `npm test -- --reporter=dot`: 67 files, 854 tests passed
+- Python unittest discovery: 225 tests passed
 - `npm run typecheck`: exit 0
 - `npm run build`: exit 0
-- `npm run package:addon`: exit 0, manifest SHA-256 `5b4bface3b736e1b8d43fbf987432b3b690aa5268990c693228c95e86fc0ae59`
+- `npm run package:addon`: exit 0, manifest SHA-256 `d90f4e00257dc8c379672e4c436bd3dfe3a9f2f580efc2e00cd0da97693a18dd`
 - `npm run audit:api-free`: exit 0
 - `npm run audit:fixtures`: exit 0
 - `npm run audit:secrets`: exit 0

@@ -10,6 +10,8 @@
 - Location native와 `DomFallbackAdapter`를 분리하고 DOM fallback을 앱 옵션으로 끌 수 있게 했습니다.
 - post-command eventTime과 선택적 commandId를 확인하고, eventId 또는 canonical fallback key 중복을 DeviceStore 적용 전에 제거합니다.
 - `reload_inventory`, `refresh_device`, `reconnect_realtime` 서비스와 bounded realtime reconnect backoff를 추가했습니다.
+- capability schema가 허용하는 token-safe 표준/custom command를 고정 allowlist 없이 처리하고, Advanced send 시각 이후 이벤트만 확인합니다.
+- owner/profile/presentation, parent/child, restricted/group, hub/driver, preference-key metadata를 redacted normalized inventory에 보존합니다.
 
 ## 0.1.145
 
