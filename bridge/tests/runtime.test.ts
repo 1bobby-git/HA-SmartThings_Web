@@ -1390,7 +1390,7 @@ describe("createBridgeRuntime", () => {
     expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(true);
   });
 
-  test("keeps waiting to open the advanced snapshot page after delayed readiness", async () => {
+  test("does not retain a second Advanced page after delayed realtime readiness", async () => {
     vi.useFakeTimers();
     const root = createTempRoot();
     const context = new FakeContext([
@@ -1416,8 +1416,9 @@ describe("createBridgeRuntime", () => {
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(context.existingPages.some((page) => page.url() === "https://my.smartthings.com/advanced")).toBe(
-      true
+      false
     );
+    expect(context.existingPages[0]?.advancedRequestCalls.length).toBeGreaterThan(0);
   });
 
   test("serves the physical action probe from normal and protocol-load-failed runtimes", async () => {

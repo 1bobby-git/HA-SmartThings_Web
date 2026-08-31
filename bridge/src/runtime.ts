@@ -52,6 +52,7 @@ import { BridgeAuth } from "./server/bridge-auth.js";
 import { CaptureStore } from "./state/capture-store.js";
 import { CameraImageStore } from "./state/camera-image-store.js";
 import { DeviceStore } from "./state/device-store.js";
+import { StateReconciliationCoordinator } from "./state/reconciliation-coordinator.js";
 import {
   ProtocolIntegrityStore,
   type ProtocolIntegritySnapshot
@@ -180,6 +181,27 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       await advancedInventory.getCapabilityDefinition(capabilityId, version)
     )
   );
+  const reconciliation = new StateReconciliationCoordinator({
+    load: () => advancedInventory.getInventory(),
+    apply: (snapshot) => {
+      const rawSnapshot = {
+        locations: snapshot.locations,
+        rooms: snapshot.rooms,
+        devices: snapshot.devices
+      };
+      volatileIdentifiers.observeRawAdvancedDeviceSnapshot({ items: snapshot.devices });
+      cameraImages.observeRawAdvancedDeviceSnapshot({ items: snapshot.devices });
+      const sanitized = redactor(rawSnapshot) as {
+        locations?: unknown;
+        rooms?: unknown;
+        devices?: unknown;
+      };
+      devices.observeAdvancedInventorySnapshot(sanitized, {
+        authoritativeWholeSnapshot: true
+      });
+      cameraImages.observeInventory(devices.snapshot());
+    }
+  });
   const refreshCommandSnapshot = (): Promise<CommandResyncEvidence> => {
     return (async () => {
       const startedAtMs = Date.now();
@@ -187,16 +209,10 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       if (!keeper || classifySmartThingsUrl(keeper.url()) !== "smartthings_location") {
         throw new Error("command_browser_unavailable");
       }
-      const inventory = await advancedInventory.getDevices();
-      if (inventory.devices.length === 0) throw new Error("advanced_snapshot_unavailable");
-      const snapshot = { items: inventory.devices };
-      volatileIdentifiers.observeRawAdvancedDeviceSnapshot(snapshot);
-      cameraImages.observeRawAdvancedDeviceSnapshot(snapshot);
-      devices.observeAdvancedDeviceSnapshot(redactor(snapshot), {
-        authoritativeWholeSnapshot: true
-      });
-      cameraImages.observeInventory(devices.snapshot());
-      log.info(`command_diag:advanced_snapshot_refreshed:${inventory.pageCount}`);
+      await reconciliation.request("command_status");
+      const reconciliationStatus = reconciliation.snapshot();
+      if (reconciliationStatus.deviceCount === 0) throw new Error("advanced_snapshot_unavailable");
+      log.info(`command_diag:advanced_snapshot_refreshed:${reconciliationStatus.pageCount}`);
       return { authoritativeSnapshot: true, startedAtMs };
     })();
   };
@@ -402,7 +418,9 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           },
           (snapshot, url) => {
             devices.observeAdvancedDeviceSnapshot(snapshot, {
-              authoritativeWholeSnapshot: isWholeAdvancedDevicesSnapshotUrl(url)
+              // A single observed page is never authoritative after the Advanced
+              // endpoint became paginated. Only the merged reconciliation result prunes.
+              authoritativeWholeSnapshot: false
             });
             cameraImages.observeInventory(devices.snapshot());
           }
@@ -411,7 +429,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         currentKeeperManager = keeperManager;
         recoverCurrentPushSocket = recoverSmartThingsWebSocket;
         detailDiscovery.reset();
-        await refreshCommandSnapshot().catch(() => {
+        await reconciliation.request("startup").catch(() => {
           log.warn("advanced_primary_inventory_sync_failed");
         });
         assigned = true;
@@ -728,30 +746,6 @@ async function attachContext(
     keeperPresent: true,
     ...statusForKeeperUrl(keeper.url())
   });
-  scheduleAdvancedSnapshotPage(
-    () =>
-      !canRecoverSocket() ||
-      classifySmartThingsUrl(keeperManager.currentKeeper()?.url() ?? "") !==
-        "smartthings_location"
-        ? "stop"
-        : canOpenAdvancedSnapshot()
-          ? "open"
-          : "wait",
-    () =>
-      observeAdvancedSnapshotPage(
-      context,
-      keeperManager,
-      sink,
-      redact,
-      observedCdpPages,
-      log,
-      cameraImages,
-      volatileIdentifiers,
-      observeSmartThingsWebSocketFrame,
-      recoverSmartThingsWebSocket,
-      onAdvancedDeviceSnapshot
-      )
-  );
   return recoverSmartThingsWebSocket;
 }
 

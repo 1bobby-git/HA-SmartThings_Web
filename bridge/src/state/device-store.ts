@@ -112,6 +112,11 @@ type AdvancedAliasNormalizer = (kind: AdvancedAliasKind, value: string) => strin
 type AdvancedDeviceSnapshotOptions = {
   authoritativeWholeSnapshot?: boolean;
 };
+type AdvancedInventorySnapshotBody = {
+  locations?: unknown;
+  rooms?: unknown;
+  devices?: unknown;
+};
 type SnapshotQuery =
   | "api/location"
   | "api/scene"
@@ -324,6 +329,25 @@ export class DeviceStore {
     const authoritativeWholeSnapshot = options.authoritativeWholeSnapshot === true;
     const changed = this.#applyAdvancedDeviceSnapshot(body, authoritativeWholeSnapshot);
     if (authoritativeWholeSnapshot && advancedDeviceRows(body)) {
+      this.#sessionWholeAdvancedDeviceSnapshotSeen = true;
+    }
+    const pruned = this.#pruneUnrefreshedDevicesIfReady();
+    if (changed || pruned) {
+      const sequence = this.#nextSequence();
+      this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
+      this.#schedulePersist();
+    }
+  }
+
+  observeAdvancedInventorySnapshot(
+    body: AdvancedInventorySnapshotBody,
+    options: AdvancedDeviceSnapshotOptions = {}
+  ): void {
+    const authoritativeWholeSnapshot = options.authoritativeWholeSnapshot === true;
+    let changed = this.#applyAdvancedLocations(body.locations);
+    changed = this.#applyAdvancedRooms(body.rooms) || changed;
+    changed = this.#applyAdvancedDeviceSnapshot(body.devices, authoritativeWholeSnapshot) || changed;
+    if (authoritativeWholeSnapshot && advancedDeviceRows(body.devices)) {
       this.#sessionWholeAdvancedDeviceSnapshotSeen = true;
     }
     const pruned = this.#pruneUnrefreshedDevicesIfReady();
@@ -568,6 +592,45 @@ export class DeviceStore {
       )) {
         changed = setIfChanged(device.controls, control.id, control) || changed;
       }
+    }
+    return changed;
+  }
+
+  #applyAdvancedLocations(body: unknown): boolean {
+    const rows = recordRows(body);
+    if (!rows) return false;
+    let changed = false;
+    for (const row of rows) {
+      const id = normalizedAdvancedId(
+        row.locationId ?? row.location_id ?? row.id,
+        "location",
+        this.#normalizeAdvancedAlias
+      );
+      const name = safeName(row.name ?? row.locationName ?? row.label);
+      if (!id || !name) continue;
+      changed = setIfChanged(this.#locations, id, { id, name }) || changed;
+    }
+    return changed;
+  }
+
+  #applyAdvancedRooms(body: unknown): boolean {
+    const rows = recordRows(body);
+    if (!rows) return false;
+    let changed = false;
+    for (const row of rows) {
+      const id = normalizedAdvancedId(
+        row.roomId ?? row.room_id ?? row.id,
+        "identifier",
+        this.#normalizeAdvancedAlias
+      );
+      const locationId = normalizedAdvancedId(
+        row.locationId ?? row.location_id,
+        "location",
+        this.#normalizeAdvancedAlias
+      );
+      const name = safeName(row.name ?? row.roomName ?? row.label);
+      if (!id || !locationId || !name) continue;
+      changed = setIfChanged(this.#rooms, id, { id, locationId, name }) || changed;
     }
     return changed;
   }
@@ -1059,6 +1122,10 @@ function advancedDeviceRows(value: unknown): Record<string, unknown>[] | null {
   if (!Array.isArray(rows)) return null;
   const records = rows.map(asRecord);
   return records.some((item) => !item) ? null : (records as Record<string, unknown>[]);
+}
+
+function recordRows(value: unknown): Record<string, unknown>[] | null {
+  return advancedDeviceRows(value);
 }
 
 function advancedDeviceStates(

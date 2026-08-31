@@ -46,10 +46,10 @@ export class AdvancedInventoryAdapter {
   }
 
   async getInventory(): Promise<AdvancedInventorySnapshot> {
-    const [deviceResult, locations] = await Promise.all([
-      this.getDevices(),
-      this.getLocations()
-    ]);
+    const deviceResult = await this.getDevices();
+    const locationResult = await Promise.allSettled([this.getLocations()]);
+    const locations =
+      locationResult[0]?.status === "fulfilled" ? locationResult[0].value : [];
     const roomResults = await Promise.allSettled(
       locations.map((location) => this.getRooms(location.locationId))
     );
