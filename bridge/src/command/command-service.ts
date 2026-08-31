@@ -97,10 +97,27 @@ export interface DeviceActionExecutionInput {
     nativeCommand?: string;
 }
 
+export interface ComponentActionExecutionInput {
+  deviceId: string;
+  component: string;
+  capability: string;
+  capabilityVersion: number;
+  command: "on" | "off";
+  arguments: BridgeJsonValue[];
+}
+
+export interface ComponentTransactionExecutionInput {
+  actions: ComponentActionExecutionInput[];
+  rollbackActions: ComponentActionExecutionInput[];
+}
+
 export interface SafeCommandExecutor {
   executeDeviceAction?(
     input: DeviceActionExecutionInput
   ): Promise<void | CommandTransportReceipt | "location_native" | "dom">;
+  executeComponentTransaction?(
+    input: ComponentTransactionExecutionInput
+  ): Promise<CommandTransportReceipt[]>;
   executeScene?(input: {
     action?: string;
     locationId: string;

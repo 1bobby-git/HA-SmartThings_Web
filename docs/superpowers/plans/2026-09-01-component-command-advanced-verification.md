@@ -165,7 +165,7 @@ Not-tested: HAOS false-unavailable devices."
 - Modify: `bridge/src/command/command-service.ts`
 - Modify: `bridge/src/command/advanced-first-executor.ts`
 
-- [ ] **Step 1: Define and test the transaction contract**
+- [x] **Step 1: Define and test the transaction contract**
 
 Add to `command-service.ts`:
 
@@ -223,7 +223,7 @@ test("reports rollback failure without raw identifiers", async () => {
 });
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 npx vitest run bridge/tests/command/component-command-executor.test.ts --pool=threads --maxWorkers=1 --no-file-parallelism
@@ -231,7 +231,7 @@ npx vitest run bridge/tests/command/component-command-executor.test.ts --pool=th
 
 Expected: module and executor interface are missing.
 
-- [ ] **Step 3: Implement minimal transaction executor**
+- [x] **Step 3: Implement minimal transaction executor**
 
 `component-command-executor.ts`:
 
@@ -269,7 +269,7 @@ export class ComponentCommandExecutor {
 
 Map each action to `RoutedCommandRequest` without logging IDs. `AdvancedFirstCommandExecutor` owns one `ComponentCommandExecutor` and delegates `executeComponentTransaction()` to it.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 ```powershell
 npx vitest run bridge/tests/command/component-command-executor.test.ts bridge/tests/command/advanced-first-executor.test.ts --pool=threads --maxWorkers=1 --no-file-parallelism

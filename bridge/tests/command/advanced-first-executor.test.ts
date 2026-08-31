@@ -35,6 +35,38 @@ function legacy(): LegacyWebCommandExecutor {
 }
 
 describe("AdvancedFirstCommandExecutor", () => {
+  test("delegates component transactions only to Advanced", async () => {
+    const fallback = legacy();
+    const advancedTransport = advanced(async () => ({
+      state: "ACCEPTED",
+      transport: "advanced",
+      acceptedAtMs: 10
+    }));
+    const executor = new AdvancedFirstCommandExecutor(advancedTransport, fallback);
+    const components = ["main", "switch2"];
+
+    await expect(executor.executeComponentTransaction({
+      actions: components.map((component) => ({
+        deviceId: "dev_001",
+        component,
+        capability: "identifier_switch",
+        capabilityVersion: 1,
+        command: "off" as const,
+        arguments: []
+      })),
+      rollbackActions: components.map((component) => ({
+        deviceId: "dev_001",
+        component,
+        capability: "identifier_switch",
+        capabilityVersion: 1,
+        command: "on" as const,
+        arguments: []
+      }))
+    })).resolves.toHaveLength(2);
+    expect(advancedTransport.execute).toHaveBeenCalledTimes(2);
+    expect(fallback.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
   test("does not touch the legacy browser command path after Advanced accepts", async () => {
     const fallback = legacy();
     const executor = new AdvancedFirstCommandExecutor(
