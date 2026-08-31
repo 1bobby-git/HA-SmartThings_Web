@@ -58,12 +58,11 @@ maps these shapes by semantics:
 - location scenes and pushed SmartThings Home Monitor state become `scene` and
   `alarm_control_panel` entities.
 
-Only commands validated from the normalized control and capability metadata are
-actionable. Version 0.1.146 sends device commands through the authenticated
-Advanced same-origin endpoint first. The existing Location-native dispatcher
-is second, and the verified DOM control is the final fallback. Authentication,
-permission, timeout, HTTP, and parser failures never fall through to a second
-transport.
+Only commands validated from normalized control metadata are actionable.
+Version 0.1.147 separates Advanced data enrichment from live command evidence.
+Unproven Advanced POSTs are not sent; the observed Location-native dispatcher
+is the default transport and a verified DOM control remains the final fallback.
+An uncertain receipt or timeout never causes a second physical dispatch.
 
 ## Advanced primary inventory and commands
 
@@ -86,6 +85,13 @@ recheck proves the value. Stateless refresh, press, and media track commands
 return `ACCEPTED_UNCONFIRMED` without inventing a persistent state. Recovered
 Socket.IO sessions trigger one full Advanced reconciliation after the first
 new inbound frame.
+
+Home Assistant exposes a switch only when the exact state has one reversible
+observed toggle. Advanced-only secondary switch states remain available to the
+normalized inventory but do not become misleading controls. Repeated component
+Refresh controls collapse to one main device button. A strong same-owner
+Cloud/Local child mirror can share the existing Cloud device card; ordinary
+same-name devices remain separate.
 
 The user-supplied Cake `2.57.0` asset and its published source maps were also
 reviewed as implementation evidence. They show that room drag wrappers and

@@ -629,7 +629,7 @@ Not-tested: Live fireplace registry and UI."
 - Modify: `docs/my-smartthings-actual-behavior.md`
 - Create: `docs/advanced-primary-architecture-0.1.147-verification.md`
 
-- [ ] **Step 1: Bump every component to `0.1.147`**
+- [x] **Step 1: Bump every component to `0.1.147`**
 
 Run:
 
@@ -639,11 +639,11 @@ npm version 0.1.147 --no-git-tag-version
 
 Update the integration manifest and add-on config versions to `0.1.147`. Add changelog bullets for evidence-gated Web command execution, executable-only switches, canonical Refresh, scoped registry cleanup, and strong Cloud/Local canonicalization.
 
-- [ ] **Step 2: Update architecture and verification docs**
+- [x] **Step 2: Update architecture and verification docs**
 
 Document that Advanced remains the data source but command execution requires per-command evidence; current unproven controls use Web native. The verification record must list local tests separately from future HAOS evidence and must not claim physical success yet.
 
-- [ ] **Step 3: Run targeted verification**
+- [x] **Step 3: Run targeted verification**
 
 ```powershell
 npx vitest run bridge/tests/command/advanced-first-executor.test.ts bridge/tests/command/command-router.test.ts bridge/tests/command/command-service.test.ts tests/addon-config.test.ts tests/protocol-version-contract.test.ts tests/documentation-gate.test.ts --pool=threads --maxWorkers=1 --no-file-parallelism
@@ -653,7 +653,7 @@ npm run typecheck
 
 Expected: selected Node tests, all Python tests, and typecheck pass.
 
-- [ ] **Step 4: Run complete verification**
+- [x] **Step 4: Run complete verification**
 
 ```powershell
 npm test -- --pool=threads --maxWorkers=1 --no-file-parallelism
@@ -667,7 +667,7 @@ git diff --check
 
 Expected: all 67+ Node files and 225+ Python tests pass, build/package complete, all audits pass, and no whitespace errors remain.
 
-- [ ] **Step 5: Commit Task 5**
+- [x] **Step 5: Commit Task 5**
 
 ```powershell
 git add package.json package-lock.json custom_components/smartthings_web/manifest.json addon/smartthings_web_bridge/config.yaml addon/smartthings_web_bridge/CHANGELOG.md docs/architecture.md docs/my-smartthings-actual-behavior.md docs/advanced-primary-architecture-0.1.147-verification.md

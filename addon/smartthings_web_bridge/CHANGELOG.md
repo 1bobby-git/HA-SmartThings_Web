@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.147
+
+- 검증되지 않은 Advanced POST를 기본 명령 경로에서 제외하고, 실제 control metadata가 관찰된 `/location` native dispatcher로 switch/button 명령을 복구합니다.
+- 장치·component·capability·원본 식별자를 기록하지 않는 transport/stage/outcome 명령 진단을 추가합니다.
+- 정확한 양방향 toggle control이 없는 Advanced switch state를 Home Assistant 제어 엔티티로 만들지 않습니다.
+- component마다 반복되는 Refresh는 main component를 우선한 장치당 하나의 버튼으로 정규화합니다.
+- 기존 secondary switch와 중복 Refresh registry row를 현재 config entry와 `ready=true` inventory 범위에서 제거합니다.
+- 같은 owner/location/room/name/type의 강한 Cloud/Local child 쌍만 Cloud 공개 ID로 병합하고 Local SSE device ID를 canonical ID로 변환합니다.
+
 ## 0.1.146
 
 - 동일 Chromium 로그인 세션의 Advanced 내부 경로를 전체 장치·location·room·초기 상태·health·capability의 주 데이터 소스로 전환하고, 200개 이후 페이지를 끝까지 병합합니다.
