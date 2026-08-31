@@ -6,6 +6,24 @@ import { join } from "node:path";
 import { DeviceStore } from "../../src/state/device-store.js";
 
 describe("DeviceStore Advanced primary inventory", () => {
+  test("ignores undated Advanced OFFLINE health", () => {
+    const store = new DeviceStore();
+
+    store.observeAdvancedDeviceSnapshot({
+      items: [
+        {
+          deviceId: "dev_001",
+          locationId: "loc_001",
+          health: { state: "OFFLINE" },
+          components: []
+        }
+      ]
+    });
+
+    expect(store.snapshot().devices[0]).toMatchObject({ id: "dev_001", online: true });
+    expect(store.snapshot().devices[0]).not.toHaveProperty("healthUpdatedAt");
+  });
+
   test("merges Advanced locations, rooms, and devices without changing canonical keys", () => {
     const store = new DeviceStore();
     const listener = vi.fn();

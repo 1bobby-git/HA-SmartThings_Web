@@ -232,6 +232,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           throw new Error("advanced_status_identifier_unavailable");
         }
         const statusPayload = await advancedInventory.getDeviceStatus(rawDeviceId);
+        devices.observeOnlineEvidence(request.deviceId, Date.now());
         const rawSnapshot = {
           items: [
             {

@@ -32,7 +32,7 @@
 - Modify: `bridge/tests/state/device-store.test.ts`
 - Modify: `bridge/tests/state/advanced-inventory-store.test.ts`
 
-- [ ] **Step 1: Add failing liveness tests**
+- [x] **Step 1: Add failing liveness tests**
 
 Add tests with these exact behaviors:
 
@@ -85,7 +85,7 @@ test("a newer dated health OFFLINE remains authoritative", () => {
 
 Use the existing frame helpers in `device-store.test.ts`; do not add test-only production methods.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 npx vitest run bridge/tests/state/device-store.test.ts bridge/tests/state/advanced-inventory-store.test.ts --pool=threads --maxWorkers=1 --no-file-parallelism
@@ -93,7 +93,7 @@ npx vitest run bridge/tests/state/device-store.test.ts bridge/tests/state/advanc
 
 Expected: undated Advanced OFFLINE sets `online=false`, and Location state events do not restore it.
 
-- [ ] **Step 3: Apply timestamped health precedence**
+- [x] **Step 3: Apply timestamped health precedence**
 
 In `#applyAdvancedDeviceSnapshot()` replace direct online assignment with:
 
@@ -125,7 +125,7 @@ const livenessChanged = this.#setDeviceHealth(device, true, state.updatedAt);
 
 When liveness changes, publish one inventory event before the state event so HA receives the availability change. Keep sequence numbers monotonic and persist once after both events.
 
-- [ ] **Step 4: Add successful-status liveness API**
+- [x] **Step 4: Add successful-status liveness API**
 
 Add a public method:
 
@@ -143,7 +143,7 @@ observeOnlineEvidence(deviceId: string, observedAtMs: number): void {
 
 `runtime.ts` must call it after `getDeviceStatus()` succeeds, before returning `CommandResyncEvidence`.
 
-- [ ] **Step 5: Verify GREEN and commit**
+- [x] **Step 5: Verify GREEN and commit**
 
 ```powershell
 npx vitest run bridge/tests/state/device-store.test.ts bridge/tests/state/advanced-inventory-store.test.ts bridge/tests/runtime.test.ts --pool=threads --maxWorkers=1 --no-file-parallelism
