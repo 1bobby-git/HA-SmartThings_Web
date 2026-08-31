@@ -210,21 +210,27 @@ operation after restart, but the immediate post-restart status response covered
 206 device IDs and omitted the safe target. The target device existed in the
 restored inventory without controls, so the restart-time control gap remained.
 
-The 0.1.141 candidate is prepared locally only. It keeps the 0.1.139 status
-action parser repair and the 0.1.140 restored-pruning repair, then adds a
-non-navigation same-origin `/location` touch to keep the authenticated
-SmartThings location session warm after the Bridge has been fully `CONNECTED`
-and ready for five minutes. The touch does not inspect DOM state, read cookies,
-call Advanced/device/scene/command endpoints, or reload the keeper page; it is
-skipped while commands, warm command pages, detail discovery, physical probes,
-non-isolated browser pages, login pages, or stale browser contexts are present.
-HAOS 0.1.141 live deployment is pending, so no current 0.1.141 live readiness,
-control, scene, or 72-hour durability claim is made here.
+Version 0.1.145 is deployed and the authenticated session restored automatically
+through four consecutive add-on updates and repeated Home Assistant Core
+restarts. The final live report was `live=true`, `ready=true`, `CONNECTED`, and
+covered 232 devices without a browser restart. The non-navigation same-origin
+`/location` touch remains gated away from commands, detail discovery, physical
+probes, non-isolated pages, login pages, and stale browser contexts. It does not
+inspect DOM state, read cookies, call Advanced/device/scene/command endpoints,
+or reload the keeper page.
+
+The same live deployment used Advanced component roles plus the configured
+SmartThings location name to render Jump3's four presence sensors as
+`부모님댁`, `친정집`, `회사`, and `Home`. Repeated registry migration stayed
+idempotent. Deleted `dev_N` cards and entities were removed only from the ready
+inventory while `loc_N` location cards were preserved. Primary-control IDs and
+visuals were also verified as `switch.eohang`, `fan.hwanpunggi`, Device-settings
+Refresh with `mdi:refresh`, and mapped control icons.
 
 The supplied capture was labelled safe but still contained account-related
 metadata inside a third-party feature-delivery URL. It was therefore treated as
 sensitive local evidence and was not added to the repository.
 
-`DECISION: LIMITED` remains in force until the current candidate is deployed and
-the cached camera bytes, Advanced bootstrap, 72-hour durability, host-reboot
-recovery, and remaining device-family gates are verified on HAOS.
+`DECISION: LIMITED` remains in force until the cached camera bytes, 72-hour
+durability, host-reboot recovery, and remaining device-family gates are verified
+on HAOS.
