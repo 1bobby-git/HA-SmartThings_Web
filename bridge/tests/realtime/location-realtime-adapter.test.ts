@@ -20,4 +20,18 @@ describe("LocationRealtimeAdapter", () => {
       lastReceivedAtMs: 2_000,
     });
   });
+
+  test("uses bounded exponential backoff and resets it after recovery", () => {
+    const adapter = new LocationRealtimeAdapter();
+
+    expect(adapter.recoveryFailed()).toBe(1_000);
+    expect(adapter.recoveryFailed()).toBe(2_000);
+    expect(adapter.recoveryFailed()).toBe(4_000);
+    for (let index = 0; index < 10; index += 1) adapter.recoveryFailed();
+    expect(adapter.recoveryFailed()).toBe(60_000);
+
+    adapter.recoveryStarted();
+    expect(adapter.observeFrame("received")).toBe(true);
+    expect(adapter.recoveryFailed()).toBe(1_000);
+  });
 });

@@ -10,6 +10,7 @@ export class LocationRealtimeAdapter {
   #reconnectCount = 0;
   #lastReconnectAtMs: number | undefined;
   #lastReceivedAtMs: number | undefined;
+  #backoffMs = 1_000;
   readonly #now: () => number;
 
   constructor(options: { now?: () => number } = {}) {
@@ -27,7 +28,14 @@ export class LocationRealtimeAdapter {
     this.#lastReceivedAtMs = this.#now();
     if (!this.#awaitingRecoveredFrame) return false;
     this.#awaitingRecoveredFrame = false;
+    this.#backoffMs = 1_000;
     return true;
+  }
+
+  recoveryFailed(): number {
+    const delay = this.#backoffMs;
+    this.#backoffMs = Math.min(60_000, this.#backoffMs * 2);
+    return delay;
   }
 
   snapshot(): LocationRealtimeSnapshot {

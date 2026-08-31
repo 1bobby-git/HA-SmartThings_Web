@@ -777,6 +777,11 @@ async function attachContext(
         }
       } catch {
         log.warn("smartthings_websocket_recovery_failed");
+        const retry = setTimeout(
+          recoverSmartThingsWebSocket,
+          realtime.recoveryFailed()
+        );
+        retry.unref();
       } finally {
         recoveryPromise = undefined;
       }
