@@ -135,6 +135,52 @@ describe("api-free production audit", () => {
 
     expect(auditSmartThingsApiFree({ cwd: root })).toEqual([]);
   });
+
+  test("allows only the authenticated same-origin Advanced request adapter", () => {
+    const root = seededTempDir();
+    write(
+      root,
+      "bridge/src/advanced/authenticated-session.ts",
+      `
+      const SMARTTHINGS_ORIGIN = "https://my.smartthings.com";
+      export async function request(input: { path: string; timeoutMs: number }) {
+        const url = new URL(input.path, SMARTTHINGS_ORIGIN);
+        if (url.origin !== SMARTTHINGS_ORIGIN || !url.pathname.startsWith("/advanced/cupcake-api/")) throw new Error();
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), input.timeoutMs);
+        try {
+          // api-free-audit: authenticated-page-same-origin-advanced-request
+          return await fetch(input.path, {
+            credentials: "same-origin",
+            method: "POST",
+            redirect: "manual",
+            signal: controller.signal
+          });
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+      `
+    );
+
+    expect(auditSmartThingsApiFree({ cwd: root })).toEqual([]);
+  });
+
+  test("does not accept the Advanced marker outside the authenticated session adapter", () => {
+    const root = seededTempDir();
+    write(
+      root,
+      "bridge/src/other.ts",
+      `
+      // api-free-audit: authenticated-page-same-origin-advanced-request
+      export const request = () => fetch("/advanced/cupcake-api/api/devices", { credentials: "same-origin", method: "GET" });
+      `
+    );
+
+    expect(auditSmartThingsApiFree({ cwd: root }).map((finding) => finding.rule)).toContain(
+      "direct-http-client"
+    );
+  });
 });
 
 describe("secret production scan", () => {
