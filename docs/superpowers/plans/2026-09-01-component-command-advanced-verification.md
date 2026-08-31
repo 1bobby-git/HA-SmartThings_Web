@@ -292,7 +292,7 @@ Not-tested: Live bathroom light components."
 - Modify: `custom_components/smartthings_web/bridge_client.py`
 - Modify: `custom_components/smartthings_web/tests/test_bridge_client.py`
 
-- [ ] **Step 1: Add failing service tests**
+- [x] **Step 1: Add failing service tests**
 
 Add tests covering:
 
@@ -336,13 +336,13 @@ test("keeps single-component devices on the verified Web path", async () => {
 
 Also test missing capability versions and dangerous device types reject component transactions.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 npx vitest run bridge/tests/command/command-service.test.ts --pool=threads --maxWorkers=1 --no-file-parallelism
 ```
 
-- [ ] **Step 3: Build the component plan**
+- [x] **Step 3: Build the component plan**
 
 Add a helper that returns `undefined` unless:
 
@@ -354,7 +354,7 @@ Add a helper that returns `undefined` unless:
 
 Sort states by role: `main`, numeric `switchN`, then component token. Build target actions only for states that differ from the requested value. Build rollback actions from the original state vector.
 
-- [ ] **Step 4: Execute, resync, verify, and rollback**
+- [x] **Step 4: Execute, resync, verify, and rollback**
 
 Before normal single-state waiting, use the component plan. Execute the transaction, call `resync({ deviceId })`, then verify every component state from `devices.snapshot()`.
 
@@ -366,11 +366,11 @@ confirmed(clientRequestId, sequence, "inventory_snapshot", "advanced")
 
 If any component does not match, execute a second component transaction containing the original state vector, resync again, verify rollback, then throw `command_confirmation_timeout`. If rollback does not match, throw `component_command_rollback_failed`.
 
-- [ ] **Step 5: Map safe errors through HTTP and HA**
+- [x] **Step 5: Map safe errors through HTTP and HA**
 
 Add `component_command_partial_failure` and `component_command_rollback_failed` to `SafeCommandErrorCode`, HTTP 502 mapping, and `_SAFE_BRIDGE_ERROR_CODES`. The HA error message must expose only these fixed codes.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 ```powershell
 npx vitest run bridge/tests/command/command-service.test.ts bridge/tests/server/http-server.test.ts --pool=threads --maxWorkers=1 --no-file-parallelism

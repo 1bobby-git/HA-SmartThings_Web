@@ -170,6 +170,8 @@ export type SafeCommandErrorCode =
   | "command_search_ambiguous"
   | "command_control_not_found"
   | "command_control_ambiguous"
+  | "component_command_partial_failure"
+  | "component_command_rollback_failed"
   | "command_execution_failed"
   | "command_confirmation_timeout";
 
@@ -195,6 +197,28 @@ interface SafeCommandServiceOptions {
 interface DedupeEntry {
   fingerprint: string;
   result: Promise<SafeCommandResult>;
+}
+
+interface ComponentVectorState {
+  component: string;
+  capability: string;
+  attribute: string;
+  value: BridgeJsonValue;
+}
+
+interface ComponentSwitchPlan {
+  transaction: ComponentTransactionExecutionInput;
+  rollbackTransaction: ComponentTransactionExecutionInput;
+  desiredVector: ComponentVectorState[];
+  originalVector: ComponentVectorState[];
+}
+
+interface ComponentSwitchEntry {
+  state: BridgeDeviceState;
+  capabilityVersion: number;
+  originalCommand: "on" | "off";
+  desiredCommand: "on" | "off";
+  desiredValue: BridgeJsonValue;
 }
 
 type ResolvedDeviceRequest = SafeCommandRequest & {
@@ -287,6 +311,21 @@ export class SafeCommandService {
     const matchAny = confirmsAnyNewDeviceState(effective);
     const desired = matchAny ? undefined : desiredValueFor(effective.command, effective.arguments, state);
     if (!matchAny && desired === undefined) throw new SafeCommandError("invalid_arguments");
+    const componentPlan =
+      effective.confirm === false || !state
+        ? undefined
+        : buildComponentSwitchPlan(
+            device,
+            effective,
+            state,
+            this.options.devices
+          );
+    if (componentPlan) {
+      if (componentVectorMatches(snapshot, effective.targetId, componentPlan.desiredVector)) {
+        return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
+      }
+      return await this.#executeComponentPlan(effective, componentPlan);
+    }
     if (state && desired !== undefined && stateValuesEqual(state.value, desired)) return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
     const roomName = device.roomId ? snapshot.rooms.find((room) => room.id === device.roomId)?.name : undefined;
     const capabilityVersion = this.options.devices.capabilityVersion(
@@ -383,6 +422,62 @@ export class SafeCommandService {
       evidence.source === "inventory_snapshot" ? "inventory_snapshot" : "device_event",
       transportForExecution(executionResult)
     );
+  }
+
+  async #executeComponentPlan(
+    request: ResolvedDeviceRequest,
+    plan: ComponentSwitchPlan
+  ): Promise<SafeCommandResult> {
+    const execute = this.options.executor.executeComponentTransaction?.bind(
+      this.options.executor
+    );
+    if (!execute) throw new SafeCommandError("command_execution_failed");
+    try {
+      await execute(plan.transaction);
+    } catch (error) {
+      throw commandError(error);
+    }
+    const refreshed = await this.#refreshComponentStatus(request.targetId);
+    if (
+      refreshed &&
+      componentVectorMatches(
+        this.options.devices.snapshot(),
+        request.targetId,
+        plan.desiredVector
+      )
+    ) {
+      return confirmed(
+        request.clientRequestId,
+        this.options.devices.currentSequence(),
+        "inventory_snapshot",
+        "advanced"
+      );
+    }
+    try {
+      await execute(plan.rollbackTransaction);
+    } catch {
+      throw new SafeCommandError("component_command_rollback_failed");
+    }
+    const rollbackRefreshed = await this.#refreshComponentStatus(request.targetId);
+    if (
+      !rollbackRefreshed ||
+      !componentVectorMatches(
+        this.options.devices.snapshot(),
+        request.targetId,
+        plan.originalVector
+      )
+    ) {
+      throw new SafeCommandError("component_command_rollback_failed");
+    }
+    throw new SafeCommandError("command_confirmation_timeout");
+  }
+
+  async #refreshComponentStatus(deviceId: string): Promise<boolean> {
+    try {
+      return (await this.options.resync({ deviceId })) !== undefined;
+    } catch {
+      return false;
+    }
   }
 
   async #executeScene(
@@ -977,6 +1072,146 @@ function desiredValueFor(command: string, args: BridgeJsonValue[], state: Bridge
   if (state && typeof state.value === "number" && typeof value !== "number") return undefined;
   if (state && typeof state.value === "string" && typeof value !== "string") return undefined;
   return value;
+}
+
+function buildComponentSwitchPlan(
+  device: BridgeDevice,
+  request: ResolvedDeviceRequest,
+  requestedState: BridgeDeviceState,
+  devices: DeviceStore
+): ComponentSwitchPlan | undefined {
+  const desiredCommand = request.command;
+  if (
+    (desiredCommand !== "on" && desiredCommand !== "off") ||
+    componentRole(requestedState) !== "main"
+  ) {
+    return undefined;
+  }
+  const states = device.states
+    .filter((state) => state.attribute === "switch" && state.componentRole !== undefined)
+    .sort(compareSwitchComponents);
+  if (states.length < 2) return undefined;
+  if (
+    dangerousControlText(device.type ?? "") ||
+    (device.controls ?? []).some(dangerousControl)
+  ) {
+    throw new SafeCommandError("unsupported_command");
+  }
+  const entries: Array<ComponentSwitchEntry | undefined> = states.map((state) => {
+    const capabilityVersion = devices.capabilityVersion(
+      device.id,
+      state.component,
+      state.capability
+    );
+    const originalCommand = switchCommandForValue(state);
+    const desiredValue = desiredValueFor(request.command, [], state);
+    if (
+      capabilityVersion === undefined ||
+      !Number.isSafeInteger(capabilityVersion) ||
+      capabilityVersion < 0 ||
+      originalCommand === undefined ||
+      desiredValue === undefined
+    ) {
+      return undefined;
+    }
+    return {
+      state,
+      capabilityVersion,
+      originalCommand,
+      desiredValue,
+      desiredCommand
+    };
+  });
+  if (entries.some((entry) => entry === undefined)) return undefined;
+  const safeEntries = entries.filter((entry): entry is ComponentSwitchEntry => entry !== undefined);
+  const action = (
+    entry: (typeof safeEntries)[number],
+    command: "on" | "off"
+  ): ComponentActionExecutionInput => ({
+    deviceId: device.id,
+    component: entry.state.component,
+    capability: entry.state.capability,
+    capabilityVersion: entry.capabilityVersion,
+    command,
+    arguments: []
+  });
+  const changed = safeEntries.filter((entry) =>
+    !stateValuesEqual(entry.state.value, entry.desiredValue)
+  );
+  return {
+    transaction: {
+      actions: changed.map((entry) => action(entry, entry.desiredCommand)),
+      rollbackActions: changed.map((entry) => action(entry, entry.originalCommand))
+    },
+    rollbackTransaction: {
+      actions: safeEntries.map((entry) => action(entry, entry.originalCommand)),
+      rollbackActions: safeEntries.map((entry) => action(entry, entry.desiredCommand))
+    },
+    desiredVector: safeEntries.map((entry) => ({
+      component: entry.state.component,
+      capability: entry.state.capability,
+      attribute: entry.state.attribute,
+      value: entry.desiredValue
+    })),
+    originalVector: safeEntries.map((entry) => ({
+      component: entry.state.component,
+      capability: entry.state.capability,
+      attribute: entry.state.attribute,
+      value: entry.state.value
+    }))
+  };
+}
+
+function switchCommandForValue(state: BridgeDeviceState): "on" | "off" | undefined {
+  const onValue = desiredValueFor("on", [], state);
+  const offValue = desiredValueFor("off", [], state);
+  const isOn = stateValuesEqual(state.value, onValue);
+  const isOff = stateValuesEqual(state.value, offValue);
+  if (isOn === isOff) return undefined;
+  return isOn ? "on" : "off";
+}
+
+function compareSwitchComponents(left: BridgeDeviceState, right: BridgeDeviceState): number {
+  const leftOrder = switchComponentOrder(left);
+  const rightOrder = switchComponentOrder(right);
+  if (leftOrder.group !== rightOrder.group) return leftOrder.group - rightOrder.group;
+  if (leftOrder.number !== rightOrder.number) return leftOrder.number - rightOrder.number;
+  return leftOrder.token.localeCompare(rightOrder.token);
+}
+
+function switchComponentOrder(state: BridgeDeviceState): {
+  group: number;
+  number: number;
+  token: string;
+} {
+  const token = componentRole(state);
+  if (token === "main") return { group: 0, number: 0, token };
+  const numbered = token.match(/^switch(\d+)$/u);
+  if (numbered) return { group: 1, number: Number(numbered[1]), token };
+  return { group: 2, number: 0, token };
+}
+
+function componentRole(state: BridgeDeviceState): string {
+  const value = state.componentRole ?? state.component.replace(/^identifier_/u, "");
+  return value.trim().toLowerCase();
+}
+
+function componentVectorMatches(
+  snapshot: ReturnType<DeviceStore["snapshot"]>,
+  deviceId: string,
+  expected: readonly ComponentVectorState[]
+): boolean {
+  const device = snapshot.devices.find((candidate) => candidate.id === deviceId);
+  if (!device) return false;
+  return expected.every((item) => {
+    const state = findState(
+      device,
+      item.component,
+      item.capability,
+      item.attribute
+    );
+    return state !== undefined && stateValuesEqual(state.value, item.value);
+  });
 }
 
 function armStateForCommand(command: string): string | undefined {
@@ -1611,7 +1846,7 @@ function commandError(error: unknown): SafeCommandError {
 }
 
 function isExecutorErrorCode(value: string): value is SafeCommandErrorCode {
-  return ["command_browser_unavailable", "command_login_required", "command_location_mismatch", "command_location_unknown", "command_location_picker_not_found", "command_location_target_not_found", "command_location_change_failed", "command_room_not_found", "command_target_not_found", "command_target_ambiguous", "command_search_not_found", "command_search_ambiguous", "command_control_not_found", "command_control_ambiguous"].includes(value);
+  return ["command_browser_unavailable", "command_login_required", "command_location_mismatch", "command_location_unknown", "command_location_picker_not_found", "command_location_target_not_found", "command_location_change_failed", "command_room_not_found", "command_target_not_found", "command_target_ambiguous", "command_search_not_found", "command_search_ambiguous", "command_control_not_found", "command_control_ambiguous", "component_command_partial_failure", "component_command_rollback_failed"].includes(value);
 }
 
 function jsonValue(value: unknown): BridgeJsonValue | undefined {

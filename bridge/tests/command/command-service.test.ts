@@ -2,14 +2,128 @@ import { describe, expect, test, vi } from "vitest";
 
 import {
   SafeCommandService,
+  type ComponentTransactionExecutionInput,
   type CommandResyncEvidence,
   type SafeCommandExecutor
 } from "../../src/command/command-service.js";
 import type { SanitizedCaptureRecord } from "../../src/state/capture-store.js";
-import { DeviceStore } from "../../src/state/device-store.js";
+import { DeviceStore, type BridgeStateSource } from "../../src/state/device-store.js";
 import { RuntimeStatusStore } from "../../src/state/runtime-state.js";
 
 describe("SafeCommandService", () => {
+  test("uses a component transaction for a multi-switch aggregate", async () => {
+    const fixture = multiSwitchFixture(["main", "switch2", "switch3", "switch4"]);
+    fixture.resync.mockImplementationOnce(async () => {
+      fixture.setSwitchStates("off");
+      return { authoritativeSnapshot: false, startedAtMs: Date.now() };
+    });
+
+    const result = await fixture.service.execute(aggregateCommand("off", "request_multi_switch_off"));
+
+    expect(fixture.executeDeviceAction).not.toHaveBeenCalled();
+    expect(fixture.executeComponentTransaction).toHaveBeenCalledOnce();
+    expect(fixture.executeComponentTransaction.mock.calls[0]?.[0].actions.map(
+      (action) => action.component
+    )).toEqual([
+      "identifier_main",
+      "identifier_switch2",
+      "identifier_switch3",
+      "identifier_switch4"
+    ]);
+    expect(fixture.executeComponentTransaction.mock.calls[0]?.[0].rollbackActions.every(
+      (action) => action.command === "on"
+    )).toBe(true);
+    expect(result).toMatchObject({
+      status: "confirmed",
+      confirmation: "inventory_snapshot",
+      transport: "advanced",
+      lifecycle: "CONFIRMED_BY_STATUS"
+    });
+  });
+
+  test("rolls back when Advanced status does not confirm every component", async () => {
+    const fixture = multiSwitchFixture(["main", "switch2", "switch3", "switch4"]);
+    fixture.resync
+      .mockImplementationOnce(async () => {
+        fixture.setSwitchStates({ main: "off", switch2: "off", switch3: "off", switch4: "on" });
+        return { authoritativeSnapshot: false, startedAtMs: Date.now() };
+      })
+      .mockImplementationOnce(async () => {
+        fixture.setSwitchStates("on");
+        return { authoritativeSnapshot: false, startedAtMs: Date.now() };
+      });
+
+    await expect(
+      fixture.service.execute(aggregateCommand("off", "request_multi_rollback"))
+    ).rejects.toMatchObject({ code: "command_confirmation_timeout" });
+    expect(fixture.executeComponentTransaction).toHaveBeenCalledTimes(2);
+    expect(fixture.executeComponentTransaction.mock.calls[1]?.[0].actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ component: "identifier_main", command: "on" }),
+        expect.objectContaining({ component: "identifier_switch4", command: "on" })
+      ])
+    );
+  });
+
+  test("reports an explicit failure when the original component vector is not restored", async () => {
+    const fixture = multiSwitchFixture(["main", "switch2", "switch3", "switch4"]);
+    fixture.resync
+      .mockImplementationOnce(async () => {
+        fixture.setSwitchStates({ main: "off", switch2: "off", switch3: "off", switch4: "on" });
+        return { authoritativeSnapshot: false, startedAtMs: Date.now() };
+      })
+      .mockImplementationOnce(async () => {
+        fixture.setSwitchStates({ main: "on", switch2: "on", switch3: "off", switch4: "on" });
+        return { authoritativeSnapshot: false, startedAtMs: Date.now() };
+      });
+
+    await expect(
+      fixture.service.execute(aggregateCommand("off", "request_rollback_failed"))
+    ).rejects.toMatchObject({ code: "component_command_rollback_failed" });
+  });
+
+  test("preserves a fixed component partial-failure code from the executor", async () => {
+    const fixture = multiSwitchFixture(["main", "switch2"]);
+    fixture.executeComponentTransaction.mockRejectedValueOnce(
+      new Error("component_command_partial_failure")
+    );
+
+    await expect(
+      fixture.service.execute(aggregateCommand("off", "request_component_partial"))
+    ).rejects.toMatchObject({ code: "component_command_partial_failure" });
+    expect(fixture.resync).not.toHaveBeenCalled();
+  });
+
+  test("keeps single-component devices on the verified Web path", async () => {
+    const fixture = multiSwitchFixture(["main"]);
+
+    await expect(
+      fixture.service.execute(aggregateCommand("off", "request_single_switch"))
+    ).resolves.toMatchObject({ status: "confirmed", confirmation: "device_event" });
+    expect(fixture.executeDeviceAction).toHaveBeenCalledOnce();
+    expect(fixture.executeComponentTransaction).not.toHaveBeenCalled();
+  });
+
+  test("keeps the verified Web path when any component capability version is missing", async () => {
+    const fixture = multiSwitchFixture(["main", "switch2"], { includeVersions: false });
+
+    await expect(
+      fixture.service.execute(aggregateCommand("off", "request_missing_version"))
+    ).resolves.toMatchObject({ status: "confirmed", confirmation: "device_event" });
+    expect(fixture.executeDeviceAction).toHaveBeenCalledOnce();
+    expect(fixture.executeComponentTransaction).not.toHaveBeenCalled();
+  });
+
+  test("rejects dangerous multi-component device types", async () => {
+    const fixture = multiSwitchFixture(["main", "switch2"], { deviceType: "door lock" });
+
+    await expect(
+      fixture.service.execute(aggregateCommand("off", "request_dangerous_multi"))
+    ).rejects.toMatchObject({ code: "unsupported_command" });
+    expect(fixture.executeDeviceAction).not.toHaveBeenCalled();
+    expect(fixture.executeComponentTransaction).not.toHaveBeenCalled();
+  });
+
   test("returns the transport receipt for an explicitly unconfirmed stateful command", async () => {
     const store = readyDeviceStore();
     const resync = vi.fn(async () => undefined);
@@ -2508,6 +2622,10 @@ function command(value: "on" | "off", clientRequestId: string) {
   };
 }
 
+function aggregateCommand(value: "on" | "off", clientRequestId: string) {
+  return { ...command(value, clientRequestId), component: "identifier_main" };
+}
+
 function refreshCommand(clientRequestId: string) {
   return {
     targetType: "device",
@@ -2557,6 +2675,105 @@ function connectedStatus(): RuntimeStatusStore {
       lastPushAtMs: now
     }
   });
+}
+
+function multiSwitchFixture(
+  components: string[],
+  options: { includeVersions?: boolean; deviceType?: string } = {}
+) {
+  const store = readyDeviceStore();
+  store.observe(sent('4291["find","api/device/status",{}]'));
+  store.observe(
+    received(
+      '4391[null,[{"deviceId":"dev_001","locationId":"loc_001","componentId":"identifier_main","capabilityId":"identifier_switch","attributeName":"switch","value":"off","unit":null,"timestamp":"2026-08-25T00:00:00Z"}]]'
+    )
+  );
+  observeDeviceDetails(store, [
+    detailSwatch("TOGGLE", "toggle", {
+      swatchId: "identifier_toggle_aggregate",
+      label: "Aggregate power",
+      componentId: "identifier_main",
+      commands: ["on", "off"]
+    })
+  ]);
+  let observedAtMs = Date.parse("2026-09-01T00:00:00.000Z");
+  const setSwitchStates = (
+    values: "on" | "off" | Readonly<Record<string, "on" | "off">>,
+    source: BridgeStateSource = "COMMAND_STATUS_RECHECK"
+  ) => {
+    observedAtMs += 1_000;
+    store.observeAdvancedDeviceSnapshot(
+      {
+        items: [
+          {
+            deviceId: "dev_001",
+            locationId: "loc_001",
+            deviceTypeName: options.deviceType ?? "switch",
+            components: components.map((component) => ({
+              id: `identifier_${component}`,
+              label: component === "main" ? "Main" : component,
+              capabilities: [
+                {
+                  id: "identifier_switch",
+                  ...(options.includeVersions === false ? {} : { version: 1 }),
+                  status: {
+                    switch: {
+                      value: typeof values === "string" ? values : values[component],
+                      timestamp: new Date(observedAtMs).toISOString()
+                    }
+                  }
+                }
+              ]
+            }))
+          }
+        ]
+      },
+      { source }
+    );
+  };
+  setSwitchStates("on", "ADVANCED_SNAPSHOT");
+  const executeDeviceAction = vi.fn(async () => {
+    store.observe(
+      received(
+        deviceEventFrame(
+          "off",
+          "2026-09-01T01:00:00.000Z",
+          "switch",
+          "dev_001",
+          "identifier_switch",
+          undefined,
+          "identifier_main"
+        )
+      )
+    );
+  });
+  const executeComponentTransaction = vi.fn(async (input: ComponentTransactionExecutionInput) =>
+    Array.from({ length: input.actions.length }, (_, index) => ({
+      state: "ACCEPTED" as const,
+      transport: "advanced" as const,
+      acceptedAtMs: index + 1
+    }))
+  );
+  const resync = vi.fn(async (_request?: { deviceId?: string }): Promise<CommandResyncEvidence> => ({
+    authoritativeSnapshot: false,
+    startedAtMs: Date.now()
+  }));
+  const service = new SafeCommandService({
+    devices: store,
+    status: connectedStatus(),
+    executor: { executeDeviceAction, executeComponentTransaction },
+    timeoutMs: 20,
+    resyncAfterMs: 0,
+    resync
+  });
+  return {
+    service,
+    store,
+    setSwitchStates,
+    resync,
+    executeDeviceAction,
+    executeComponentTransaction
+  };
 }
 
 function readyDeviceStore(
@@ -2636,7 +2853,8 @@ function deviceEventFrame(
   attribute = "switch",
   deviceId = "dev_001",
   capability = "identifier_switch",
-  commandId?: string
+  commandId?: string,
+  component = "main"
 ): string {
   return `42${JSON.stringify([
     "api/subscription DEVICE_EVENT",
@@ -2647,7 +2865,7 @@ function deviceEventFrame(
         device_event: {
           device_id: deviceId,
           location_id: "loc_001",
-          component: "main",
+          component,
           capability,
           attribute,
           value,

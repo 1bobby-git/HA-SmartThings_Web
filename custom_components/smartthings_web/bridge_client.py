@@ -46,6 +46,8 @@ _SAFE_BRIDGE_ERROR_CODES = {
     "command_confirmation_timeout",
     "command_control_ambiguous",
     "command_control_not_found",
+    "component_command_partial_failure",
+    "component_command_rollback_failed",
     "command_execution_failed",
     "command_location_change_failed",
     "command_location_mismatch",
