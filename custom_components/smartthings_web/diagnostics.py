@@ -75,6 +75,8 @@ async def _async_health_diagnostics(runtime: object | None) -> dict[str, Any]:
             **_copy_int(details, "advancedInventoryPageCount"),
             **_copy_int(details, "pendingCommandCount"),
             **_copy_int(details, "domFallbackCount"),
+            **_copy_int(details, "reconnectCount"),
+            **_copy_int(details, "lastReconnectAtMs"),
             **_copy_str(details, "lastCommandTransport"),
             **_copy_str(details, "lastCommandConfirmation"),
         },

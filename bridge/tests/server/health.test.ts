@@ -132,6 +132,7 @@ describe("createHealthReport", () => {
       adapterFailureCount: 0,
       pendingCommandCount: 0,
       domFallbackCount: 0,
+      reconnectCount: 0,
       bridgeVersion: "0.1.0",
       browserVersion: "Chromium 141.0.7390.122",
       protocolVersion: "proto-4",

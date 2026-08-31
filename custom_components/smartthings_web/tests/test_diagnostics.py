@@ -101,6 +101,8 @@ class DiagnosticsTests(unittest.IsolatedAsyncioTestCase):
                             "advancedInventoryPageCount": 2,
                             "pendingCommandCount": 0,
                             "domFallbackCount": 0,
+                            "reconnectCount": 3,
+                            "lastReconnectAtMs": 123456,
                             "lastCommandTransport": "advanced",
                             "lastCommandConfirmation": "CONFIRMED_BY_EVENT",
                             "deviceId": "raw-device-id",

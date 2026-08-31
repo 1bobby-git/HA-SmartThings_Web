@@ -65,6 +65,7 @@ describe("RuntimeStatusStore", () => {
       adapterFailureCount: 0,
       pendingCommandCount: 0,
       domFallbackCount: 0,
+      reconnectCount: 0,
       lastCommandTransport: undefined,
       lastCommandConfirmation: undefined,
       bridgeVersion: "0.0.0-dev",
@@ -80,6 +81,7 @@ describe("RuntimeStatusStore", () => {
       lastParserSuccessAtMs: undefined,
       lastBrowserStartAtMs: undefined,
       advancedInventoryLastSyncAtMs: undefined,
+      lastReconnectAtMs: undefined,
       lastStateChangeAtMs: 1_000
     });
   });

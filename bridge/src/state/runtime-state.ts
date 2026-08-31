@@ -61,6 +61,7 @@ export interface RuntimeStatusSnapshot {
   adapterFailureCount: number;
   pendingCommandCount: number;
   domFallbackCount: number;
+  reconnectCount: number;
   lastCommandTransport: string | undefined;
   lastCommandConfirmation: string | undefined;
   bridgeVersion: string;
@@ -76,6 +77,7 @@ export interface RuntimeStatusSnapshot {
   lastParserSuccessAtMs: number | undefined;
   lastBrowserStartAtMs: number | undefined;
   advancedInventoryLastSyncAtMs: number | undefined;
+  lastReconnectAtMs: number | undefined;
   lastStateChangeAtMs: number;
 }
 
@@ -120,6 +122,7 @@ const snapshotKeys = new Set<keyof RuntimeStatusSnapshot>([
   "adapterFailureCount",
   "pendingCommandCount",
   "domFallbackCount",
+  "reconnectCount",
   "lastCommandTransport",
   "lastCommandConfirmation",
   "bridgeVersion",
@@ -135,6 +138,7 @@ const snapshotKeys = new Set<keyof RuntimeStatusSnapshot>([
   "lastParserSuccessAtMs",
   "lastBrowserStartAtMs",
   "advancedInventoryLastSyncAtMs",
+  "lastReconnectAtMs",
   "lastStateChangeAtMs"
 ]);
 
@@ -155,6 +159,7 @@ const counterKeys = new Set<keyof RuntimeStatusSnapshot>([
   ,"adapterFailureCount"
   ,"pendingCommandCount"
   ,"domFallbackCount"
+  ,"reconnectCount"
 ]);
 
 const booleanKeys = new Set<keyof RuntimeStatusSnapshot>([
@@ -178,6 +183,7 @@ const timestampKeys = new Set<keyof RuntimeStatusSnapshot>([
   "lastParserSuccessAtMs",
   "lastBrowserStartAtMs",
   "advancedInventoryLastSyncAtMs",
+  "lastReconnectAtMs",
   "lastStateChangeAtMs"
 ]);
 
@@ -243,6 +249,7 @@ export class RuntimeStatusStore {
       adapterFailureCount: 0,
       pendingCommandCount: 0,
       domFallbackCount: 0,
+      reconnectCount: 0,
       lastCommandTransport: undefined,
       lastCommandConfirmation: undefined,
       bridgeVersion: "0.0.0-dev",
@@ -258,6 +265,7 @@ export class RuntimeStatusStore {
       lastParserSuccessAtMs: undefined,
       lastBrowserStartAtMs: undefined,
       advancedInventoryLastSyncAtMs: undefined,
+      lastReconnectAtMs: undefined,
       lastStateChangeAtMs: now,
       ...initial
     });

@@ -54,6 +54,7 @@ import { CaptureStore } from "./state/capture-store.js";
 import { CameraImageStore } from "./state/camera-image-store.js";
 import { DeviceStore } from "./state/device-store.js";
 import { StateReconciliationCoordinator } from "./state/reconciliation-coordinator.js";
+import { LocationRealtimeAdapter } from "./realtime/location-realtime-adapter.js";
 import {
   ProtocolIntegrityStore,
   type ProtocolIntegritySnapshot
@@ -717,7 +718,7 @@ async function attachContext(
 
   let recoveryPromise: Promise<void> | undefined;
   let lastRecoveryStartedAtMs = 0;
-  let awaitingRecoveredFrame = false;
+  const realtime = new LocationRealtimeAdapter();
   const recoverSmartThingsWebSocket = () => {
     const now = Date.now();
     if (
@@ -742,7 +743,14 @@ async function attachContext(
         const keeper = await keeperManager.recoverKeeper();
         if (canRecoverSocket()) {
           status.update({ keeperPresent: true, ...statusForKeeperUrl(keeper.url()) });
-          awaitingRecoveredFrame = true;
+          realtime.recoveryStarted();
+          const realtimeStatus = realtime.snapshot();
+          status.update({
+            reconnectCount: realtimeStatus.reconnectCount,
+            ...(realtimeStatus.lastReconnectAtMs === undefined
+              ? {}
+              : { lastReconnectAtMs: realtimeStatus.lastReconnectAtMs })
+          });
         }
       } catch {
         log.warn("smartthings_websocket_recovery_failed");
@@ -754,8 +762,7 @@ async function attachContext(
   const observeSmartThingsWebSocketFrame = (direction: "sent" | "received") => {
     if (direction === "received" && canRecoverSocket()) {
       status.update({ lastPushAtMs: Date.now() });
-      if (awaitingRecoveredFrame) {
-        awaitingRecoveredFrame = false;
+      if (realtime.observeFrame(direction)) {
         onRealtimeRecovered();
       }
     }

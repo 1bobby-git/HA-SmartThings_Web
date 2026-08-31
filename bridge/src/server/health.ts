@@ -27,6 +27,8 @@ export interface HealthDetails {
   adapterFailureCount: number;
   pendingCommandCount: number;
   domFallbackCount: number;
+  reconnectCount: number;
+  lastReconnectAtMs?: number;
   lastCommandTransport?: string;
   lastCommandConfirmation?: string;
   bridgeVersion: string;
@@ -128,6 +130,8 @@ export function createHealthReport(
       adapterFailureCount: snapshot.adapterFailureCount,
       pendingCommandCount: snapshot.pendingCommandCount,
       domFallbackCount: snapshot.domFallbackCount,
+      reconnectCount: snapshot.reconnectCount,
+      lastReconnectAtMs: snapshot.lastReconnectAtMs,
       lastCommandTransport: snapshot.lastCommandTransport,
       lastCommandConfirmation: snapshot.lastCommandConfirmation,
       bridgeVersion: snapshot.bridgeVersion,
