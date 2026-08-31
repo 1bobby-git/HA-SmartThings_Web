@@ -282,8 +282,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     devices,
     status,
     executor: commandExecutor,
-    timeoutMs: 30_000,
-    resyncAfterMs: 1_000,
+    timeoutMs: deps.config.commandConfirmationTimeoutMs ?? 30_000,
+    ...(deps.config.statusRecheckEnabled === false ? {} : { resyncAfterMs: 1_000 }),
     resync: refreshCommandSnapshot,
     onPendingCountChange: (count) => status.update({ pendingCommandCount: count }),
     onResult: (result) => {
@@ -392,6 +392,17 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       );
     });
   }, 1_000);
+  const reconciliationInterval = setInterval(() => {
+    if (stopped || !createHealthReport(status.getSnapshot()).ready) return;
+    void reconciliation.request("interval").catch(() => {
+      const current = status.getSnapshot();
+      status.update({ adapterFailureCount: current.adapterFailureCount + 1 });
+      if (deps.config.debugProtocolLogging === true) {
+        log.warn("advanced_interval_reconciliation_failed");
+      }
+    });
+  }, deps.config.inventoryReconciliationIntervalMs ?? 21_600_000);
+  reconciliationInterval.unref();
   heartbeat();
 
   if (protocolIntegrityLoadFailed) {
@@ -414,6 +425,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           heartbeatInterval,
           keeperInterval,
           detailDiscoveryInterval,
+          reconciliationInterval,
           server,
           aliases,
           captures,
@@ -666,6 +678,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         heartbeatInterval,
         keeperInterval,
         detailDiscoveryInterval,
+        reconciliationInterval,
         server,
         aliases,
         captures,
@@ -1290,6 +1303,7 @@ async function stopRuntime(options: {
   heartbeatInterval: NodeJS.Timeout;
   keeperInterval: NodeJS.Timeout;
   detailDiscoveryInterval: NodeJS.Timeout;
+  reconciliationInterval: NodeJS.Timeout;
   server: BridgeHttpServer;
   aliases: SqliteAliasStore;
   captures: CaptureStore;
@@ -1300,6 +1314,7 @@ async function stopRuntime(options: {
   clearInterval(options.heartbeatInterval);
   clearInterval(options.keeperInterval);
   clearInterval(options.detailDiscoveryInterval);
+  clearInterval(options.reconciliationInterval);
   const context = options.getContext();
   await Promise.allSettled([
     context?.close?.(),

@@ -18,6 +18,14 @@ arch:
 options:
   log_level: info
   dom_fallback_enabled: true
+  command_confirmation_timeout: 30
+  status_recheck_enabled: true
+  inventory_reconciliation_interval: 21600
+  debug_protocol_logging: false
 schema:
   log_level: list(trace|debug|info|warning|error)
   dom_fallback_enabled: bool
+  command_confirmation_timeout: int(1,120)
+  status_recheck_enabled: bool
+  inventory_reconciliation_interval: int(900,604800)
+  debug_protocol_logging: bool

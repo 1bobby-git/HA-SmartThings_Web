@@ -8,6 +8,10 @@ export interface BridgeConfig {
   browserMaxRestarts: number;
   browserRetryDelayMs?: number;
   domFallbackEnabled?: boolean;
+  commandConfirmationTimeoutMs?: number;
+  statusRecheckEnabled?: boolean;
+  inventoryReconciliationIntervalMs?: number;
+  debugProtocolLogging?: boolean;
 }
 
 export function readBridgeConfig(
@@ -25,6 +29,30 @@ export function readBridgeConfig(
     domFallbackEnabled: parseBoolean(
       env.STW_DOM_FALLBACK_ENABLED ?? String(options.dom_fallback_enabled ?? true),
       "STW_DOM_FALLBACK_ENABLED"
+    ),
+    commandConfirmationTimeoutMs:
+      parseBoundedSeconds(
+        env.STW_COMMAND_CONFIRMATION_TIMEOUT_SECONDS ??
+          String(options.command_confirmation_timeout ?? 30),
+        "STW_COMMAND_CONFIRMATION_TIMEOUT_SECONDS",
+        1,
+        120
+      ) * 1_000,
+    statusRecheckEnabled: parseBoolean(
+      env.STW_STATUS_RECHECK_ENABLED ?? String(options.status_recheck_enabled ?? true),
+      "STW_STATUS_RECHECK_ENABLED"
+    ),
+    inventoryReconciliationIntervalMs:
+      parseBoundedSeconds(
+        env.STW_INVENTORY_RECONCILIATION_SECONDS ??
+          String(options.inventory_reconciliation_interval ?? 21_600),
+        "STW_INVENTORY_RECONCILIATION_SECONDS",
+        900,
+        604_800
+      ) * 1_000,
+    debugProtocolLogging: parseBoolean(
+      env.STW_DEBUG_PROTOCOL_LOGGING ?? String(options.debug_protocol_logging ?? false),
+      "STW_DEBUG_PROTOCOL_LOGGING"
     )
   };
 }
@@ -45,6 +73,19 @@ function parseBoolean(value: string, name: string): boolean {
   if (value === "true") return true;
   if (value === "false") return false;
   throw new Error(`invalid bridge config: ${name} must be true or false`);
+}
+
+function parseBoundedSeconds(
+  value: string,
+  name: string,
+  minimum: number,
+  maximum: number
+): number {
+  const seconds = Number(value);
+  if (!Number.isSafeInteger(seconds) || seconds < minimum || seconds > maximum) {
+    throw new Error(`invalid bridge config: ${name} must be an integer from ${minimum} to ${maximum}`);
+  }
+  return seconds;
 }
 
 function parseRetryDelay(value: string): number {
