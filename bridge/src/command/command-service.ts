@@ -1421,6 +1421,15 @@ function stateValuesEqual(
   if (typeof actual === "string" && typeof desired === "string") {
     return actual.trim().toLowerCase() === desired.trim().toLowerCase();
   }
+  if (
+    typeof actual === "number" &&
+    Number.isFinite(actual) &&
+    typeof desired === "number" &&
+    Number.isFinite(desired)
+  ) {
+    const tolerance = Math.max(1e-6, Math.abs(desired) * 1e-6);
+    return Math.abs(actual - desired) <= tolerance;
+  }
   return JSON.stringify(actual) === JSON.stringify(desired);
 }
 

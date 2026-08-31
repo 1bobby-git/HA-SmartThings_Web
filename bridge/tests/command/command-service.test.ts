@@ -82,6 +82,51 @@ describe("SafeCommandService", () => {
     });
   });
 
+  test("confirms numeric state with bounded device rounding tolerance", async () => {
+    const store = readyDeviceStore();
+    observeDeviceDetails(store, [
+      detailSwatch("SLIDER", "slider", {
+        swatchId: "identifier_level_tolerance",
+        attributeName: "level",
+        capabilityId: "identifier_switchLevel",
+        min: 0,
+        max: 100,
+      }),
+    ]);
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: {
+        executeDeviceAction: vi.fn(async () => {
+          store.observe(
+            received(
+              deviceEventFrame(
+                70.00005,
+                "2026-08-25T00:00:01Z",
+                "level",
+                "dev_001",
+                "identifier_switchLevel"
+              )
+            )
+          );
+        }),
+      },
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined),
+    });
+
+    await expect(
+      service.execute(
+        deviceCommand("setNumber", "request_numeric_tolerance", {
+          attribute: "level",
+          arguments: [70],
+          capability: "identifier_switchLevel",
+          controlId: "identifier_level_tolerance",
+        })
+      )
+    ).resolves.toMatchObject({ status: "confirmed" });
+  });
+
   test("does not confirm a transient state that reverses before browser interaction completes", async () => {
     const store = readyDeviceStore();
     const resync = vi.fn(async () => undefined);
