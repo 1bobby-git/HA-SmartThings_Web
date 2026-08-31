@@ -242,7 +242,9 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           ]
         };
         volatileIdentifiers.observeRawAdvancedDeviceSnapshot(rawSnapshot);
-        devices.observeAdvancedDeviceSnapshot(redactor(rawSnapshot));
+        devices.observeAdvancedDeviceSnapshot(redactor(rawSnapshot), {
+          source: "COMMAND_STATUS_RECHECK"
+        });
         cameraImages.observeInventory(devices.snapshot());
         log.info("command_diag:advanced_status_refreshed");
         return { authoritativeSnapshot: false, startedAtMs };

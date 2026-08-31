@@ -45,6 +45,7 @@ describe("DeviceStore Advanced primary inventory", () => {
       ]
     });
     expect(listener).toHaveBeenCalledOnce();
+    expect(store.snapshot().devices[0]?.states[0]?.source).toBe("ADVANCED_SNAPSHOT");
   });
 
   test("uses later Advanced topology metadata for the same IDs without duplicating devices", () => {

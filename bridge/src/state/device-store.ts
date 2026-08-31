@@ -30,7 +30,14 @@ export interface BridgeDeviceState {
   updatedAt: string | null;
   componentRole?: string;
   capabilityRole?: string;
+  source?: BridgeStateSource;
 }
+
+export type BridgeStateSource =
+  | "ADVANCED_SNAPSHOT"
+  | "LOCATION_EVENT"
+  | "COMMAND_STATUS_RECHECK"
+  | "DOM_FALLBACK";
 
 export interface BridgeDeviceControl {
   id: string;
@@ -111,6 +118,7 @@ type AdvancedAliasKind = "device" | "location" | "identifier";
 type AdvancedAliasNormalizer = (kind: AdvancedAliasKind, value: string) => string;
 type AdvancedDeviceSnapshotOptions = {
   authoritativeWholeSnapshot?: boolean;
+  source?: BridgeStateSource;
 };
 type AdvancedInventorySnapshotBody = {
   locations?: unknown;
@@ -338,7 +346,11 @@ export class DeviceStore {
 
   observeAdvancedDeviceSnapshot(body: unknown, options: AdvancedDeviceSnapshotOptions = {}): void {
     const authoritativeWholeSnapshot = options.authoritativeWholeSnapshot === true;
-    const changed = this.#applyAdvancedDeviceSnapshot(body, authoritativeWholeSnapshot);
+    const changed = this.#applyAdvancedDeviceSnapshot(
+      body,
+      authoritativeWholeSnapshot,
+      options.source ?? "ADVANCED_SNAPSHOT"
+    );
     if (authoritativeWholeSnapshot && advancedDeviceRows(body)) {
       this.#sessionWholeAdvancedDeviceSnapshotSeen = true;
     }
@@ -357,7 +369,12 @@ export class DeviceStore {
     const authoritativeWholeSnapshot = options.authoritativeWholeSnapshot === true;
     let changed = this.#applyAdvancedLocations(body.locations);
     changed = this.#applyAdvancedRooms(body.rooms) || changed;
-    changed = this.#applyAdvancedDeviceSnapshot(body.devices, authoritativeWholeSnapshot) || changed;
+    changed =
+      this.#applyAdvancedDeviceSnapshot(
+        body.devices,
+        authoritativeWholeSnapshot,
+        options.source ?? "ADVANCED_SNAPSHOT"
+      ) || changed;
     if (authoritativeWholeSnapshot && advancedDeviceRows(body.devices)) {
       this.#sessionWholeAdvancedDeviceSnapshotSeen = true;
     }
@@ -531,7 +548,11 @@ export class DeviceStore {
     return changed;
   }
 
-  #applyAdvancedDeviceSnapshot(body: unknown, observeRestoredPresence = false): boolean {
+  #applyAdvancedDeviceSnapshot(
+    body: unknown,
+    observeRestoredPresence = false,
+    source: BridgeStateSource = "ADVANCED_SNAPSHOT"
+  ): boolean {
     const rows = advancedDeviceRows(body);
     if (!rows) {
       return false;
@@ -597,7 +618,8 @@ export class DeviceStore {
         row,
         this.#identifierRole,
         this.#normalizeStateToken,
-        this.#normalizeAdvancedAlias
+        this.#normalizeAdvancedAlias,
+        source
       )) {
         changed = this.#mergeStateRoles(device, state) || changed;
         changed = this.#setState(device, state) || changed;
@@ -1151,13 +1173,19 @@ function advancedDeviceStates(
   row: Record<string, unknown>,
   identifierRole: IdentifierRoleResolver,
   normalizeStateToken: StateTokenNormalizer,
-  normalizeAdvancedAlias: AdvancedAliasNormalizer
+  normalizeAdvancedAlias: AdvancedAliasNormalizer,
+  source: BridgeStateSource
 ): BridgeDeviceState[] {
   const status = asRecord(row.status);
   const componentRoles = advancedComponentRoles(row.components, normalizeAdvancedAlias);
   const components = asRecord(status?.components);
   if (!components) {
-    return advancedArrayDeviceStates(row.components, identifierRole, normalizeAdvancedAlias);
+    return advancedArrayDeviceStates(
+      row.components,
+      identifierRole,
+      normalizeAdvancedAlias,
+      source
+    );
   }
   const result: BridgeDeviceState[] = [];
   for (const [rawComponent, capabilitiesValue] of Object.entries(components)) {
@@ -1186,7 +1214,8 @@ function advancedDeviceStates(
           unit: stateRecord.unit,
           updatedAt: stateRecord.timestamp ?? stateRecord.updatedAt,
           componentRole,
-          capabilityRole
+          capabilityRole,
+          source
         }, identifierRole);
         if (state) result.push(state);
       }
@@ -1218,7 +1247,8 @@ function advancedComponentRoles(
 function advancedArrayDeviceStates(
   value: unknown,
   identifierRole: IdentifierRoleResolver,
-  normalizeAdvancedAlias: AdvancedAliasNormalizer
+  normalizeAdvancedAlias: AdvancedAliasNormalizer,
+  source: BridgeStateSource
 ): BridgeDeviceState[] {
   if (!Array.isArray(value)) return [];
   const result: BridgeDeviceState[] = [];
@@ -1258,7 +1288,8 @@ function advancedArrayDeviceStates(
           unit: stateRecord.unit,
           updatedAt: stateRecord.timestamp ?? stateRecord.updatedAt,
           componentRole,
-          capabilityRole
+          capabilityRole,
+          source
         }, identifierRole);
         if (state) result.push(state);
       }
@@ -1395,7 +1426,8 @@ function stateFromSnapshot(
     attribute: row.attributeName,
     value: row.value,
     unit: row.unit,
-    updatedAt: row.timestamp
+    updatedAt: row.timestamp,
+    source: "LOCATION_EVENT"
   }, identifierRole);
 }
 
@@ -1422,7 +1454,8 @@ function stateFromEvent(
     attribute,
     value: event.value,
     unit: event.unit,
-    updatedAt: event.event_time ?? event.eventTime ?? data.event_time ?? data.eventTime
+    updatedAt: event.event_time ?? event.eventTime ?? data.event_time ?? data.eventTime,
+    source: "LOCATION_EVENT"
   }, identifierRole);
   return state?.updatedAt ? state : null;
 }
@@ -1479,6 +1512,7 @@ function stateFromParts(
   }
   const componentRole = safeRole(input.componentRole) ?? identifierRole(component);
   const capabilityRole = safeRole(input.capabilityRole) ?? identifierRole(capability);
+  const source = isBridgeStateSource(input.source) ? input.source : undefined;
   return {
     component,
     capability,
@@ -1487,8 +1521,18 @@ function stateFromParts(
     unit: readString(input.unit),
     updatedAt: validTimestamp(input.updatedAt),
     ...(componentRole ? { componentRole } : {}),
-    ...(capabilityRole ? { capabilityRole } : {})
+    ...(capabilityRole ? { capabilityRole } : {}),
+    ...(source ? { source } : {})
   };
+}
+
+function isBridgeStateSource(value: unknown): value is BridgeStateSource {
+  return [
+    "ADVANCED_SNAPSHOT",
+    "LOCATION_EVENT",
+    "COMMAND_STATUS_RECHECK",
+    "DOM_FALLBACK"
+  ].includes(String(value));
 }
 
 function controlFromSwatch(row: Record<string, unknown>): BridgeDeviceControl | null {
