@@ -853,6 +853,7 @@ describe("createBridgeRuntime", () => {
     const socket = new FakeEmitter() as FakeEmitter & { url: () => string };
     socket.url = () => "wss://my.smartthings.com/socket.io/?EIO=4&transport=websocket";
     await context.emit("websocket", socket);
+    const advancedRequestsBeforeRecovery = keeper.advancedRequestCalls.length;
 
     await socket.emit("close", undefined);
 
@@ -862,6 +863,10 @@ describe("createBridgeRuntime", () => {
       parserHealthy: false,
       initialSnapshotComplete: false
     });
+    await socket.emit("framereceived", { payload: "2" });
+    await vi.waitFor(() =>
+      expect(keeper.advancedRequestCalls.length).toBeGreaterThan(advancedRequestsBeforeRecovery)
+    );
   });
 
   test("recovers a stale-but-open authenticated SmartThings socket after received frames stop", async () => {

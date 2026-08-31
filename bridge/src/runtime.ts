@@ -416,6 +416,11 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
               physicalActionProbe.snapshot(getProbeEvidence()).state !== "armed"
             );
           },
+          () => {
+            void reconciliation.request("reconnect").catch(() => {
+              log.warn("advanced_reconnect_reconciliation_failed");
+            });
+          },
           (snapshot, url) => {
             devices.observeAdvancedDeviceSnapshot(snapshot, {
               // A single observed page is never authoritative after the Advanced
@@ -648,6 +653,7 @@ async function attachContext(
   canRecoverSocket: () => boolean,
   onNewPage: () => void,
   canOpenAdvancedSnapshot: () => boolean,
+  onRealtimeRecovered: () => void,
   onAdvancedDeviceSnapshot: (snapshot: unknown, url: string) => void
 ): Promise<() => void> {
   const observedCdpPages = new WeakSet<object>();
@@ -659,6 +665,7 @@ async function attachContext(
 
   let recoveryPromise: Promise<void> | undefined;
   let lastRecoveryStartedAtMs = 0;
+  let awaitingRecoveredFrame = false;
   const recoverSmartThingsWebSocket = () => {
     const now = Date.now();
     if (
@@ -683,6 +690,7 @@ async function attachContext(
         const keeper = await keeperManager.recoverKeeper();
         if (canRecoverSocket()) {
           status.update({ keeperPresent: true, ...statusForKeeperUrl(keeper.url()) });
+          awaitingRecoveredFrame = true;
         }
       } catch {
         log.warn("smartthings_websocket_recovery_failed");
@@ -694,6 +702,10 @@ async function attachContext(
   const observeSmartThingsWebSocketFrame = (direction: "sent" | "received") => {
     if (direction === "received" && canRecoverSocket()) {
       status.update({ lastPushAtMs: Date.now() });
+      if (awaitingRecoveredFrame) {
+        awaitingRecoveredFrame = false;
+        onRealtimeRecovered();
+      }
     }
   };
 
