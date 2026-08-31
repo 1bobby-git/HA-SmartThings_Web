@@ -82,6 +82,42 @@ describe("SafeCommandService", () => {
     });
   });
 
+  test("rejects a matching state event when both command IDs exist and differ", async () => {
+    const store = readyDeviceStore();
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: {
+        executeDeviceAction: vi.fn(async () => {
+          store.observe(
+            received(
+              deviceEventFrame(
+                "on",
+                "2026-08-25T00:00:01Z",
+                "switch",
+                "dev_001",
+                "identifier_switch",
+                "other-command"
+              )
+            )
+          );
+          return {
+            state: "ACCEPTED" as const,
+            transport: "advanced" as const,
+            acceptedAtMs: Date.now(),
+            commandId: "expected-command"
+          };
+        })
+      },
+      timeoutMs: 10,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute(command("on", "request_command_id"))).rejects.toMatchObject({
+      code: "command_confirmation_timeout"
+    });
+  });
+
   test("confirms numeric state with bounded device rounding tolerance", async () => {
     const store = readyDeviceStore();
     observeDeviceDetails(store, [
@@ -2525,7 +2561,8 @@ function deviceEventFrame(
   eventTime: string,
   attribute = "switch",
   deviceId = "dev_001",
-  capability = "identifier_switch"
+  capability = "identifier_switch",
+  commandId?: string
 ): string {
   return `42${JSON.stringify([
     "api/subscription DEVICE_EVENT",
@@ -2540,7 +2577,8 @@ function deviceEventFrame(
           capability,
           attribute,
           value,
-          unit: null
+          unit: null,
+          ...(commandId ? { command_id: commandId } : {})
         }
       }
     }

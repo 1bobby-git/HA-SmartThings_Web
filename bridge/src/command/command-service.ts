@@ -312,6 +312,7 @@ export class SafeCommandService {
         throw commandError(error);
       }
     }
+    let receiptCommandId: string | undefined;
     const wait = effective.command === "refresh"
       ? waitForRefreshCommand({
           devices: this.options.devices,
@@ -333,12 +334,17 @@ export class SafeCommandService {
           desired,
           afterSequence: snapshot.sequence,
           stabilityMs: this.options.confirmationStabilityMs ?? 0,
-          resync: () => this.options.resync({ deviceId: effective.targetId })
+          resync: () => this.options.resync({ deviceId: effective.targetId }),
+          ...(state?.updatedAt ? { minimumEventTime: state.updatedAt } : {}),
+          expectedCommandId: () => receiptCommandId
         });
     let executionResult: void | CommandTransportReceipt | "location_native" | "dom";
     try {
       if (!this.options.executor.executeDeviceAction) throw new SafeCommandError("command_execution_failed");
       executionResult = await this.options.executor.executeDeviceAction(executionInput);
+      if (executionResult && typeof executionResult === "object") {
+        receiptCommandId = executionResult.commandId;
+      }
     } catch (error) {
       wait.cancel();
       throw commandError(error);
@@ -524,7 +530,7 @@ function findState(device: BridgeDevice, component: string, capability: string, 
 
 type CommandResync = () => Promise<CommandResyncEvidence | undefined>;
 
-function waitForState(options: { devices: DeviceStore; request: SafeCommandRequest; attribute: string; desired: BridgeJsonValue | undefined; afterSequence: number; stabilityMs: number; resync: CommandResync }): ConfirmationWait {
+function waitForState(options: { devices: DeviceStore; request: SafeCommandRequest; attribute: string; desired: BridgeJsonValue | undefined; afterSequence: number; stabilityMs: number; resync: CommandResync; minimumEventTime?: string; expectedCommandId?: () => string | undefined }): ConfirmationWait {
   const snapshotMatches = () => {
     if (options.desired === undefined) return false;
     const device = options.devices
@@ -561,7 +567,19 @@ function waitForState(options: { devices: DeviceStore; request: SafeCommandReque
         event.state.attribute === options.attribute &&
         !stateValuesEqual(event.state.value, options.desired)) ||
         (event.type === "inventory" && !snapshotMatches())),
-    matchesSnapshot: snapshotMatches
+    matchesSnapshot: snapshotMatches,
+    acceptsEvidence: (evidence) => {
+      if (evidence.source !== "event") return true;
+      if (
+        options.minimumEventTime &&
+        evidence.eventTime &&
+        Date.parse(evidence.eventTime) <= Date.parse(options.minimumEventTime)
+      ) {
+        return false;
+      }
+      const expectedCommandId = options.expectedCommandId?.();
+      return !expectedCommandId || !evidence.commandId || expectedCommandId === evidence.commandId;
+    }
   });
 }
 
@@ -703,9 +721,11 @@ interface ConfirmationWait {
 interface ConfirmationEvidence {
   sequence: number;
   source: "event" | "inventory_snapshot";
+  eventTime?: string;
+  commandId?: string;
 }
 
-function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: CommandResync; matches: (event: BridgeDeviceStoreEvent) => boolean; invalidates?: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean; acceptsResyncEvidence?: (evidence: CommandResyncEvidence | undefined, minStartedAtMs?: number) => boolean; stabilityMs?: number }): ConfirmationWait {
+function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: CommandResync; matches: (event: BridgeDeviceStoreEvent) => boolean; invalidates?: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean; acceptsResyncEvidence?: (evidence: CommandResyncEvidence | undefined, minStartedAtMs?: number) => boolean; acceptsEvidence?: (evidence: ConfirmationEvidence) => boolean; stabilityMs?: number }): ConfirmationWait {
   let settled = false;
   let interactionComplete = false;
   let unsubscribe: () => void = () => undefined;
@@ -713,6 +733,7 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
   let resyncTimer: NodeJS.Timeout | undefined;
   let stabilityTimer: NodeJS.Timeout | undefined;
   let resyncPromise: Promise<void> | undefined;
+  let lastResyncStartedAfterSequence: number | undefined;
   let pendingEvidence: ConfirmationEvidence | undefined;
   let rejectResult: (error: SafeCommandError) => void = () => undefined;
   let resolveResult: (evidence: ConfirmationEvidence) => void = () => undefined;
@@ -726,6 +747,10 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
   };
   const resolvePending = () => {
     if (settled || !interactionComplete || !pendingEvidence) return;
+    if (options.acceptsEvidence?.(pendingEvidence) === false) {
+      pendingEvidence = undefined;
+      return;
+    }
     if ((options.stabilityMs ?? 0) > 0) {
       if (stabilityTimer) clearTimeout(stabilityTimer);
       stabilityTimer = setTimeout(() => {
@@ -757,12 +782,16 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
       if (!options.matches(event)) return;
       pendingEvidence = {
         sequence: event.sequence,
-        source: event.type === "inventory" ? "inventory_snapshot" : "event"
+        source: event.type === "inventory" ? "inventory_snapshot" : "event",
+        ...(event.type === "state" && event.eventTime ? { eventTime: event.eventTime } : {}),
+        ...(event.type === "state" && event.commandId ? { commandId: event.commandId } : {})
       };
       resolvePending();
     });
   });
-  const settleFromSnapshot = async (): Promise<boolean> => {
+  const settleFromSnapshot = async (
+    minimumSequence = options.afterSequence
+  ): Promise<boolean> => {
     if (settled || options.matchesSnapshot?.() !== true) return settled;
     const stabilityMs = Math.max(0, options.stabilityMs ?? 0);
     if (stabilityMs > 0) {
@@ -770,7 +799,7 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
       if (settled || options.matchesSnapshot?.() !== true) return settled;
     }
     const sequence = options.devices.snapshot().sequence;
-    if (sequence <= options.afterSequence) return false;
+    if (sequence <= minimumSequence) return false;
     cleanup();
     resolveResult({ sequence, source: "inventory_snapshot" });
     return true;
@@ -786,12 +815,13 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
   };
   const resyncAndCheck = (minStartedAtMs?: number): Promise<void> => {
     if (!resyncPromise) {
+      lastResyncStartedAfterSequence = options.devices.currentSequence();
       resyncPromise = options
         .resync()
         .catch(() => undefined)
         .then(async (evidence) => {
           if (settleFromResyncEvidence(evidence, minStartedAtMs)) return;
-          await settleFromSnapshot();
+          await settleFromSnapshot(lastResyncStartedAfterSequence);
         });
     }
     return resyncPromise;
@@ -817,8 +847,10 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
       timer = setTimeout(() => {
         timer = undefined;
         const finalCheck = hasEarlyResync
-          ? settleFromSnapshot()
-          : resyncAndCheck(minResyncStartedAtMs).then(() => settleFromSnapshot());
+          ? settleFromSnapshot(lastResyncStartedAfterSequence ?? options.afterSequence)
+          : resyncAndCheck(minResyncStartedAtMs).then(() =>
+              settleFromSnapshot(lastResyncStartedAfterSequence ?? options.afterSequence)
+            );
         void finalCheck.then((confirmedBySnapshot) => {
           if (settled || confirmedBySnapshot) return;
           cleanup();

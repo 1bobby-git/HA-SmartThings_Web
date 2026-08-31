@@ -8,6 +8,42 @@ import type { SanitizedCaptureRecord } from "../../src/state/capture-store.js";
 import { DeviceStore } from "../../src/state/device-store.js";
 
 describe("DeviceStore", () => {
+  test("deduplicates repeated event IDs before applying or publishing state", () => {
+    const store = new DeviceStore();
+    const listener = vi.fn();
+    store.subscribe(listener);
+    const eventFrame = (value: string, eventTime: string) =>
+      receivedFrame(
+        `42${JSON.stringify([
+          "api/subscription DEVICE_EVENT",
+          {
+            data: {
+              event_type: "DEVICE_EVENT",
+              device_event: {
+                event_id: "event_same_001",
+                event_time: eventTime,
+                device_id: "dev_001",
+                location_id: "loc_001",
+                component: "main",
+                capability: "identifier_contactSensor",
+                attribute: "contact",
+                value,
+                state_change: true
+              }
+            }
+          }
+        ])}`
+      );
+
+    store.observe(eventFrame("open", "2026-08-31T00:00:01Z"));
+    store.observe(eventFrame("closed", "2026-08-31T00:00:02Z"));
+
+    expect(
+      store.snapshot().devices[0]?.states.find((state) => state.attribute === "contact")?.value
+    ).toBe("open");
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
   test("applies a live event with an omitted component and epoch-millisecond timestamp", () => {
     const store = new DeviceStore();
     observeSnapshotState(store, {
@@ -191,7 +227,7 @@ describe("DeviceStore", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
-  test("publishes every repeated button event even when value and timestamp match", () => {
+  test("deduplicates repeated button delivery with the same fallback identity", () => {
     const store = new DeviceStore();
     observeSnapshotState(store, {
       componentId: "identifier_component_main",
@@ -212,9 +248,9 @@ describe("DeviceStore", () => {
     store.observe(repeated);
     store.observe(repeated);
 
-    expect(store.snapshot().sequence).toBe(3);
-    expect(listener).toHaveBeenCalledTimes(2);
-    expect(listener.mock.calls.map(([event]) => event.sequence)).toEqual([2, 3]);
+    expect(store.snapshot().sequence).toBe(2);
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener.mock.calls.map(([event]) => event.sequence)).toEqual([2]);
   });
 
   test("rejects a live event without a valid updated timestamp", () => {

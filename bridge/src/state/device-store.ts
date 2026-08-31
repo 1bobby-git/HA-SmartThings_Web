@@ -1,5 +1,9 @@
 import type { SanitizedCaptureRecord } from "./capture-store.js";
 import { decodeSocketIoTextFrame } from "../inspector/socketio-decoder.js";
+import {
+  EventDeduplicator,
+  extractDeviceEventIdentity
+} from "../inspector/event-deduplicator.js";
 import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -109,6 +113,9 @@ export type BridgeDeviceStoreEvent =
       type: "state";
       deviceId: string;
       state: BridgeDeviceState;
+      eventId?: string;
+      eventTime?: string;
+      commandId?: string;
     };
 
 type Listener = (event: BridgeDeviceStoreEvent) => void;
@@ -179,6 +186,10 @@ export class DeviceStore {
   readonly #scenes = new Map<string, BridgeScene>();
   readonly #pending = new Map<string, PendingSnapshot>();
   readonly #listeners = new Set<Listener>();
+  readonly #eventDeduplicator = new EventDeduplicator({
+    ttlMs: 5 * 60_000,
+    maxEntries: 100_000
+  });
   readonly #normalizeStateToken: StateTokenNormalizer;
   readonly #normalizeAdvancedAlias: AdvancedAliasNormalizer;
   readonly #identifierRole: IdentifierRoleResolver;
@@ -273,6 +284,10 @@ export class DeviceStore {
       return;
     }
     if (decoded.kind === "event" && decoded.eventName === "api/subscription DEVICE_EVENT") {
+      const identity = extractDeviceEventIdentity(decoded.args[0]);
+      if (identity && this.#eventDeduplicator.observe(identity).duplicate) {
+        return;
+      }
       this.#applyDeviceEvent(decoded.args[0]);
       return;
     }
@@ -698,12 +713,19 @@ export class DeviceStore {
       return;
     }
     const sequence = this.#nextSequence();
+    const eventId = safeEventMetadata(event.event_id ?? event.eventId ?? data.event_id ?? data.eventId);
+    const commandId = safeEventMetadata(
+      event.command_id ?? event.commandId ?? data.command_id ?? data.commandId
+    );
     this.#publish({
       schemaVersion: 1,
       sequence,
       type: "state",
       deviceId,
-      state: cloneState(state)
+      state: cloneState(state),
+      ...(eventId ? { eventId } : {}),
+      ...(state.updatedAt ? { eventTime: state.updatedAt } : {}),
+      ...(commandId ? { commandId } : {})
     });
     this.#schedulePersist();
   }
@@ -1533,6 +1555,13 @@ function isBridgeStateSource(value: unknown): value is BridgeStateSource {
     "COMMAND_STATUS_RECHECK",
     "DOM_FALLBACK"
   ].includes(String(value));
+}
+
+function safeEventMetadata(value: unknown): string | undefined {
+  return typeof value === "string" && value.length >= 1 && value.length <= 256 &&
+    !/[\u0000-\u001f\u007f]/u.test(value)
+    ? value
+    : undefined;
 }
 
 function controlFromSwatch(row: Record<string, unknown>): BridgeDeviceControl | null {
