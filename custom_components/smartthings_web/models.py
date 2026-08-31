@@ -125,18 +125,21 @@ class BridgeInventory:
 class BridgeCommandResult:
     """Verified result returned by the local Bridge command endpoint."""
 
-    status: Literal["confirmed", "already_confirmed"]
+    status: Literal["confirmed", "already_confirmed", "accepted_unconfirmed"]
     sequence: int
     confirmation: Literal[
         "device_event",
         "inventory_snapshot",
         "current_state",
         "security_arm_state_event",
+        "accepted_receipt",
     ]
     transport: Literal[
         "smartthings_web_ui", "advanced", "location_native", "internal", "dom"
     ] = "smartthings_web_ui"
-    lifecycle: Literal["CONFIRMED_BY_EVENT", "CONFIRMED_BY_STATUS"] = (
+    lifecycle: Literal[
+        "CONFIRMED_BY_EVENT", "CONFIRMED_BY_STATUS", "ACCEPTED_UNCONFIRMED"
+    ] = (
         "CONFIRMED_BY_EVENT"
     )
 
@@ -1548,13 +1551,14 @@ def parse_command_result(
         or raw.get("clientRequestId") != client_request_id
         or transport
         not in {"smartthings_web_ui", "advanced", "location_native", "internal", "dom"}
-        or status not in {"confirmed", "already_confirmed"}
+        or status not in {"confirmed", "already_confirmed", "accepted_unconfirmed"}
         or confirmation
         not in {
             "device_event",
             "inventory_snapshot",
             "current_state",
             "security_arm_state_event",
+            "accepted_receipt",
         }
         or not isinstance(sequence, int)
         or isinstance(sequence, bool)
@@ -1570,11 +1574,18 @@ def parse_command_result(
             return None
     if status == "already_confirmed" and confirmation != "current_state":
         return None
-    expected_lifecycle = (
-        "CONFIRMED_BY_EVENT"
-        if confirmation in {"device_event", "security_arm_state_event"}
-        else "CONFIRMED_BY_STATUS"
-    )
+    if status == "accepted_unconfirmed":
+        if confirmation != "accepted_receipt" or target_type not in {None, "device"}:
+            return None
+        expected_lifecycle = "ACCEPTED_UNCONFIRMED"
+    else:
+        if confirmation == "accepted_receipt":
+            return None
+        expected_lifecycle = (
+            "CONFIRMED_BY_EVENT"
+            if confirmation in {"device_event", "security_arm_state_event"}
+            else "CONFIRMED_BY_STATUS"
+        )
     if lifecycle is not None and lifecycle != expected_lifecycle:
         return None
     return BridgeCommandResult(

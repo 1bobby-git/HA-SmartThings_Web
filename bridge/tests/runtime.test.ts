@@ -414,7 +414,7 @@ describe("createBridgeRuntime", () => {
     ).toBe(true);
   });
 
-  test("confirms refresh commands from authoritative Advanced resync evidence", async () => {
+  test("accepts stateless refresh without inventing a persistent confirmation state", async () => {
     const root = createTempRoot();
     const keeper = new FakePage("https://my.smartthings.com/location/raw-location-001");
     keeper.advancedSnapshots = [
@@ -518,7 +518,11 @@ describe("createBridgeRuntime", () => {
 
     expect({ status: response.status, body: responseBody }).toMatchObject({
       status: 200,
-      body: { status: "confirmed", confirmation: "inventory_snapshot" }
+      body: {
+        status: "accepted_unconfirmed",
+        confirmation: "accepted_receipt",
+        lifecycle: "ACCEPTED_UNCONFIRMED"
+      }
     });
     expect(keeper.evaluate).toHaveBeenCalled();
   });

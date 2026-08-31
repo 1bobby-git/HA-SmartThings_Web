@@ -695,7 +695,11 @@ describe("SafeCommandService", () => {
       controlId: "identifier_track",
       controlLabel: "Track control",
       capability: "identifier_mediaTrackControl"
-    }))).resolves.toMatchObject({ status: "confirmed" });
+    }))).resolves.toMatchObject({
+      status: "accepted_unconfirmed",
+      confirmation: "accepted_receipt",
+      lifecycle: "ACCEPTED_UNCONFIRMED"
+    });
     expect(executor.executeDeviceAction).toHaveBeenCalledWith(expect.objectContaining({
       command: "nextTrack",
       controlId: "identifier_track",
@@ -1238,7 +1242,7 @@ describe("SafeCommandService", () => {
     expect(resync).toHaveBeenCalledTimes(1);
   });
 
-  test("confirms refresh without caller-supplied component metadata from any newer device state", async () => {
+  test("accepts refresh without caller-supplied component metadata or a persistent state", async () => {
     const store = readyDeviceStore();
     observeRefreshControl(store);
     const service = new SafeCommandService({
@@ -1259,10 +1263,13 @@ describe("SafeCommandService", () => {
       command: "refresh",
       arguments: [],
       clientRequestId: "request_018"
-    })).resolves.toMatchObject({ status: "confirmed" });
+    })).resolves.toMatchObject({
+      status: "accepted_unconfirmed",
+      confirmation: "accepted_receipt"
+    });
   });
 
-  test("confirms refresh from the bounded post-command authoritative snapshot", async () => {
+  test("does not run an Advanced resync merely to confirm stateless refresh", async () => {
     const store = readyDeviceStore();
     observeRefreshControl(store);
     const resync = vi.fn(async () => ({ authoritativeSnapshot: true, startedAtMs: Date.now() }));
@@ -1276,15 +1283,13 @@ describe("SafeCommandService", () => {
     });
 
     await expect(service.execute(refreshCommand("request_refresh_snapshot"))).resolves.toMatchObject({
-      status: "confirmed",
-      confirmation: "inventory_snapshot"
+      status: "accepted_unconfirmed",
+      confirmation: "accepted_receipt"
     });
-    expect(resync).toHaveBeenCalledTimes(1);
+    expect(resync).not.toHaveBeenCalled();
   });
 
-  test("rejects refresh snapshot evidence that started before browser execution completed", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
+  test("does not consult stale snapshot evidence for stateless refresh", async () => {
     const store = readyDeviceStore();
     observeRefreshControl(store);
     const resync = vi.fn(async () => ({
@@ -1295,29 +1300,20 @@ describe("SafeCommandService", () => {
       devices: store,
       status: connectedStatus(),
       executor: {
-        executeDeviceAction: vi.fn(async () => {
-          vi.setSystemTime(2_000);
-        })
+        executeDeviceAction: vi.fn(async () => undefined)
       },
       timeoutMs: 10,
       resyncAfterMs: 0,
       resync
     });
 
-    try {
-      const result = service.execute(refreshCommand("request_refresh_stale_snapshot"));
-      const rejected = expect(result).rejects.toMatchObject({
-        code: "command_confirmation_timeout"
-      });
-      await vi.advanceTimersByTimeAsync(11);
-      await rejected;
-      expect(resync).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(
+      service.execute(refreshCommand("request_refresh_stale_snapshot"))
+    ).resolves.toMatchObject({ status: "accepted_unconfirmed" });
+    expect(resync).not.toHaveBeenCalled();
   });
 
-  test("keeps generic press commands on newer device-event confirmation only", async () => {
+  test("returns accepted-unconfirmed for a stateless press without waiting for a state", async () => {
     const store = readyDeviceStore();
     observeDeviceDetails(store, [
       detailSwatch("BUTTON", "button", {
@@ -1331,7 +1327,13 @@ describe("SafeCommandService", () => {
     const service = new SafeCommandService({
       devices: store,
       status: connectedStatus(),
-      executor: { executeDeviceAction: vi.fn(async () => undefined) },
+      executor: {
+        executeDeviceAction: vi.fn(async () => ({
+          state: "ACCEPTED" as const,
+          transport: "advanced" as const,
+          acceptedAtMs: Date.now()
+        }))
+      },
       timeoutMs: 10,
       resyncAfterMs: 0,
       resync
@@ -1341,8 +1343,13 @@ describe("SafeCommandService", () => {
       attribute: "button",
       arguments: [],
       controlId: "identifier_button001"
-    }))).rejects.toMatchObject({ code: "command_confirmation_timeout" });
-    expect(resync).toHaveBeenCalledTimes(1);
+    }))).resolves.toMatchObject({
+      status: "accepted_unconfirmed",
+      confirmation: "accepted_receipt",
+      lifecycle: "ACCEPTED_UNCONFIRMED",
+      transport: "advanced"
+    });
+    expect(resync).not.toHaveBeenCalled();
   });
 
   test.each([
@@ -1503,7 +1510,7 @@ describe("SafeCommandService", () => {
     ["failed", async () => {
       throw new Error("advanced_snapshot_unavailable");
     }]
-  ])("times out when refresh resync is %s", async (_name, resyncImpl) => {
+  ])("does not depend on %s refresh resync for a stateless receipt", async (_name, resyncImpl) => {
     const store = readyDeviceStore();
     observeRefreshControl(store);
     const resync = vi.fn(resyncImpl);
@@ -1516,10 +1523,10 @@ describe("SafeCommandService", () => {
       resync
     });
 
-    await expect(service.execute(refreshCommand("request_refresh_resync_fail"))).rejects.toMatchObject({
-      code: "command_confirmation_timeout"
-    });
-    expect(resync).toHaveBeenCalledTimes(1);
+    await expect(
+      service.execute(refreshCommand("request_refresh_resync_fail"))
+    ).resolves.toMatchObject({ status: "accepted_unconfirmed" });
+    expect(resync).not.toHaveBeenCalled();
   });
 
   test("does not resync or confirm refresh when browser execution fails", async () => {

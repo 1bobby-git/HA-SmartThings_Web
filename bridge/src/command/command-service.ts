@@ -30,11 +30,19 @@ export interface SafeCommandRequest {
 export interface SafeCommandResult {
   schemaVersion: 1;
   clientRequestId: string;
-  status: "confirmed" | "already_confirmed";
+  status: "confirmed" | "already_confirmed" | "accepted_unconfirmed";
   sequence: number;
   transport: "smartthings_web_ui" | CommandTransportName;
-  confirmation: "device_event" | "inventory_snapshot" | "security_arm_state_event" | "current_state";
-  lifecycle: "CONFIRMED_BY_EVENT" | "CONFIRMED_BY_STATUS";
+  confirmation:
+    | "device_event"
+    | "inventory_snapshot"
+    | "security_arm_state_event"
+    | "current_state"
+    | "accepted_receipt";
+  lifecycle:
+    | "CONFIRMED_BY_EVENT"
+    | "CONFIRMED_BY_STATUS"
+    | "ACCEPTED_UNCONFIRMED";
 }
 
 type DeviceActionCommand =
@@ -248,6 +256,40 @@ export class SafeCommandService {
     const desired = matchAny ? undefined : desiredValueFor(effective.command, effective.arguments, state);
     if (!matchAny && desired === undefined) throw new SafeCommandError("invalid_arguments");
     if (state && desired !== undefined && stateValuesEqual(state.value, desired)) return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
+    const roomName = device.roomId ? snapshot.rooms.find((room) => room.id === device.roomId)?.name : undefined;
+    const executionInput: DeviceActionExecutionInput = {
+      action: effective.command,
+      arguments: effective.arguments,
+      attribute,
+      capability: effective.capability,
+      command: effective.command as DeviceActionCommand,
+      component: effective.component,
+      deviceId: effective.targetId,
+      deviceName: device.name,
+      locationId: device.locationId,
+      locationNames,
+      ...(roomName ? { roomName } : {}),
+      ...(effective.controlId ? { controlId: effective.controlId } : {}),
+      ...(effective.controlLabel ? { controlLabel: effective.controlLabel } : {}),
+      ...(effective.optionLabel ? { optionLabel: effective.optionLabel } : {}),
+      ...(effective.optionCommand ? { optionCommand: effective.optionCommand } : {}),
+      ...(effective.nativeCommand ? { nativeCommand: effective.nativeCommand } : {})
+    };
+    if (isStatelessCommand(effective.command)) {
+      try {
+        if (!this.options.executor.executeDeviceAction) {
+          throw new SafeCommandError("command_execution_failed");
+        }
+        const receipt = await this.options.executor.executeDeviceAction(executionInput);
+        return acceptedUnconfirmed(
+          effective.clientRequestId,
+          snapshot.sequence,
+          transportForExecution(receipt)
+        );
+      } catch (error) {
+        throw commandError(error);
+      }
+    }
     const wait = effective.command === "refresh"
       ? waitForRefreshCommand({
           devices: this.options.devices,
@@ -271,28 +313,10 @@ export class SafeCommandService {
           stabilityMs: this.options.confirmationStabilityMs ?? 0,
           resync: this.options.resync
         });
-    const roomName = device.roomId ? snapshot.rooms.find((room) => room.id === device.roomId)?.name : undefined;
     let executionResult: void | CommandTransportReceipt | "location_native" | "dom";
     try {
       if (!this.options.executor.executeDeviceAction) throw new SafeCommandError("command_execution_failed");
-      executionResult = await this.options.executor.executeDeviceAction({
-        action: effective.command,
-        arguments: effective.arguments,
-        attribute,
-        capability: effective.capability,
-        command: effective.command as DeviceActionCommand,
-        component: effective.component,
-        deviceId: effective.targetId,
-        deviceName: device.name,
-        locationId: device.locationId,
-        locationNames,
-        ...(roomName ? { roomName } : {}),
-        ...(effective.controlId ? { controlId: effective.controlId } : {}),
-        ...(effective.controlLabel ? { controlLabel: effective.controlLabel } : {}),
-        ...(effective.optionLabel ? { optionLabel: effective.optionLabel } : {}),
-        ...(effective.optionCommand ? { optionCommand: effective.optionCommand } : {}),
-        ...(effective.nativeCommand ? { nativeCommand: effective.nativeCommand } : {})
-      });
+      executionResult = await this.options.executor.executeDeviceAction(executionInput);
     } catch (error) {
       wait.cancel();
       throw commandError(error);
@@ -1448,12 +1472,32 @@ function confirmed(
   };
 }
 
+function acceptedUnconfirmed(
+  clientRequestId: string,
+  sequence: number,
+  transport: SafeCommandResult["transport"]
+): SafeCommandResult {
+  return {
+    schemaVersion: 1,
+    clientRequestId,
+    status: "accepted_unconfirmed",
+    sequence,
+    transport,
+    confirmation: "accepted_receipt",
+    lifecycle: "ACCEPTED_UNCONFIRMED"
+  };
+}
+
 function transportForExecution(
   result: void | CommandTransportReceipt | "location_native" | "dom"
 ): SafeCommandResult["transport"] {
   if (result === "location_native" || result === "dom") return result;
   if (result && typeof result === "object") return result.transport;
   return "smartthings_web_ui";
+}
+
+function isStatelessCommand(command: string): boolean {
+  return ["refresh", "press", "nextTrack", "previousTrack"].includes(command);
 }
 
 function commandError(error: unknown): SafeCommandError {

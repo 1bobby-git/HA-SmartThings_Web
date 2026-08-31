@@ -1894,6 +1894,26 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertEqual(result.transport, "advanced")
         self.assertEqual(result.lifecycle, "CONFIRMED_BY_EVENT")
 
+    def test_command_result_accepts_stateless_advanced_receipt_without_state_confirmation(self) -> None:
+        result = parse_command_result(
+            {
+                "schemaVersion": 1,
+                "clientRequestId": "request_stateless_123",
+                "status": "accepted_unconfirmed",
+                "sequence": 45,
+                "transport": "advanced",
+                "confirmation": "accepted_receipt",
+                "lifecycle": "ACCEPTED_UNCONFIRMED",
+            },
+            "request_stateless_123",
+            "device",
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.status, "accepted_unconfirmed")
+        self.assertEqual(result.confirmation, "accepted_receipt")
+        self.assertEqual(result.lifecycle, "ACCEPTED_UNCONFIRMED")
+
     def test_command_result_rejects_wrong_request_or_unverified_confirmation(self) -> None:
         base = {
             "schemaVersion": 1,
