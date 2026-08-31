@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.146
+
+- 동일 Chromium 로그인 세션의 Advanced 내부 경로를 전체 장치·location·room·초기 상태·health·capability의 주 데이터 소스로 전환하고, 200개 이후 페이지를 끝까지 병합합니다.
+- 장치 명령을 Advanced direct → Location native → 검증된 내부 경로 → DOM fallback 순서로 처리하며, 미지원 외 오류에서는 다음 경로를 실행하지 않습니다.
+- stateful 명령은 push 또는 status 재조회로 확인하고, stateless 명령은 `ACCEPTED_UNCONFIRMED`로 구분해 낙관적 상태 변경을 막습니다.
+- Socket.IO 복구 후 첫 수신 프레임에서 Advanced 전체 reconciliation을 실행하고, 기존 entity/config/device identity를 유지합니다.
+- `smartthings_web.execute_command` 서비스, 고급 옵션, Advanced/command aggregate diagnostics를 추가하며 cookie·token·CSRF·원본 ID는 계속 차단합니다.
+
 ## 0.1.145
 
 - Give primary control entities a mapped device icon even when SmartThings artwork is also available, so the control area retains a stable device-specific visual while Refresh keeps its dedicated settings icon.
