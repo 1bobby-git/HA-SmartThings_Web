@@ -118,6 +118,7 @@ def _device(*, with_control: bool) -> tuple[BridgeDevice, BridgeState]:
                 component=switch.component,
                 capability=switch.capability,
                 attribute=switch.attribute,
+                commands=("on", "off"),
             )
         )
     return (
@@ -175,6 +176,7 @@ def _multi_component_switch_device(
         ("switch3", "switch3"),
         ("switch4", "switch4"),
     ),
+    controlled_components: tuple[str, ...] = ("main",),
 ) -> BridgeDevice:
     states = [
         BridgeState(
@@ -188,6 +190,19 @@ def _multi_component_switch_device(
         )
         for component, role in components
     ]
+    controls = {
+        f"action:{state.component}:{state.capability}:switch": BridgeControl(
+            f"action:{state.component}:{state.capability}:switch",
+            "toggle",
+            "Power",
+            component=state.component,
+            capability=state.capability,
+            attribute=state.attribute,
+            commands=("on", "off"),
+        )
+        for state in states
+        if state.component in controlled_components
+    }
     return BridgeDevice(
         "dev_multiswitch",
         "loc_001",
@@ -196,6 +211,7 @@ def _multi_component_switch_device(
         "switch",
         True,
         states={state.key: state for state in states},
+        controls=controls,
     )
 
 
@@ -215,7 +231,7 @@ def _runtime(device: BridgeDevice, client: object) -> SmartThingsWebRuntime:
 class SmartThingsWebSwitchTests(unittest.IsolatedAsyncioTestCase):
     """Keep domain classification separate from observed write controls."""
 
-    async def test_setup_adds_primary_switch_from_pushed_state_without_control(self) -> None:
+    async def test_setup_omits_switch_state_without_exact_toggle(self) -> None:
         device, _state = _device(with_control=False)
         runtime = _runtime(device, object())
         entry = SimpleNamespace(
@@ -226,19 +242,9 @@ class SmartThingsWebSwitchTests(unittest.IsolatedAsyncioTestCase):
 
         await async_setup_entry(object(), entry, added.extend)
 
-        self.assertEqual(len(added), 1)
-        self.assertEqual(
-            added[0]._attr_unique_id,
-            "dev_560_identifier_cd4f3cfbf2aa_identifier_74292182f118_switch",
-        )
-        self.assertTrue(added[0].available)
-        self.assertFalse(added[0].is_on)
-        self.assertEqual(
-            added[0].extra_state_attributes,
-            {"smartthings_raw_value": "off"},
-        )
+        self.assertEqual(added, [])
 
-    async def test_setup_names_secondary_switch_components_without_dropping_states(self) -> None:
+    async def test_setup_exposes_only_the_component_with_an_exact_toggle(self) -> None:
         device = _multi_component_switch_device()
         runtime = _runtime(device, object())
         entry = SimpleNamespace(
@@ -249,24 +255,12 @@ class SmartThingsWebSwitchTests(unittest.IsolatedAsyncioTestCase):
 
         await async_setup_entry(object(), entry, added.extend)
 
-        self.assertEqual(len(added), 4)
-        names_by_component = {
-            entity.state_key[0]: getattr(entity, "_attr_name", None)
-            for entity in added
-        }
-        self.assertEqual(
-            names_by_component,
-            {
-                "main": None,
-                "switch2": "스위치 2",
-                "switch3": "스위치 3",
-                "switch4": "스위치 4",
-            },
-        )
+        self.assertEqual([entity.state_key[0] for entity in added], ["main"])
 
-    async def test_setup_names_single_secondary_switch_component(self) -> None:
+    async def test_setup_keeps_secondary_switch_with_its_own_exact_toggle(self) -> None:
         device = _multi_component_switch_device(
-            (("main", "main"), ("switch2", "switch2"))
+            (("main", "main"), ("switch2", "switch2")),
+            ("main", "switch2"),
         )
         runtime = _runtime(device, object())
         entry = SimpleNamespace(
@@ -296,7 +290,8 @@ class SmartThingsWebSwitchTests(unittest.IsolatedAsyncioTestCase):
                 ("main", "main"),
                 ("identifier_b", "identifier_role_b"),
                 ("identifier_a", "identifier_role_a"),
-            )
+            ),
+            ("main", "identifier_a", "identifier_b"),
         )
         runtime = _runtime(device, object())
         entry = SimpleNamespace(

@@ -104,7 +104,13 @@ if hasattr(package, "button"):
     delattr(package, "button")
 
 from smartthings_web.button import SmartThingsWebButton, async_setup_entry  # noqa: E402
-from smartthings_web.models import BridgeControl, BridgeDevice, BridgeInventory, SmartThingsWebRuntime  # noqa: E402
+from smartthings_web.models import (  # noqa: E402
+    BridgeControl,
+    BridgeDevice,
+    BridgeInventory,
+    BridgeState,
+    SmartThingsWebRuntime,
+)
 
 
 class _FakeEntry:
@@ -181,6 +187,46 @@ class ButtonDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(added[0]._attr_translation_key, "refresh")
         self.assertEqual(added[0]._attr_suggested_object_id, "window_sensor_refresh")
         self.assertEqual(added[0].entity_id, "button.window_sensor_refresh")
+
+    async def test_component_refresh_controls_expose_one_main_button(self) -> None:
+        controls = {
+            f"advanced:refresh:{component}:identifier_refresh": BridgeControl(
+                f"advanced:refresh:{component}:identifier_refresh",
+                "button",
+                "Refresh",
+                component=component,
+                capability="identifier_refresh",
+                attribute="refresh",
+                commands=("refresh",),
+            )
+            for component in ("switch2", "switch4", "switch3", "main")
+        }
+        main_state = BridgeState(
+            "main",
+            "identifier_switch",
+            "switch",
+            "off",
+            None,
+            None,
+            component_role="main",
+        )
+        device = BridgeDevice(
+            "dev_151",
+            "loc_001",
+            None,
+            "거실 간접등",
+            "switch",
+            True,
+            states={main_state.key: main_state},
+            controls=controls,
+        )
+        runtime = self._bootstrap_runtime(device)
+        added: list[SmartThingsWebButton] = []
+
+        await async_setup_entry(object(), _FakeEntry(runtime), added.extend)
+
+        self.assertEqual(len(added), 1)
+        self.assertEqual(added[0].control.component, "main")
 
     async def test_refresh_button_is_a_config_entity_with_refresh_icon(self) -> None:
         control = BridgeControl(

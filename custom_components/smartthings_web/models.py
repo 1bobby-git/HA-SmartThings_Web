@@ -464,6 +464,13 @@ def control_kind(device: BridgeDevice, switch_state: BridgeState) -> ControlKind
         return None
     if is_readonly_appliance_switch(device):
         return None
+    toggle = toggle_control_for_state(device, switch_state)
+    if (
+        toggle is None
+        or not safe_observed_control(toggle)
+        or not safe_generic_toggle_control(toggle)
+    ):
+        return None
     attributes = {
         state.attribute
         for state in device.states.values()
@@ -1125,21 +1132,58 @@ def select_control_for_state(
     return matches[0] if len(matches) == 1 else None
 
 
-def refresh_controls(device: BridgeDevice) -> list[BridgeControl]:
-    """Return refresh button controls discovered from detail swatches."""
-    return [
+def canonical_refresh_control(device: BridgeDevice) -> BridgeControl | None:
+    """Return the one device-level Refresh control exposed to Home Assistant."""
+    candidates = [
         control
         for control in device.controls.values()
         if _is_observed_refresh_control(control)
+    ]
+    if not candidates:
+        return None
+    main_components = {
+        state.component
+        for state in device.states.values()
+        if (state.component_role or "").strip().lower() == "main"
+    }
+    return min(
+        candidates,
+        key=lambda control: (
+            control.component not in main_components,
+            control.component or "",
+            control.control_id,
+        ),
+    )
+
+
+def refresh_controls(device: BridgeDevice) -> list[BridgeControl]:
+    """Return at most one canonical device-level Refresh control."""
+    control = canonical_refresh_control(device)
+    return [] if control is None else [control]
+
+
+def noncanonical_refresh_controls(device: BridgeDevice) -> list[BridgeControl]:
+    """Return observed component Refresh controls hidden behind the canonical one."""
+    canonical = canonical_refresh_control(device)
+    return [
+        control
+        for control in device.controls.values()
+        if _is_observed_refresh_control(control) and control != canonical
     ]
 
 
 def button_controls(device: BridgeDevice) -> list[BridgeControl]:
     """Return non-value button controls discovered from detail swatches."""
+    canonical_refresh = canonical_refresh_control(device)
     return [
         control
         for control in device.controls.values()
-        if control.kind == "button" and safe_observed_control(control)
+        if control.kind == "button"
+        and safe_observed_control(control)
+        and (
+            not _is_observed_refresh_control(control)
+            or control == canonical_refresh
+        )
     ]
 
 

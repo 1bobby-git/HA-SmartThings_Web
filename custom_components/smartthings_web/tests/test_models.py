@@ -533,6 +533,17 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             updated_at="2026-08-24T21:10:00Z",
         )
         device.states = {switch.key: switch}
+        device.controls = {
+            "action:main:switch": BridgeControl(
+                "action:main:switch",
+                "toggle",
+                "Power",
+                component=switch.component,
+                capability=switch.capability,
+                attribute=switch.attribute,
+                commands=("on", "off"),
+            )
+        }
 
         self.assertEqual(control_kind(device, switch), "switch")
 
@@ -612,6 +623,17 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             updated_at="2026-08-24T21:10:00Z",
         )
         device.states = {switch.key: switch, color_range.key: color_range}
+        device.controls = {
+            "action:main:switch": BridgeControl(
+                "action:main:switch",
+                "toggle",
+                "Power",
+                component=switch.component,
+                capability=switch.capability,
+                attribute=switch.attribute,
+                commands=("on", "off"),
+            )
+        }
 
         self.assertEqual(control_kind(device, switch), "light")
 

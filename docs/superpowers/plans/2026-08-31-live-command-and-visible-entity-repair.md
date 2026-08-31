@@ -199,7 +199,7 @@ Not-tested: HAOS physical commands."
 - Modify: `custom_components/smartthings_web/tests/test_switch.py`
 - Modify: `custom_components/smartthings_web/tests/test_button.py`
 
-- [ ] **Step 1: Replace wrong switch expectations with failing safety tests**
+- [x] **Step 1: Replace wrong switch expectations with failing safety tests**
 
 In `test_switch.py`, replace the state-only creation test with:
 
@@ -255,7 +255,7 @@ async def test_component_refresh_controls_expose_one_main_button(self) -> None:
     self.assertEqual(added[0].control.component, "main")
 ```
 
-- [ ] **Step 2: Verify the new tests fail**
+- [x] **Step 2: Verify the new tests fail**
 
 Run:
 
@@ -266,7 +266,7 @@ python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_
 
 Expected: the state-only and four-component fixtures create too many entities.
 
-- [ ] **Step 3: Require an exact reversible toggle in `control_kind()`**
+- [x] **Step 3: Require an exact reversible toggle in `control_kind()`**
 
 In `models.py`, after the dangerous-domain checks in `control_kind()` add:
 
@@ -282,7 +282,7 @@ if (
 
 Keep the existing light-vs-switch classification after this gate. `switch.py` then discovers only exact controls without a second policy branch.
 
-- [ ] **Step 4: Canonicalize Refresh controls**
+- [x] **Step 4: Canonicalize Refresh controls**
 
 In `models.py`, add:
 
@@ -328,7 +328,7 @@ def button_controls(device: BridgeDevice) -> list[BridgeControl]:
     ]
 ```
 
-- [ ] **Step 5: Run focused Python tests**
+- [x] **Step 5: Run focused Python tests**
 
 ```powershell
 python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_switch.py'
@@ -338,7 +338,7 @@ python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_
 
 Expected: all focused tests pass.
 
-- [ ] **Step 6: Commit Task 2**
+- [x] **Step 6: Commit Task 2**
 
 ```powershell
 git add custom_components/smartthings_web/models.py custom_components/smartthings_web/switch.py custom_components/smartthings_web/button.py custom_components/smartthings_web/tests/test_models.py custom_components/smartthings_web/tests/test_switch.py custom_components/smartthings_web/tests/test_button.py
