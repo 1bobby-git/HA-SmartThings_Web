@@ -306,10 +306,9 @@ def _attach_visuals(entity: Entity, device: BridgeDevice) -> None:
     entity_picture = _entity_picture_for(device)
     if entity_picture is not None:
         entity._attr_entity_picture = entity_picture
-    else:
-        icon = _device_icon_for(device)
-        if icon is not None:
-            entity._attr_icon = icon
+    icon = _device_icon_for(device)
+    if icon is not None:
+        entity._attr_icon = icon
 
 
 def _offline_laundry_state_is_readable(device: BridgeDevice) -> bool:

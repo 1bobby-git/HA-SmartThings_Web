@@ -387,6 +387,13 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
             "어항",
             "air_purifier",
             True,
+            presentation=BridgeDevicePresentation(
+                icon_url=(
+                    "https://client.smartthings.com/icons/oneui/"
+                    "oic.d.airpurifier/on"
+                ),
+                asset_type="air_purifier",
+            ),
             states={state.key: state},
         )
         bathroom_fan = BridgeDevice(
@@ -433,6 +440,10 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(switch._attr_suggested_object_id, "eohang")
         self.assertEqual(switch.entity_id, "switch.eohang")
         self.assertEqual(switch._attr_icon, "mdi:air-purifier")
+        self.assertEqual(
+            switch._attr_entity_picture,
+            "https://client.smartthings.com/icons/oneui/oic.d.airpurifier/on",
+        )
         self.assertEqual(fan._attr_suggested_object_id, "hwanpunggi")
         self.assertEqual(fan.entity_id, "fan.hwanpunggi")
         self.assertEqual(

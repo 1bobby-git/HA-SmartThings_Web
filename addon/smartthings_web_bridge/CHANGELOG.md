@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.145
+
+- Give primary control entities a mapped device icon even when SmartThings artwork is also available, so the control area retains a stable device-specific visual while Refresh keeps its dedicated settings icon.
+
 ## 0.1.144
 
 - Keep the location-derived `Home` presence label stable across repeated registry migrations without accumulating duplicate suffixes.
