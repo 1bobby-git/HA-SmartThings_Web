@@ -21,10 +21,10 @@ import {
 } from "./advanced/capability-cache.js";
 import { AdvancedFirstCommandExecutor } from "./command/advanced-first-executor.js";
 import {
-  SafeCommandService,
   type CommandResyncEvidence,
   type CommandResyncRequest
 } from "./command/command-service.js";
+import { CommandConfirmationCoordinator } from "./command/command-confirmation.js";
 import {
   launchSmartThingsPersistentContext,
   type ChromiumLauncher
@@ -277,7 +277,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     advancedCommandExecutor,
     legacyCommandExecutor
   );
-  const commands = new SafeCommandService({
+  const commands = new CommandConfirmationCoordinator({
     devices,
     status,
     executor: commandExecutor,
