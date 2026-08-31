@@ -50,6 +50,9 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
         deviceId: input.deviceId,
         component: input.component,
         capability: input.capability,
+        ...(input.capabilityVersion === undefined
+          ? {}
+          : { capabilityVersion: input.capabilityVersion }),
         command: input.nativeCommand ?? input.optionCommand ?? input.command,
         arguments: input.arguments
       });

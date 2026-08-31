@@ -141,6 +141,7 @@ interface MutableDevice {
   presentation?: BridgeDevicePresentation;
   states: Map<string, BridgeDeviceState>;
   controls: Map<string, BridgeDeviceControl>;
+  capabilityVersions: Map<string, number>;
 }
 
 const SNAPSHOT_QUERIES = new Set<SnapshotQuery>([
@@ -308,6 +309,16 @@ export class DeviceStore {
 
   currentSequence(): number {
     return this.#sequence;
+  }
+
+  capabilityVersion(
+    deviceId: string,
+    component: string,
+    capability: string
+  ): number | undefined {
+    return this.#devices
+      .get(deviceId)
+      ?.capabilityVersions.get(`${component}\u0000${capability}`);
   }
 
   subscribe(listener: Listener): () => void {
@@ -540,6 +551,12 @@ export class DeviceStore {
       if (!id || !locationId) continue;
       if (observeRestoredPresence) this.#confirmRestoredDevice(id);
       const device = this.#ensureDevice(id, locationId);
+      for (const [key, version] of advancedCapabilityVersions(
+        row.components,
+        this.#normalizeAdvancedAlias
+      )) {
+        device.capabilityVersions.set(key, version);
+      }
       const nextName = safeName(
         row.label ?? row.name ?? row.deviceLabel ?? row.deviceName
       ) ?? device.name;
@@ -744,7 +761,8 @@ export class DeviceStore {
       online: true,
       healthUpdatedAt: null,
       states: new Map(),
-      controls: new Map()
+      controls: new Map(),
+      capabilityVersions: new Map()
     };
     this.#devices.set(id, created);
     return created;
@@ -878,7 +896,8 @@ export class DeviceStore {
         healthUpdatedAt: device.healthUpdatedAt ?? null,
         ...(device.presentation ? { presentation: { ...device.presentation } } : {}),
         states: new Map(device.states.map((state) => [stateKey(state), cloneState(state)])),
-        controls: new Map((device.controls ?? []).map((control) => [control.id, cloneControl(control)]))
+        controls: new Map((device.controls ?? []).map((control) => [control.id, cloneControl(control)])),
+        capabilityVersions: new Map()
       });
     }
   }
@@ -1284,6 +1303,42 @@ function advancedDeviceControls(
         commands: ["refresh"]
       });
       if (control) result.push(control);
+    }
+  }
+  return result;
+}
+
+function advancedCapabilityVersions(
+  value: unknown,
+  normalizeAdvancedAlias: AdvancedAliasNormalizer
+): Map<string, number> {
+  const result = new Map<string, number>();
+  if (!Array.isArray(value)) return result;
+  for (const componentValue of value) {
+    const componentRow = asRecord(componentValue);
+    const component = normalizedAdvancedId(
+      componentRow?.id ?? componentRow?.componentId,
+      "identifier",
+      normalizeAdvancedAlias
+    );
+    if (!component || !Array.isArray(componentRow?.capabilities)) continue;
+    for (const capabilityValue of componentRow.capabilities) {
+      const capabilityRow = asRecord(capabilityValue);
+      const capability = normalizedAdvancedId(
+        capabilityRow?.id ?? capabilityRow?.capabilityId,
+        "identifier",
+        normalizeAdvancedAlias
+      );
+      const version = capabilityRow?.version;
+      if (
+        !capability ||
+        typeof version !== "number" ||
+        !Number.isSafeInteger(version) ||
+        version < 0
+      ) {
+        continue;
+      }
+      result.set(`${component}\u0000${capability}`, version);
     }
   }
   return result;

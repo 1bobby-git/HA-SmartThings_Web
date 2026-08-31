@@ -64,4 +64,29 @@ describe("DeviceStore Advanced primary inventory", () => {
     expect(store.snapshot().devices).toHaveLength(1);
     expect(store.snapshot().devices[0]?.name).toBe("Safe plug");
   });
+
+  test("retains capability versions for command schema lookup without changing public IDs", () => {
+    const store = new DeviceStore();
+    store.observeAdvancedInventorySnapshot({
+      locations: [{ locationId: "loc_001", name: "Home" }],
+      rooms: [],
+      devices: [
+        {
+          deviceId: "dev_001",
+          locationId: "loc_001",
+          components: [
+            {
+              id: "identifier_main",
+              capabilities: [{ id: "identifier_switchLevel", version: 3 }],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(
+      store.capabilityVersion("dev_001", "identifier_main", "identifier_switchLevel")
+    ).toBe(3);
+    expect(store.snapshot().devices[0]?.id).toBe("dev_001");
+  });
 });

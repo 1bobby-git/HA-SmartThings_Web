@@ -82,6 +82,7 @@ export interface DeviceActionExecutionInput {
     arguments: BridgeJsonValue[];
     attribute: string;
     capability: string;
+    capabilityVersion?: number;
     command: DeviceActionCommand;
     component: string;
     deviceId: string;
@@ -268,11 +269,17 @@ export class SafeCommandService {
     if (!matchAny && desired === undefined) throw new SafeCommandError("invalid_arguments");
     if (state && desired !== undefined && stateValuesEqual(state.value, desired)) return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
     const roomName = device.roomId ? snapshot.rooms.find((room) => room.id === device.roomId)?.name : undefined;
+    const capabilityVersion = this.options.devices.capabilityVersion(
+      effective.targetId,
+      effective.component,
+      effective.capability
+    );
     const executionInput: DeviceActionExecutionInput = {
       action: effective.command,
       arguments: effective.arguments,
       attribute,
       capability: effective.capability,
+      ...(capabilityVersion === undefined ? {} : { capabilityVersion }),
       command: effective.command as DeviceActionCommand,
       component: effective.component,
       deviceId: effective.targetId,
