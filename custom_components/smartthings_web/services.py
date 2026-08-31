@@ -129,13 +129,28 @@ async def async_handle_refresh_device(hass: HomeAssistant, call: ServiceCall) ->
     runtime = _runtime_for_device(hass, device_id)
     if runtime is None:
         _raise_device_not_found()
+    device = runtime.inventory.devices[device_id]
+    controls = getattr(device, "controls", {})
+    refresh = next(
+        (
+            control
+            for control in controls.values()
+            if getattr(control, "command", None) == "refresh"
+            or "refresh" in getattr(control, "commands", ())
+        ),
+        None,
+    )
+    if refresh is None:
+        _raise_service_error("capability_not_found")
     await runtime.client.async_execute_command(
         target_type="device",
         target_id=device_id,
-        component="main",
-        capability="refresh",
+        component=refresh.component,
+        capability=refresh.capability,
         command="refresh",
         arguments=[],
+        control_id=refresh.control_id,
+        control_label=refresh.label,
         confirm=False,
         timeout=30,
     )
@@ -163,8 +178,12 @@ def _unique_clients(hass: HomeAssistant) -> list[Any]:
 
 
 def _raise_device_not_found() -> None:
+    _raise_service_error("device_not_found")
+
+
+def _raise_service_error(code: str) -> None:
     try:
         from homeassistant.exceptions import HomeAssistantError
     except ImportError:  # Minimal test environments do not ship Home Assistant.
         HomeAssistantError = RuntimeError
-    raise HomeAssistantError("device_not_found")
+    raise HomeAssistantError(code)

@@ -130,7 +130,22 @@ class SmartThingsWebServiceTests(unittest.IsolatedAsyncioTestCase):
         entry = SimpleNamespace(
             runtime_data=SimpleNamespace(
                 client=client,
-                inventory=SimpleNamespace(devices={"dev_001": object()}),
+                inventory=SimpleNamespace(
+                    devices={
+                        "dev_001": SimpleNamespace(
+                            controls={
+                                "identifier_refresh_control": SimpleNamespace(
+                                    control_id="identifier_refresh_control",
+                                    component="identifier_main",
+                                    capability="identifier_refresh",
+                                    command="refresh",
+                                    commands=("refresh",),
+                                    label="Refresh",
+                                )
+                            }
+                        )
+                    }
+                ),
             )
         )
         hass = SimpleNamespace(
@@ -148,10 +163,12 @@ class SmartThingsWebServiceTests(unittest.IsolatedAsyncioTestCase):
         client.async_execute_command.assert_awaited_once_with(
             target_type="device",
             target_id="dev_001",
-            component="main",
-            capability="refresh",
+            component="identifier_main",
+            capability="identifier_refresh",
             command="refresh",
             arguments=[],
+            control_id="identifier_refresh_control",
+            control_label="Refresh",
             confirm=False,
             timeout=30,
         )
