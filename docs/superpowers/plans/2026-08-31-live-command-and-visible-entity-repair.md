@@ -684,39 +684,39 @@ Not-tested: HAOS deployment and physical devices."
 **Files:**
 - Modify after evidence: `docs/advanced-primary-architecture-0.1.147-verification.md`
 
-- [ ] **Step 1: Review the branch before integration**
+- [x] **Step 1: Review the branch before integration**
 
 Run the required scoped cleanup and review gates. `ai-slop-cleaner` must inspect only changed files. `$code-review` must end with `APPROVE` and architect status `CLEAR`; otherwise record ultragoal review blockers and keep the Codex goal active.
 
-- [ ] **Step 2: Merge to main and push**
+- [x] **Step 2: Merge to main and push**
 
 From the primary checkout, merge `codex/live-command-visible-entity-repair` with a Lore-compliant merge commit. Confirm `HEAD == origin/main` after push and preserve unrelated untracked capture artifacts.
 
-- [ ] **Step 3: Package and publish HACS `v0.1.147`**
+- [x] **Step 3: Package and publish HACS `v0.1.147`**
 
 Build integration and add-on archives from the exact main SHA, calculate SHA-256 digests, create tag `v0.1.147`, publish the GitHub release, upload both archives, and confirm it is `Latest` and targets the exact merge SHA.
 
-- [ ] **Step 4: Back up and deploy exact artifacts to HAOS**
+- [x] **Step 4: Back up and deploy exact artifacts to HAOS**
 
 Back up `/mnt/data/supervisor/apps/local/smartthings_web_bridge`, `/mnt/data/supervisor/homeassistant/custom_components/smartthings_web`, and the affected Home Assistant registries. Upload the release archives through QGA, verify both archive hashes, atomically replace sources, reload the store, update the local app with a Supervisor backup, and restart Core/add-on as required.
 
-- [ ] **Step 5: Prove runtime identity before control**
+- [x] **Step 5: Prove runtime identity before control**
 
 Verify app/integration version `0.1.147`, runtime package-manifest SHA, `live=true`, `ready=true`, `CONNECTED`, `architectureVersion`, and two Home Assistant SSE connections. Stop if Samsung login/MFA is required.
 
-- [ ] **Step 6: Prove one switch action and restore its original state**
+- [x] **Step 6: Prove one switch action and restore its original state**
 
 Select a benign exact-toggle entity from the live inventory. Record its original Bridge and HA state. Call Home Assistant `switch.turn_on` or `switch.turn_off`, require a newer matching Location push and HA state, then restore the original state and require the reverse push. Do not use lock, valve, door, appliance safety, or aquarium-critical targets.
 
-- [ ] **Step 7: Prove one canonical button action**
+- [x] **Step 7: Prove one canonical button action**
 
 Press one canonical device Refresh button from Home Assistant. Require an accepted result through Web native and bounded authoritative refresh evidence. Confirm no duplicate component buttons exist for that device.
 
-- [ ] **Step 8: Prove registry and rendered UI**
+- [x] **Step 8: Prove registry and rendered UI**
 
 Read registry counts for `dev_151`, `dev_185`, and aliased `dev_602`. Require one living-room indirect-light switch, one Refresh button, one fireplace device card, and no stale secondary switches/buttons. Open the actual Home Assistant device pages and capture rendered evidence.
 
-- [ ] **Step 9: Record live evidence and push the final documentation commit**
+- [x] **Step 9: Record live evidence and push the final documentation commit**
 
 Update the `0.1.147` verification record with timestamps, exact SHA/version/hash, command lifecycle/transport, before/after state, registry counts, and UI evidence paths. Re-run the documentation gate and push the evidence commit.
 

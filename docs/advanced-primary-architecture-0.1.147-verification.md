@@ -55,16 +55,38 @@ canonicalization은 같은 location, room, 정규화 이름, type, owner를 공�
 
 ## 현재 검증 경계
 
-이 문서는 로컬 candidate 증거다. 다음 항목은 릴리스·HAOS 배포 후에만 완료로 기록한다.
+## HAOS 릴리스·배포 증거
 
-- exact main SHA와 GitHub `v0.1.147` asset hash
-- HAOS add-on/integration version과 runtime manifest hash
-- Home Assistant `switch.turn_on` 또는 `switch.turn_off` 실동작과 원상복구
-- 같은 command의 post-command Location push와 Home Assistant state 반영
-- canonical `button.press` 성공
-- `거실 간접등` main switch 하나와 Refresh 하나
-- `벽난로` device card 하나와 `dev_602` stale registry 제거
-- 실제 Home Assistant 렌더링 증거
-- Samsung login/MFA 안전 경계
+2026-09-01 KST live 실행:
 
-위 live 항목을 확인하기 전 production/physical 완료를 주장하지 않는다.
+- main merge SHA: `18711d6c0a5ca483a29463df8e467cf9b2248d83`
+- GitHub Latest release: `v0.1.147`
+- bridge asset SHA-256: `2f3459abf237c80d28d968fc812b12f689ef8cb712034614c43454a3a7ca9618`
+- integration asset SHA-256: `f81b1fa574727903c9b8521323948c01b69e175b2444309b354315bc2cff971c`
+- HAOS backup: `/mnt/data/ha-smartthings-web-backups/18711d6c0a5c-14e0ab39db2c`
+- add-on/integration version: `0.1.147`
+- runtime package manifest SHA-256: `14e0ab39db2c00fa1a99c39a524bbc2cc02a751b0d1425b38e441a5a5dc3b90e`
+- Bridge: `CONNECTED`, `ready=true`, `activeConnections=2`, `advanced-primary-v1`
+- Core: Home Assistant `2026.8.3`, 정상 재시작 완료
+
+## 실명령·realtime 증거
+
+`switch.geosil_ganjeobdeung`은 실행 전 HA와 Bridge 모두 `off`였다.
+
+- `switch.turn_on`: HA 서비스 성공, `2026-08-31T16:14:10.325Z`의 더 새로운 `LOCATION_EVENT`로 Bridge main state가 `on`, HA state가 `2026-08-31T16:14:10.514048Z`에 `on`으로 반영됐다.
+- command transport: `location_native`
+- confirmation: `CONFIRMED_BY_EVENT`
+- `switch.turn_off`: 같은 경로로 `2026-08-31T16:14:44.006Z` Bridge `off`, HA `2026-08-31T16:14:44.165665Z` `off`가 확인돼 원래 상태로 복구됐다.
+- `button.geosil_ganjeobdeung_refresh_4`: Home Assistant `button.press` HTTP 200, `2026-08-31T16:15:13.380569Z` pressed state, `location_native`, `ACCEPTED_UNCONFIRMED`으로 성공했다.
+
+route logs는 각 명령에 대해 `command_route:location_native:dispatch:attempt`, `command_diag:native_command_sent`, `command_route:location_native:receipt:accepted`를 기록했다. device/location/component/capability 원문이나 인증정보는 기록하지 않았다.
+
+## Registry·실화면 증거
+
+- `dev_151` 거실 간접등: device card 1개, control switch 1개, Refresh button 1개. `스위치 2/3/4`와 중복 Refresh는 registry에서 제거됐다.
+- rendered device page: 제어 영역에 `거실 간접등` toggle 1개, 기기 설정에 `새로고침` 1개가 표시된다. 활동 기록에 on, off, Refresh가 모두 표시된다.
+- 벽난로: canonical `dev_185` device card 1개만 남고 aliased `dev_602` card는 registry에서 제거됐다.
+- rendered 벽난로 page: Refresh 1개와 Local source의 최신 firmware `1.163.1`, online, color temperature `4,000 K`, hue `0`, level `1%`, saturation `0`가 한 카드에 표시된다.
+- 벽난로 switch는 exact 관찰 toggle이 없으므로 생성하지 않았다. 실행할 수 없는 control을 표시하지 않는 승인된 fail-closed 결과다.
+
+Samsung 세션은 모든 live 검증 동안 `CONNECTED/ready=true`였으며 CAPTCHA나 MFA 우회는 발생하지 않았다. 이번 오류 복구·실명령·realtime·registry/UI gate는 통과했다. 72시간 유휴 내구성, 모든 기기 유형, 장기 endpoint drift는 별도의 `DECISION: LIMITED` 범위로 남는다.
