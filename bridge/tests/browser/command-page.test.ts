@@ -140,7 +140,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       }
     );
 
-    await executor.executeDeviceAction({
+    await executor.executeLocationNative({
       action: "on",
       arguments: [],
       attribute: "switch",
@@ -198,7 +198,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       locationId: "loc_001"
     };
 
-    await executor.executeDeviceAction({
+    await executor.executeLocationNative({
       ...base,
       action: "on",
       command: "on",

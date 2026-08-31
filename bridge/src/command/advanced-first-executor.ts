@@ -8,11 +8,17 @@ import {
   type CommandTransport,
   type CommandTransportReceipt
 } from "./command-router.js";
+import {
+  DomFallbackAdapter,
+  LocationNativeCommandAdapter
+} from "./fallback-adapters.js";
 
 export interface LegacyWebCommandExecutor {
   executeDeviceAction(
     input: DeviceActionExecutionInput
   ): Promise<"location_native" | "dom" | void>;
+  executeLocationNative?(input: DeviceActionExecutionInput): Promise<void>;
+  executeDomFallback?(input: DeviceActionExecutionInput): Promise<void>;
   executeScene?: SafeCommandExecutor["executeScene"];
   executeLocationAction?: SafeCommandExecutor["executeLocationAction"];
 }
@@ -31,7 +37,30 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
   async executeDeviceAction(
     input: DeviceActionExecutionInput
   ): Promise<CommandTransportReceipt> {
-    const legacyTransport: CommandTransport = {
+    const routed = {
+      deviceId: input.deviceId,
+      component: input.component,
+      capability: input.capability,
+      ...(input.capabilityVersion === undefined
+        ? {}
+        : { capabilityVersion: input.capabilityVersion }),
+      command: input.nativeCommand ?? input.optionCommand ?? input.command,
+      arguments: input.arguments
+    };
+    const explicitFallbacks =
+      this.legacy.executeLocationNative && this.legacy.executeDomFallback
+        ? {
+            locationNative: new LocationNativeCommandAdapter(
+              async () => await this.legacy.executeLocationNative?.(input),
+              this.#now
+            ),
+            dom: new DomFallbackAdapter(
+              async () => await this.legacy.executeDomFallback?.(input),
+              this.#now
+            )
+          }
+        : undefined;
+    const legacyTransport: CommandTransport = explicitFallbacks?.locationNative ?? {
       name: "location_native",
       execute: async () => {
         const transport = (await this.legacy.executeDeviceAction(input)) ?? "location_native";
@@ -45,17 +74,11 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
     try {
       return await new OrderedCommandRouter({
         advanced: this.advanced,
-        locationNative: legacyTransport
-      }).execute({
-        deviceId: input.deviceId,
-        component: input.component,
-        capability: input.capability,
-        ...(input.capabilityVersion === undefined
-          ? {}
-          : { capabilityVersion: input.capabilityVersion }),
-        command: input.nativeCommand ?? input.optionCommand ?? input.command,
-        arguments: input.arguments
-      });
+        locationNative: legacyTransport,
+        ...(explicitFallbacks?.dom
+          ? { dom: explicitFallbacks.dom, domFallbackEnabled: true }
+          : {})
+      }).execute(routed);
     } catch (error) {
       if (error instanceof CommandTransportError) {
         if (error.code === "authentication") throw new Error("command_login_required");

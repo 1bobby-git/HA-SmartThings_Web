@@ -72,6 +72,40 @@ describe("AdvancedFirstCommandExecutor", () => {
     expect(fallback.executeDeviceAction).toHaveBeenCalledOnce();
   });
 
+  test("uses explicit Location native and DOM adapters in the required order", async () => {
+    const order: string[] = [];
+    const combined = vi.fn(async () => {
+      throw new Error("combined path must not run");
+    });
+    const fallback = {
+      executeDeviceAction: combined,
+      executeLocationNative: vi.fn(async () => {
+        order.push("location-native");
+        throw new Error("command_native_unavailable");
+      }),
+      executeDomFallback: vi.fn(async () => {
+        order.push("dom");
+      })
+    } as LegacyWebCommandExecutor & {
+      executeLocationNative: (input: typeof action) => Promise<void>;
+      executeDomFallback: (input: typeof action) => Promise<void>;
+    };
+    const executor = new AdvancedFirstCommandExecutor(
+      advanced(async () => {
+        order.push("advanced");
+        throw new CommandTransportError("unsupported", "advanced");
+      }),
+      fallback,
+      { now: () => 30 }
+    );
+
+    await expect(executor.executeDeviceAction(action)).resolves.toMatchObject({
+      transport: "dom"
+    });
+    expect(order).toEqual(["advanced", "location-native", "dom"]);
+    expect(combined).not.toHaveBeenCalled();
+  });
+
   test("does not invoke fallback after a non-unsupported Advanced error", async () => {
     const fallback = legacy();
     const executor = new AdvancedFirstCommandExecutor(
