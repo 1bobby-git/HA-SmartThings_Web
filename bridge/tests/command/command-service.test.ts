@@ -180,7 +180,8 @@ describe("SafeCommandService", () => {
       await vi.advanceTimersByTimeAsync(901);
 
       await rejected;
-      expect(resync).toHaveBeenCalledTimes(1);
+      expect(resync).toHaveBeenCalledOnce();
+      expect(resync).toHaveBeenCalledWith({ deviceId: "dev_001" });
     } finally {
       vi.useRealTimers();
     }
@@ -522,7 +523,8 @@ describe("SafeCommandService", () => {
         status: "confirmed",
         confirmation: "inventory_snapshot"
       });
-      expect(resync).toHaveBeenCalledTimes(1);
+      expect(resync).toHaveBeenCalledOnce();
+      expect(resync).toHaveBeenCalledWith({ deviceId: "dev_001" });
     } finally {
       vi.useRealTimers();
     }

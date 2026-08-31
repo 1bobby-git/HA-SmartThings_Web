@@ -22,7 +22,8 @@ import {
 import { AdvancedFirstCommandExecutor } from "./command/advanced-first-executor.js";
 import {
   SafeCommandService,
-  type CommandResyncEvidence
+  type CommandResyncEvidence,
+  type CommandResyncRequest
 } from "./command/command-service.js";
 import {
   launchSmartThingsPersistentContext,
@@ -140,7 +141,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   const redactor = createRedactor(aliases);
   const volatileIdentifiers = new VolatileIdentifierMap((kind, rawIdentifier) =>
     aliases.alias(kind, rawIdentifier)
-  );
+  , (rawIdentifier) => aliases.alias("location", rawIdentifier));
   log.info("bridge_init:capture_store");
   const captures = new CaptureStore(paths.sqlitePath);
   const devices = new DeviceStore({
@@ -209,12 +210,41 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       });
     }
   });
-  const refreshCommandSnapshot = (): Promise<CommandResyncEvidence> => {
+  const refreshCommandSnapshot = (
+    request?: CommandResyncRequest
+  ): Promise<CommandResyncEvidence> => {
     return (async () => {
       const startedAtMs = Date.now();
       const keeper = currentKeeperManager?.currentKeeper();
       if (!keeper || classifySmartThingsUrl(keeper.url()) !== "smartthings_location") {
         throw new Error("command_browser_unavailable");
+      }
+      if (request?.deviceId) {
+        const device = devices
+          .snapshot()
+          .devices.find((candidate) => candidate.id === request.deviceId);
+        const rawDeviceId = volatileIdentifiers.rawDeviceId(request.deviceId);
+        const rawLocationId = device
+          ? volatileIdentifiers.rawLocationId(device.locationId)
+          : undefined;
+        if (!device || !rawDeviceId || !rawLocationId) {
+          throw new Error("advanced_status_identifier_unavailable");
+        }
+        const statusPayload = await advancedInventory.getDeviceStatus(rawDeviceId);
+        const rawSnapshot = {
+          items: [
+            {
+              deviceId: rawDeviceId,
+              locationId: rawLocationId,
+              status: statusPayload
+            }
+          ]
+        };
+        volatileIdentifiers.observeRawAdvancedDeviceSnapshot(rawSnapshot);
+        devices.observeAdvancedDeviceSnapshot(redactor(rawSnapshot));
+        cameraImages.observeInventory(devices.snapshot());
+        log.info("command_diag:advanced_status_refreshed");
+        return { authoritativeSnapshot: false, startedAtMs };
       }
       await reconciliation.request("command_status");
       const reconciliationStatus = reconciliation.snapshot();

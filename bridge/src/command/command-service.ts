@@ -119,6 +119,10 @@ export interface CommandResyncEvidence {
   startedAtMs: number;
 }
 
+export interface CommandResyncRequest {
+  deviceId?: string;
+}
+
 export type SafeCommandErrorCode =
   | "invalid_body"
   | "unknown_key"
@@ -166,7 +170,7 @@ interface SafeCommandServiceOptions {
   timeoutMs: number;
   resyncAfterMs?: number;
   confirmationStabilityMs?: number;
-  resync: () => Promise<CommandResyncEvidence | undefined>;
+  resync: (request?: CommandResyncRequest) => Promise<CommandResyncEvidence | undefined>;
   onPendingCountChange?: (count: number) => void;
   onResult?: (result: SafeCommandResult) => void;
 }
@@ -313,14 +317,14 @@ export class SafeCommandService {
           devices: this.options.devices,
           deviceId: effective.targetId,
           afterSequence: snapshot.sequence,
-          resync: this.options.resync
+          resync: () => this.options.resync({ deviceId: effective.targetId })
         })
       : matchAny
         ? waitForAnyDeviceEvent({
             devices: this.options.devices,
             deviceId: effective.targetId,
             afterSequence: snapshot.sequence,
-            resync: this.options.resync
+            resync: () => this.options.resync({ deviceId: effective.targetId })
           })
       : waitForState({
           devices: this.options.devices,
@@ -329,7 +333,7 @@ export class SafeCommandService {
           desired,
           afterSequence: snapshot.sequence,
           stabilityMs: this.options.confirmationStabilityMs ?? 0,
-          resync: this.options.resync
+          resync: () => this.options.resync({ deviceId: effective.targetId })
         });
     let executionResult: void | CommandTransportReceipt | "location_native" | "dom";
     try {

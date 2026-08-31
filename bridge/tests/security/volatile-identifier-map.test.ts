@@ -7,7 +7,7 @@ describe("VolatileIdentifierMap", () => {
     const alias = vi.fn((kind: "device" | "identifier", raw: string) =>
       kind === "device" ? `dev_${raw}` : `identifier_${raw}`
     );
-    const identifiers = new VolatileIdentifierMap(alias);
+    const identifiers = new VolatileIdentifierMap(alias, (raw) => `loc_${raw}`);
 
     identifiers.observeRawWebSocketFrame(
       "received",
@@ -17,6 +17,7 @@ describe("VolatileIdentifierMap", () => {
           data: {
             device_event: {
               device_id: "raw-device",
+              location_id: "raw-location",
               component: "main",
               capability: "switch",
               attribute: "switch",
@@ -28,6 +29,7 @@ describe("VolatileIdentifierMap", () => {
     );
 
     expect(identifiers.rawDeviceId("dev_raw-device")).toBe("raw-device");
+    expect(identifiers.rawLocationId("loc_raw-location")).toBe("raw-location");
     expect(identifiers.rawDeviceId("dev_dev_raw-device")).toBe("raw-device");
     expect(identifiers.rawIdentifier("identifier_main")).toBe("main");
     expect(identifiers.rawIdentifier("identifier_switch")).toBe("switch");

@@ -424,6 +424,39 @@ describe("createBridgeRuntime", () => {
       lastCommandTransport: "advanced",
       lastCommandConfirmation: "CONFIRMED_BY_EVENT"
     });
+    keeper.onAdvancedCommand = undefined;
+    keeper.advancedStatusResponse = {
+      components: {
+        main: {
+          switch: {
+            switch: { value: "off", timestamp: "2026-08-25T00:00:02Z" }
+          }
+        }
+      }
+    };
+    const statusConfirmed = await fetch(`${baseUrl}/api/v1/commands`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({
+        deviceId: target?.id,
+        component: state?.component,
+        capability: state?.capability,
+        command: "off",
+        arguments: [],
+        clientRequestId: "request_haos_status_002"
+      })
+    });
+    await expect(statusConfirmed.json()).resolves.toMatchObject({
+      status: "confirmed",
+      confirmation: "inventory_snapshot",
+      lifecycle: "CONFIRMED_BY_STATUS",
+      transport: "advanced"
+    });
+    expect(
+      keeper.advancedRequestCalls.some((request) =>
+        String((request as { path?: unknown }).path).endsWith("/status")
+      )
+    ).toBe(true);
   });
 
   test("accepts stateless refresh without inventing a persistent confirmation state", async () => {
