@@ -443,7 +443,7 @@ Not-tested: Live Home Assistant registry and dashboards."
 - Modify: `custom_components/smartthings_web/bridge_client.py`
 - Modify: `custom_components/smartthings_web/tests/test_bridge_client.py`
 
-- [ ] **Step 1: Add metadata and alias model fields**
+- [x] **Step 1: Add metadata and alias model fields**
 
 Add to `models.py`:
 
@@ -493,7 +493,7 @@ if isinstance(device_id, str) and canonical_id != device_id:
 
 Merge `device_aliases` in `_apply_inventory()` and keep only aliases whose canonical device still exists.
 
-- [ ] **Step 2: Write duplicate identity tests**
+- [x] **Step 2: Write duplicate identity tests**
 
 Create `test_device_identity.py` with helpers that build Cloud `dev_185` and Local child `dev_602`. Add:
 
@@ -521,7 +521,7 @@ def test_does_not_merge_same_name_devices_without_strong_pair_evidence(self) -> 
 
 Also cover a third candidate, missing parent, same execution context, weak state overlap, and conflicting unique controls; all must remain separate.
 
-- [ ] **Step 3: Verify identity tests fail before implementation**
+- [x] **Step 3: Verify identity tests fail before implementation**
 
 ```powershell
 python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_device_identity.py'
@@ -529,7 +529,7 @@ python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_
 
 Expected: import failure because `device_identity.py` and metadata types do not exist.
 
-- [ ] **Step 4: Implement strong canonicalization**
+- [x] **Step 4: Implement strong canonicalization**
 
 Create `device_identity.py` with:
 
@@ -570,7 +570,7 @@ def canonicalize_duplicate_devices(
 
 `_strong_cloud_local_pair()` must require exactly two candidates, one `CLOUD`, one `LOCAL`, a Local parent, overlapping switch plus at least three light-state attributes, and no control ID unique to the Local candidate. `_merge_pair()` deep-copies the Cloud device, chooses newer states with parsed `updated_at`, retains the Cloud controls/public ID, sets `health_updated_at` to the newer value, and records the Local alias/parent metadata.
 
-- [ ] **Step 5: Parse metadata and canonicalize inventory**
+- [x] **Step 5: Parse metadata and canonicalize inventory**
 
 In `bridge_client.py`, parse only allowlisted Advanced fields:
 
@@ -593,7 +593,7 @@ devices = canonical.devices
 
 Pass `device_aliases=canonical.aliases` into `BridgeInventory`.
 
-- [ ] **Step 6: Run identity, client, runtime, and registry tests**
+- [x] **Step 6: Run identity, client, runtime, and registry tests**
 
 ```powershell
 python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_device_identity.py'
@@ -604,7 +604,7 @@ python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_
 
 Expected: all pass; aliased SSE events update the canonical device and stale duplicate rows are removable.
 
-- [ ] **Step 7: Commit Task 4**
+- [x] **Step 7: Commit Task 4**
 
 ```powershell
 git add custom_components/smartthings_web/device_identity.py custom_components/smartthings_web/models.py custom_components/smartthings_web/bridge_client.py custom_components/smartthings_web/tests/test_device_identity.py custom_components/smartthings_web/tests/test_bridge_client.py custom_components/smartthings_web/tests/test_models.py

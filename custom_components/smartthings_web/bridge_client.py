@@ -12,7 +12,9 @@ from uuid import uuid4
 from aiohttp import ClientError, ClientSession, ClientTimeout
 from yarl import URL
 
+from .device_identity import canonicalize_duplicate_devices
 from .models import (
+    BridgeAdvancedDeviceMetadata,
     BridgeCommandResult,
     BridgeDevice,
     BridgeInventory,
@@ -416,6 +418,8 @@ def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:
         room_id = item.get("roomId")
         device_type = item.get("type")
         presentation = parse_device_presentation(item.get("presentation"))
+        advanced = _parse_advanced_metadata(item.get("advanced"))
+        health_updated_at = item.get("healthUpdatedAt")
         devices[device_id] = BridgeDevice(
             device_id=device_id,
             location_id=location_id,
@@ -426,7 +430,15 @@ def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:
             presentation=presentation,
             states=states,
             controls=controls,
+            advanced=advanced,
+            health_updated_at=(
+                health_updated_at
+                if isinstance(health_updated_at, str)
+                and 0 < len(health_updated_at) <= 64
+                else None
+            ),
         )
+    canonical = canonicalize_duplicate_devices(devices)
     scenes = {}
     for item in raw.get("scenes", []):
         parsed_scene = parse_scene(item)
@@ -442,6 +454,36 @@ def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:
         protocol_version=protocol_version if isinstance(protocol_version, str) else "unknown",
         locations=locations,
         rooms=rooms,
-        devices=devices,
+        devices=canonical.devices,
         scenes=scenes,
+        device_aliases=canonical.aliases,
     )
+
+
+def _parse_advanced_metadata(raw: Any) -> BridgeAdvancedDeviceMetadata | None:
+    """Parse only the redacted identity fields needed for safe canonicalization."""
+    if not isinstance(raw, dict):
+        return None
+    owner_id = _safe_alias(raw.get("ownerId"), "identifier_")
+    parent_device_id = _safe_alias(raw.get("parentDeviceId"), "dev_")
+    execution_context = raw.get("executionContext")
+    if execution_context not in {"CLOUD", "LOCAL"}:
+        execution_context = None
+    if owner_id is None and parent_device_id is None and execution_context is None:
+        return None
+    return BridgeAdvancedDeviceMetadata(
+        owner_id=owner_id,
+        parent_device_id=parent_device_id,
+        execution_context=execution_context,
+    )
+
+
+def _safe_alias(value: Any, prefix: str) -> str | None:
+    if (
+        isinstance(value, str)
+        and value.startswith(prefix)
+        and 1 <= len(value) <= 256
+        and re.fullmatch(r"[A-Za-z0-9_.:-]+", value)
+    ):
+        return value
+    return None

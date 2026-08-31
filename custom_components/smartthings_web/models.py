@@ -44,6 +44,16 @@ class BridgeDevicePresentation:
     animation_url: str | None = None
 
 
+@dataclass(frozen=True)
+class BridgeAdvancedDeviceMetadata:
+    """Allowlisted Advanced identity metadata used for safe canonicalization."""
+
+    owner_id: str | None = None
+    parent_device_id: str | None = None
+    execution_context: str | None = None
+    linked_device_ids: tuple[str, ...] = ()
+
+
 @dataclass
 class BridgeDevice:
     """One Bridge device."""
@@ -57,6 +67,8 @@ class BridgeDevice:
     presentation: BridgeDevicePresentation | None = None
     states: dict[tuple[str, str, str], BridgeState] = field(default_factory=dict)
     controls: dict[str, "BridgeControl"] = field(default_factory=dict)
+    advanced: BridgeAdvancedDeviceMetadata | None = None
+    health_updated_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -119,6 +131,7 @@ class BridgeInventory:
     rooms: dict[str, tuple[str, str]]
     devices: dict[str, BridgeDevice]
     scenes: dict[str, BridgeScene] = field(default_factory=dict)
+    device_aliases: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -185,6 +198,10 @@ class SmartThingsWebRuntime:
 
     async def handle_event(self, event: dict[str, Any]) -> bool:
         """Apply one SSE event, resynchronizing on reconnects and gaps."""
+        device_id = event.get("deviceId")
+        canonical_id = self.inventory.device_aliases.get(device_id, device_id)
+        if isinstance(device_id, str) and canonical_id != device_id:
+            event = {**event, "deviceId": canonical_id}
         if event.get("type") == "image":
             return self.apply_image_event(event)
         if event.get("type") == "inventory":
@@ -311,6 +328,12 @@ class SmartThingsWebRuntime:
                 )
                 if authoritative
                 else _merge_scenes(current.scenes, latest.scenes)
+            ),
+            device_aliases=_merge_device_aliases(
+                current.device_aliases,
+                latest.device_aliases,
+                devices,
+                authoritative=authoritative,
             ),
         )
         if merged == current:
@@ -1871,6 +1894,22 @@ def _state_is_newer(candidate: BridgeState, current: BridgeState) -> bool:
     if candidate_time is None:
         return False
     return candidate_time > current_time
+
+
+def _merge_device_aliases(
+    current: dict[str, str],
+    latest: dict[str, str],
+    devices: dict[str, BridgeDevice],
+    *,
+    authoritative: bool,
+) -> dict[str, str]:
+    """Retain only aliases whose source is hidden and canonical target exists."""
+    merged = deepcopy(latest) if authoritative else {**current, **latest}
+    return {
+        alias: canonical
+        for alias, canonical in merged.items()
+        if alias not in devices and canonical in devices and alias != canonical
+    }
 
 
 def _merge_locations(

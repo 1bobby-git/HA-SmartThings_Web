@@ -521,6 +521,45 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertCountEqual(calls, ["global", "state_1", "device_1"])
 
+    def test_alias_state_event_updates_the_canonical_device(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        current.device_aliases = {"dev_602": "dev_001"}
+        runtime = SmartThingsWebRuntime(FakeClient(deepcopy(current)), "loc_001", current)
+        state = next(iter(current.devices["dev_001"].states.values()))
+
+        changed = asyncio.run(
+            runtime.handle_event({
+                "type": "state",
+                "sequence": 11,
+                "deviceId": "dev_602",
+                "state": {
+                    "component": state.component,
+                    "capability": state.capability,
+                    "attribute": state.attribute,
+                    "value": 81,
+                    "unit": state.unit,
+                    "updatedAt": "2026-08-24T21:11:00Z",
+                },
+            })
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            runtime.inventory.devices["dev_001"].states[state.key].value,
+            81,
+        )
+
+    def test_inventory_merge_retains_only_valid_canonical_aliases(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        current.device_aliases = {"dev_602": "dev_001", "dev_stale": "dev_missing"}
+        runtime = SmartThingsWebRuntime(FakeClient(), "loc_001", current)
+        latest = inventory(11, 21, "2026-08-24T21:11:00Z")
+        latest.device_aliases = {"dev_602": "dev_001"}
+
+        runtime.apply_inventory(latest)
+
+        self.assertEqual(runtime.inventory.device_aliases, {"dev_602": "dev_001"})
+
     def test_control_kind_keeps_plain_switches_out_of_binary_sensor_and_light(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")
         device = current.devices["dev_001"]
