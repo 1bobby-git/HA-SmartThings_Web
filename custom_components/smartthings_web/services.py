@@ -51,8 +51,6 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     if services is None:
         return
     has_service = getattr(services, "has_service", None)
-    if callable(has_service) and has_service(DOMAIN, SERVICE_EXECUTE_COMMAND):
-        return
     register = getattr(services, "async_register", None)
     if callable(register):
         registrations = (

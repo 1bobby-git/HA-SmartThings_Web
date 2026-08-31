@@ -118,6 +118,35 @@ describe("SafeCommandService", () => {
     });
   });
 
+  test("rejects a matching event that occurred before the Advanced command was sent", async () => {
+    const store = readyDeviceStore();
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: {
+        executeDeviceAction: vi.fn(async () => {
+          store.observe(
+            received(
+              deviceEventFrame("on", "2026-08-25T00:00:01Z")
+            )
+          );
+          return {
+            state: "ACCEPTED" as const,
+            transport: "advanced" as const,
+            sentAtMs: Date.parse("2026-08-25T00:00:02Z"),
+            acceptedAtMs: Date.parse("2026-08-25T00:00:03Z")
+          };
+        })
+      },
+      timeoutMs: 10,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute(command("on", "request_pre_send_event"))).rejects.toMatchObject({
+      code: "command_confirmation_timeout"
+    });
+  });
+
   test("confirms numeric state with bounded device rounding tolerance", async () => {
     const store = readyDeviceStore();
     observeDeviceDetails(store, [
@@ -161,6 +190,51 @@ describe("SafeCommandService", () => {
         })
       )
     ).resolves.toMatchObject({ status: "confirmed" });
+  });
+
+  test("passes a token-safe schema-driven command through without a hardcoded allowlist", async () => {
+    const store = readyDeviceStore();
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => {
+        store.observe(
+          received(
+            deviceEventFrame(
+              42,
+              "2026-08-25T00:00:01Z",
+              "detectionFrequency",
+              "dev_001",
+              "identifier_switch"
+            )
+          )
+        );
+      })
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        targetType: "device",
+        targetId: "dev_001",
+        component: "main",
+        capability: "identifier_switch",
+        attribute: "detectionFrequency",
+        command: "setDetectionFrequency",
+        arguments: [42],
+        clientRequestId: "request_dynamic_schema"
+      })
+    ).resolves.toMatchObject({ status: "confirmed" });
+    expect(executor.executeDeviceAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "setDetectionFrequency",
+        arguments: [42]
+      })
+    );
   });
 
   test("does not confirm a transient state that reverses before browser interaction completes", async () => {

@@ -67,6 +67,7 @@ describe("AdvancedFirstCommandExecutor", () => {
     await expect(executor.executeDeviceAction(action)).resolves.toEqual({
       state: "ACCEPTED",
       transport: "location_native",
+      sentAtMs: 20,
       acceptedAtMs: 20
     });
     expect(fallback.executeDeviceAction).toHaveBeenCalledOnce();

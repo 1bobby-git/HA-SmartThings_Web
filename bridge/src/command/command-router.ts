@@ -12,6 +12,7 @@ export type CommandTransportName = "advanced" | "location_native" | "internal" |
 export interface CommandTransportReceipt {
   state: "ACCEPTED";
   transport: CommandTransportName;
+  sentAtMs?: number;
   acceptedAtMs: number;
   commandId?: string;
 }

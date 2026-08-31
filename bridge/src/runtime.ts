@@ -739,60 +739,43 @@ async function attachContext(
 
   await keeperManager.reconcileRestoredPages();
 
-  let recoveryPromise: Promise<void> | undefined;
-  let lastRecoveryStartedAtMs = 0;
-  const realtime = new LocationRealtimeAdapter();
-  const recoverSmartThingsWebSocket = () => {
-    const now = Date.now();
-    if (
-      !canRecoverSocket() ||
-      recoveryPromise ||
-      now - lastRecoveryStartedAtMs < 1_000
-    ) {
-      return;
-    }
-    lastRecoveryStartedAtMs = now;
-    resetSnapshotSession();
-    status.update({
-      pushConnected: false,
-      parserHealthy: false,
-      initialSnapshotComplete: false,
-      lastSnapshotAtMs: undefined,
-      lastParserSuccessAtMs: undefined,
-      state: "RECONNECTING"
-    });
-    recoveryPromise = (async () => {
-      try {
-        const keeper = await keeperManager.recoverKeeper();
-        if (canRecoverSocket()) {
-          status.update({ keeperPresent: true, ...statusForKeeperUrl(keeper.url()) });
-          realtime.recoveryStarted();
-          const realtimeStatus = realtime.snapshot();
-          status.update({
-            reconnectCount: realtimeStatus.reconnectCount,
-            ...(realtimeStatus.lastReconnectAtMs === undefined
-              ? {}
-              : { lastReconnectAtMs: realtimeStatus.lastReconnectAtMs })
-          });
-        }
-      } catch {
-        log.warn("smartthings_websocket_recovery_failed");
-        const retry = setTimeout(
-          recoverSmartThingsWebSocket,
-          realtime.recoveryFailed()
-        );
-        retry.unref();
-      } finally {
-        recoveryPromise = undefined;
+  let realtime: LocationRealtimeAdapter;
+  realtime = new LocationRealtimeAdapter({
+    canRecover: canRecoverSocket,
+    onRecoveryAttempt: () => {
+      resetSnapshotSession();
+      status.update({
+        pushConnected: false,
+        parserHealthy: false,
+        initialSnapshotComplete: false,
+        lastSnapshotAtMs: undefined,
+        lastParserSuccessAtMs: undefined,
+        state: "RECONNECTING"
+      });
+    },
+    recover: async () => {
+      const keeper = await keeperManager.recoverKeeper();
+      if (canRecoverSocket()) {
+        status.update({ keeperPresent: true, ...statusForKeeperUrl(keeper.url()) });
       }
-    })();
-  };
+    },
+    onRecoveryFailed: () => log.warn("smartthings_websocket_recovery_failed"),
+    onRecovered: () => {
+      const realtimeStatus = realtime.snapshot();
+      status.update({
+        reconnectCount: realtimeStatus.reconnectCount,
+        ...(realtimeStatus.lastReconnectAtMs === undefined
+          ? {}
+          : { lastReconnectAtMs: realtimeStatus.lastReconnectAtMs })
+      });
+      onRealtimeRecovered();
+    }
+  });
+  const recoverSmartThingsWebSocket = () => realtime.requestRecovery();
   const observeSmartThingsWebSocketFrame = (direction: "sent" | "received") => {
     if (direction === "received" && canRecoverSocket()) {
       status.update({ lastPushAtMs: Date.now() });
-      if (realtime.observeFrame(direction)) {
-        onRealtimeRecovered();
-      }
+      realtime.observeFrame(direction);
     }
   };
 

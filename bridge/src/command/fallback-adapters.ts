@@ -16,11 +16,13 @@ export class LocationNativeCommandAdapter implements CommandTransport {
   ) {}
 
   async execute(request: RoutedCommandRequest): Promise<CommandTransportReceipt> {
+    const sentAtMs = this.now();
     try {
       await this.executeNative(request);
       return {
         state: "ACCEPTED",
         transport: "location_native",
+        sentAtMs,
         acceptedAtMs: this.now()
       };
     } catch (error) {
@@ -41,10 +43,12 @@ export class DomFallbackAdapter implements CommandTransport {
   ) {}
 
   async execute(request: RoutedCommandRequest): Promise<CommandTransportReceipt> {
+    const sentAtMs = this.now();
     await this.executeDom(request);
     return {
       state: "ACCEPTED",
       transport: "dom",
+      sentAtMs,
       acceptedAtMs: this.now()
     };
   }

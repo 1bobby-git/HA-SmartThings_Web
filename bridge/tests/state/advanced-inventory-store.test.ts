@@ -1,4 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { DeviceStore } from "../../src/state/device-store.js";
 
@@ -89,5 +92,85 @@ describe("DeviceStore Advanced primary inventory", () => {
       store.capabilityVersion("dev_001", "identifier_main", "identifier_switchLevel")
     ).toBe(3);
     expect(store.snapshot().devices[0]?.id).toBe("dev_001");
+  });
+
+  test("retains redacted Advanced relationship and classification metadata", () => {
+    const store = new DeviceStore();
+    store.observeAdvancedInventorySnapshot({
+      locations: [{ locationId: "loc_001", name: "Home" }],
+      rooms: [],
+      devices: [
+        {
+          deviceId: "dev_001",
+          locationId: "loc_001",
+          ownerId: "identifier_owner",
+          profileId: "identifier_profile",
+          presentationId: "identifier_presentation",
+          parentDeviceId: "dev_parent",
+          childDevices: [{ deviceId: "dev_child" }],
+          hubId: "dev_hub",
+          driverId: "identifier_driver",
+          executionContext: "LOCAL",
+          restricted: true,
+          deviceType: "GROUP",
+          preferences: { thermostatScale: "C", secretToken: "redacted" }
+        }
+      ]
+    });
+
+    expect(store.snapshot().devices[0]).toMatchObject({
+      id: "dev_001",
+      advanced: {
+        ownerId: "identifier_owner",
+        profileId: "identifier_profile",
+        presentationId: "identifier_presentation",
+        parentDeviceId: "dev_parent",
+        childDeviceIds: ["dev_child"],
+        hubId: "dev_hub",
+        driverId: "identifier_driver",
+        executionContext: "LOCAL",
+        restricted: true,
+        group: true,
+        preferenceKeys: ["secretToken", "thermostatScale"]
+      }
+    });
+  });
+
+  test("restores redacted Advanced metadata from normalized inventory persistence", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-advanced-metadata-"));
+    const sqlitePath = join(root, "bridge.sqlite");
+    let first: DeviceStore | undefined;
+    let second: DeviceStore | undefined;
+    try {
+      first = new DeviceStore({ sqlitePath });
+      first.observeAdvancedInventorySnapshot({
+        locations: [{ locationId: "loc_001", name: "Home" }],
+        rooms: [],
+        devices: [
+          {
+            deviceId: "dev_001",
+            locationId: "loc_001",
+            ownerId: "identifier_owner",
+            parentDeviceId: "dev_parent",
+            restricted: true
+          }
+        ]
+      });
+      first.close();
+      first = undefined;
+
+      second = new DeviceStore({ sqlitePath });
+      expect(second.snapshot().devices[0]?.advanced).toEqual({
+        ownerId: "identifier_owner",
+        parentDeviceId: "dev_parent",
+        restricted: true
+      });
+      second.close();
+      second = undefined;
+    } finally {
+      first?.close();
+      second?.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

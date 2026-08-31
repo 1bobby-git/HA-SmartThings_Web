@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { LocationRealtimeAdapter } from "../../src/realtime/location-realtime-adapter.js";
 
@@ -33,5 +33,33 @@ describe("LocationRealtimeAdapter", () => {
     adapter.recoveryStarted();
     expect(adapter.observeFrame("received")).toBe(true);
     expect(adapter.recoveryFailed()).toBe(1_000);
+  });
+
+  test("owns coalesced reconnect attempts and schedules retry after failure", async () => {
+    vi.useFakeTimers();
+    const recover = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("temporary"))
+      .mockResolvedValueOnce(undefined);
+    const failed = vi.fn();
+    const adapter = new LocationRealtimeAdapter({
+      recover,
+      canRecover: () => true,
+      onRecoveryFailed: failed
+    });
+    try {
+      adapter.requestRecovery();
+      adapter.requestRecovery();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(recover).toHaveBeenCalledOnce();
+      expect(failed).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(recover).toHaveBeenCalledTimes(2);
+      expect(adapter.snapshot().awaitingRecoveredFrame).toBe(true);
+    } finally {
+      adapter.stop();
+      vi.useRealTimers();
+    }
   });
 });

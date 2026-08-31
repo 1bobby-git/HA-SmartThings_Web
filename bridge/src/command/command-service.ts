@@ -267,7 +267,6 @@ export class SafeCommandService {
     validateCommandAttribute(effective.command, attribute, effective.controlId);
     const state = findState(device, effective.component, effective.capability, attribute);
     if (!state && !allowsMissingCurrentState(effective.command)) throw new SafeCommandError("capability_not_found");
-    if (!isSupportedDeviceCommand(effective.command)) throw new SafeCommandError("unsupported_command");
     const matchAny = confirmsAnyNewDeviceState(effective);
     const desired = matchAny ? undefined : desiredValueFor(effective.command, effective.arguments, state);
     if (!matchAny && desired === undefined) throw new SafeCommandError("invalid_arguments");
@@ -313,6 +312,7 @@ export class SafeCommandService {
       }
     }
     let receiptCommandId: string | undefined;
+    let advancedSentAtMs: number | undefined;
     const wait = effective.command === "refresh"
       ? waitForRefreshCommand({
           devices: this.options.devices,
@@ -335,7 +335,9 @@ export class SafeCommandService {
           afterSequence: snapshot.sequence,
           stabilityMs: this.options.confirmationStabilityMs ?? 0,
           resync: () => this.options.resync({ deviceId: effective.targetId }),
-          ...(state?.updatedAt ? { minimumEventTime: state.updatedAt } : {}),
+          minimumEventTimeMs: () =>
+            advancedSentAtMs ??
+            (state?.updatedAt ? Date.parse(state.updatedAt) : undefined),
           expectedCommandId: () => receiptCommandId
         });
     let executionResult: void | CommandTransportReceipt | "location_native" | "dom";
@@ -344,6 +346,9 @@ export class SafeCommandService {
       executionResult = await this.options.executor.executeDeviceAction(executionInput);
       if (executionResult && typeof executionResult === "object") {
         receiptCommandId = executionResult.commandId;
+        if (executionResult.transport === "advanced") {
+          advancedSentAtMs = executionResult.sentAtMs;
+        }
       }
     } catch (error) {
       wait.cancel();
@@ -491,7 +496,7 @@ function normalizeRequest(targetType: SafeCommandRequest["targetType"], targetId
     if (input.arguments.length !== 1 || typeof input.arguments[0] !== "number" || !Number.isFinite(input.arguments[0])) throw new SafeCommandError("invalid_arguments");
   } else if (input.command === "playTrackAndResume") {
     if (input.arguments.length !== 1 || typeof input.arguments[0] !== "string" || input.arguments[0].length < 1 || input.arguments[0].length > 2048 || /[\u0000-\u001f\u007f]/u.test(input.arguments[0])) throw new SafeCommandError("invalid_arguments");
-  } else if (input.arguments.length !== 0) {
+  } else if (isSupportedDeviceCommand(input.command) && input.arguments.length !== 0) {
     throw new SafeCommandError("invalid_arguments");
   }
   if (typeof input.clientRequestId !== "string" || !clientRequestPattern.test(input.clientRequestId)) throw new SafeCommandError("invalid_client_request_id");
@@ -530,7 +535,7 @@ function findState(device: BridgeDevice, component: string, capability: string, 
 
 type CommandResync = () => Promise<CommandResyncEvidence | undefined>;
 
-function waitForState(options: { devices: DeviceStore; request: SafeCommandRequest; attribute: string; desired: BridgeJsonValue | undefined; afterSequence: number; stabilityMs: number; resync: CommandResync; minimumEventTime?: string; expectedCommandId?: () => string | undefined }): ConfirmationWait {
+function waitForState(options: { devices: DeviceStore; request: SafeCommandRequest; attribute: string; desired: BridgeJsonValue | undefined; afterSequence: number; stabilityMs: number; resync: CommandResync; minimumEventTimeMs?: () => number | undefined; expectedCommandId?: () => string | undefined }): ConfirmationWait {
   const snapshotMatches = () => {
     if (options.desired === undefined) return false;
     const device = options.devices
@@ -570,10 +575,11 @@ function waitForState(options: { devices: DeviceStore; request: SafeCommandReque
     matchesSnapshot: snapshotMatches,
     acceptsEvidence: (evidence) => {
       if (evidence.source !== "event") return true;
+      const minimumEventTimeMs = options.minimumEventTimeMs?.();
       if (
-        options.minimumEventTime &&
+        minimumEventTimeMs !== undefined &&
         evidence.eventTime &&
-        Date.parse(evidence.eventTime) <= Date.parse(options.minimumEventTime)
+        Date.parse(evidence.eventTime) <= minimumEventTimeMs
       ) {
         return false;
       }

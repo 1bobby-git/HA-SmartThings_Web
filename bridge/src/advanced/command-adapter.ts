@@ -89,6 +89,7 @@ export class AdvancedCommandAdapter implements CommandTransport {
     };
     for (let attempt = 1; attempt <= this.#maxAttempts; attempt += 1) {
       try {
+        const sentAtMs = this.#now();
         return await this.options.session.request(
           {
             endpoint: "commands",
@@ -96,7 +97,7 @@ export class AdvancedCommandAdapter implements CommandTransport {
             path: advancedEndpoints.deviceCommands(deviceId),
             body
           },
-          (value) => parseReceipt(value, this.#now())
+          (value) => parseReceipt(value, sentAtMs, this.#now())
         );
       } catch (error) {
         const classified = classifyError(error);
@@ -127,7 +128,11 @@ export class AdvancedCommandAdapter implements CommandTransport {
   }
 }
 
-function parseReceipt(value: unknown, acceptedAtMs: number): CommandTransportReceipt {
+function parseReceipt(
+  value: unknown,
+  sentAtMs: number,
+  acceptedAtMs: number
+): CommandTransportReceipt {
   if (!isRecord(value) || !Array.isArray(value.results) || value.results.length === 0) {
     throw new AdvancedCommandError("response_invalid");
   }
@@ -143,6 +148,7 @@ function parseReceipt(value: unknown, acceptedAtMs: number): CommandTransportRec
   return {
     state: "ACCEPTED",
     transport: "advanced",
+    sentAtMs,
     acceptedAtMs,
     ...(commandId === undefined ? {} : { commandId })
   };

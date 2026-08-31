@@ -373,7 +373,7 @@ describe("createBridgeRuntime", () => {
           attribute: "switch",
           value: "on",
           stateChange: true,
-          eventTime: "2026-08-25T00:00:01Z"
+          eventTime: new Date(Date.now() + 1_000).toISOString()
         })
       });
     };
@@ -429,7 +429,10 @@ describe("createBridgeRuntime", () => {
       components: {
         main: {
           switch: {
-            switch: { value: "off", timestamp: "2026-08-25T00:00:02Z" }
+            switch: {
+              value: "off",
+              timestamp: new Date(Date.now() + 2_000).toISOString()
+            }
           }
         }
       }

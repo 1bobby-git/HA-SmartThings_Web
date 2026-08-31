@@ -65,10 +65,12 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
     const legacyTransport: CommandTransport = explicitFallbacks?.locationNative ?? {
       name: "location_native",
       execute: async () => {
+        const sentAtMs = this.#now();
         const transport = (await this.legacy.executeDeviceAction(input)) ?? "location_native";
         return {
           state: "ACCEPTED",
           transport,
+          sentAtMs,
           acceptedAtMs: this.#now()
         };
       }

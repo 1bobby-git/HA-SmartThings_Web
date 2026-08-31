@@ -32,10 +32,27 @@ from smartthings_web.services import (  # noqa: E402
     async_handle_reconnect_realtime,
     async_handle_reload_inventory,
     async_handle_refresh_device,
+    async_setup_services,
 )
 
 
 class SmartThingsWebServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_setup_registers_each_missing_service_independently(self) -> None:
+        registered: list[str] = []
+        services = SimpleNamespace(
+            has_service=lambda _domain, service: service == "execute_command",
+            async_register=lambda _domain, service, _handler, schema: registered.append(
+                service
+            ),
+        )
+
+        await async_setup_services(SimpleNamespace(services=services))
+
+        self.assertEqual(
+            registered,
+            ["reload_inventory", "refresh_device", "reconnect_realtime"],
+        )
+
     async def test_execute_command_routes_to_the_entry_that_owns_the_device(self) -> None:
         client = SimpleNamespace(async_execute_command=AsyncMock())
         runtime = SimpleNamespace(

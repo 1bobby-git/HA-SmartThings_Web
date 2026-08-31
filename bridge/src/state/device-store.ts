@@ -67,6 +67,20 @@ export interface BridgeDevicePresentation {
   animationUrl?: string;
 }
 
+export interface BridgeAdvancedDeviceMetadata {
+  ownerId?: string;
+  profileId?: string;
+  presentationId?: string;
+  parentDeviceId?: string;
+  childDeviceIds?: string[];
+  hubId?: string;
+  driverId?: string;
+  executionContext?: string;
+  restricted?: boolean;
+  group?: boolean;
+  preferenceKeys?: string[];
+}
+
 export interface BridgeDevice {
   id: string;
   locationId: string;
@@ -78,6 +92,7 @@ export interface BridgeDevice {
   presentation?: BridgeDevicePresentation;
   states: BridgeDeviceState[];
   controls?: BridgeDeviceControl[];
+  advanced?: BridgeAdvancedDeviceMetadata;
 }
 
 export interface BridgeScene {
@@ -157,6 +172,7 @@ interface MutableDevice {
   states: Map<string, BridgeDeviceState>;
   controls: Map<string, BridgeDeviceControl>;
   capabilityVersions: Map<string, number>;
+  advanced?: BridgeAdvancedDeviceMetadata;
 }
 
 const SNAPSHOT_QUERIES = new Set<SnapshotQuery>([
@@ -321,6 +337,7 @@ export class DeviceStore {
         online: device.online,
         ...(device.healthUpdatedAt ? { healthUpdatedAt: device.healthUpdatedAt } : {}),
         ...(device.presentation ? { presentation: { ...device.presentation } } : {}),
+        ...(device.advanced ? { advanced: cloneAdvancedMetadata(device.advanced) } : {}),
         states: snapshotDeviceStates(device).sort(byState).map(cloneState),
         ...(device.controls.size > 0
           ? { controls: [...device.controls.values()].sort(byId).map(cloneControl) }
@@ -587,6 +604,12 @@ export class DeviceStore {
       if (!id || !locationId) continue;
       if (observeRestoredPresence) this.#confirmRestoredDevice(id);
       const device = this.#ensureDevice(id, locationId);
+      const advanced = advancedDeviceMetadata(row, this.#normalizeAdvancedAlias);
+      if (JSON.stringify(device.advanced) !== JSON.stringify(advanced)) {
+        if (advanced) device.advanced = advanced;
+        else delete device.advanced;
+        changed = true;
+      }
       for (const [key, version] of advancedCapabilityVersions(
         row.components,
         this.#normalizeAdvancedAlias
@@ -941,7 +964,8 @@ export class DeviceStore {
         ...(device.presentation ? { presentation: { ...device.presentation } } : {}),
         states: new Map(device.states.map((state) => [stateKey(state), cloneState(state)])),
         controls: new Map((device.controls ?? []).map((control) => [control.id, cloneControl(control)])),
-        capabilityVersions: new Map()
+        capabilityVersions: new Map(),
+        ...(device.advanced ? { advanced: cloneAdvancedMetadata(device.advanced) } : {})
       });
     }
   }
@@ -1067,6 +1091,7 @@ function parsePersistedInventory(value: unknown): BridgeInventory | undefined {
         ? item?.healthUpdatedAt
         : validTimestamp(item.healthUpdatedAt);
     const presentation = devicePresentation(asRecord(item?.presentation));
+    const advanced = parseStoredAdvancedMetadata(item?.advanced);
     if (
       !id ||
       !locationId ||
@@ -1078,6 +1103,7 @@ function parsePersistedInventory(value: unknown): BridgeInventory | undefined {
         item.healthUpdatedAt !== null &&
         healthUpdatedAt === null) ||
       !Array.isArray(item.states)
+      || advanced === null
     ) {
       return undefined;
     }
@@ -1108,6 +1134,7 @@ function parsePersistedInventory(value: unknown): BridgeInventory | undefined {
         ? { healthUpdatedAt: healthUpdatedAt as string | null }
         : {}),
       ...(presentation ? { presentation } : {}),
+      ...(advanced ? { advanced } : {}),
       states,
       ...(controls.length > 0 ? { controls } : {})
     });
@@ -1395,6 +1422,104 @@ function advancedCapabilityVersions(
     }
   }
   return result;
+}
+
+function advancedDeviceMetadata(
+  row: Record<string, unknown>,
+  normalizeAdvancedAlias: AdvancedAliasNormalizer
+): BridgeAdvancedDeviceMetadata | undefined {
+  const ownerId = normalizedAdvancedId(
+    row.ownerId ?? row.owner_id,
+    "identifier",
+    normalizeAdvancedAlias
+  ) ?? undefined;
+  const profileId = normalizedAdvancedId(
+    row.profileId ?? row.deviceProfileId ?? row.profile_id,
+    "identifier",
+    normalizeAdvancedAlias
+  ) ?? undefined;
+  const presentationId = normalizedAdvancedId(
+    row.presentationId ?? asRecord(row.presentation)?.presentationId,
+    "identifier",
+    normalizeAdvancedAlias
+  ) ?? undefined;
+  const parentDeviceId = normalizedAdvancedId(
+    row.parentDeviceId ?? row.parent_device_id,
+    "device",
+    normalizeAdvancedAlias
+  ) ?? undefined;
+  const hubId = normalizedAdvancedId(
+    row.hubId ?? row.hubDeviceId ?? row.hub_id,
+    "device",
+    normalizeAdvancedAlias
+  ) ?? undefined;
+  const driverId = normalizedAdvancedId(
+    row.driverId ?? row.driver_id,
+    "identifier",
+    normalizeAdvancedAlias
+  ) ?? undefined;
+  const childRows = Array.isArray(row.childDevices)
+    ? row.childDevices
+    : Array.isArray(row.children)
+      ? row.children
+      : [];
+  const childDeviceIds = childRows
+    .map((value) => {
+      const child = asRecord(value);
+      return normalizedAdvancedId(
+        child?.deviceId ?? child?.id ?? value,
+        "device",
+        normalizeAdvancedAlias
+      );
+    })
+    .filter((value): value is string => value !== null)
+    .sort();
+  const executionContext = safeToken(readString(row.executionContext ?? row.execution_context))
+    ? readString(row.executionContext ?? row.execution_context) ?? undefined
+    : undefined;
+  const restricted =
+    typeof row.restricted === "boolean"
+      ? row.restricted
+      : typeof row.isRestricted === "boolean"
+        ? row.isRestricted
+        : undefined;
+  const rawType = readString(row.deviceType ?? row.type ?? row.deviceTypeName)?.toUpperCase();
+  const group =
+    typeof row.group === "boolean"
+      ? row.group
+      : typeof row.isGroup === "boolean"
+        ? row.isGroup
+        : rawType === "GROUP"
+          ? true
+          : undefined;
+  const preferences = asRecord(row.preferences);
+  const preferenceKeys = preferences
+    ? Object.keys(preferences).filter((key) => safeToken(key)).sort()
+    : [];
+  const metadata: BridgeAdvancedDeviceMetadata = {
+    ...(ownerId ? { ownerId } : {}),
+    ...(profileId ? { profileId } : {}),
+    ...(presentationId ? { presentationId } : {}),
+    ...(parentDeviceId ? { parentDeviceId } : {}),
+    ...(childDeviceIds.length > 0 ? { childDeviceIds } : {}),
+    ...(hubId ? { hubId } : {}),
+    ...(driverId ? { driverId } : {}),
+    ...(executionContext ? { executionContext } : {}),
+    ...(restricted === undefined ? {} : { restricted }),
+    ...(group === undefined ? {} : { group }),
+    ...(preferenceKeys.length > 0 ? { preferenceKeys } : {})
+  };
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
+function cloneAdvancedMetadata(
+  value: BridgeAdvancedDeviceMetadata
+): BridgeAdvancedDeviceMetadata {
+  return {
+    ...value,
+    ...(value.childDeviceIds ? { childDeviceIds: [...value.childDeviceIds] } : {}),
+    ...(value.preferenceKeys ? { preferenceKeys: [...value.preferenceKeys] } : {})
+  };
 }
 
 function advancedComponentRole(component: Record<string, unknown>): string | undefined {
@@ -2058,6 +2183,78 @@ function unwrapSceneTypedValue(value: unknown): unknown {
 function arrayOfDeviceIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => safeId(item, "dev")).filter((item): item is string => item !== null);
+}
+
+function parseStoredAdvancedMetadata(
+  value: unknown
+): BridgeAdvancedDeviceMetadata | undefined | null {
+  if (value === undefined) return undefined;
+  const row = asRecord(value);
+  if (!row) return null;
+  const optionalId = (
+    key: keyof BridgeAdvancedDeviceMetadata,
+    prefix: "dev" | "identifier"
+  ): string | undefined | null => {
+    const candidate = row[key];
+    return candidate === undefined ? undefined : safeId(candidate, prefix);
+  };
+  const ownerId = optionalId("ownerId", "identifier");
+  const profileId = optionalId("profileId", "identifier");
+  const presentationId = optionalId("presentationId", "identifier");
+  const parentDeviceId = optionalId("parentDeviceId", "dev");
+  const hubId = optionalId("hubId", "dev");
+  const driverId = optionalId("driverId", "identifier");
+  if ([ownerId, profileId, presentationId, parentDeviceId, hubId, driverId].includes(null)) {
+    return null;
+  }
+  const executionContext =
+    row.executionContext === undefined
+      ? undefined
+      : safeToken(readString(row.executionContext))
+        ? readString(row.executionContext) ?? undefined
+        : null;
+  if (executionContext === null) return null;
+  const restricted = row.restricted;
+  const group = row.group;
+  if (
+    (restricted !== undefined && typeof restricted !== "boolean") ||
+    (group !== undefined && typeof group !== "boolean")
+  ) {
+    return null;
+  }
+  const childDeviceIds = parseStoredIdArray(row.childDeviceIds, "dev");
+  const preferenceKeys = parseStoredTokenArray(row.preferenceKeys);
+  if (childDeviceIds === null || preferenceKeys === null) return null;
+  return {
+    ...(ownerId ? { ownerId } : {}),
+    ...(profileId ? { profileId } : {}),
+    ...(presentationId ? { presentationId } : {}),
+    ...(parentDeviceId ? { parentDeviceId } : {}),
+    ...(childDeviceIds ? { childDeviceIds } : {}),
+    ...(hubId ? { hubId } : {}),
+    ...(driverId ? { driverId } : {}),
+    ...(executionContext ? { executionContext } : {}),
+    ...(typeof restricted === "boolean" ? { restricted } : {}),
+    ...(typeof group === "boolean" ? { group } : {}),
+    ...(preferenceKeys ? { preferenceKeys } : {})
+  };
+}
+
+function parseStoredIdArray(
+  value: unknown,
+  prefix: "dev" | "identifier"
+): string[] | undefined | null {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return null;
+  const parsed = value.map((entry) => safeId(entry, prefix));
+  return parsed.some((entry) => !entry) ? null : parsed as string[];
+}
+
+function parseStoredTokenArray(value: unknown): string[] | undefined | null {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return null;
+  const parsed = value.map((entry) => readString(entry));
+  return parsed.some((entry) => !safeToken(entry)) ? null : parsed as string[];
 }
 
 function parseStoredSceneExpectedStates(value: unknown): BridgeSceneExpectedState[] {
