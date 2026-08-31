@@ -117,6 +117,70 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
   async #executeVerifiedWeb(
     input: DeviceActionExecutionInput
   ): Promise<CommandTransportReceipt> {
+    const executeLocationNative = this.legacy.executeLocationNative?.bind(this.legacy);
+    const executeDomFallback = this.legacy.executeDomFallback?.bind(this.legacy);
+    if (executeLocationNative && executeDomFallback) {
+      const sentAtMs = this.#now();
+      this.#diagnostic({
+        transport: "location_native",
+        stage: "dispatch",
+        outcome: "attempt"
+      });
+      try {
+        await executeLocationNative(input);
+        this.#diagnostic({
+          transport: "location_native",
+          stage: "receipt",
+          outcome: "accepted"
+        });
+        return {
+          state: "ACCEPTED",
+          transport: "location_native",
+          sentAtMs,
+          acceptedAtMs: this.#now()
+        };
+      } catch (error) {
+        this.#diagnostic({
+          transport: "location_native",
+          stage: "dispatch",
+          outcome: "failed",
+          code: safeCommandCode(error)
+        });
+        if (!(error instanceof Error) || error.message !== "command_native_unavailable") {
+          throw error;
+        }
+      }
+      if (!this.#domFallbackEnabled) {
+        throw new Error("command_control_not_found");
+      }
+      this.#diagnostic({
+        transport: "dom",
+        stage: "dispatch",
+        outcome: "attempt"
+      });
+      try {
+        await executeDomFallback(input);
+        this.#diagnostic({
+          transport: "dom",
+          stage: "receipt",
+          outcome: "accepted"
+        });
+        return {
+          state: "ACCEPTED",
+          transport: "dom",
+          sentAtMs,
+          acceptedAtMs: this.#now()
+        };
+      } catch (error) {
+        this.#diagnostic({
+          transport: "dom",
+          stage: "dispatch",
+          outcome: "failed",
+          code: safeCommandCode(error)
+        });
+        throw error;
+      }
+    }
     this.#diagnostic({
       transport: "location_native",
       stage: "dispatch",

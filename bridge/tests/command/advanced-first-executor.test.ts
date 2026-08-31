@@ -219,6 +219,60 @@ describe("AdvancedFirstCommandExecutor", () => {
     expect(JSON.stringify(diagnostics)).not.toContain("dev_001");
   });
 
+  test("keeps DOM disabled on the default verified Web path", async () => {
+    const fallback = {
+      executeDeviceAction: vi.fn(async () => {
+        throw new Error("combined path must not run");
+      }),
+      executeLocationNative: vi.fn(async () => {
+        throw new Error("command_native_unavailable");
+      }),
+      executeDomFallback: vi.fn(async () => undefined)
+    } as LegacyWebCommandExecutor;
+    const executor = new AdvancedFirstCommandExecutor(
+      advanced(async () => {
+        throw new Error("Advanced must not run");
+      }),
+      fallback,
+      { domFallbackEnabled: false }
+    );
+
+    await expect(executor.executeDeviceAction(action)).rejects.toThrow(
+      "command_control_not_found"
+    );
+    expect(fallback.executeLocationNative).toHaveBeenCalledOnce();
+    expect(fallback.executeDomFallback).not.toHaveBeenCalled();
+    expect(fallback.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test("uses verified DOM last when Location native is unavailable", async () => {
+    const order: string[] = [];
+    const fallback = {
+      executeDeviceAction: vi.fn(async () => {
+        throw new Error("combined path must not run");
+      }),
+      executeLocationNative: vi.fn(async () => {
+        order.push("location-native");
+        throw new Error("command_native_unavailable");
+      }),
+      executeDomFallback: vi.fn(async () => {
+        order.push("dom");
+      })
+    } as LegacyWebCommandExecutor;
+    const executor = new AdvancedFirstCommandExecutor(
+      advanced(async () => {
+        throw new Error("Advanced must not run");
+      }),
+      fallback
+    );
+
+    await expect(executor.executeDeviceAction(action)).resolves.toMatchObject({
+      transport: "dom"
+    });
+    expect(order).toEqual(["location-native", "dom"]);
+    expect(fallback.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
   test("keeps scenes and location actions on the existing verified executor", async () => {
     const fallback = legacy();
     const executor = new AdvancedFirstCommandExecutor(
