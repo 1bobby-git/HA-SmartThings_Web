@@ -34,6 +34,7 @@ export interface SafeCommandResult {
   sequence: number;
   transport: "smartthings_web_ui" | CommandTransportName;
   confirmation: "device_event" | "inventory_snapshot" | "security_arm_state_event" | "current_state";
+  lifecycle: "CONFIRMED_BY_EVENT" | "CONFIRMED_BY_STATUS";
 }
 
 type DeviceActionCommand =
@@ -1416,7 +1417,15 @@ function safeControlLabel(value: unknown): value is string {
 }
 
 function alreadyConfirmed(clientRequestId: string, sequence: number): SafeCommandResult {
-  return { schemaVersion: 1, clientRequestId, status: "already_confirmed", sequence, transport: "smartthings_web_ui", confirmation: "current_state" };
+  return {
+    schemaVersion: 1,
+    clientRequestId,
+    status: "already_confirmed",
+    sequence,
+    transport: "smartthings_web_ui",
+    confirmation: "current_state",
+    lifecycle: "CONFIRMED_BY_STATUS"
+  };
 }
 
 function confirmed(
@@ -1425,7 +1434,18 @@ function confirmed(
   confirmation: SafeCommandResult["confirmation"],
   transport: SafeCommandResult["transport"] = "smartthings_web_ui"
 ): SafeCommandResult {
-  return { schemaVersion: 1, clientRequestId, status: "confirmed", sequence, transport, confirmation };
+  return {
+    schemaVersion: 1,
+    clientRequestId,
+    status: "confirmed",
+    sequence,
+    transport,
+    confirmation,
+    lifecycle:
+      confirmation === "device_event" || confirmation === "security_arm_state_event"
+        ? "CONFIRMED_BY_EVENT"
+        : "CONFIRMED_BY_STATUS"
+  };
 }
 
 function transportForExecution(

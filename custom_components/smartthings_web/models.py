@@ -133,6 +133,12 @@ class BridgeCommandResult:
         "current_state",
         "security_arm_state_event",
     ]
+    transport: Literal[
+        "smartthings_web_ui", "advanced", "location_native", "internal", "dom"
+    ] = "smartthings_web_ui"
+    lifecycle: Literal["CONFIRMED_BY_EVENT", "CONFIRMED_BY_STATUS"] = (
+        "CONFIRMED_BY_EVENT"
+    )
 
 
 @dataclass
@@ -1534,11 +1540,14 @@ def parse_command_result(
     """Accept only a result bound to this request and an authoritative state source."""
     status = raw.get("status")
     confirmation = raw.get("confirmation")
+    transport = raw.get("transport")
+    lifecycle = raw.get("lifecycle")
     sequence = raw.get("sequence")
     if (
         raw.get("schemaVersion") != 1
         or raw.get("clientRequestId") != client_request_id
-        or raw.get("transport") != "smartthings_web_ui"
+        or transport
+        not in {"smartthings_web_ui", "advanced", "location_native", "internal", "dom"}
         or status not in {"confirmed", "already_confirmed"}
         or confirmation
         not in {
@@ -1561,7 +1570,20 @@ def parse_command_result(
             return None
     if status == "already_confirmed" and confirmation != "current_state":
         return None
-    return BridgeCommandResult(status, sequence, confirmation)
+    expected_lifecycle = (
+        "CONFIRMED_BY_EVENT"
+        if confirmation in {"device_event", "security_arm_state_event"}
+        else "CONFIRMED_BY_STATUS"
+    )
+    if lifecycle is not None and lifecycle != expected_lifecycle:
+        return None
+    return BridgeCommandResult(
+        status=status,
+        sequence=sequence,
+        confirmation=confirmation,
+        transport=transport,
+        lifecycle=expected_lifecycle,
+    )
 
 
 def parse_location(raw: Any) -> BridgeLocation | None:

@@ -1875,6 +1875,25 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertEqual(result.sequence, 43)
         self.assertEqual(result.confirmation, "inventory_snapshot")
 
+    def test_command_result_accepts_advanced_transport_with_explicit_lifecycle(self) -> None:
+        result = parse_command_result(
+            {
+                "schemaVersion": 1,
+                "clientRequestId": "request_advanced_123",
+                "status": "confirmed",
+                "sequence": 44,
+                "transport": "advanced",
+                "confirmation": "device_event",
+                "lifecycle": "CONFIRMED_BY_EVENT",
+            },
+            "request_advanced_123",
+            "device",
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.transport, "advanced")
+        self.assertEqual(result.lifecycle, "CONFIRMED_BY_EVENT")
+
     def test_command_result_rejects_wrong_request_or_unverified_confirmation(self) -> None:
         base = {
             "schemaVersion": 1,

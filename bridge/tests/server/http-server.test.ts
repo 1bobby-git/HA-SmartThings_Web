@@ -325,8 +325,9 @@ describe("createBridgeHttpServer", () => {
       clientRequestId: "request_007",
       status: "confirmed" as const,
       sequence: 7,
-      transport: "smartthings_web_ui" as const,
-      confirmation: "device_event" as const
+              transport: "smartthings_web_ui" as const,
+              confirmation: "device_event" as const,
+              lifecycle: "CONFIRMED_BY_EVENT" as const
     }));
     const server = await createBridgeHttpServer({
       store: createStore(),
@@ -360,7 +361,8 @@ describe("createBridgeHttpServer", () => {
       status: "confirmed",
       sequence: 7,
       transport: "smartthings_web_ui",
-      confirmation: "device_event"
+      confirmation: "device_event",
+      lifecycle: "CONFIRMED_BY_EVENT"
     });
     expect(execute).toHaveBeenCalledTimes(1);
   });
