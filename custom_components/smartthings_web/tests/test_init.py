@@ -1494,6 +1494,8 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         )
 
         _migrate_entity_registry(object(), entry, inventory)
+        _migrate_entity_registry(object(), entry, inventory)
+        _migrate_entity_registry(object(), entry, inventory)
 
         self.assertCountEqual(
             [new for _old, new in registry.renamed],

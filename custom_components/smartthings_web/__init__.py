@@ -1624,21 +1624,30 @@ def _generated_registry_state_name(
         for item in getattr(device, "states", {}).values()
         if getattr(item, "attribute", None) == getattr(state, "attribute", None)
     ]
+    main_presence_name = (
+        location_name(inventory, getattr(device, "location_id", ""))
+        if getattr(state, "attribute", None) == "presence"
+        and getattr(device, "location_id", None) in inventory.locations
+        else None
+    )
     if base is None:
         base = _readable_registry_state_attribute(state)
     base = _normalized_registry_state_name_base(
         base.strip(),
         state,
         len(siblings),
+        additional_qualifiers=(
+            (main_presence_name,)
+            if main_presence_name is not None
+            and str(getattr(state, "component_role", "")).strip().lower()
+            == "main"
+            else ()
+        ),
     )
     names = disambiguated_state_names(
         [(item, base) for item in siblings],
         all_states=getattr(device, "states", {}).values(),
-        main_presence_name=(
-            location_name(inventory, getattr(device, "location_id", ""))
-            if getattr(device, "location_id", None) in inventory.locations
-            else None
-        ),
+        main_presence_name=main_presence_name,
     )
     name = names.get(getattr(state, "key", ()), base)
     prefix = f"{base} ("
@@ -1651,9 +1660,11 @@ def _normalized_registry_state_name_base(
     base: str,
     state: object,
     sibling_count: int,
+    *,
+    additional_qualifiers: Sequence[str] = (),
 ) -> str:
     """Remove stale role suffixes before current sibling disambiguation runs."""
-    for qualifier in _registry_state_qualifier_names(state):
+    for qualifier in (*_registry_state_qualifier_names(state), *additional_qualifiers):
         qualifier_variants = list(
             dict.fromkeys(
                 candidate

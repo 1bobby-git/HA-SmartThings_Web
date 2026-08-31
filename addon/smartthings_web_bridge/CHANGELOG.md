@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.144
+
+- Keep the location-derived `Home` presence label stable across repeated registry migrations without accumulating duplicate suffixes.
+
 ## 0.1.143
 
 - Map the Advanced inventory's reserved `main` presence role to the current SmartThings location name, so mobile multi-place presence sensors can use `Home` alongside their named places instead of falling back to numbers.
