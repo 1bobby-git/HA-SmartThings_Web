@@ -44,6 +44,16 @@ class BridgeDevicePresentation:
     animation_url: str | None = None
 
 
+@dataclass(frozen=True)
+class BridgeAdvancedDeviceMetadata:
+    """Allowlisted Advanced identity metadata used for safe canonicalization."""
+
+    owner_id: str | None = None
+    parent_device_id: str | None = None
+    execution_context: str | None = None
+    linked_device_ids: tuple[str, ...] = ()
+
+
 @dataclass
 class BridgeDevice:
     """One Bridge device."""
@@ -57,6 +67,8 @@ class BridgeDevice:
     presentation: BridgeDevicePresentation | None = None
     states: dict[tuple[str, str, str], BridgeState] = field(default_factory=dict)
     controls: dict[str, "BridgeControl"] = field(default_factory=dict)
+    advanced: BridgeAdvancedDeviceMetadata | None = None
+    health_updated_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -119,6 +131,7 @@ class BridgeInventory:
     rooms: dict[str, tuple[str, str]]
     devices: dict[str, BridgeDevice]
     scenes: dict[str, BridgeScene] = field(default_factory=dict)
+    device_aliases: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -185,6 +198,10 @@ class SmartThingsWebRuntime:
 
     async def handle_event(self, event: dict[str, Any]) -> bool:
         """Apply one SSE event, resynchronizing on reconnects and gaps."""
+        device_id = event.get("deviceId")
+        canonical_id = self.inventory.device_aliases.get(device_id, device_id)
+        if isinstance(device_id, str) and canonical_id != device_id:
+            event = {**event, "deviceId": canonical_id}
         if event.get("type") == "image":
             return self.apply_image_event(event)
         if event.get("type") == "inventory":
@@ -276,6 +293,16 @@ class SmartThingsWebRuntime:
                     if authoritative
                     else {**existing.controls, **latest_device.controls}
                 ),
+                advanced=deepcopy(
+                    latest_device.advanced
+                    if latest_device.advanced is not None
+                    else existing.advanced
+                ),
+                health_updated_at=(
+                    latest_device.health_updated_at
+                    if latest_device.health_updated_at is not None
+                    else existing.health_updated_at
+                ),
             )
         merged = BridgeInventory(
             sequence=latest.sequence if allow_sequence_reset else max(current.sequence, latest.sequence),
@@ -311,6 +338,12 @@ class SmartThingsWebRuntime:
                 )
                 if authoritative
                 else _merge_scenes(current.scenes, latest.scenes)
+            ),
+            device_aliases=_merge_device_aliases(
+                current.device_aliases,
+                latest.device_aliases,
+                devices,
+                authoritative=authoritative,
             ),
         )
         if merged == current:
@@ -463,6 +496,13 @@ def control_kind(device: BridgeDevice, switch_state: BridgeState) -> ControlKind
     if is_media_device(device) or is_fan_device(device):
         return None
     if is_readonly_appliance_switch(device):
+        return None
+    toggle = toggle_control_for_state(device, switch_state)
+    if (
+        toggle is None
+        or not safe_observed_control(toggle)
+        or not safe_generic_toggle_control(toggle)
+    ):
         return None
     attributes = {
         state.attribute
@@ -1125,21 +1165,58 @@ def select_control_for_state(
     return matches[0] if len(matches) == 1 else None
 
 
-def refresh_controls(device: BridgeDevice) -> list[BridgeControl]:
-    """Return refresh button controls discovered from detail swatches."""
-    return [
+def canonical_refresh_control(device: BridgeDevice) -> BridgeControl | None:
+    """Return the one device-level Refresh control exposed to Home Assistant."""
+    candidates = [
         control
         for control in device.controls.values()
         if _is_observed_refresh_control(control)
+    ]
+    if not candidates:
+        return None
+    main_components = {
+        state.component
+        for state in device.states.values()
+        if (state.component_role or "").strip().lower() == "main"
+    }
+    return min(
+        candidates,
+        key=lambda control: (
+            control.component not in main_components,
+            control.component or "",
+            control.control_id,
+        ),
+    )
+
+
+def refresh_controls(device: BridgeDevice) -> list[BridgeControl]:
+    """Return at most one canonical device-level Refresh control."""
+    control = canonical_refresh_control(device)
+    return [] if control is None else [control]
+
+
+def noncanonical_refresh_controls(device: BridgeDevice) -> list[BridgeControl]:
+    """Return observed component Refresh controls hidden behind the canonical one."""
+    canonical = canonical_refresh_control(device)
+    return [
+        control
+        for control in device.controls.values()
+        if _is_observed_refresh_control(control) and control != canonical
     ]
 
 
 def button_controls(device: BridgeDevice) -> list[BridgeControl]:
     """Return non-value button controls discovered from detail swatches."""
+    canonical_refresh = canonical_refresh_control(device)
     return [
         control
         for control in device.controls.values()
-        if control.kind == "button" and safe_observed_control(control)
+        if control.kind == "button"
+        and safe_observed_control(control)
+        and (
+            not _is_observed_refresh_control(control)
+            or control == canonical_refresh
+        )
     ]
 
 
@@ -1827,6 +1904,22 @@ def _state_is_newer(candidate: BridgeState, current: BridgeState) -> bool:
     if candidate_time is None:
         return False
     return candidate_time > current_time
+
+
+def _merge_device_aliases(
+    current: dict[str, str],
+    latest: dict[str, str],
+    devices: dict[str, BridgeDevice],
+    *,
+    authoritative: bool,
+) -> dict[str, str]:
+    """Retain only aliases whose source is hidden and canonical target exists."""
+    merged = deepcopy(latest) if authoritative else {**current, **latest}
+    return {
+        alias: canonical
+        for alias, canonical in merged.items()
+        if alias not in devices and canonical in devices and alias != canonical
+    }
 
 
 def _merge_locations(

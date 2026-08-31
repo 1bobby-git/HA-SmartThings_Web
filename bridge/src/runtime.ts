@@ -93,7 +93,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.146";
+  const bridgeVersion = "0.1.147";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
@@ -276,7 +276,14 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   const commandExecutor = new AdvancedFirstCommandExecutor(
     advancedCommandExecutor,
     legacyCommandExecutor,
-    { domFallbackEnabled: deps.config.domFallbackEnabled ?? true }
+    {
+      domFallbackEnabled: deps.config.domFallbackEnabled ?? true,
+      canUseAdvanced: () => false,
+      onDiagnostic: ({ transport, stage, outcome, code }) =>
+        log.info(
+          `command_route:${transport}:${stage}:${outcome}${code ? `:${code}` : ""}`
+        )
+    }
   );
   const commands = new CommandConfirmationCoordinator({
     devices,

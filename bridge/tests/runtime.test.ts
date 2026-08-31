@@ -103,6 +103,15 @@ class FakePage extends FakeEmitter {
         value: this.advancedSnapshots[0] ?? { items: [] }
       };
     }
+    if (
+      typeof argument === "object" &&
+      argument !== null &&
+      typeof (argument as { deviceId?: unknown }).deviceId === "string" &&
+      typeof (argument as { command?: unknown }).command === "string"
+    ) {
+      await this.onNativeCommand?.(argument as { command: string });
+      return "sent";
+    }
     this.evaluateCalls.push([pageFunction, argument]);
     if (
       typeof argument === "object" &&
@@ -123,6 +132,7 @@ class FakePage extends FakeEmitter {
   advancedCommandResponse: unknown = { results: [{ status: "UNSUPPORTED" }] };
   advancedStatusResponse: unknown = { components: {} };
   onAdvancedCommand: (() => void | Promise<void>) | undefined;
+  onNativeCommand: ((command: { command: string }) => void | Promise<void>) | undefined;
   sessionTouchOutcome: "ok" | "reauth" | "failed" = "ok";
   onSessionTouch: (() => void | Promise<void>) | undefined;
 
@@ -281,12 +291,9 @@ describe("createBridgeRuntime", () => {
     expect(isWholeAdvancedDevicesSnapshotUrl(reversed.toString())).toBe(true);
   });
 
-  test("uses the Advanced command endpoint first and confirms it from the Location push", async () => {
+  test("uses the verified Location native command and confirms it from the Location push", async () => {
     const root = createTempRoot();
     const keeper = new FakePage("https://my.smartthings.com/location/raw-location-001");
-    keeper.advancedCommandResponse = {
-      results: [{ id: "advanced-command-001", status: "ACCEPTED" }]
-    };
     const context = new FakeContext([keeper]);
     const runtime = await createBridgeRuntime(
       createDeps(root, { chromium: { launchPersistentContext: vi.fn(async () => context) } })
@@ -364,14 +371,14 @@ describe("createBridgeRuntime", () => {
     expect(target).toBeDefined();
     const state = target?.states.find((candidate) => candidate.attribute === "switch");
     expect(state).toBeDefined();
-    keeper.onAdvancedCommand = async () => {
+    keeper.onNativeCommand = async ({ command }) => {
       await socket.emit("framereceived", {
         payload: buildDeviceEventFrame({
           eventId: "command-event-001",
           deviceId: "raw-command-device-001",
           capability: "switch",
           attribute: "switch",
-          value: "on",
+          value: command === "off" ? "off" : "on",
           stateChange: true,
           eventTime: new Date(Date.now() + 1_000).toISOString()
         })
@@ -397,7 +404,7 @@ describe("createBridgeRuntime", () => {
       body: {
         status: "confirmed",
         confirmation: "device_event",
-        transport: "advanced"
+        transport: "location_native"
       }
     });
     expect(
@@ -407,11 +414,9 @@ describe("createBridgeRuntime", () => {
     ).toHaveLength(1);
     expect(
       keeper.advancedRequestCalls.some(
-        (request) =>
-          (request as { method?: unknown }).method === "POST" &&
-          String((request as { path?: unknown }).path).endsWith("/commands")
+        (request) => (request as { method?: unknown }).method === "POST"
       )
-    ).toBe(true);
+    ).toBe(false);
     const health = await fetch(`${baseUrl}/health/details`).then(
       (value) => value.json() as Promise<{ details: Record<string, unknown> }>
     );
@@ -421,45 +426,9 @@ describe("createBridgeRuntime", () => {
       advancedInventoryPageCount: expect.any(Number),
       pendingCommandCount: 0,
       domFallbackCount: 0,
-      lastCommandTransport: "advanced",
+      lastCommandTransport: "location_native",
       lastCommandConfirmation: "CONFIRMED_BY_EVENT"
     });
-    keeper.onAdvancedCommand = undefined;
-    keeper.advancedStatusResponse = {
-      components: {
-        main: {
-          switch: {
-            switch: {
-              value: "off",
-              timestamp: new Date(Date.now() + 2_000).toISOString()
-            }
-          }
-        }
-      }
-    };
-    const statusConfirmed = await fetch(`${baseUrl}/api/v1/commands`, {
-      method: "POST",
-      headers: { ...headers, "content-type": "application/json" },
-      body: JSON.stringify({
-        deviceId: target?.id,
-        component: state?.component,
-        capability: state?.capability,
-        command: "off",
-        arguments: [],
-        clientRequestId: "request_haos_status_002"
-      })
-    });
-    await expect(statusConfirmed.json()).resolves.toMatchObject({
-      status: "confirmed",
-      confirmation: "inventory_snapshot",
-      lifecycle: "CONFIRMED_BY_STATUS",
-      transport: "advanced"
-    });
-    expect(
-      keeper.advancedRequestCalls.some((request) =>
-        String((request as { path?: unknown }).path).endsWith("/status")
-      )
-    ).toBe(true);
   });
 
   test("accepts stateless refresh without inventing a persistent confirmation state", async () => {

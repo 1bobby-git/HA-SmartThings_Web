@@ -370,6 +370,98 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
         self.assertEqual(parsed.devices["dev_001"].name, "디티오룸 Status")
         self.assertEqual(parsed.devices["dev_002"].name, "거실 2")
 
+    def test_inventory_parses_and_canonicalizes_strong_cloud_local_pair(self) -> None:
+        def raw_device(
+            device_id: str,
+            execution_context: str,
+            parent_device_id: str | None,
+            color_temperature: int,
+            updated_at: str,
+        ) -> dict[str, Any]:
+            advanced = {
+                "ownerId": "identifier_owner",
+                "executionContext": execution_context,
+            }
+            if parent_device_id is not None:
+                advanced["parentDeviceId"] = parent_device_id
+            states = [
+                {
+                    "component": "identifier_main",
+                    "componentRole": "main",
+                    "capability": capability,
+                    "attribute": attribute,
+                    "value": value,
+                    "updatedAt": updated_at,
+                }
+                for capability, attribute, value in (
+                    ("identifier_switch", "switch", "off"),
+                    ("identifier_level", "level", 1),
+                    ("identifier_color", "hue", 10),
+                    ("identifier_color", "saturation", 81),
+                    (
+                        "identifier_color_temperature",
+                        "colorTemperature",
+                        color_temperature,
+                    ),
+                )
+            ]
+            return {
+                "id": device_id,
+                "locationId": "loc_009",
+                "roomId": "identifier_living_room",
+                "name": "벽난로",
+                "type": "light_bulb",
+                "online": True,
+                "healthUpdatedAt": updated_at,
+                "advanced": advanced,
+                "states": states,
+                "controls": [
+                    {
+                        "id": "advanced:refresh:identifier_main:identifier_refresh",
+                        "kind": "button",
+                        "label": "Refresh",
+                        "component": "identifier_main",
+                        "capability": "identifier_refresh",
+                        "attribute": "refresh",
+                        "commands": ["refresh"],
+                    }
+                ],
+            }
+
+        parsed = parse_inventory(
+            {
+                "schemaVersion": 1,
+                "sequence": 10,
+                "ready": True,
+                "bridgeVersion": "0.1.147",
+                "protocolVersion": "4:test",
+                "locations": [],
+                "rooms": [],
+                "devices": [
+                    raw_device(
+                        "dev_185",
+                        "CLOUD",
+                        None,
+                        2732,
+                        "2026-07-05T01:27:46Z",
+                    ),
+                    raw_device(
+                        "dev_602",
+                        "LOCAL",
+                        "dev_407",
+                        4000,
+                        "2026-08-31T13:39:35Z",
+                    ),
+                ],
+            }
+        )
+
+        self.assertEqual(set(parsed.devices), {"dev_185"})
+        self.assertEqual(parsed.device_aliases, {"dev_602": "dev_185"})
+        merged = parsed.devices["dev_185"]
+        self.assertEqual(merged.advanced.linked_device_ids, ("dev_602",))
+        self.assertEqual(merged.health_updated_at, "2026-08-31T13:39:35Z")
+
 
 class _FakeResponse:
     def __init__(self, status: int, payload: dict[str, Any]) -> None:

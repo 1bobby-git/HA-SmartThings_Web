@@ -10,21 +10,26 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("packages the Advanced-primary architecture as version 0.1.146", () => {
+  test("packages the evidence-gated repair as version 0.1.147", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.146");
+    expect(config.version).toBe("0.1.147");
     expect(config.homeassistant_api).toBe(true);
-    expect(packageMetadata.version).toBe("0.1.146");
-    expect(protocolMetadata.bridge_version).toBe("0.1.146");
+    expect(packageMetadata.version).toBe("0.1.147");
+    expect(protocolMetadata.bridge_version).toBe("0.1.147");
     expect(protocolMetadata.protocol_version).toBe(4);
-    expect(runtime).toContain('const bridgeVersion = "0.1.146";');
+    expect(runtime).toContain('const bridgeVersion = "0.1.147";');
     expect(runtime).not.toContain("AUTHENTICATED_KEEPER_KEEPALIVE_MS");
     expect(runtime).not.toContain("confirmationStabilityMs: 500");
+    expect(changelog).toContain("## 0.1.147");
+    expect(changelog).toContain("검증되지 않은 Advanced POST");
+    expect(changelog).toContain("양방향 toggle control");
+    expect(changelog).toContain("장치당 하나의 버튼");
+    expect(changelog).toContain("Cloud/Local child");
     expect(changelog).toContain("## 0.1.146");
     expect(changelog).toContain("Advanced direct");
     expect(changelog).toContain("ACCEPTED_UNCONFIRMED");

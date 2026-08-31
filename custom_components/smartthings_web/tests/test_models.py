@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import models as models_module  # noqa: E402
 
 from models import (  # noqa: E402
+    BridgeAdvancedDeviceMetadata,
     BridgeControl,
     BridgeDevice,
     BridgeDevicePresentation,
@@ -521,6 +522,70 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertCountEqual(calls, ["global", "state_1", "device_1"])
 
+    def test_alias_state_event_updates_the_canonical_device(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        current.device_aliases = {"dev_602": "dev_001"}
+        runtime = SmartThingsWebRuntime(FakeClient(deepcopy(current)), "loc_001", current)
+        state = next(iter(current.devices["dev_001"].states.values()))
+
+        changed = asyncio.run(
+            runtime.handle_event({
+                "type": "state",
+                "sequence": 11,
+                "deviceId": "dev_602",
+                "state": {
+                    "component": state.component,
+                    "capability": state.capability,
+                    "attribute": state.attribute,
+                    "value": 81,
+                    "unit": state.unit,
+                    "updatedAt": "2026-08-24T21:11:00Z",
+                },
+            })
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            runtime.inventory.devices["dev_001"].states[state.key].value,
+            81,
+        )
+
+    def test_inventory_merge_retains_only_valid_canonical_aliases(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        current.device_aliases = {"dev_602": "dev_001", "dev_stale": "dev_missing"}
+        runtime = SmartThingsWebRuntime(FakeClient(), "loc_001", current)
+        latest = inventory(11, 21, "2026-08-24T21:11:00Z")
+        latest.device_aliases = {"dev_602": "dev_001"}
+
+        runtime.apply_inventory(latest)
+
+        self.assertEqual(runtime.inventory.device_aliases, {"dev_602": "dev_001"})
+
+    def test_inventory_merge_preserves_advanced_identity_and_health_metadata(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        current_device = current.devices["dev_001"]
+        current_device.advanced = BridgeAdvancedDeviceMetadata(
+            owner_id="identifier_owner",
+            execution_context="CLOUD",
+        )
+        current_device.health_updated_at = "2026-08-24T21:10:00Z"
+        latest = inventory(11, 21, "2026-08-24T21:11:00Z")
+        latest_device = latest.devices["dev_001"]
+        latest_device.advanced = BridgeAdvancedDeviceMetadata(
+            owner_id="identifier_owner",
+            parent_device_id="dev_parent",
+            execution_context="CLOUD",
+            linked_device_ids=("dev_602",),
+        )
+        latest_device.health_updated_at = "2026-08-24T21:11:00Z"
+        runtime = SmartThingsWebRuntime(FakeClient(), "loc_001", current)
+
+        runtime.apply_inventory(latest)
+
+        merged = runtime.inventory.devices["dev_001"]
+        self.assertEqual(merged.advanced, latest_device.advanced)
+        self.assertEqual(merged.health_updated_at, "2026-08-24T21:11:00Z")
+
     def test_control_kind_keeps_plain_switches_out_of_binary_sensor_and_light(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")
         device = current.devices["dev_001"]
@@ -533,6 +598,17 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             updated_at="2026-08-24T21:10:00Z",
         )
         device.states = {switch.key: switch}
+        device.controls = {
+            "action:main:switch": BridgeControl(
+                "action:main:switch",
+                "toggle",
+                "Power",
+                component=switch.component,
+                capability=switch.capability,
+                attribute=switch.attribute,
+                commands=("on", "off"),
+            )
+        }
 
         self.assertEqual(control_kind(device, switch), "switch")
 
@@ -612,6 +688,17 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             updated_at="2026-08-24T21:10:00Z",
         )
         device.states = {switch.key: switch, color_range.key: color_range}
+        device.controls = {
+            "action:main:switch": BridgeControl(
+                "action:main:switch",
+                "toggle",
+                "Power",
+                component=switch.component,
+                capability=switch.capability,
+                attribute=switch.attribute,
+                commands=("on", "off"),
+            )
+        }
 
         self.assertEqual(control_kind(device, switch), "light")
 

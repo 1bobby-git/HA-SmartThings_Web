@@ -9,9 +9,9 @@
 
 ## Advanced 주 데이터·명령 구조
 
-버전 0.1.146은 로그인된 동일 Chromium context에서 SmartThings Advanced 내부 경로를 장치·location·room·상태·health·capability의 주 데이터 소스로 사용합니다. 200개를 넘는 장치는 next link 또는 `isNext/max/page` 규칙으로 끝까지 읽고 `deviceId`로 병합합니다.
+버전 0.1.147은 로그인된 동일 Chromium context에서 SmartThings Advanced 내부 경로를 장치·location·room·상태·health·capability의 주 데이터 소스로 사용합니다. 200개를 넘는 장치는 next link 또는 `isNext/max/page` 규칙으로 끝까지 읽고 `deviceId`로 병합합니다. 실제 명령은 live 증거가 없는 Advanced POST를 건너뛰고 관찰된 `/location` native control로 실행하며, 실행할 수 없는 secondary switch와 중복 Refresh는 Home Assistant 제어 엔티티로 노출하지 않습니다.
 
-장치 명령은 **Advanced direct command → `/location` native command → 검증된 내부 경로 → DOM fallback** 순서입니다. HTTP `ACCEPTED`만으로 HA 상태를 바꾸지 않으며, stateful 명령은 `/location`의 새 push 또는 Advanced status 재조회로 확인합니다. `refresh`, `press`, media next/previous처럼 지속 상태가 없는 명령은 접수 성공만 반환합니다.
+장치 명령은 live 증거가 있는 조합에서만 Advanced direct를 허용하고, 현재 기본은 **`/location` native command → 검증된 DOM fallback** 순서입니다. HTTP `ACCEPTED`만으로 HA 상태를 바꾸지 않으며, stateful 명령은 `/location`의 새 push 또는 상태 재조회로 확인합니다. `refresh`, `press`, media next/previous처럼 지속 상태가 없는 명령은 접수 성공만 반환합니다.
 
 `/location` 페이지는 제거하지 않습니다. Socket.IO realtime keeper로 계속 유지되며 물리 조작, SmartThings 앱, 외부 자동화의 변경을 HA에 전달합니다. 재연결 후 첫 수신 프레임이 확인되면 Advanced 전체 snapshot을 다시 동기화합니다. 쿠키·토큰·CSRF·원본 device/location ID는 서비스, 로그, diagnostics에 노출하지 않습니다.
 

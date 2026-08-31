@@ -44,7 +44,8 @@ describe("AdvancedFirstCommandExecutor", () => {
         acceptedAtMs: 10,
         commandId: "command-1"
       })),
-      fallback
+      fallback,
+      { canUseAdvanced: () => true }
     );
 
     await expect(executor.executeDeviceAction(action)).resolves.toMatchObject({
@@ -61,7 +62,7 @@ describe("AdvancedFirstCommandExecutor", () => {
         throw new CommandTransportError("unsupported", "advanced");
       }),
       fallback,
-      { now: () => 20 }
+      { now: () => 20, canUseAdvanced: () => true }
     );
 
     await expect(executor.executeDeviceAction(action)).resolves.toEqual({
@@ -97,7 +98,7 @@ describe("AdvancedFirstCommandExecutor", () => {
         throw new CommandTransportError("unsupported", "advanced");
       }),
       fallback,
-      { now: () => 30 }
+      { now: () => 30, canUseAdvanced: () => true }
     );
 
     await expect(executor.executeDeviceAction(action)).resolves.toMatchObject({
@@ -120,7 +121,7 @@ describe("AdvancedFirstCommandExecutor", () => {
         throw new CommandTransportError("unsupported", "advanced");
       }),
       fallback,
-      { domFallbackEnabled: false }
+      { domFallbackEnabled: false, canUseAdvanced: () => true }
     );
 
     await expect(executor.executeDeviceAction(action)).rejects.toThrowError(
@@ -136,12 +137,139 @@ describe("AdvancedFirstCommandExecutor", () => {
       advanced(async () => {
         throw new CommandTransportError("transient", "advanced");
       }),
-      fallback
+      fallback,
+      { canUseAdvanced: () => true }
     );
 
     await expect(executor.executeDeviceAction(action)).rejects.toThrowError(
       "command_execution_failed"
     );
+    expect(fallback.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test("uses the verified Web path until this exact Advanced command is proven", async () => {
+    const fallback = legacy();
+    const advancedTransport = advanced(async () => ({
+      state: "ACCEPTED",
+      transport: "advanced",
+      acceptedAtMs: 10
+    }));
+    const executor = new AdvancedFirstCommandExecutor(advancedTransport, fallback);
+
+    await expect(executor.executeDeviceAction(action)).resolves.toMatchObject({
+      transport: "location_native"
+    });
+    expect(advancedTransport.execute).not.toHaveBeenCalled();
+    expect(fallback.executeDeviceAction).toHaveBeenCalledOnce();
+  });
+
+  test("uses Advanced only when the exact command evidence policy approves it", async () => {
+    const fallback = legacy();
+    const advancedTransport = advanced(async () => ({
+      state: "ACCEPTED",
+      transport: "advanced",
+      acceptedAtMs: 10,
+      commandId: "command-1"
+    }));
+    const executor = new AdvancedFirstCommandExecutor(advancedTransport, fallback, {
+      canUseAdvanced: (input) =>
+        input.deviceId === "dev_001" &&
+        input.component === "identifier_main" &&
+        input.capability === "identifier_switch" &&
+        input.command === "on"
+    });
+
+    await expect(executor.executeDeviceAction(action)).resolves.toMatchObject({
+      transport: "advanced",
+      commandId: "command-1"
+    });
+    expect(fallback.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test("records safe route diagnostics without identifiers", async () => {
+    const diagnostics: object[] = [];
+    const fallback = legacy();
+    fallback.executeDeviceAction = vi.fn(async () => {
+      throw new Error("command_execution_failed");
+    });
+    const executor = new AdvancedFirstCommandExecutor(
+      advanced(async () => {
+        throw new Error("must not run");
+      }),
+      fallback,
+      { onDiagnostic: (event) => diagnostics.push(event) }
+    );
+
+    await expect(executor.executeDeviceAction(action)).rejects.toThrow(
+      "command_execution_failed"
+    );
+    expect(diagnostics).toEqual([
+      {
+        transport: "location_native",
+        stage: "dispatch",
+        outcome: "attempt"
+      },
+      {
+        transport: "location_native",
+        stage: "dispatch",
+        outcome: "failed",
+        code: "command_execution_failed"
+      }
+    ]);
+    expect(JSON.stringify(diagnostics)).not.toContain("dev_001");
+  });
+
+  test("keeps DOM disabled on the default verified Web path", async () => {
+    const fallback = {
+      executeDeviceAction: vi.fn(async () => {
+        throw new Error("combined path must not run");
+      }),
+      executeLocationNative: vi.fn(async () => {
+        throw new Error("command_native_unavailable");
+      }),
+      executeDomFallback: vi.fn(async () => undefined)
+    } as LegacyWebCommandExecutor;
+    const executor = new AdvancedFirstCommandExecutor(
+      advanced(async () => {
+        throw new Error("Advanced must not run");
+      }),
+      fallback,
+      { domFallbackEnabled: false }
+    );
+
+    await expect(executor.executeDeviceAction(action)).rejects.toThrow(
+      "command_control_not_found"
+    );
+    expect(fallback.executeLocationNative).toHaveBeenCalledOnce();
+    expect(fallback.executeDomFallback).not.toHaveBeenCalled();
+    expect(fallback.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test("uses verified DOM last when Location native is unavailable", async () => {
+    const order: string[] = [];
+    const fallback = {
+      executeDeviceAction: vi.fn(async () => {
+        throw new Error("combined path must not run");
+      }),
+      executeLocationNative: vi.fn(async () => {
+        order.push("location-native");
+        throw new Error("command_native_unavailable");
+      }),
+      executeDomFallback: vi.fn(async () => {
+        order.push("dom");
+      })
+    } as LegacyWebCommandExecutor;
+    const executor = new AdvancedFirstCommandExecutor(
+      advanced(async () => {
+        throw new Error("Advanced must not run");
+      }),
+      fallback
+    );
+
+    await expect(executor.executeDeviceAction(action)).resolves.toMatchObject({
+      transport: "dom"
+    });
+    expect(order).toEqual(["location-native", "dom"]);
     expect(fallback.executeDeviceAction).not.toHaveBeenCalled();
   });
 
