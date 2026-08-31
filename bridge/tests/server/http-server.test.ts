@@ -325,8 +325,9 @@ describe("createBridgeHttpServer", () => {
       clientRequestId: "request_007",
       status: "confirmed" as const,
       sequence: 7,
-      transport: "smartthings_web_ui" as const,
-      confirmation: "device_event" as const
+              transport: "smartthings_web_ui" as const,
+              confirmation: "device_event" as const,
+              lifecycle: "CONFIRMED_BY_EVENT" as const
     }));
     const server = await createBridgeHttpServer({
       store: createStore(),
@@ -360,9 +361,42 @@ describe("createBridgeHttpServer", () => {
       status: "confirmed",
       sequence: 7,
       transport: "smartthings_web_ui",
-      confirmation: "device_event"
+      confirmation: "device_event",
+      lifecycle: "CONFIRMED_BY_EVENT"
     });
     expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  test("serves authenticated inventory reload and realtime reconnect maintenance requests", async () => {
+    const token = "m".repeat(32);
+    const reloadInventory = vi.fn(async () => undefined);
+    const reconnectRealtime = vi.fn(async () => undefined);
+    const server = await createBridgeHttpServer({
+      store: createStore(),
+      host: "127.0.0.1",
+      port: 0,
+      auth: new BridgeAuth(token),
+      devices: new DeviceStore(),
+      maintenance: { reloadInventory, reconnectRealtime }
+    });
+    servers.push(server);
+    const headers = { authorization: `Bearer ${token}` };
+
+    const reload = await fetch(
+      `http://127.0.0.1:${server.port}/api/v1/maintenance/reload-inventory`,
+      { method: "POST", headers }
+    );
+    const reconnect = await fetch(
+      `http://127.0.0.1:${server.port}/api/v1/maintenance/reconnect-realtime`,
+      { method: "POST", headers }
+    );
+
+    expect(reload.status).toBe(200);
+    await expect(reload.json()).resolves.toEqual({ accepted: true });
+    expect(reconnect.status).toBe(200);
+    await expect(reconnect.json()).resolves.toEqual({ accepted: true });
+    expect(reloadInventory).toHaveBeenCalledOnce();
+    expect(reconnectRealtime).toHaveBeenCalledOnce();
   });
 
   test("streams the current inventory marker and subsequent device events, then unsubscribes on close", async () => {

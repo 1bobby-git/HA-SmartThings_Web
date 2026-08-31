@@ -1,0 +1,60 @@
+execute_command:
+  name: Execute command
+  description: Execute a validated SmartThings Web command through the local Bridge.
+  fields:
+    device_id:
+      name: Device ID
+      required: true
+      selector:
+        text:
+    component:
+      name: Component
+      default: main
+      selector:
+        text:
+    capability:
+      name: Capability
+      required: true
+      selector:
+        text:
+    command:
+      name: Command
+      required: true
+      selector:
+        text:
+    arguments:
+      name: Arguments
+      default: []
+      selector:
+        object:
+    confirm:
+      name: Confirm state
+      default: true
+      selector:
+        boolean:
+    timeout:
+      name: Confirmation timeout
+      default: 30
+      selector:
+        number:
+          min: 1
+          max: 120
+          unit_of_measurement: s
+
+reload_inventory:
+  name: Reload inventory
+  description: Run one coalesced Advanced inventory reconciliation.
+
+refresh_device:
+  name: Refresh device
+  description: Execute the observed stateless refresh command for one device.
+  fields:
+    device_id:
+      name: Device ID
+      required: true
+      selector:
+        text:
+
+reconnect_realtime:
+  name: Reconnect realtime
+  description: Reconnect the Location Socket.IO keeper and resynchronize after recovery.

@@ -1,5 +1,9 @@
 import type { SanitizedCaptureRecord } from "./capture-store.js";
 import { decodeSocketIoTextFrame } from "../inspector/socketio-decoder.js";
+import {
+  EventDeduplicator,
+  extractDeviceEventIdentity
+} from "../inspector/event-deduplicator.js";
 import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -30,7 +34,14 @@ export interface BridgeDeviceState {
   updatedAt: string | null;
   componentRole?: string;
   capabilityRole?: string;
+  source?: BridgeStateSource;
 }
+
+export type BridgeStateSource =
+  | "ADVANCED_SNAPSHOT"
+  | "LOCATION_EVENT"
+  | "COMMAND_STATUS_RECHECK"
+  | "DOM_FALLBACK";
 
 export interface BridgeDeviceControl {
   id: string;
@@ -56,6 +67,20 @@ export interface BridgeDevicePresentation {
   animationUrl?: string;
 }
 
+export interface BridgeAdvancedDeviceMetadata {
+  ownerId?: string;
+  profileId?: string;
+  presentationId?: string;
+  parentDeviceId?: string;
+  childDeviceIds?: string[];
+  hubId?: string;
+  driverId?: string;
+  executionContext?: string;
+  restricted?: boolean;
+  group?: boolean;
+  preferenceKeys?: string[];
+}
+
 export interface BridgeDevice {
   id: string;
   locationId: string;
@@ -67,6 +92,7 @@ export interface BridgeDevice {
   presentation?: BridgeDevicePresentation;
   states: BridgeDeviceState[];
   controls?: BridgeDeviceControl[];
+  advanced?: BridgeAdvancedDeviceMetadata;
 }
 
 export interface BridgeScene {
@@ -102,6 +128,9 @@ export type BridgeDeviceStoreEvent =
       type: "state";
       deviceId: string;
       state: BridgeDeviceState;
+      eventId?: string;
+      eventTime?: string;
+      commandId?: string;
     };
 
 type Listener = (event: BridgeDeviceStoreEvent) => void;
@@ -111,6 +140,12 @@ type AdvancedAliasKind = "device" | "location" | "identifier";
 type AdvancedAliasNormalizer = (kind: AdvancedAliasKind, value: string) => string;
 type AdvancedDeviceSnapshotOptions = {
   authoritativeWholeSnapshot?: boolean;
+  source?: BridgeStateSource;
+};
+type AdvancedInventorySnapshotBody = {
+  locations?: unknown;
+  rooms?: unknown;
+  devices?: unknown;
 };
 type SnapshotQuery =
   | "api/location"
@@ -136,6 +171,8 @@ interface MutableDevice {
   presentation?: BridgeDevicePresentation;
   states: Map<string, BridgeDeviceState>;
   controls: Map<string, BridgeDeviceControl>;
+  capabilityVersions: Map<string, number>;
+  advanced?: BridgeAdvancedDeviceMetadata;
 }
 
 const SNAPSHOT_QUERIES = new Set<SnapshotQuery>([
@@ -165,6 +202,10 @@ export class DeviceStore {
   readonly #scenes = new Map<string, BridgeScene>();
   readonly #pending = new Map<string, PendingSnapshot>();
   readonly #listeners = new Set<Listener>();
+  readonly #eventDeduplicator = new EventDeduplicator({
+    ttlMs: 5 * 60_000,
+    maxEntries: 100_000
+  });
   readonly #normalizeStateToken: StateTokenNormalizer;
   readonly #normalizeAdvancedAlias: AdvancedAliasNormalizer;
   readonly #identifierRole: IdentifierRoleResolver;
@@ -259,6 +300,10 @@ export class DeviceStore {
       return;
     }
     if (decoded.kind === "event" && decoded.eventName === "api/subscription DEVICE_EVENT") {
+      const identity = extractDeviceEventIdentity(decoded.args[0]);
+      if (identity && this.#eventDeduplicator.observe(identity).duplicate) {
+        return;
+      }
       this.#applyDeviceEvent(decoded.args[0]);
       return;
     }
@@ -292,6 +337,7 @@ export class DeviceStore {
         online: device.online,
         ...(device.healthUpdatedAt ? { healthUpdatedAt: device.healthUpdatedAt } : {}),
         ...(device.presentation ? { presentation: { ...device.presentation } } : {}),
+        ...(device.advanced ? { advanced: cloneAdvancedMetadata(device.advanced) } : {}),
         states: snapshotDeviceStates(device).sort(byState).map(cloneState),
         ...(device.controls.size > 0
           ? { controls: [...device.controls.values()].sort(byId).map(cloneControl) }
@@ -303,6 +349,16 @@ export class DeviceStore {
 
   currentSequence(): number {
     return this.#sequence;
+  }
+
+  capabilityVersion(
+    deviceId: string,
+    component: string,
+    capability: string
+  ): number | undefined {
+    return this.#devices
+      .get(deviceId)
+      ?.capabilityVersions.get(`${component}\u0000${capability}`);
   }
 
   subscribe(listener: Listener): () => void {
@@ -322,8 +378,36 @@ export class DeviceStore {
 
   observeAdvancedDeviceSnapshot(body: unknown, options: AdvancedDeviceSnapshotOptions = {}): void {
     const authoritativeWholeSnapshot = options.authoritativeWholeSnapshot === true;
-    const changed = this.#applyAdvancedDeviceSnapshot(body, authoritativeWholeSnapshot);
+    const changed = this.#applyAdvancedDeviceSnapshot(
+      body,
+      authoritativeWholeSnapshot,
+      options.source ?? "ADVANCED_SNAPSHOT"
+    );
     if (authoritativeWholeSnapshot && advancedDeviceRows(body)) {
+      this.#sessionWholeAdvancedDeviceSnapshotSeen = true;
+    }
+    const pruned = this.#pruneUnrefreshedDevicesIfReady();
+    if (changed || pruned) {
+      const sequence = this.#nextSequence();
+      this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
+      this.#schedulePersist();
+    }
+  }
+
+  observeAdvancedInventorySnapshot(
+    body: AdvancedInventorySnapshotBody,
+    options: AdvancedDeviceSnapshotOptions = {}
+  ): void {
+    const authoritativeWholeSnapshot = options.authoritativeWholeSnapshot === true;
+    let changed = this.#applyAdvancedLocations(body.locations);
+    changed = this.#applyAdvancedRooms(body.rooms) || changed;
+    changed =
+      this.#applyAdvancedDeviceSnapshot(
+        body.devices,
+        authoritativeWholeSnapshot,
+        options.source ?? "ADVANCED_SNAPSHOT"
+      ) || changed;
+    if (authoritativeWholeSnapshot && advancedDeviceRows(body.devices)) {
       this.#sessionWholeAdvancedDeviceSnapshotSeen = true;
     }
     const pruned = this.#pruneUnrefreshedDevicesIfReady();
@@ -496,7 +580,11 @@ export class DeviceStore {
     return changed;
   }
 
-  #applyAdvancedDeviceSnapshot(body: unknown, observeRestoredPresence = false): boolean {
+  #applyAdvancedDeviceSnapshot(
+    body: unknown,
+    observeRestoredPresence = false,
+    source: BridgeStateSource = "ADVANCED_SNAPSHOT"
+  ): boolean {
     const rows = advancedDeviceRows(body);
     if (!rows) {
       return false;
@@ -516,6 +604,18 @@ export class DeviceStore {
       if (!id || !locationId) continue;
       if (observeRestoredPresence) this.#confirmRestoredDevice(id);
       const device = this.#ensureDevice(id, locationId);
+      const advanced = advancedDeviceMetadata(row, this.#normalizeAdvancedAlias);
+      if (JSON.stringify(device.advanced) !== JSON.stringify(advanced)) {
+        if (advanced) device.advanced = advanced;
+        else delete device.advanced;
+        changed = true;
+      }
+      for (const [key, version] of advancedCapabilityVersions(
+        row.components,
+        this.#normalizeAdvancedAlias
+      )) {
+        device.capabilityVersions.set(key, version);
+      }
       const nextName = safeName(
         row.label ?? row.name ?? row.deviceLabel ?? row.deviceName
       ) ?? device.name;
@@ -556,7 +656,8 @@ export class DeviceStore {
         row,
         this.#identifierRole,
         this.#normalizeStateToken,
-        this.#normalizeAdvancedAlias
+        this.#normalizeAdvancedAlias,
+        source
       )) {
         changed = this.#mergeStateRoles(device, state) || changed;
         changed = this.#setState(device, state) || changed;
@@ -568,6 +669,45 @@ export class DeviceStore {
       )) {
         changed = setIfChanged(device.controls, control.id, control) || changed;
       }
+    }
+    return changed;
+  }
+
+  #applyAdvancedLocations(body: unknown): boolean {
+    const rows = recordRows(body);
+    if (!rows) return false;
+    let changed = false;
+    for (const row of rows) {
+      const id = normalizedAdvancedId(
+        row.locationId ?? row.location_id ?? row.id,
+        "location",
+        this.#normalizeAdvancedAlias
+      );
+      const name = safeName(row.name ?? row.locationName ?? row.label);
+      if (!id || !name) continue;
+      changed = setIfChanged(this.#locations, id, { id, name }) || changed;
+    }
+    return changed;
+  }
+
+  #applyAdvancedRooms(body: unknown): boolean {
+    const rows = recordRows(body);
+    if (!rows) return false;
+    let changed = false;
+    for (const row of rows) {
+      const id = normalizedAdvancedId(
+        row.roomId ?? row.room_id ?? row.id,
+        "identifier",
+        this.#normalizeAdvancedAlias
+      );
+      const locationId = normalizedAdvancedId(
+        row.locationId ?? row.location_id,
+        "location",
+        this.#normalizeAdvancedAlias
+      );
+      const name = safeName(row.name ?? row.roomName ?? row.label);
+      if (!id || !locationId || !name) continue;
+      changed = setIfChanged(this.#rooms, id, { id, locationId, name }) || changed;
     }
     return changed;
   }
@@ -596,12 +736,19 @@ export class DeviceStore {
       return;
     }
     const sequence = this.#nextSequence();
+    const eventId = safeEventMetadata(event.event_id ?? event.eventId ?? data.event_id ?? data.eventId);
+    const commandId = safeEventMetadata(
+      event.command_id ?? event.commandId ?? data.command_id ?? data.commandId
+    );
     this.#publish({
       schemaVersion: 1,
       sequence,
       type: "state",
       deviceId,
-      state: cloneState(state)
+      state: cloneState(state),
+      ...(eventId ? { eventId } : {}),
+      ...(state.updatedAt ? { eventTime: state.updatedAt } : {}),
+      ...(commandId ? { commandId } : {})
     });
     this.#schedulePersist();
   }
@@ -681,7 +828,8 @@ export class DeviceStore {
       online: true,
       healthUpdatedAt: null,
       states: new Map(),
-      controls: new Map()
+      controls: new Map(),
+      capabilityVersions: new Map()
     };
     this.#devices.set(id, created);
     return created;
@@ -815,7 +963,9 @@ export class DeviceStore {
         healthUpdatedAt: device.healthUpdatedAt ?? null,
         ...(device.presentation ? { presentation: { ...device.presentation } } : {}),
         states: new Map(device.states.map((state) => [stateKey(state), cloneState(state)])),
-        controls: new Map((device.controls ?? []).map((control) => [control.id, cloneControl(control)]))
+        controls: new Map((device.controls ?? []).map((control) => [control.id, cloneControl(control)])),
+        capabilityVersions: new Map(),
+        ...(device.advanced ? { advanced: cloneAdvancedMetadata(device.advanced) } : {})
       });
     }
   }
@@ -941,6 +1091,7 @@ function parsePersistedInventory(value: unknown): BridgeInventory | undefined {
         ? item?.healthUpdatedAt
         : validTimestamp(item.healthUpdatedAt);
     const presentation = devicePresentation(asRecord(item?.presentation));
+    const advanced = parseStoredAdvancedMetadata(item?.advanced);
     if (
       !id ||
       !locationId ||
@@ -952,6 +1103,7 @@ function parsePersistedInventory(value: unknown): BridgeInventory | undefined {
         item.healthUpdatedAt !== null &&
         healthUpdatedAt === null) ||
       !Array.isArray(item.states)
+      || advanced === null
     ) {
       return undefined;
     }
@@ -982,6 +1134,7 @@ function parsePersistedInventory(value: unknown): BridgeInventory | undefined {
         ? { healthUpdatedAt: healthUpdatedAt as string | null }
         : {}),
       ...(presentation ? { presentation } : {}),
+      ...(advanced ? { advanced } : {}),
       states,
       ...(controls.length > 0 ? { controls } : {})
     });
@@ -1061,17 +1214,27 @@ function advancedDeviceRows(value: unknown): Record<string, unknown>[] | null {
   return records.some((item) => !item) ? null : (records as Record<string, unknown>[]);
 }
 
+function recordRows(value: unknown): Record<string, unknown>[] | null {
+  return advancedDeviceRows(value);
+}
+
 function advancedDeviceStates(
   row: Record<string, unknown>,
   identifierRole: IdentifierRoleResolver,
   normalizeStateToken: StateTokenNormalizer,
-  normalizeAdvancedAlias: AdvancedAliasNormalizer
+  normalizeAdvancedAlias: AdvancedAliasNormalizer,
+  source: BridgeStateSource
 ): BridgeDeviceState[] {
   const status = asRecord(row.status);
   const componentRoles = advancedComponentRoles(row.components, normalizeAdvancedAlias);
   const components = asRecord(status?.components);
   if (!components) {
-    return advancedArrayDeviceStates(row.components, identifierRole, normalizeAdvancedAlias);
+    return advancedArrayDeviceStates(
+      row.components,
+      identifierRole,
+      normalizeAdvancedAlias,
+      source
+    );
   }
   const result: BridgeDeviceState[] = [];
   for (const [rawComponent, capabilitiesValue] of Object.entries(components)) {
@@ -1100,7 +1263,8 @@ function advancedDeviceStates(
           unit: stateRecord.unit,
           updatedAt: stateRecord.timestamp ?? stateRecord.updatedAt,
           componentRole,
-          capabilityRole
+          capabilityRole,
+          source
         }, identifierRole);
         if (state) result.push(state);
       }
@@ -1132,7 +1296,8 @@ function advancedComponentRoles(
 function advancedArrayDeviceStates(
   value: unknown,
   identifierRole: IdentifierRoleResolver,
-  normalizeAdvancedAlias: AdvancedAliasNormalizer
+  normalizeAdvancedAlias: AdvancedAliasNormalizer,
+  source: BridgeStateSource
 ): BridgeDeviceState[] {
   if (!Array.isArray(value)) return [];
   const result: BridgeDeviceState[] = [];
@@ -1172,7 +1337,8 @@ function advancedArrayDeviceStates(
           unit: stateRecord.unit,
           updatedAt: stateRecord.timestamp ?? stateRecord.updatedAt,
           componentRole,
-          capabilityRole
+          capabilityRole,
+          source
         }, identifierRole);
         if (state) result.push(state);
       }
@@ -1220,6 +1386,140 @@ function advancedDeviceControls(
     }
   }
   return result;
+}
+
+function advancedCapabilityVersions(
+  value: unknown,
+  normalizeAdvancedAlias: AdvancedAliasNormalizer
+): Map<string, number> {
+  const result = new Map<string, number>();
+  if (!Array.isArray(value)) return result;
+  for (const componentValue of value) {
+    const componentRow = asRecord(componentValue);
+    const component = normalizedAdvancedId(
+      componentRow?.id ?? componentRow?.componentId,
+      "identifier",
+      normalizeAdvancedAlias
+    );
+    if (!component || !Array.isArray(componentRow?.capabilities)) continue;
+    for (const capabilityValue of componentRow.capabilities) {
+      const capabilityRow = asRecord(capabilityValue);
+      const capability = normalizedAdvancedId(
+        capabilityRow?.id ?? capabilityRow?.capabilityId,
+        "identifier",
+        normalizeAdvancedAlias
+      );
+      const version = capabilityRow?.version;
+      if (
+        !capability ||
+        typeof version !== "number" ||
+        !Number.isSafeInteger(version) ||
+        version < 0
+      ) {
+        continue;
+      }
+      result.set(`${component}\u0000${capability}`, version);
+    }
+  }
+  return result;
+}
+
+function advancedDeviceMetadata(
+  row: Record<string, unknown>,
+  normalizeAdvancedAlias: AdvancedAliasNormalizer
+): BridgeAdvancedDeviceMetadata | undefined {
+  const ownerId = normalizedAdvancedId(
+    row.ownerId ?? row.owner_id,
+    "identifier",
+    normalizeAdvancedAlias
+  ) ?? undefined;
+  const profileId = normalizedAdvancedId(
+    row.profileId ?? row.deviceProfileId ?? row.profile_id,
+    "identifier",
+    normalizeAdvancedAlias
+  ) ?? undefined;
+  const presentationId = normalizedAdvancedId(
+    row.presentationId ?? asRecord(row.presentation)?.presentationId,
+    "identifier",
+    normalizeAdvancedAlias
+  ) ?? undefined;
+  const parentDeviceId = normalizedAdvancedId(
+    row.parentDeviceId ?? row.parent_device_id,
+    "device",
+    normalizeAdvancedAlias
+  ) ?? undefined;
+  const hubId = normalizedAdvancedId(
+    row.hubId ?? row.hubDeviceId ?? row.hub_id,
+    "device",
+    normalizeAdvancedAlias
+  ) ?? undefined;
+  const driverId = normalizedAdvancedId(
+    row.driverId ?? row.driver_id,
+    "identifier",
+    normalizeAdvancedAlias
+  ) ?? undefined;
+  const childRows = Array.isArray(row.childDevices)
+    ? row.childDevices
+    : Array.isArray(row.children)
+      ? row.children
+      : [];
+  const childDeviceIds = childRows
+    .map((value) => {
+      const child = asRecord(value);
+      return normalizedAdvancedId(
+        child?.deviceId ?? child?.id ?? value,
+        "device",
+        normalizeAdvancedAlias
+      );
+    })
+    .filter((value): value is string => value !== null)
+    .sort();
+  const executionContext = safeToken(readString(row.executionContext ?? row.execution_context))
+    ? readString(row.executionContext ?? row.execution_context) ?? undefined
+    : undefined;
+  const restricted =
+    typeof row.restricted === "boolean"
+      ? row.restricted
+      : typeof row.isRestricted === "boolean"
+        ? row.isRestricted
+        : undefined;
+  const rawType = readString(row.deviceType ?? row.type ?? row.deviceTypeName)?.toUpperCase();
+  const group =
+    typeof row.group === "boolean"
+      ? row.group
+      : typeof row.isGroup === "boolean"
+        ? row.isGroup
+        : rawType === "GROUP"
+          ? true
+          : undefined;
+  const preferences = asRecord(row.preferences);
+  const preferenceKeys = preferences
+    ? Object.keys(preferences).filter((key) => safeToken(key)).sort()
+    : [];
+  const metadata: BridgeAdvancedDeviceMetadata = {
+    ...(ownerId ? { ownerId } : {}),
+    ...(profileId ? { profileId } : {}),
+    ...(presentationId ? { presentationId } : {}),
+    ...(parentDeviceId ? { parentDeviceId } : {}),
+    ...(childDeviceIds.length > 0 ? { childDeviceIds } : {}),
+    ...(hubId ? { hubId } : {}),
+    ...(driverId ? { driverId } : {}),
+    ...(executionContext ? { executionContext } : {}),
+    ...(restricted === undefined ? {} : { restricted }),
+    ...(group === undefined ? {} : { group }),
+    ...(preferenceKeys.length > 0 ? { preferenceKeys } : {})
+  };
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
+function cloneAdvancedMetadata(
+  value: BridgeAdvancedDeviceMetadata
+): BridgeAdvancedDeviceMetadata {
+  return {
+    ...value,
+    ...(value.childDeviceIds ? { childDeviceIds: [...value.childDeviceIds] } : {}),
+    ...(value.preferenceKeys ? { preferenceKeys: [...value.preferenceKeys] } : {})
+  };
 }
 
 function advancedComponentRole(component: Record<string, unknown>): string | undefined {
@@ -1273,7 +1573,8 @@ function stateFromSnapshot(
     attribute: row.attributeName,
     value: row.value,
     unit: row.unit,
-    updatedAt: row.timestamp
+    updatedAt: row.timestamp,
+    source: "LOCATION_EVENT"
   }, identifierRole);
 }
 
@@ -1300,7 +1601,8 @@ function stateFromEvent(
     attribute,
     value: event.value,
     unit: event.unit,
-    updatedAt: event.event_time ?? event.eventTime ?? data.event_time ?? data.eventTime
+    updatedAt: event.event_time ?? event.eventTime ?? data.event_time ?? data.eventTime,
+    source: "LOCATION_EVENT"
   }, identifierRole);
   return state?.updatedAt ? state : null;
 }
@@ -1357,6 +1659,7 @@ function stateFromParts(
   }
   const componentRole = safeRole(input.componentRole) ?? identifierRole(component);
   const capabilityRole = safeRole(input.capabilityRole) ?? identifierRole(capability);
+  const source = isBridgeStateSource(input.source) ? input.source : undefined;
   return {
     component,
     capability,
@@ -1365,8 +1668,25 @@ function stateFromParts(
     unit: readString(input.unit),
     updatedAt: validTimestamp(input.updatedAt),
     ...(componentRole ? { componentRole } : {}),
-    ...(capabilityRole ? { capabilityRole } : {})
+    ...(capabilityRole ? { capabilityRole } : {}),
+    ...(source ? { source } : {})
   };
+}
+
+function isBridgeStateSource(value: unknown): value is BridgeStateSource {
+  return [
+    "ADVANCED_SNAPSHOT",
+    "LOCATION_EVENT",
+    "COMMAND_STATUS_RECHECK",
+    "DOM_FALLBACK"
+  ].includes(String(value));
+}
+
+function safeEventMetadata(value: unknown): string | undefined {
+  return typeof value === "string" && value.length >= 1 && value.length <= 256 &&
+    !/[\u0000-\u001f\u007f]/u.test(value)
+    ? value
+    : undefined;
 }
 
 function controlFromSwatch(row: Record<string, unknown>): BridgeDeviceControl | null {
@@ -1863,6 +2183,78 @@ function unwrapSceneTypedValue(value: unknown): unknown {
 function arrayOfDeviceIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => safeId(item, "dev")).filter((item): item is string => item !== null);
+}
+
+function parseStoredAdvancedMetadata(
+  value: unknown
+): BridgeAdvancedDeviceMetadata | undefined | null {
+  if (value === undefined) return undefined;
+  const row = asRecord(value);
+  if (!row) return null;
+  const optionalId = (
+    key: keyof BridgeAdvancedDeviceMetadata,
+    prefix: "dev" | "identifier"
+  ): string | undefined | null => {
+    const candidate = row[key];
+    return candidate === undefined ? undefined : safeId(candidate, prefix);
+  };
+  const ownerId = optionalId("ownerId", "identifier");
+  const profileId = optionalId("profileId", "identifier");
+  const presentationId = optionalId("presentationId", "identifier");
+  const parentDeviceId = optionalId("parentDeviceId", "dev");
+  const hubId = optionalId("hubId", "dev");
+  const driverId = optionalId("driverId", "identifier");
+  if ([ownerId, profileId, presentationId, parentDeviceId, hubId, driverId].includes(null)) {
+    return null;
+  }
+  const executionContext =
+    row.executionContext === undefined
+      ? undefined
+      : safeToken(readString(row.executionContext))
+        ? readString(row.executionContext) ?? undefined
+        : null;
+  if (executionContext === null) return null;
+  const restricted = row.restricted;
+  const group = row.group;
+  if (
+    (restricted !== undefined && typeof restricted !== "boolean") ||
+    (group !== undefined && typeof group !== "boolean")
+  ) {
+    return null;
+  }
+  const childDeviceIds = parseStoredIdArray(row.childDeviceIds, "dev");
+  const preferenceKeys = parseStoredTokenArray(row.preferenceKeys);
+  if (childDeviceIds === null || preferenceKeys === null) return null;
+  return {
+    ...(ownerId ? { ownerId } : {}),
+    ...(profileId ? { profileId } : {}),
+    ...(presentationId ? { presentationId } : {}),
+    ...(parentDeviceId ? { parentDeviceId } : {}),
+    ...(childDeviceIds ? { childDeviceIds } : {}),
+    ...(hubId ? { hubId } : {}),
+    ...(driverId ? { driverId } : {}),
+    ...(executionContext ? { executionContext } : {}),
+    ...(typeof restricted === "boolean" ? { restricted } : {}),
+    ...(typeof group === "boolean" ? { group } : {}),
+    ...(preferenceKeys ? { preferenceKeys } : {})
+  };
+}
+
+function parseStoredIdArray(
+  value: unknown,
+  prefix: "dev" | "identifier"
+): string[] | undefined | null {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return null;
+  const parsed = value.map((entry) => safeId(entry, prefix));
+  return parsed.some((entry) => !entry) ? null : parsed as string[];
+}
+
+function parseStoredTokenArray(value: unknown): string[] | undefined | null {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return null;
+  const parsed = value.map((entry) => readString(entry));
+  return parsed.some((entry) => !safeToken(entry)) ? null : parsed as string[];
 }
 
 function parseStoredSceneExpectedStates(value: unknown): BridgeSceneExpectedState[] {

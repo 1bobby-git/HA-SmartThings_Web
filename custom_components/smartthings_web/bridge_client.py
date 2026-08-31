@@ -141,6 +141,19 @@ class SmartThingsWebBridgeClient:
         """Fetch non-secret Bridge health metadata for repairs/diagnostics."""
         return await self._request_json("GET", "/health/details")
 
+    async def async_reload_inventory(self) -> None:
+        """Request one coalesced Advanced inventory reconciliation."""
+        await self._async_maintenance("/api/v1/maintenance/reload-inventory")
+
+    async def async_reconnect_realtime(self) -> None:
+        """Request a bounded Location realtime reconnect."""
+        await self._async_maintenance("/api/v1/maintenance/reconnect-realtime")
+
+    async def _async_maintenance(self, path: str) -> None:
+        raw = await self._request_json("POST", path, auth=True, timeout_seconds=30)
+        if raw.get("accepted") is not True:
+            raise BridgeClientError("bridge_response_invalid")
+
     async def async_execute_switch(
         self,
         device_id: str,
@@ -170,6 +183,8 @@ class SmartThingsWebBridgeClient:
         control_id: str | None = None,
         control_label: str | None = None,
         arguments: list[Any] | None = None,
+        confirm: bool | None = None,
+        timeout: int | None = None,
     ) -> BridgeCommandResult:
         """Execute one generic command and require authoritative Bridge confirmation."""
         client_request_id = f"ha_{uuid4().hex}"
@@ -190,12 +205,18 @@ class SmartThingsWebBridgeClient:
             body["controlId"] = control_id
         if control_label is not None:
             body["controlLabel"] = control_label
+        if confirm is not None:
+            body["confirm"] = confirm
+        if timeout is not None:
+            if isinstance(timeout, bool) or timeout < 1 or timeout > 120:
+                raise BridgeClientError("invalid_arguments")
+            body["timeout"] = timeout
         raw = await self._request_json(
             "POST",
             "/api/v1/commands",
             auth=True,
             json_body=body,
-            timeout_seconds=90,
+            timeout_seconds=90 if timeout is None else timeout + 10,
         )
         result = parse_command_result(raw, client_request_id, target_type)
         if result is None:
@@ -350,6 +371,8 @@ class ReadOnlyBridgeClient:
         control_id: str | None = None,
         control_label: str | None = None,
         arguments: list[Any] | None = None,
+        confirm: bool | None = None,
+        timeout: int | None = None,
     ) -> BridgeCommandResult:
         """Block generic commands when the entry is read-only."""
         raise BridgeReadOnlyError("smartthings_web_read_only")

@@ -79,7 +79,14 @@ export function extractDeviceEventIdentity(input: unknown): EventIdentityInput |
     capability: readString(event, "capability"),
     attribute: readString(event, "attribute"),
     stateChange: readBoolean(event, "state_change", "stateChange"),
-    payloadHash: readString(delivery, "payload_hash", "payloadHash")
+    payloadHash:
+      readString(delivery, "payload_hash", "payloadHash") ??
+      createEventPayloadHash({
+        eventTime: readString(event, "event_time", "eventTime") ??
+          readString(data, "event_time", "eventTime"),
+        unit: readString(event, "unit"),
+        value: event.value
+      })
   };
 }
 

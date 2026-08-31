@@ -125,14 +125,23 @@ class BridgeInventory:
 class BridgeCommandResult:
     """Verified result returned by the local Bridge command endpoint."""
 
-    status: Literal["confirmed", "already_confirmed"]
+    status: Literal["confirmed", "already_confirmed", "accepted_unconfirmed"]
     sequence: int
     confirmation: Literal[
         "device_event",
         "inventory_snapshot",
         "current_state",
         "security_arm_state_event",
+        "accepted_receipt",
     ]
+    transport: Literal[
+        "smartthings_web_ui", "advanced", "location_native", "internal", "dom"
+    ] = "smartthings_web_ui"
+    lifecycle: Literal[
+        "CONFIRMED_BY_EVENT", "CONFIRMED_BY_STATUS", "ACCEPTED_UNCONFIRMED"
+    ] = (
+        "CONFIRMED_BY_EVENT"
+    )
 
 
 @dataclass
@@ -1534,18 +1543,22 @@ def parse_command_result(
     """Accept only a result bound to this request and an authoritative state source."""
     status = raw.get("status")
     confirmation = raw.get("confirmation")
+    transport = raw.get("transport")
+    lifecycle = raw.get("lifecycle")
     sequence = raw.get("sequence")
     if (
         raw.get("schemaVersion") != 1
         or raw.get("clientRequestId") != client_request_id
-        or raw.get("transport") != "smartthings_web_ui"
-        or status not in {"confirmed", "already_confirmed"}
+        or transport
+        not in {"smartthings_web_ui", "advanced", "location_native", "internal", "dom"}
+        or status not in {"confirmed", "already_confirmed", "accepted_unconfirmed"}
         or confirmation
         not in {
             "device_event",
             "inventory_snapshot",
             "current_state",
             "security_arm_state_event",
+            "accepted_receipt",
         }
         or not isinstance(sequence, int)
         or isinstance(sequence, bool)
@@ -1561,7 +1574,27 @@ def parse_command_result(
             return None
     if status == "already_confirmed" and confirmation != "current_state":
         return None
-    return BridgeCommandResult(status, sequence, confirmation)
+    if status == "accepted_unconfirmed":
+        if confirmation != "accepted_receipt" or target_type not in {None, "device"}:
+            return None
+        expected_lifecycle = "ACCEPTED_UNCONFIRMED"
+    else:
+        if confirmation == "accepted_receipt":
+            return None
+        expected_lifecycle = (
+            "CONFIRMED_BY_EVENT"
+            if confirmation in {"device_event", "security_arm_state_event"}
+            else "CONFIRMED_BY_STATUS"
+        )
+    if lifecycle is not None and lifecycle != expected_lifecycle:
+        return None
+    return BridgeCommandResult(
+        status=status,
+        sequence=sequence,
+        confirmation=confirmation,
+        transport=transport,
+        lifecycle=expected_lifecycle,
+    )
 
 
 def parse_location(raw: Any) -> BridgeLocation | None:

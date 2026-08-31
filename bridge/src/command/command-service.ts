@@ -6,6 +6,10 @@ import type {
   BridgeSceneExpectedState,
   DeviceStore
 } from "../state/device-store.js";
+import type {
+  CommandTransportName,
+  CommandTransportReceipt
+} from "./command-router.js";
 import { createHealthReport } from "../server/health.js";
 import type { RuntimeStatusStore } from "../state/runtime-state.js";
 
@@ -21,15 +25,26 @@ export interface SafeCommandRequest {
   clientRequestId: string;
   controlId?: string;
   controlLabel?: string;
+  confirm?: boolean;
+  timeout?: number;
 }
 
 export interface SafeCommandResult {
   schemaVersion: 1;
   clientRequestId: string;
-  status: "confirmed" | "already_confirmed";
+  status: "confirmed" | "already_confirmed" | "accepted_unconfirmed";
   sequence: number;
-  transport: "smartthings_web_ui";
-  confirmation: "device_event" | "inventory_snapshot" | "security_arm_state_event" | "current_state";
+  transport: "smartthings_web_ui" | CommandTransportName;
+  confirmation:
+    | "device_event"
+    | "inventory_snapshot"
+    | "security_arm_state_event"
+    | "current_state"
+    | "accepted_receipt";
+  lifecycle:
+    | "CONFIRMED_BY_EVENT"
+    | "CONFIRMED_BY_STATUS"
+    | "ACCEPTED_UNCONFIRMED";
 }
 
 type DeviceActionCommand =
@@ -62,12 +77,12 @@ type DeviceActionCommand =
 
 type LocationAction = "armAway" | "armStay" | "disarm";
 
-export interface SafeCommandExecutor {
-  executeDeviceAction?(input: {
+export interface DeviceActionExecutionInput {
     action: string;
     arguments: BridgeJsonValue[];
     attribute: string;
     capability: string;
+    capabilityVersion?: number;
     command: DeviceActionCommand;
     component: string;
     deviceId: string;
@@ -80,7 +95,12 @@ export interface SafeCommandExecutor {
     optionLabel?: string;
     optionCommand?: string;
     nativeCommand?: string;
-  }): Promise<void>;
+}
+
+export interface SafeCommandExecutor {
+  executeDeviceAction?(
+    input: DeviceActionExecutionInput
+  ): Promise<void | CommandTransportReceipt | "location_native" | "dom">;
   executeScene?(input: {
     action?: string;
     locationId: string;
@@ -97,6 +117,10 @@ export interface SafeCommandExecutor {
 export interface CommandResyncEvidence {
   authoritativeSnapshot: boolean;
   startedAtMs: number;
+}
+
+export interface CommandResyncRequest {
+  deviceId?: string;
 }
 
 export type SafeCommandErrorCode =
@@ -146,7 +170,9 @@ interface SafeCommandServiceOptions {
   timeoutMs: number;
   resyncAfterMs?: number;
   confirmationStabilityMs?: number;
-  resync: () => Promise<CommandResyncEvidence | undefined>;
+  resync: (request?: CommandResyncRequest) => Promise<CommandResyncEvidence | undefined>;
+  onPendingCountChange?: (count: number) => void;
+  onResult?: (result: SafeCommandResult) => void;
 }
 
 interface DedupeEntry {
@@ -160,8 +186,8 @@ type ResolvedDeviceRequest = SafeCommandRequest & {
   nativeCommand?: string;
 };
 
-const oldRequestKeys = ["deviceId", "component", "capability", "command", "arguments", "clientRequestId"] as const;
-const newRequestKeys = ["targetType", "targetId", "component", "capability", "attribute", "command", "arguments", "clientRequestId", "controlId", "controlLabel"] as const;
+const oldRequestKeys = ["deviceId", "component", "capability", "command", "arguments", "clientRequestId", "confirm", "timeout"] as const;
+const newRequestKeys = ["targetType", "targetId", "component", "capability", "attribute", "command", "arguments", "clientRequestId", "controlId", "controlLabel", "confirm", "timeout"] as const;
 const tokenPattern = /^[A-Za-z0-9_.:-]{1,160}$/u;
 const devicePattern = /^dev_[0-9]{3,32}$/u;
 const targetPattern = /^(?:dev|loc|identifier)_[A-Za-z0-9_]{3,64}$/u;
@@ -184,7 +210,10 @@ export class SafeCommandService {
       }
       return existing.result;
     }
-    const result = this.#enqueue(request);
+    const result = this.#enqueue(request).then((value) => {
+      this.options.onResult?.(value);
+      return value;
+    });
     this.#dedupe.set(request.clientRequestId, { fingerprint, result });
     while (this.#dedupe.size > dedupeLimit) {
       const oldest = this.#dedupe.keys().next().value as string | undefined;
@@ -202,8 +231,12 @@ export class SafeCommandService {
       () => undefined
     );
     this.#queues.set(request.targetId, queueTail);
+    this.options.onPendingCountChange?.(this.#queues.size);
     void queueTail.finally(() => {
-      if (this.#queues.get(request.targetId) === queueTail) this.#queues.delete(request.targetId);
+      if (this.#queues.get(request.targetId) === queueTail) {
+        this.#queues.delete(request.targetId);
+        this.options.onPendingCountChange?.(this.#queues.size);
+      }
     });
     return operation;
   }
@@ -234,24 +267,65 @@ export class SafeCommandService {
     validateCommandAttribute(effective.command, attribute, effective.controlId);
     const state = findState(device, effective.component, effective.capability, attribute);
     if (!state && !allowsMissingCurrentState(effective.command)) throw new SafeCommandError("capability_not_found");
-    if (!isSupportedDeviceCommand(effective.command)) throw new SafeCommandError("unsupported_command");
     const matchAny = confirmsAnyNewDeviceState(effective);
     const desired = matchAny ? undefined : desiredValueFor(effective.command, effective.arguments, state);
     if (!matchAny && desired === undefined) throw new SafeCommandError("invalid_arguments");
     if (state && desired !== undefined && stateValuesEqual(state.value, desired)) return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
+    const roomName = device.roomId ? snapshot.rooms.find((room) => room.id === device.roomId)?.name : undefined;
+    const capabilityVersion = this.options.devices.capabilityVersion(
+      effective.targetId,
+      effective.component,
+      effective.capability
+    );
+    const executionInput: DeviceActionExecutionInput = {
+      action: effective.command,
+      arguments: effective.arguments,
+      attribute,
+      capability: effective.capability,
+      ...(capabilityVersion === undefined ? {} : { capabilityVersion }),
+      command: effective.command as DeviceActionCommand,
+      component: effective.component,
+      deviceId: effective.targetId,
+      deviceName: device.name,
+      locationId: device.locationId,
+      locationNames,
+      ...(roomName ? { roomName } : {}),
+      ...(effective.controlId ? { controlId: effective.controlId } : {}),
+      ...(effective.controlLabel ? { controlLabel: effective.controlLabel } : {}),
+      ...(effective.optionLabel ? { optionLabel: effective.optionLabel } : {}),
+      ...(effective.optionCommand ? { optionCommand: effective.optionCommand } : {}),
+      ...(effective.nativeCommand ? { nativeCommand: effective.nativeCommand } : {})
+    };
+    if (isStatelessCommand(effective.command) || effective.confirm === false) {
+      try {
+        if (!this.options.executor.executeDeviceAction) {
+          throw new SafeCommandError("command_execution_failed");
+        }
+        const receipt = await this.options.executor.executeDeviceAction(executionInput);
+        return acceptedUnconfirmed(
+          effective.clientRequestId,
+          snapshot.sequence,
+          transportForExecution(receipt)
+        );
+      } catch (error) {
+        throw commandError(error);
+      }
+    }
+    let receiptCommandId: string | undefined;
+    let advancedSentAtMs: number | undefined;
     const wait = effective.command === "refresh"
       ? waitForRefreshCommand({
           devices: this.options.devices,
           deviceId: effective.targetId,
           afterSequence: snapshot.sequence,
-          resync: this.options.resync
+          resync: () => this.options.resync({ deviceId: effective.targetId })
         })
       : matchAny
         ? waitForAnyDeviceEvent({
             devices: this.options.devices,
             deviceId: effective.targetId,
             afterSequence: snapshot.sequence,
-            resync: this.options.resync
+            resync: () => this.options.resync({ deviceId: effective.targetId })
           })
       : waitForState({
           devices: this.options.devices,
@@ -260,39 +334,37 @@ export class SafeCommandService {
           desired,
           afterSequence: snapshot.sequence,
           stabilityMs: this.options.confirmationStabilityMs ?? 0,
-          resync: this.options.resync
+          resync: () => this.options.resync({ deviceId: effective.targetId }),
+          minimumEventTimeMs: () =>
+            advancedSentAtMs ??
+            (state?.updatedAt ? Date.parse(state.updatedAt) : undefined),
+          expectedCommandId: () => receiptCommandId
         });
-    const roomName = device.roomId ? snapshot.rooms.find((room) => room.id === device.roomId)?.name : undefined;
+    let executionResult: void | CommandTransportReceipt | "location_native" | "dom";
     try {
       if (!this.options.executor.executeDeviceAction) throw new SafeCommandError("command_execution_failed");
-      await this.options.executor.executeDeviceAction({
-        action: effective.command,
-        arguments: effective.arguments,
-        attribute,
-        capability: effective.capability,
-        command: effective.command as DeviceActionCommand,
-        component: effective.component,
-        deviceId: effective.targetId,
-        deviceName: device.name,
-        locationId: device.locationId,
-        locationNames,
-        ...(roomName ? { roomName } : {}),
-        ...(effective.controlId ? { controlId: effective.controlId } : {}),
-        ...(effective.controlLabel ? { controlLabel: effective.controlLabel } : {}),
-        ...(effective.optionLabel ? { optionLabel: effective.optionLabel } : {}),
-        ...(effective.optionCommand ? { optionCommand: effective.optionCommand } : {}),
-        ...(effective.nativeCommand ? { nativeCommand: effective.nativeCommand } : {})
-      });
+      executionResult = await this.options.executor.executeDeviceAction(executionInput);
+      if (executionResult && typeof executionResult === "object") {
+        receiptCommandId = executionResult.commandId;
+        if (executionResult.transport === "advanced") {
+          advancedSentAtMs = executionResult.sentAtMs;
+        }
+      }
     } catch (error) {
       wait.cancel();
       throw commandError(error);
     }
-    wait.startTimeout(this.options.timeoutMs, this.options.resyncAfterMs, Date.now());
+    wait.startTimeout(
+      effective.timeout === undefined ? this.options.timeoutMs : effective.timeout * 1_000,
+      this.options.resyncAfterMs,
+      Date.now()
+    );
     const evidence = await wait.result;
     return confirmed(
       request.clientRequestId,
       evidence.sequence,
-      evidence.source === "inventory_snapshot" ? "inventory_snapshot" : "device_event"
+      evidence.source === "inventory_snapshot" ? "inventory_snapshot" : "device_event",
+      transportForExecution(executionResult)
     );
   }
 
@@ -424,10 +496,22 @@ function normalizeRequest(targetType: SafeCommandRequest["targetType"], targetId
     if (input.arguments.length !== 1 || typeof input.arguments[0] !== "number" || !Number.isFinite(input.arguments[0])) throw new SafeCommandError("invalid_arguments");
   } else if (input.command === "playTrackAndResume") {
     if (input.arguments.length !== 1 || typeof input.arguments[0] !== "string" || input.arguments[0].length < 1 || input.arguments[0].length > 2048 || /[\u0000-\u001f\u007f]/u.test(input.arguments[0])) throw new SafeCommandError("invalid_arguments");
-  } else if (input.arguments.length !== 0) {
+  } else if (isSupportedDeviceCommand(input.command) && input.arguments.length !== 0) {
     throw new SafeCommandError("invalid_arguments");
   }
   if (typeof input.clientRequestId !== "string" || !clientRequestPattern.test(input.clientRequestId)) throw new SafeCommandError("invalid_client_request_id");
+  if (input.confirm !== undefined && typeof input.confirm !== "boolean") {
+    throw new SafeCommandError("invalid_arguments");
+  }
+  if (
+    input.timeout !== undefined &&
+    (typeof input.timeout !== "number" ||
+      !Number.isSafeInteger(input.timeout) ||
+      input.timeout < 1 ||
+      input.timeout > 120)
+  ) {
+    throw new SafeCommandError("invalid_arguments");
+  }
   return {
     targetType,
     targetId,
@@ -437,6 +521,8 @@ function normalizeRequest(targetType: SafeCommandRequest["targetType"], targetId
     ...(typeof input.attribute === "string" ? { attribute: input.attribute } : {}),
     ...(typeof input.controlId === "string" ? { controlId: input.controlId } : {}),
     ...(typeof input.controlLabel === "string" ? { controlLabel: input.controlLabel } : {}),
+    ...(typeof input.confirm === "boolean" ? { confirm: input.confirm } : {}),
+    ...(typeof input.timeout === "number" ? { timeout: input.timeout } : {}),
     command: input.command,
     arguments: input.arguments.map((value) => jsonValue(value) as BridgeJsonValue),
     clientRequestId: input.clientRequestId
@@ -449,7 +535,7 @@ function findState(device: BridgeDevice, component: string, capability: string, 
 
 type CommandResync = () => Promise<CommandResyncEvidence | undefined>;
 
-function waitForState(options: { devices: DeviceStore; request: SafeCommandRequest; attribute: string; desired: BridgeJsonValue | undefined; afterSequence: number; stabilityMs: number; resync: CommandResync }): ConfirmationWait {
+function waitForState(options: { devices: DeviceStore; request: SafeCommandRequest; attribute: string; desired: BridgeJsonValue | undefined; afterSequence: number; stabilityMs: number; resync: CommandResync; minimumEventTimeMs?: () => number | undefined; expectedCommandId?: () => string | undefined }): ConfirmationWait {
   const snapshotMatches = () => {
     if (options.desired === undefined) return false;
     const device = options.devices
@@ -486,7 +572,20 @@ function waitForState(options: { devices: DeviceStore; request: SafeCommandReque
         event.state.attribute === options.attribute &&
         !stateValuesEqual(event.state.value, options.desired)) ||
         (event.type === "inventory" && !snapshotMatches())),
-    matchesSnapshot: snapshotMatches
+    matchesSnapshot: snapshotMatches,
+    acceptsEvidence: (evidence) => {
+      if (evidence.source !== "event") return true;
+      const minimumEventTimeMs = options.minimumEventTimeMs?.();
+      if (
+        minimumEventTimeMs !== undefined &&
+        evidence.eventTime &&
+        Date.parse(evidence.eventTime) <= minimumEventTimeMs
+      ) {
+        return false;
+      }
+      const expectedCommandId = options.expectedCommandId?.();
+      return !expectedCommandId || !evidence.commandId || expectedCommandId === evidence.commandId;
+    }
   });
 }
 
@@ -628,9 +727,11 @@ interface ConfirmationWait {
 interface ConfirmationEvidence {
   sequence: number;
   source: "event" | "inventory_snapshot";
+  eventTime?: string;
+  commandId?: string;
 }
 
-function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: CommandResync; matches: (event: BridgeDeviceStoreEvent) => boolean; invalidates?: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean; acceptsResyncEvidence?: (evidence: CommandResyncEvidence | undefined, minStartedAtMs?: number) => boolean; stabilityMs?: number }): ConfirmationWait {
+function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: CommandResync; matches: (event: BridgeDeviceStoreEvent) => boolean; invalidates?: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean; acceptsResyncEvidence?: (evidence: CommandResyncEvidence | undefined, minStartedAtMs?: number) => boolean; acceptsEvidence?: (evidence: ConfirmationEvidence) => boolean; stabilityMs?: number }): ConfirmationWait {
   let settled = false;
   let interactionComplete = false;
   let unsubscribe: () => void = () => undefined;
@@ -638,6 +739,7 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
   let resyncTimer: NodeJS.Timeout | undefined;
   let stabilityTimer: NodeJS.Timeout | undefined;
   let resyncPromise: Promise<void> | undefined;
+  let lastResyncStartedAfterSequence: number | undefined;
   let pendingEvidence: ConfirmationEvidence | undefined;
   let rejectResult: (error: SafeCommandError) => void = () => undefined;
   let resolveResult: (evidence: ConfirmationEvidence) => void = () => undefined;
@@ -651,6 +753,10 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
   };
   const resolvePending = () => {
     if (settled || !interactionComplete || !pendingEvidence) return;
+    if (options.acceptsEvidence?.(pendingEvidence) === false) {
+      pendingEvidence = undefined;
+      return;
+    }
     if ((options.stabilityMs ?? 0) > 0) {
       if (stabilityTimer) clearTimeout(stabilityTimer);
       stabilityTimer = setTimeout(() => {
@@ -682,12 +788,16 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
       if (!options.matches(event)) return;
       pendingEvidence = {
         sequence: event.sequence,
-        source: event.type === "inventory" ? "inventory_snapshot" : "event"
+        source: event.type === "inventory" ? "inventory_snapshot" : "event",
+        ...(event.type === "state" && event.eventTime ? { eventTime: event.eventTime } : {}),
+        ...(event.type === "state" && event.commandId ? { commandId: event.commandId } : {})
       };
       resolvePending();
     });
   });
-  const settleFromSnapshot = async (): Promise<boolean> => {
+  const settleFromSnapshot = async (
+    minimumSequence = options.afterSequence
+  ): Promise<boolean> => {
     if (settled || options.matchesSnapshot?.() !== true) return settled;
     const stabilityMs = Math.max(0, options.stabilityMs ?? 0);
     if (stabilityMs > 0) {
@@ -695,7 +805,7 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
       if (settled || options.matchesSnapshot?.() !== true) return settled;
     }
     const sequence = options.devices.snapshot().sequence;
-    if (sequence <= options.afterSequence) return false;
+    if (sequence <= minimumSequence) return false;
     cleanup();
     resolveResult({ sequence, source: "inventory_snapshot" });
     return true;
@@ -711,12 +821,13 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
   };
   const resyncAndCheck = (minStartedAtMs?: number): Promise<void> => {
     if (!resyncPromise) {
+      lastResyncStartedAfterSequence = options.devices.currentSequence();
       resyncPromise = options
         .resync()
         .catch(() => undefined)
         .then(async (evidence) => {
           if (settleFromResyncEvidence(evidence, minStartedAtMs)) return;
-          await settleFromSnapshot();
+          await settleFromSnapshot(lastResyncStartedAfterSequence);
         });
     }
     return resyncPromise;
@@ -742,8 +853,10 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
       timer = setTimeout(() => {
         timer = undefined;
         const finalCheck = hasEarlyResync
-          ? settleFromSnapshot()
-          : resyncAndCheck(minResyncStartedAtMs).then(() => settleFromSnapshot());
+          ? settleFromSnapshot(lastResyncStartedAfterSequence ?? options.afterSequence)
+          : resyncAndCheck(minResyncStartedAtMs).then(() =>
+              settleFromSnapshot(lastResyncStartedAfterSequence ?? options.afterSequence)
+            );
         void finalCheck.then((confirmedBySnapshot) => {
           if (settled || confirmedBySnapshot) return;
           cleanup();
@@ -1357,6 +1470,15 @@ function stateValuesEqual(
   if (typeof actual === "string" && typeof desired === "string") {
     return actual.trim().toLowerCase() === desired.trim().toLowerCase();
   }
+  if (
+    typeof actual === "number" &&
+    Number.isFinite(actual) &&
+    typeof desired === "number" &&
+    Number.isFinite(desired)
+  ) {
+    const tolerance = Math.max(1e-6, Math.abs(desired) * 1e-6);
+    return Math.abs(actual - desired) <= tolerance;
+  }
   return JSON.stringify(actual) === JSON.stringify(desired);
 }
 
@@ -1406,11 +1528,63 @@ function safeControlLabel(value: unknown): value is string {
 }
 
 function alreadyConfirmed(clientRequestId: string, sequence: number): SafeCommandResult {
-  return { schemaVersion: 1, clientRequestId, status: "already_confirmed", sequence, transport: "smartthings_web_ui", confirmation: "current_state" };
+  return {
+    schemaVersion: 1,
+    clientRequestId,
+    status: "already_confirmed",
+    sequence,
+    transport: "smartthings_web_ui",
+    confirmation: "current_state",
+    lifecycle: "CONFIRMED_BY_STATUS"
+  };
 }
 
-function confirmed(clientRequestId: string, sequence: number, confirmation: SafeCommandResult["confirmation"]): SafeCommandResult {
-  return { schemaVersion: 1, clientRequestId, status: "confirmed", sequence, transport: "smartthings_web_ui", confirmation };
+function confirmed(
+  clientRequestId: string,
+  sequence: number,
+  confirmation: SafeCommandResult["confirmation"],
+  transport: SafeCommandResult["transport"] = "smartthings_web_ui"
+): SafeCommandResult {
+  return {
+    schemaVersion: 1,
+    clientRequestId,
+    status: "confirmed",
+    sequence,
+    transport,
+    confirmation,
+    lifecycle:
+      confirmation === "device_event" || confirmation === "security_arm_state_event"
+        ? "CONFIRMED_BY_EVENT"
+        : "CONFIRMED_BY_STATUS"
+  };
+}
+
+function acceptedUnconfirmed(
+  clientRequestId: string,
+  sequence: number,
+  transport: SafeCommandResult["transport"]
+): SafeCommandResult {
+  return {
+    schemaVersion: 1,
+    clientRequestId,
+    status: "accepted_unconfirmed",
+    sequence,
+    transport,
+    confirmation: "accepted_receipt",
+    lifecycle: "ACCEPTED_UNCONFIRMED"
+  };
+}
+
+function transportForExecution(
+  result: void | CommandTransportReceipt | "location_native" | "dom"
+): SafeCommandResult["transport"] {
+  if (result === "location_native" || result === "dom") return result;
+  if (result && typeof result === "object") return result.transport;
+  return "smartthings_web_ui";
+}
+
+function isStatelessCommand(command: string): boolean {
+  return ["refresh", "press", "nextTrack", "previousTrack"].includes(command);
 }
 
 function commandError(error: unknown): SafeCommandError {

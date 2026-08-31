@@ -95,6 +95,16 @@ class DiagnosticsTests(unittest.IsolatedAsyncioTestCase):
                             "protocolChangeCount": 0,
                             "restartCount": 0,
                             "detailDiscoveryFailureCount": 0,
+                            "architectureVersion": "advanced-primary-v1",
+                            "advancedInventoryDeviceCount": 235,
+                            "advancedInventoryLocationCount": 2,
+                            "advancedInventoryPageCount": 2,
+                            "pendingCommandCount": 0,
+                            "domFallbackCount": 0,
+                            "reconnectCount": 3,
+                            "lastReconnectAtMs": 123456,
+                            "lastCommandTransport": "advanced",
+                            "lastCommandConfirmation": "CONFIRMED_BY_EVENT",
                             "deviceId": "raw-device-id",
                         },
                     }
@@ -111,6 +121,16 @@ class DiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(diagnostics["health"]["live"], True)
         self.assertEqual(diagnostics["health"]["details"]["state"], "CONNECTED")
         self.assertEqual(diagnostics["health"]["details"]["observedDeviceCount"], 1)
+        self.assertEqual(
+            diagnostics["health"]["details"]["architectureVersion"],
+            "advanced-primary-v1",
+        )
+        self.assertEqual(
+            diagnostics["health"]["details"]["advancedInventoryDeviceCount"], 235
+        )
+        self.assertEqual(
+            diagnostics["health"]["details"]["lastCommandTransport"], "advanced"
+        )
         self.assertNotRegex(
             serialized,
             "raw-secret-token|raw-location-id|raw-room-id|raw-device-id|Private|example.invalid",

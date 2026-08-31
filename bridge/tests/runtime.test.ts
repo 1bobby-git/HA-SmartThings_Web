@@ -79,6 +79,30 @@ class FakePage extends FakeEmitter {
     this.currentUrl = url;
   });
   readonly evaluate = vi.fn(async (pageFunction?: unknown, argument?: unknown) => {
+    if (
+      typeof argument === "object" &&
+      argument !== null &&
+      typeof (argument as { endpoint?: unknown }).endpoint === "string"
+    ) {
+      this.advancedRequestCalls.push(argument);
+      const request = argument as { method?: unknown; path?: unknown };
+      if (request.method === "POST") {
+        await this.onAdvancedCommand?.();
+        return {
+          ok: true,
+          status: 200,
+          value: this.advancedCommandResponse
+        };
+      }
+      if (typeof request.path === "string" && request.path.endsWith("/status")) {
+        return { ok: true, status: 200, value: this.advancedStatusResponse };
+      }
+      return {
+        ok: true,
+        status: 200,
+        value: this.advancedSnapshots[0] ?? { items: [] }
+      };
+    }
     this.evaluateCalls.push([pageFunction, argument]);
     if (
       typeof argument === "object" &&
@@ -94,7 +118,11 @@ class FakePage extends FakeEmitter {
     this.closed = true;
   });
   readonly evaluateCalls: unknown[][] = [];
+  readonly advancedRequestCalls: unknown[] = [];
   advancedSnapshots: unknown[] = [];
+  advancedCommandResponse: unknown = { results: [{ status: "UNSUPPORTED" }] };
+  advancedStatusResponse: unknown = { components: {} };
+  onAdvancedCommand: (() => void | Promise<void>) | undefined;
   sessionTouchOutcome: "ok" | "reauth" | "failed" = "ok";
   onSessionTouch: (() => void | Promise<void>) | undefined;
 
@@ -253,11 +281,13 @@ describe("createBridgeRuntime", () => {
     expect(isWholeAdvancedDevicesSnapshotUrl(reversed.toString())).toBe(true);
   });
 
-  test("wires the authenticated command API through an isolated UI page and push confirmation", async () => {
+  test("uses the Advanced command endpoint first and confirms it from the Location push", async () => {
     const root = createTempRoot();
-    const context = new FakeContext([
-      new FakePage("https://my.smartthings.com/location/raw-location-001")
-    ]);
+    const keeper = new FakePage("https://my.smartthings.com/location/raw-location-001");
+    keeper.advancedCommandResponse = {
+      results: [{ id: "advanced-command-001", status: "ACCEPTED" }]
+    };
+    const context = new FakeContext([keeper]);
     const runtime = await createBridgeRuntime(
       createDeps(root, { chromium: { launchPersistentContext: vi.fn(async () => context) } })
     );
@@ -334,7 +364,7 @@ describe("createBridgeRuntime", () => {
     expect(target).toBeDefined();
     const state = target?.states.find((candidate) => candidate.attribute === "switch");
     expect(state).toBeDefined();
-    context.onCommandToggle = async () => {
+    keeper.onAdvancedCommand = async () => {
       await socket.emit("framereceived", {
         payload: buildDeviceEventFrame({
           eventId: "command-event-001",
@@ -343,7 +373,7 @@ describe("createBridgeRuntime", () => {
           attribute: "switch",
           value: "on",
           stateChange: true,
-          eventTime: "2026-08-25T00:00:01Z"
+          eventTime: new Date(Date.now() + 1_000).toISOString()
         })
       });
     };
@@ -364,16 +394,75 @@ describe("createBridgeRuntime", () => {
     const responseBody = await response.json();
     expect({ status: response.status, body: responseBody }).toMatchObject({
       status: 200,
-      body: { status: "confirmed", confirmation: "device_event" }
+      body: {
+        status: "confirmed",
+        confirmation: "device_event",
+        transport: "advanced"
+      }
     });
     expect(
       context.existingPages.filter(
         (page) => !page.closed && page.url() !== "https://my.smartthings.com/advanced"
       )
-    ).toHaveLength(2);
+    ).toHaveLength(1);
+    expect(
+      keeper.advancedRequestCalls.some(
+        (request) =>
+          (request as { method?: unknown }).method === "POST" &&
+          String((request as { path?: unknown }).path).endsWith("/commands")
+      )
+    ).toBe(true);
+    const health = await fetch(`${baseUrl}/health/details`).then(
+      (value) => value.json() as Promise<{ details: Record<string, unknown> }>
+    );
+    expect(health.details).toMatchObject({
+      architectureVersion: "advanced-primary-v1",
+      advancedInventoryDeviceCount: expect.any(Number),
+      advancedInventoryPageCount: expect.any(Number),
+      pendingCommandCount: 0,
+      domFallbackCount: 0,
+      lastCommandTransport: "advanced",
+      lastCommandConfirmation: "CONFIRMED_BY_EVENT"
+    });
+    keeper.onAdvancedCommand = undefined;
+    keeper.advancedStatusResponse = {
+      components: {
+        main: {
+          switch: {
+            switch: {
+              value: "off",
+              timestamp: new Date(Date.now() + 2_000).toISOString()
+            }
+          }
+        }
+      }
+    };
+    const statusConfirmed = await fetch(`${baseUrl}/api/v1/commands`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({
+        deviceId: target?.id,
+        component: state?.component,
+        capability: state?.capability,
+        command: "off",
+        arguments: [],
+        clientRequestId: "request_haos_status_002"
+      })
+    });
+    await expect(statusConfirmed.json()).resolves.toMatchObject({
+      status: "confirmed",
+      confirmation: "inventory_snapshot",
+      lifecycle: "CONFIRMED_BY_STATUS",
+      transport: "advanced"
+    });
+    expect(
+      keeper.advancedRequestCalls.some((request) =>
+        String((request as { path?: unknown }).path).endsWith("/status")
+      )
+    ).toBe(true);
   });
 
-  test("confirms refresh commands from authoritative Advanced resync evidence", async () => {
+  test("accepts stateless refresh without inventing a persistent confirmation state", async () => {
     const root = createTempRoot();
     const keeper = new FakePage("https://my.smartthings.com/location/raw-location-001");
     keeper.advancedSnapshots = [
@@ -477,7 +566,11 @@ describe("createBridgeRuntime", () => {
 
     expect({ status: response.status, body: responseBody }).toMatchObject({
       status: 200,
-      body: { status: "confirmed", confirmation: "inventory_snapshot" }
+      body: {
+        status: "accepted_unconfirmed",
+        confirmation: "accepted_receipt",
+        lifecycle: "ACCEPTED_UNCONFIRMED"
+      }
     });
     expect(keeper.evaluate).toHaveBeenCalled();
   });
@@ -808,6 +901,7 @@ describe("createBridgeRuntime", () => {
     const socket = new FakeEmitter() as FakeEmitter & { url: () => string };
     socket.url = () => "wss://my.smartthings.com/socket.io/?EIO=4&transport=websocket";
     await context.emit("websocket", socket);
+    const advancedRequestsBeforeRecovery = keeper.advancedRequestCalls.length;
 
     await socket.emit("close", undefined);
 
@@ -817,6 +911,10 @@ describe("createBridgeRuntime", () => {
       parserHealthy: false,
       initialSnapshotComplete: false
     });
+    await socket.emit("framereceived", { payload: "2" });
+    await vi.waitFor(() =>
+      expect(keeper.advancedRequestCalls.length).toBeGreaterThan(advancedRequestsBeforeRecovery)
+    );
   });
 
   test("recovers a stale-but-open authenticated SmartThings socket after received frames stop", async () => {
@@ -1349,7 +1447,7 @@ describe("createBridgeRuntime", () => {
     expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(true);
   });
 
-  test("keeps waiting to open the advanced snapshot page after delayed readiness", async () => {
+  test("does not retain a second Advanced page after delayed realtime readiness", async () => {
     vi.useFakeTimers();
     const root = createTempRoot();
     const context = new FakeContext([
@@ -1375,8 +1473,9 @@ describe("createBridgeRuntime", () => {
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(context.existingPages.some((page) => page.url() === "https://my.smartthings.com/advanced")).toBe(
-      true
+      false
     );
+    expect(context.existingPages[0]?.advancedRequestCalls.length).toBeGreaterThan(0);
   });
 
   test("serves the physical action probe from normal and protocol-load-failed runtimes", async () => {

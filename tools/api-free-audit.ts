@@ -111,11 +111,33 @@ function isApiFinding(
   index: number,
   relativePath: string
 ): boolean {
+  const fileText = lines.join("\n");
   if (
     rule === "direct-http-client" &&
     /\bfetch\s*\(\s*["'`]\/?api\/v1\/[A-Za-z0-9._/-]+["'`]/u.test(line)
   ) {
     return false;
+  }
+  if (
+    rule === "direct-http-client" &&
+    relativePath === "bridge/src/advanced/authenticated-session.ts" &&
+    /authenticated-page-same-origin-advanced-request/u.test(nearby(lines, index)) &&
+    /credentials:\s*"same-origin"/u.test(nearby(lines, index)) &&
+    /method:\s*input\.method/u.test(nearby(lines, index)) ||
+    (
+      rule === "direct-http-client" &&
+      relativePath === "bridge/src/advanced/authenticated-session.ts" &&
+      /authenticated-page-same-origin-advanced-request/u.test(nearby(lines, index)) &&
+      /credentials:\s*"same-origin"/u.test(nearby(lines, index)) &&
+      /method:\s*"(?:GET|POST)"/u.test(nearby(lines, index))
+    )
+  ) {
+    if (
+      /url\.origin\s*!==\s*SMARTTHINGS_ORIGIN/u.test(fileText) &&
+      /url\.pathname\.startsWith\("\/advanced\/cupcake-api\/"\)/u.test(fileText)
+    ) {
+      return false;
+    }
   }
   if (
     rule === "direct-http-client" &&
@@ -131,6 +153,16 @@ function isApiFinding(
     relativePath === "bridge/src/browser/keeper-page.ts" &&
     /\bcontroller\.abort\(\)/u.test(line) &&
     /authenticated-page-same-origin-read-only-session-touch/u.test(lines.join("\n"))
+  ) {
+    return false;
+  }
+  if (
+    rule === "playwright-network-mutation" &&
+    relativePath === "bridge/src/advanced/authenticated-session.ts" &&
+    /\bcontroller\.abort\(\)/u.test(line) &&
+    /authenticated-page-same-origin-advanced-request/u.test(fileText) &&
+    /url\.origin\s*!==\s*SMARTTHINGS_ORIGIN/u.test(fileText) &&
+    /url\.pathname\.startsWith\("\/advanced\/cupcake-api\/"\)/u.test(fileText)
   ) {
     return false;
   }

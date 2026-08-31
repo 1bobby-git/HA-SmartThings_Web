@@ -7,6 +7,18 @@
 > **현재 상태: LIMITED ALPHA**  
 > 현재 게이트는 `DECISION: LIMITED`입니다. 실제 HAOS 환경에서 연결·재시작 복구·푸시 상태 반영이 검증되었지만, 장시간 유휴 상태·호스트 재부팅 복구·모든 기기 유형의 제어·완전한 API 독립성은 아직 검증 범위 밖입니다.
 
+## Advanced 주 데이터·명령 구조
+
+버전 0.1.146은 로그인된 동일 Chromium context에서 SmartThings Advanced 내부 경로를 장치·location·room·상태·health·capability의 주 데이터 소스로 사용합니다. 200개를 넘는 장치는 next link 또는 `isNext/max/page` 규칙으로 끝까지 읽고 `deviceId`로 병합합니다.
+
+장치 명령은 **Advanced direct command → `/location` native command → 검증된 내부 경로 → DOM fallback** 순서입니다. HTTP `ACCEPTED`만으로 HA 상태를 바꾸지 않으며, stateful 명령은 `/location`의 새 push 또는 Advanced status 재조회로 확인합니다. `refresh`, `press`, media next/previous처럼 지속 상태가 없는 명령은 접수 성공만 반환합니다.
+
+`/location` 페이지는 제거하지 않습니다. Socket.IO realtime keeper로 계속 유지되며 물리 조작, SmartThings 앱, 외부 자동화의 변경을 HA에 전달합니다. 재연결 후 첫 수신 프레임이 확인되면 Advanced 전체 snapshot을 다시 동기화합니다. 쿠키·토큰·CSRF·원본 device/location ID는 서비스, 로그, diagnostics에 노출하지 않습니다.
+
+기존 `smartthings_web` config entry, entity ID, unique ID, device registry identifier, area와 사용자 이름은 유지됩니다. 범용 명령은 `smartthings_web.execute_command` 서비스를 사용하며 `device_id`, `component`, `capability`, `command`와 선택적인 `arguments`, `confirm`, `timeout`을 받습니다.
+
+운영 서비스로 `smartthings_web.reload_inventory`, `smartthings_web.refresh_device`, `smartthings_web.reconnect_realtime`도 제공합니다. 앱 옵션에서 confirmation timeout, status recheck, 저빈도 reconciliation interval, DOM fallback, protocol debug logging을 설정할 수 있으며 잘못된 값은 시작 전에 거부됩니다.
+
 ## 빠른 설치
 
 설치는 **브리지 앱 → HACS 통합 → 통합 설정** 순서로 진행합니다.

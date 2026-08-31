@@ -3,8 +3,10 @@ import { decodeSocketIoTextFrame } from "../inspector/socketio-decoder.js";
 type VolatileAliasKind = "device" | "identifier";
 
 const DEVICE_ALIAS = /^dev_[0-9A-Za-z_-]{3,64}$/u;
+const LOCATION_ALIAS = /^loc_[0-9A-Za-z_-]{3,64}$/u;
 const IDENTIFIER_ALIAS = /^identifier_[0-9A-Za-z_-]{3,64}$/u;
 const DEVICE_KEYS = new Set(["deviceId", "device_id"]);
+const LOCATION_KEYS = new Set(["locationId", "location_id"]);
 const COMPONENT_KEYS = new Set(["component", "componentId", "component_id"]);
 const CAPABILITY_KEYS = new Set(["capability", "capabilityId", "capability_id"]);
 const SEMANTIC_IDENTIFIER_ROLES = new Set([
@@ -37,11 +39,14 @@ const MAX_VOLATILE_FRAME_BYTES = 8 * 1024 * 1024;
 export class VolatileIdentifierMap {
   readonly #deviceAliases = new Map<string, string>();
   readonly #identifierAliases = new Map<string, string>();
+  readonly #locationAliases = new Map<string, string>();
   readonly #rawDevices = new Set<string>();
   readonly #rawIdentifiers = new Set<string>();
+  readonly #rawLocations = new Set<string>();
 
   constructor(
-    private readonly alias: (kind: VolatileAliasKind, rawIdentifier: string) => string
+    private readonly alias: (kind: VolatileAliasKind, rawIdentifier: string) => string,
+    private readonly aliasLocation?: (rawIdentifier: string) => string
   ) {}
 
   observeRawWebSocketFrame(_direction: "sent" | "received", raw: string): void {
@@ -71,6 +76,8 @@ export class VolatileIdentifierMap {
       if (!isRecord(rowValue)) continue;
       const deviceId = firstString(rowValue.deviceId, rowValue.device_id);
       if (deviceId) this.#remember("device", deviceId);
+      const locationId = firstString(rowValue.locationId, rowValue.location_id);
+      if (locationId) this.#rememberLocation(locationId);
       if (!Array.isArray(rowValue.components)) continue;
       for (const componentValue of rowValue.components) {
         if (!isRecord(componentValue)) continue;
@@ -94,6 +101,10 @@ export class VolatileIdentifierMap {
     return IDENTIFIER_ALIAS.test(alias) ? this.#identifierAliases.get(alias) : undefined;
   }
 
+  rawLocationId(alias: string): string | undefined {
+    return LOCATION_ALIAS.test(alias) ? this.#locationAliases.get(alias) : undefined;
+  }
+
   semanticIdentifierRole(alias: string): string | undefined {
     const raw = this.rawIdentifier(alias) ?? alias;
     if (!raw) return undefined;
@@ -105,8 +116,10 @@ export class VolatileIdentifierMap {
   reset(): void {
     this.#deviceAliases.clear();
     this.#identifierAliases.clear();
+    this.#locationAliases.clear();
     this.#rawDevices.clear();
     this.#rawIdentifiers.clear();
+    this.#rawLocations.clear();
   }
 
   #walk(root: unknown): void {
@@ -126,6 +139,7 @@ export class VolatileIdentifierMap {
       for (const [key, value] of Object.entries(current.value)) {
         if (typeof value === "string") {
           if (DEVICE_KEYS.has(key)) this.#remember("device", value);
+          if (LOCATION_KEYS.has(key)) this.#rememberLocation(value);
           if (COMPONENT_KEYS.has(key) || CAPABILITY_KEYS.has(key)) {
             this.#remember("identifier", value);
           }
@@ -163,6 +177,29 @@ export class VolatileIdentifierMap {
       rawValues.add(raw);
     } catch {
       // Raw identifiers remain optional, in-memory acceleration hints only.
+    }
+  }
+
+  #rememberLocation(raw: string): void {
+    if (
+      !this.aliasLocation ||
+      raw.length === 0 ||
+      raw.length > MAX_IDENTIFIER_LENGTH ||
+      /[\u0000-\u001f\u007f]/u.test(raw) ||
+      this.#rawLocations.has(raw)
+    ) {
+      return;
+    }
+    try {
+      let alias = this.aliasLocation(raw);
+      for (let generation = 0; generation < 3; generation += 1) {
+        if (!LOCATION_ALIAS.test(alias)) break;
+        this.#locationAliases.set(alias, raw);
+        alias = this.aliasLocation(alias);
+      }
+      this.#rawLocations.add(raw);
+    } catch {
+      // Location identifiers remain optional in-memory hints only.
     }
   }
 }

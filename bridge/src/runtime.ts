@@ -12,10 +12,19 @@ import {
 import { BrowserSupervisor } from "./browser/browser-supervisor.js";
 import { SmartThingsWebUiCommandExecutor } from "./browser/command-page.js";
 import { DeviceDetailDiscovery } from "./browser/device-detail-discovery.js";
+import { AuthenticatedSmartThingsSession } from "./advanced/authenticated-session.js";
+import { AdvancedInventoryAdapter } from "./advanced/inventory-adapter.js";
+import { AdvancedCommandAdapter } from "./advanced/command-adapter.js";
 import {
-  SafeCommandService,
-  type CommandResyncEvidence
+  CapabilityDefinitionCache,
+  parseCapabilityDefinition
+} from "./advanced/capability-cache.js";
+import { AdvancedFirstCommandExecutor } from "./command/advanced-first-executor.js";
+import {
+  type CommandResyncEvidence,
+  type CommandResyncRequest
 } from "./command/command-service.js";
+import { CommandConfirmationCoordinator } from "./command/command-confirmation.js";
 import {
   launchSmartThingsPersistentContext,
   type ChromiumLauncher
@@ -44,6 +53,8 @@ import { BridgeAuth } from "./server/bridge-auth.js";
 import { CaptureStore } from "./state/capture-store.js";
 import { CameraImageStore } from "./state/camera-image-store.js";
 import { DeviceStore } from "./state/device-store.js";
+import { StateReconciliationCoordinator } from "./state/reconciliation-coordinator.js";
+import { LocationRealtimeAdapter } from "./realtime/location-realtime-adapter.js";
 import {
   ProtocolIntegrityStore,
   type ProtocolIntegritySnapshot
@@ -82,7 +93,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.145";
+const bridgeVersion = "0.1.146";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
@@ -110,6 +121,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   const status = new RuntimeStatusStore({
     initial: {
       bridgeVersion,
+      architectureVersion: "advanced-primary-v1",
       dbAvailable: true,
       protocolVersion: protocolVersionFor(protocolIntegritySnapshot),
       protocolChangeCount: protocolIntegritySnapshot?.changeCount ?? 0,
@@ -130,7 +142,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   const redactor = createRedactor(aliases);
   const volatileIdentifiers = new VolatileIdentifierMap((kind, rawIdentifier) =>
     aliases.alias(kind, rawIdentifier)
-  );
+  , (rawIdentifier) => aliases.alias("location", rawIdentifier));
   log.info("bridge_init:capture_store");
   const captures = new CaptureStore(paths.sqlitePath);
   const devices = new DeviceStore({
@@ -158,28 +170,93 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   let sessionTouchInFlight = false;
   let sessionTouchReadySinceMs: number | undefined;
   let lastSessionTouchAttemptAtMs = 0;
-  const refreshCommandSnapshot = (): Promise<CommandResyncEvidence> => {
+  const authenticatedSession = new AuthenticatedSmartThingsSession({
+    currentKeeper: () => currentKeeperManager?.currentKeeper(),
+    openAdvancedPage: async () => {
+      const manager = currentKeeperManager;
+      if (!manager) throw new Error("advanced_session_unavailable");
+      return await manager.openAdvancedPage();
+    }
+  });
+  const advancedInventory = new AdvancedInventoryAdapter(authenticatedSession);
+  const capabilityCache = new CapabilityDefinitionCache(async (capabilityId, version) =>
+    parseCapabilityDefinition(
+      await advancedInventory.getCapabilityDefinition(capabilityId, version)
+    )
+  );
+  const reconciliation = new StateReconciliationCoordinator({
+    load: () => advancedInventory.getInventory(),
+    apply: (snapshot) => {
+      const rawSnapshot = {
+        locations: snapshot.locations,
+        rooms: snapshot.rooms,
+        devices: snapshot.devices
+      };
+      volatileIdentifiers.observeRawAdvancedDeviceSnapshot({ items: snapshot.devices });
+      cameraImages.observeRawAdvancedDeviceSnapshot({ items: snapshot.devices });
+      const sanitized = redactor(rawSnapshot) as {
+        locations?: unknown;
+        rooms?: unknown;
+        devices?: unknown;
+      };
+      devices.observeAdvancedInventorySnapshot(sanitized, {
+        authoritativeWholeSnapshot: true
+      });
+      cameraImages.observeInventory(devices.snapshot());
+      status.update({
+        advancedInventoryLastSyncAtMs: Date.now(),
+        advancedInventoryDeviceCount: snapshot.devices.length,
+        advancedInventoryLocationCount: snapshot.locations.length,
+        advancedInventoryPageCount: snapshot.pageCount
+      });
+    }
+  });
+  const refreshCommandSnapshot = (
+    request?: CommandResyncRequest
+  ): Promise<CommandResyncEvidence> => {
     return (async () => {
       const startedAtMs = Date.now();
       const keeper = currentKeeperManager?.currentKeeper();
       if (!keeper || classifySmartThingsUrl(keeper.url()) !== "smartthings_location") {
         throw new Error("command_browser_unavailable");
       }
-      const snapshots = await fetchAdvancedDeviceSnapshots(keeper, [
-        ADVANCED_DEVICE_SNAPSHOT_URLS[1]
-      ]);
-      if (snapshots.length === 0) throw new Error("advanced_snapshot_unavailable");
-      for (const snapshot of snapshots) {
-        volatileIdentifiers.observeRawAdvancedDeviceSnapshot(snapshot);
-        cameraImages.observeRawAdvancedDeviceSnapshot(snapshot);
-        devices.observeAdvancedDeviceSnapshot(redactor(snapshot));
+      if (request?.deviceId) {
+        const device = devices
+          .snapshot()
+          .devices.find((candidate) => candidate.id === request.deviceId);
+        const rawDeviceId = volatileIdentifiers.rawDeviceId(request.deviceId);
+        const rawLocationId = device
+          ? volatileIdentifiers.rawLocationId(device.locationId)
+          : undefined;
+        if (!device || !rawDeviceId || !rawLocationId) {
+          throw new Error("advanced_status_identifier_unavailable");
+        }
+        const statusPayload = await advancedInventory.getDeviceStatus(rawDeviceId);
+        const rawSnapshot = {
+          items: [
+            {
+              deviceId: rawDeviceId,
+              locationId: rawLocationId,
+              status: statusPayload
+            }
+          ]
+        };
+        volatileIdentifiers.observeRawAdvancedDeviceSnapshot(rawSnapshot);
+        devices.observeAdvancedDeviceSnapshot(redactor(rawSnapshot), {
+          source: "COMMAND_STATUS_RECHECK"
+        });
         cameraImages.observeInventory(devices.snapshot());
+        log.info("command_diag:advanced_status_refreshed");
+        return { authoritativeSnapshot: false, startedAtMs };
       }
-      log.info(`command_diag:advanced_snapshot_refreshed:${snapshots.length}`);
+      await reconciliation.request("command_status");
+      const reconciliationStatus = reconciliation.snapshot();
+      if (reconciliationStatus.deviceCount === 0) throw new Error("advanced_snapshot_unavailable");
+      log.info(`command_diag:advanced_snapshot_refreshed:${reconciliationStatus.pageCount}`);
       return { authoritativeSnapshot: true, startedAtMs };
     })();
   };
-  const commandExecutor = new SmartThingsWebUiCommandExecutor(
+  const legacyCommandExecutor = new SmartThingsWebUiCommandExecutor(
     () => currentKeeperManager,
     (rawLocationId) =>
       aliases.alias("location", aliases.alias("location", rawLocationId)),
@@ -190,13 +267,35 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       resolveRawIdentifier: (alias) => volatileIdentifiers.rawIdentifier(alias)
     }
   );
-  const commands = new SafeCommandService({
+  const advancedCommandExecutor = new AdvancedCommandAdapter({
+    session: authenticatedSession,
+    capabilityCache,
+    resolveRawDeviceId: (alias) => volatileIdentifiers.rawDeviceId(alias),
+    resolveRawIdentifier: (alias) => volatileIdentifiers.rawIdentifier(alias)
+  });
+  const commandExecutor = new AdvancedFirstCommandExecutor(
+    advancedCommandExecutor,
+    legacyCommandExecutor,
+    { domFallbackEnabled: deps.config.domFallbackEnabled ?? true }
+  );
+  const commands = new CommandConfirmationCoordinator({
     devices,
     status,
     executor: commandExecutor,
-    timeoutMs: 30_000,
-    resyncAfterMs: 1_000,
-    resync: refreshCommandSnapshot
+    timeoutMs: deps.config.commandConfirmationTimeoutMs ?? 30_000,
+    ...(deps.config.statusRecheckEnabled === false ? {} : { resyncAfterMs: 1_000 }),
+    resync: refreshCommandSnapshot,
+    onPendingCountChange: (count) => status.update({ pendingCommandCount: count }),
+    onResult: (result) => {
+      const current = status.getSnapshot();
+      status.update({
+        lastCommandTransport: result.transport,
+        lastCommandConfirmation: result.lifecycle,
+        ...(result.transport === "dom"
+          ? { domFallbackCount: current.domFallbackCount + 1 }
+          : {})
+      });
+    }
   });
   const getProbeEvidence = () =>
     probeEvidenceFrom(
@@ -205,15 +304,15 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     );
   const detailDiscovery = new DeviceDetailDiscovery({
     inventory: () => devices.snapshot(),
-    inspector: commandExecutor,
+    inspector: legacyCommandExecutor,
     resolveCameraImageUrl: (deviceId) => cameraImages.thumbnailRequestUrl(deviceId),
     canInspect: () => {
       const report = createHealthReport(status.getSnapshot());
       return (
         report.ready &&
         report.details.state === "CONNECTED" &&
-        !commandExecutor.hasWarmCommandPage() &&
-        !commandExecutor.hasForegroundOperation() &&
+        !legacyCommandExecutor.hasWarmCommandPage() &&
+        !legacyCommandExecutor.hasForegroundOperation() &&
         !sessionTouchInFlight &&
         isProbeBrowserIsolated(currentContext, currentKeeperManager) &&
         physicalActionProbe.snapshot(getProbeEvidence()).state !== "armed"
@@ -228,6 +327,13 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     auth,
     devices,
     commands,
+    maintenance: {
+      reloadInventory: async () => await reconciliation.request("reload"),
+      reconnectRealtime: async () => {
+        if (!recoverCurrentPushSocket) throw new Error("realtime_reconnect_unavailable");
+        recoverCurrentPushSocket();
+      }
+    },
     images: cameraImages,
     physicalActionProbe,
     getProbeEvidence
@@ -286,6 +392,17 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       );
     });
   }, 1_000);
+  const reconciliationInterval = setInterval(() => {
+    if (stopped || !createHealthReport(status.getSnapshot()).ready) return;
+    void reconciliation.request("interval").catch(() => {
+      const current = status.getSnapshot();
+      status.update({ adapterFailureCount: current.adapterFailureCount + 1 });
+      if (deps.config.debugProtocolLogging === true) {
+        log.warn("advanced_interval_reconciliation_failed");
+      }
+    });
+  }, deps.config.inventoryReconciliationIntervalMs ?? 21_600_000);
+  reconciliationInterval.unref();
   heartbeat();
 
   if (protocolIntegrityLoadFailed) {
@@ -308,6 +425,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           heartbeatInterval,
           keeperInterval,
           detailDiscoveryInterval,
+          reconciliationInterval,
           server,
           aliases,
           captures,
@@ -362,16 +480,25 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
               context === currentContext &&
               keeperManager === currentKeeperManager &&
               report.ready &&
-              !commandExecutor.hasWarmCommandPage() &&
-              !commandExecutor.hasForegroundOperation() &&
+              !legacyCommandExecutor.hasWarmCommandPage() &&
+              !legacyCommandExecutor.hasForegroundOperation() &&
               !sessionTouchInFlight &&
               isProbeBrowserIsolated(context, keeperManager) &&
               physicalActionProbe.snapshot(getProbeEvidence()).state !== "armed"
             );
           },
+          () => {
+            void reconciliation.request("reconnect").catch(() => {
+              const current = status.getSnapshot();
+              status.update({ adapterFailureCount: current.adapterFailureCount + 1 });
+              log.warn("advanced_reconnect_reconciliation_failed");
+            });
+          },
           (snapshot, url) => {
             devices.observeAdvancedDeviceSnapshot(snapshot, {
-              authoritativeWholeSnapshot: isWholeAdvancedDevicesSnapshotUrl(url)
+              // A single observed page is never authoritative after the Advanced
+              // endpoint became paginated. Only the merged reconciliation result prunes.
+              authoritativeWholeSnapshot: false
             });
             cameraImages.observeInventory(devices.snapshot());
           }
@@ -380,6 +507,11 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         currentKeeperManager = keeperManager;
         recoverCurrentPushSocket = recoverSmartThingsWebSocket;
         detailDiscovery.reset();
+        await reconciliation.request("startup").catch(() => {
+          const current = status.getSnapshot();
+          status.update({ adapterFailureCount: current.adapterFailureCount + 1 });
+          log.warn("advanced_primary_inventory_sync_failed");
+        });
         assigned = true;
         return context;
       } finally {
@@ -492,8 +624,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       now - sessionTouchReadySinceMs < SESSION_TOUCH_INTERVAL_MS ||
       now - lastSessionTouchAttemptAtMs < SESSION_TOUCH_INTERVAL_MS ||
       sessionTouchInFlight ||
-      commandExecutor.hasForegroundOperation() ||
-      commandExecutor.hasWarmCommandPage() ||
+      legacyCommandExecutor.hasForegroundOperation() ||
+      legacyCommandExecutor.hasWarmCommandPage() ||
       detailDiscovery.isRunning() ||
       !isProbeBrowserIsolated(context, keeperManager) ||
       physicalActionProbe.snapshot(getProbeEvidence()).state === "armed"
@@ -546,6 +678,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         heartbeatInterval,
         keeperInterval,
         detailDiscoveryInterval,
+        reconciliationInterval,
         server,
         aliases,
         captures,
@@ -596,6 +729,7 @@ async function attachContext(
   canRecoverSocket: () => boolean,
   onNewPage: () => void,
   canOpenAdvancedSnapshot: () => boolean,
+  onRealtimeRecovered: () => void,
   onAdvancedDeviceSnapshot: (snapshot: unknown, url: string) => void
 ): Promise<() => void> {
   const observedCdpPages = new WeakSet<object>();
@@ -605,43 +739,43 @@ async function attachContext(
 
   await keeperManager.reconcileRestoredPages();
 
-  let recoveryPromise: Promise<void> | undefined;
-  let lastRecoveryStartedAtMs = 0;
-  const recoverSmartThingsWebSocket = () => {
-    const now = Date.now();
-    if (
-      !canRecoverSocket() ||
-      recoveryPromise ||
-      now - lastRecoveryStartedAtMs < 1_000
-    ) {
-      return;
-    }
-    lastRecoveryStartedAtMs = now;
-    resetSnapshotSession();
-    status.update({
-      pushConnected: false,
-      parserHealthy: false,
-      initialSnapshotComplete: false,
-      lastSnapshotAtMs: undefined,
-      lastParserSuccessAtMs: undefined,
-      state: "RECONNECTING"
-    });
-    recoveryPromise = (async () => {
-      try {
-        const keeper = await keeperManager.recoverKeeper();
-        if (canRecoverSocket()) {
-          status.update({ keeperPresent: true, ...statusForKeeperUrl(keeper.url()) });
-        }
-      } catch {
-        log.warn("smartthings_websocket_recovery_failed");
-      } finally {
-        recoveryPromise = undefined;
+  let realtime: LocationRealtimeAdapter;
+  realtime = new LocationRealtimeAdapter({
+    canRecover: canRecoverSocket,
+    onRecoveryAttempt: () => {
+      resetSnapshotSession();
+      status.update({
+        pushConnected: false,
+        parserHealthy: false,
+        initialSnapshotComplete: false,
+        lastSnapshotAtMs: undefined,
+        lastParserSuccessAtMs: undefined,
+        state: "RECONNECTING"
+      });
+    },
+    recover: async () => {
+      const keeper = await keeperManager.recoverKeeper();
+      if (canRecoverSocket()) {
+        status.update({ keeperPresent: true, ...statusForKeeperUrl(keeper.url()) });
       }
-    })();
-  };
+    },
+    onRecoveryFailed: () => log.warn("smartthings_websocket_recovery_failed"),
+    onRecovered: () => {
+      const realtimeStatus = realtime.snapshot();
+      status.update({
+        reconnectCount: realtimeStatus.reconnectCount,
+        ...(realtimeStatus.lastReconnectAtMs === undefined
+          ? {}
+          : { lastReconnectAtMs: realtimeStatus.lastReconnectAtMs })
+      });
+      onRealtimeRecovered();
+    }
+  });
+  const recoverSmartThingsWebSocket = () => realtime.requestRecovery();
   const observeSmartThingsWebSocketFrame = (direction: "sent" | "received") => {
     if (direction === "received" && canRecoverSocket()) {
       status.update({ lastPushAtMs: Date.now() });
+      realtime.observeFrame(direction);
     }
   };
 
@@ -694,30 +828,6 @@ async function attachContext(
     keeperPresent: true,
     ...statusForKeeperUrl(keeper.url())
   });
-  scheduleAdvancedSnapshotPage(
-    () =>
-      !canRecoverSocket() ||
-      classifySmartThingsUrl(keeperManager.currentKeeper()?.url() ?? "") !==
-        "smartthings_location"
-        ? "stop"
-        : canOpenAdvancedSnapshot()
-          ? "open"
-          : "wait",
-    () =>
-      observeAdvancedSnapshotPage(
-      context,
-      keeperManager,
-      sink,
-      redact,
-      observedCdpPages,
-      log,
-      cameraImages,
-      volatileIdentifiers,
-      observeSmartThingsWebSocketFrame,
-      recoverSmartThingsWebSocket,
-      onAdvancedDeviceSnapshot
-      )
-  );
   return recoverSmartThingsWebSocket;
 }
 
@@ -1181,6 +1291,7 @@ async function stopRuntime(options: {
   heartbeatInterval: NodeJS.Timeout;
   keeperInterval: NodeJS.Timeout;
   detailDiscoveryInterval: NodeJS.Timeout;
+  reconciliationInterval: NodeJS.Timeout;
   server: BridgeHttpServer;
   aliases: SqliteAliasStore;
   captures: CaptureStore;
@@ -1191,6 +1302,7 @@ async function stopRuntime(options: {
   clearInterval(options.heartbeatInterval);
   clearInterval(options.keeperInterval);
   clearInterval(options.detailDiscoveryInterval);
+  clearInterval(options.reconciliationInterval);
   const context = options.getContext();
   await Promise.allSettled([
     context?.close?.(),

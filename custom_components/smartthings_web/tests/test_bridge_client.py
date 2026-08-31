@@ -167,6 +167,58 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
         self.assertEqual(body["controlLabel"], "Home Monitor")
         self.assertEqual(request.await_args.kwargs["timeout_seconds"], 90)
 
+    async def test_generic_command_forwards_confirmation_and_timeout_policy(self) -> None:
+        client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
+
+        async def accepted(_method: str, _path: str, **kwargs: Any) -> dict[str, Any]:
+            request_id = kwargs["json_body"]["clientRequestId"]
+            return {
+                "schemaVersion": 1,
+                "status": "accepted_unconfirmed",
+                "clientRequestId": request_id,
+                "sequence": 44,
+                "transport": "advanced",
+                "confirmation": "accepted_receipt",
+                "lifecycle": "ACCEPTED_UNCONFIRMED",
+            }
+
+        request = AsyncMock(side_effect=accepted)
+        client._request_json = request  # type: ignore[method-assign]
+
+        result = await client.async_execute_command(
+            target_type="device",
+            target_id="dev_001",
+            component="main",
+            capability="switch",
+            command="on",
+            arguments=[],
+            confirm=False,
+            timeout=25,
+        )
+
+        body = request.await_args.kwargs["json_body"]
+        self.assertEqual(body["confirm"], False)
+        self.assertEqual(body["timeout"], 25)
+        self.assertEqual(request.await_args.kwargs["timeout_seconds"], 35)
+        self.assertEqual(result.status, "accepted_unconfirmed")
+
+    async def test_maintenance_methods_call_authenticated_local_routes(self) -> None:
+        client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
+        request = AsyncMock(return_value={"accepted": True})
+        client._request_json = request  # type: ignore[method-assign]
+
+        await client.async_reload_inventory()
+        await client.async_reconnect_realtime()
+
+        self.assertEqual(
+            [call.args[:2] for call in request.await_args_list],
+            [
+                ("POST", "/api/v1/maintenance/reload-inventory"),
+                ("POST", "/api/v1/maintenance/reconnect-realtime"),
+            ],
+        )
+        self.assertTrue(all(call.kwargs["auth"] for call in request.await_args_list))
+
     async def test_event_stream_yields_data_events_and_ignores_keepalives(self) -> None:
         session = _FakeEventSession(
             200,

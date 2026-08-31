@@ -20,6 +20,17 @@ export interface HealthDetails {
   protocolChangeCount: number;
   protocolMismatchSurface?: RuntimeStatusSnapshot["protocolMismatchSurface"];
   restartCount: number;
+  architectureVersion: string;
+  advancedInventoryDeviceCount: number;
+  advancedInventoryLocationCount: number;
+  advancedInventoryPageCount: number;
+  adapterFailureCount: number;
+  pendingCommandCount: number;
+  domFallbackCount: number;
+  reconnectCount: number;
+  lastReconnectAtMs?: number;
+  lastCommandTransport?: string;
+  lastCommandConfirmation?: string;
   bridgeVersion: string;
   browserVersion: string;
   protocolVersion: string;
@@ -112,6 +123,17 @@ export function createHealthReport(
       protocolChangeCount: snapshot.protocolChangeCount,
       protocolMismatchSurface: snapshot.protocolMismatchSurface,
       restartCount: snapshot.restartCount,
+      architectureVersion: snapshot.architectureVersion,
+      advancedInventoryDeviceCount: snapshot.advancedInventoryDeviceCount,
+      advancedInventoryLocationCount: snapshot.advancedInventoryLocationCount,
+      advancedInventoryPageCount: snapshot.advancedInventoryPageCount,
+      adapterFailureCount: snapshot.adapterFailureCount,
+      pendingCommandCount: snapshot.pendingCommandCount,
+      domFallbackCount: snapshot.domFallbackCount,
+      reconnectCount: snapshot.reconnectCount,
+      lastReconnectAtMs: snapshot.lastReconnectAtMs,
+      lastCommandTransport: snapshot.lastCommandTransport,
+      lastCommandConfirmation: snapshot.lastCommandConfirmation,
       bridgeVersion: snapshot.bridgeVersion,
       browserVersion: snapshot.browserVersion,
       protocolVersion: snapshot.protocolVersion,

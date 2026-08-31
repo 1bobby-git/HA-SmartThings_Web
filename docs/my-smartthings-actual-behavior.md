@@ -58,55 +58,34 @@ maps these shapes by semantics:
 - location scenes and pushed SmartThings Home Monitor state become `scene` and
   `alarm_control_panel` entities.
 
-Only controls actually observed on the SmartThings Web detail page are
-actionable. A command is successful only after a newer authoritative push
-confirms the requested value. Missing controls fail closed instead of clicking
-a similarly shaped page element.
+Only commands validated from the normalized control and capability metadata are
+actionable. Version 0.1.146 sends device commands through the authenticated
+Advanced same-origin endpoint first. The existing Location-native dispatcher
+is second, and the verified DOM control is the final fallback. Authentication,
+permission, timeout, HTTP, and parser failures never fall through to a second
+transport.
 
-## Advanced device bootstrap
+## Advanced primary inventory and commands
 
-An authenticated inspection of `https://my.smartthings.com/advanced` confirmed
-that the page naturally loads same-origin
-`/advanced/cupcake-api/api/devices` JSON containing device identity,
-location/room, health, category/type, presentation/profile information,
-component capability status, and allowed-action metadata. The status tree is
-useful for initial and reconnect enrichment, especially for refrigerator
-compartments and appliance values that are distributed across components.
+The Advanced device endpoint is paginated. The Bridge follows server links
+first and otherwise continues with `isNext/max/page`, merging all pages by raw
+SmartThings `deviceId` before redaction and normalization. Advanced locations,
+rooms, device state, health, profile/capability metadata, and supported command
+schemas feed the existing `DeviceStore`; a single observed page is never an
+authoritative deletion snapshot.
 
-Version 0.1.96 observes that naturally loaded response once per new Chromium
-context after installing the existing CDP network observer, redacts it, merges
-only metadata and state into DeviceStore, publishes each accepted snapshot as
-one atomic inventory transition, and closes the temporary Advanced page. If
-that page does not complete the expected device response within five seconds,
-the page performs the two observed same-origin device-list GETs once as a
-bounded bootstrap fallback. This uses the active page session directly, never
-exports or replays cookies, never mutates Cupcake data, and is not a status
-poller. The
-single-redaction Advanced aliases are normalized to the existing inventory
-aliases before merge, and the array-shaped component labels/categories are
-used to restore refrigerator, freezer, cooler, custom-zone, and similar roles
-after a Bridge restart without replacing a newer pushed value.
-Component and capability identifiers
-remain aliases; only a small allowlist of semantic roles such as cooler,
-freezer, pantry, ice maker, hub, setup, and Bixby is carried separately for
-localized Home Assistant labels. `updatedAt` ordering prevents the bootstrap
-from replacing newer push state.
+The same persistent Chromium session serves the Location keeper and Advanced
+requests. Requests run in the keeper when origin policy permits and use a
+short-lived Advanced page only as a fallback. Browser profile data, cookies,
+storage state, authorization, CSRF, and raw identifiers remain outside logs,
+diagnostics, persisted inventory, and HA service data.
 
-The Advanced `allowedActions` field is descriptive evidence only. It is not
-converted into a Bridge control, and the implementation does not send direct
-Cupcake commands, periodically fetch status, replay cookies, or treat Advanced
-JSON as a replacement for the authoritative SmartThings Web push stream.
-
-The supplied capture also contains four accepted device command exchanges.
-Cake sends them through its already authenticated Feathers client as
-`service("api/device").patch(deviceId, {query: {execute: true, commands}})`
-over the same Socket.IO transport used by the web application. Version 0.1.85
-uses that existing in-page dispatcher first, retaining raw device, component,
-and capability identifiers only in volatile process memory. It does not export
-cookies, replay authentication, create a second public API client, or treat the
-command ACK as state confirmation. If the dispatcher is not available before
-dispatch, the exact observed UI control remains the fallback; a rejected or
-uncertain dispatched command is never repeated through the UI.
+An Advanced HTTP `200` with `ACCEPTED` is a transport receipt. Stateful commands
+remain pending until a matching post-send Location event or an Advanced status
+recheck proves the value. Stateless refresh, press, and media track commands
+return `ACCEPTED_UNCONFIRMED` without inventing a persistent state. Recovered
+Socket.IO sessions trigger one full Advanced reconciliation after the first
+new inbound frame.
 
 The user-supplied Cake `2.57.0` asset and its published source maps were also
 reviewed as implementation evidence. They show that room drag wrappers and

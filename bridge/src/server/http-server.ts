@@ -25,6 +25,10 @@ export interface BridgeHttpServerOptions {
   auth?: BridgeAuth;
   devices?: DeviceStore;
   commands?: Pick<SafeCommandService, "execute">;
+  maintenance?: {
+    reloadInventory(): Promise<void>;
+    reconnectRealtime(): Promise<void>;
+  };
   images?: Pick<CameraImageStore, "get"> & Partial<Pick<CameraImageStore, "subscribe">>;
   physicalActionProbe?: PhysicalActionCorrelationProbe;
   getProbeEvidence?: () => ProbeRuntimeEvidence;
@@ -112,6 +116,18 @@ async function handleBridgeApiRequest(
     }
     if (!options.auth.authenticate(request.headers.authorization)) {
       return writeError(response, 401, "unauthorized");
+    }
+    if (path === "/api/v1/maintenance/reload-inventory") {
+      if (method !== "POST") return writeError(response, 405, "method_not_allowed");
+      if (!options.maintenance) return writeError(response, 503, "maintenance_unavailable");
+      await options.maintenance.reloadInventory();
+      return writeJson(response, 200, { accepted: true });
+    }
+    if (path === "/api/v1/maintenance/reconnect-realtime") {
+      if (method !== "POST") return writeError(response, 405, "method_not_allowed");
+      if (!options.maintenance) return writeError(response, 503, "maintenance_unavailable");
+      await options.maintenance.reconnectRealtime();
+      return writeJson(response, 200, { accepted: true });
     }
     const imageDeviceId = imageDeviceIdFromPath(path);
     if (imageDeviceId) {

@@ -233,7 +233,22 @@ export class SmartThingsWebUiCommandExecutor {
     optionLabel?: string;
     optionCommand?: string;
     nativeCommand?: string;
-  }): Promise<void> {
+  }): Promise<"location_native" | "dom"> {
+    try {
+      await this.executeLocationNative(input);
+      return "location_native";
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "command_native_unavailable") {
+        throw error;
+      }
+    }
+    await this.executeDomFallback(input);
+    return "dom";
+  }
+
+  async executeLocationNative(
+    input: Parameters<SmartThingsWebUiCommandExecutor["executeDeviceAction"]>[0]
+  ): Promise<void> {
     this.#diagnostic("foreground_requested");
     const manager = this.getManager();
     if (!manager) {
@@ -249,6 +264,16 @@ export class SmartThingsWebUiCommandExecutor {
       throw new Error("command_execution_failed");
     }
     this.#diagnostic("native_command_unavailable");
+    throw new Error("command_native_unavailable");
+  }
+
+  async executeDomFallback(
+    input: Parameters<SmartThingsWebUiCommandExecutor["executeDeviceAction"]>[0]
+  ): Promise<void> {
+    const manager = this.getManager();
+    if (!manager) {
+      throw new Error("command_browser_unavailable");
+    }
     await this.#runForeground(() => {
       this.#diagnostic("foreground_ready");
       return this.#executeDeviceActionFallback(manager, input);
