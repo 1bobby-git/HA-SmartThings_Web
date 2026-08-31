@@ -14,9 +14,9 @@ AuthenticatedSmartThingsSession
 ├─ AdvancedInventoryAdapter
 ├─ AdvancedCommandAdapter
 ├─ LocationRealtimeAdapter
-├─ SafeCommandService / confirmation coordinator
+├─ CommandConfirmationCoordinator
 ├─ StateReconciliationCoordinator
-└─ verified DOM fallback in SmartThingsWebUiCommandExecutor
+└─ DomFallbackAdapter
 ```
 
 하나의 persistent Chromium context와 `/location` keeper를 공유한다. Advanced same-origin 요청이 먼저 실행되며 origin 제약 시에만 짧은 Advanced 페이지를 열고 닫는다.
@@ -40,6 +40,7 @@ AuthenticatedSmartThingsSession
 - device/component/capability/command/arguments는 동적으로 구성한다.
 - capability version을 DeviceStore에서 command adapter까지 전달한다.
 - 인증·권한·timeout·HTTP·parser 오류는 fallback하지 않는다. 명시적 unsupported만 다음 경로로 진행한다.
+- receipt/event의 commandId가 모두 존재하면 일치해야 하며, commandId가 없으면 나머지 identity와 eventTime으로 확인한다.
 
 ## 6. `/location`에 유지한 기능
 
@@ -48,10 +49,13 @@ AuthenticatedSmartThingsSession
 - stateful 명령의 push confirmation
 - disconnect 감지와 keeper 복구
 - 복구 후 첫 inbound frame에서 Advanced 전체 reconciliation
+- keeper reload 실패 시 1초부터 60초까지 제한된 지수 backoff 재시도
 
 ## 7. DOM 기능 축소
 
 Advanced가 지원되면 DOM을 호출하지 않는다. Advanced가 unsupported이고 Location native도 사용할 수 없을 때만 기존의 정확히 관찰된 detail control을 사용한다. 실패한 Advanced 명령을 DOM으로 반복하지 않는다.
+
+`dom_fallback_enabled=false`이면 DomFallbackAdapter를 command router에서 제외한다.
 
 ## 8. 엔티티 호환성
 
@@ -65,11 +69,11 @@ Advanced가 지원되면 DOM을 호출하지 않는다. Advanced가 unsupported�
 
 2026-08-31 최종 로컬 실행:
 
-- `npm test -- --reporter=dot`: 66 files, 841 tests passed
-- Python unittest discovery: 222 tests passed
+- `npm test -- --reporter=dot`: 67 files, 849 tests passed
+- Python unittest discovery: 224 tests passed
 - `npm run typecheck`: exit 0
 - `npm run build`: exit 0
-- `npm run package:addon`: exit 0, manifest SHA-256 `aff1aa5577b173b2189efdb4266fafcf3523c6da138b1402da71ef7884434618`
+- `npm run package:addon`: exit 0, manifest SHA-256 `5b4bface3b736e1b8d43fbf987432b3b690aa5268990c693228c95e86fc0ae59`
 - `npm run audit:api-free`: exit 0
 - `npm run audit:fixtures`: exit 0
 - `npm run audit:secrets`: exit 0
@@ -87,6 +91,9 @@ Advanced가 지원되면 DOM을 호출하지 않는다. Advanced가 unsupported�
 - same-origin Cupcake 요청은 `AuthenticatedSmartThingsSession` 파일과 origin/path guard 안에서만 audit allowlist가 적용된다.
 - cookie, storage state, Authorization, CSRF, token, 원본 device/location ID와 원본 payload를 로그·diagnostics·서비스에 노출하지 않는다.
 - HA 서비스는 aliased `dev_*` ID와 제한된 token/arguments만 받는다.
+- 동일 eventId 또는 동일 canonical fallback identity delivery는 DeviceStore 변경 전에 제거한다.
+
+운영 서비스는 `execute_command`, `reload_inventory`, `refresh_device`, `reconnect_realtime`이며 모두 인증된 local Bridge 경로만 사용한다. add-on 옵션으로 confirmation timeout, status recheck, reconciliation interval, DOM fallback, protocol debug logging을 제한된 범위에서 설정한다.
 
 ## 12. 후속 작업과 검증 경계
 

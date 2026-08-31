@@ -7,6 +7,9 @@
 - stateful 명령은 push 또는 status 재조회로 확인하고, stateless 명령은 `ACCEPTED_UNCONFIRMED`로 구분해 낙관적 상태 변경을 막습니다.
 - Socket.IO 복구 후 첫 수신 프레임에서 Advanced 전체 reconciliation을 실행하고, 기존 entity/config/device identity를 유지합니다.
 - `smartthings_web.execute_command` 서비스, 고급 옵션, Advanced/command aggregate diagnostics를 추가하며 cookie·token·CSRF·원본 ID는 계속 차단합니다.
+- Location native와 `DomFallbackAdapter`를 분리하고 DOM fallback을 앱 옵션으로 끌 수 있게 했습니다.
+- post-command eventTime과 선택적 commandId를 확인하고, eventId 또는 canonical fallback key 중복을 DeviceStore 적용 전에 제거합니다.
+- `reload_inventory`, `refresh_device`, `reconnect_realtime` 서비스와 bounded realtime reconnect backoff를 추가했습니다.
 
 ## 0.1.145
 

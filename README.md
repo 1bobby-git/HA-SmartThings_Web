@@ -17,6 +17,8 @@
 
 기존 `smartthings_web` config entry, entity ID, unique ID, device registry identifier, area와 사용자 이름은 유지됩니다. 범용 명령은 `smartthings_web.execute_command` 서비스를 사용하며 `device_id`, `component`, `capability`, `command`와 선택적인 `arguments`, `confirm`, `timeout`을 받습니다.
 
+운영 서비스로 `smartthings_web.reload_inventory`, `smartthings_web.refresh_device`, `smartthings_web.reconnect_realtime`도 제공합니다. 앱 옵션에서 confirmation timeout, status recheck, 저빈도 reconciliation interval, DOM fallback, protocol debug logging을 설정할 수 있으며 잘못된 값은 시작 전에 거부됩니다.
+
 ## 빠른 설치
 
 설치는 **브리지 앱 → HACS 통합 → 통합 설정** 순서로 진행합니다.
