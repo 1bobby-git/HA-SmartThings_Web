@@ -10,7 +10,8 @@ describe("readBridgeConfig", () => {
       port: 8098,
       heartbeatIntervalMs: 10_000,
       browserMaxRestarts: 3,
-      browserRetryDelayMs: 1_000
+      browserRetryDelayMs: 1_000,
+      domFallbackEnabled: true
     });
   });
 
@@ -22,7 +23,8 @@ describe("readBridgeConfig", () => {
         STW_PORT: "18098",
         STW_HEARTBEAT_INTERVAL_MS: "5000",
         STW_BROWSER_MAX_RESTARTS: "2",
-        STW_BROWSER_RETRY_DELAY_MS: "750"
+        STW_BROWSER_RETRY_DELAY_MS: "750",
+        STW_DOM_FALLBACK_ENABLED: "false"
       })
     ).toMatchObject({
       dataDir: "D:/bridge-data",
@@ -30,7 +32,8 @@ describe("readBridgeConfig", () => {
       port: 18_098,
       heartbeatIntervalMs: 5_000,
       browserMaxRestarts: 2,
-      browserRetryDelayMs: 750
+      browserRetryDelayMs: 750,
+      domFallbackEnabled: false
     });
 
     for (const env of [
@@ -43,6 +46,7 @@ describe("readBridgeConfig", () => {
       { STW_BROWSER_MAX_RESTARTS: "1.5" },
       { STW_BROWSER_RETRY_DELAY_MS: "99" },
       { STW_BROWSER_RETRY_DELAY_MS: "10001" }
+      ,{ STW_DOM_FALLBACK_ENABLED: "yes" }
     ]) {
       expect(() => readBridgeConfig(env)).toThrow(/invalid bridge config/i);
     }

@@ -17,5 +17,7 @@ arch:
   - aarch64
 options:
   log_level: info
+  dom_fallback_enabled: true
 schema:
   log_level: list(trace|debug|info|warning|error)
+  dom_fallback_enabled: bool

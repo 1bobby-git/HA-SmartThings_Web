@@ -25,13 +25,15 @@ export interface LegacyWebCommandExecutor {
 
 export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
   readonly #now: () => number;
+  readonly #domFallbackEnabled: boolean;
 
   constructor(
     private readonly advanced: CommandTransport,
     private readonly legacy: LegacyWebCommandExecutor,
-    options: { now?: () => number } = {}
+    options: { now?: () => number; domFallbackEnabled?: boolean } = {}
   ) {
     this.#now = options.now ?? Date.now;
+    this.#domFallbackEnabled = options.domFallbackEnabled ?? true;
   }
 
   async executeDeviceAction(
@@ -76,7 +78,7 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
         advanced: this.advanced,
         locationNative: legacyTransport,
         ...(explicitFallbacks?.dom
-          ? { dom: explicitFallbacks.dom, domFallbackEnabled: true }
+          ? { dom: explicitFallbacks.dom, domFallbackEnabled: this.#domFallbackEnabled }
           : {})
       }).execute(routed);
     } catch (error) {

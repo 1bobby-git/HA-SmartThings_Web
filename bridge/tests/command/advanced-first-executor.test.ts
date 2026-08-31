@@ -106,6 +106,29 @@ describe("AdvancedFirstCommandExecutor", () => {
     expect(combined).not.toHaveBeenCalled();
   });
 
+  test("keeps DOM fallback disabled when Bridge configuration turns it off", async () => {
+    const fallback = {
+      executeDeviceAction: vi.fn(async () => "dom" as const),
+      executeLocationNative: vi.fn(async () => {
+        throw new Error("command_native_unavailable");
+      }),
+      executeDomFallback: vi.fn(async () => undefined)
+    } as LegacyWebCommandExecutor;
+    const executor = new AdvancedFirstCommandExecutor(
+      advanced(async () => {
+        throw new CommandTransportError("unsupported", "advanced");
+      }),
+      fallback,
+      { domFallbackEnabled: false }
+    );
+
+    await expect(executor.executeDeviceAction(action)).rejects.toThrowError(
+      "command_control_not_found"
+    );
+    expect(fallback.executeDomFallback).not.toHaveBeenCalled();
+    expect(fallback.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
   test("does not invoke fallback after a non-unsupported Advanced error", async () => {
     const fallback = legacy();
     const executor = new AdvancedFirstCommandExecutor(

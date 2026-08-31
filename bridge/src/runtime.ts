@@ -275,7 +275,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   });
   const commandExecutor = new AdvancedFirstCommandExecutor(
     advancedCommandExecutor,
-    legacyCommandExecutor
+    legacyCommandExecutor,
+    { domFallbackEnabled: deps.config.domFallbackEnabled ?? true }
   );
   const commands = new CommandConfirmationCoordinator({
     devices,
