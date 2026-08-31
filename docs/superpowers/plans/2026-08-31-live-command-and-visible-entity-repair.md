@@ -36,7 +36,7 @@
 - Modify: `bridge/src/command/advanced-first-executor.ts`
 - Modify: `bridge/src/runtime.ts`
 
-- [ ] **Step 1: Add failing Web-default and diagnostics tests**
+- [x] **Step 1: Add failing Web-default and diagnostics tests**
 
 Add these cases to `bridge/tests/command/advanced-first-executor.test.ts`:
 
@@ -101,7 +101,7 @@ test("records safe route diagnostics without identifiers", async () => {
 
 Update the pre-existing tests that intentionally exercise Advanced-first behavior to pass `canUseAdvanced: () => true`; leave the new default-Web test without that option. This keeps the Advanced adapter covered without making it production-default.
 
-- [ ] **Step 2: Run the tests and verify RED**
+- [x] **Step 2: Run the tests and verify RED**
 
 Run:
 
@@ -111,7 +111,7 @@ npx vitest run bridge/tests/command/advanced-first-executor.test.ts --pool=threa
 
 Expected: FAIL because the executor still attempts Advanced first and its options do not define `canUseAdvanced` or `onDiagnostic`.
 
-- [ ] **Step 3: Implement the minimal evidence gate**
+- [x] **Step 3: Implement the minimal evidence gate**
 
 In `bridge/src/command/advanced-first-executor.ts`, add:
 
@@ -166,7 +166,7 @@ In `bridge/src/runtime.ts`, pass:
 }
 ```
 
-- [ ] **Step 4: Run command tests and typecheck**
+- [x] **Step 4: Run command tests and typecheck**
 
 Run:
 
@@ -177,7 +177,7 @@ npm run typecheck
 
 Expected: all selected tests pass and TypeScript reports no errors.
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
 
 ```powershell
 git add bridge/src/command/advanced-first-executor.ts bridge/src/runtime.ts bridge/tests/command/advanced-first-executor.test.ts

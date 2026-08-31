@@ -23,22 +23,43 @@ export interface LegacyWebCommandExecutor {
   executeLocationAction?: SafeCommandExecutor["executeLocationAction"];
 }
 
+export interface CommandRouteDiagnostic {
+  transport: "advanced" | "location_native" | "dom";
+  stage: "dispatch" | "receipt";
+  outcome: "attempt" | "accepted" | "failed";
+  code?: string;
+}
+
+export interface AdvancedFirstCommandExecutorOptions {
+  now?: () => number;
+  domFallbackEnabled?: boolean;
+  canUseAdvanced?: (input: DeviceActionExecutionInput) => boolean;
+  onDiagnostic?: (event: CommandRouteDiagnostic) => void;
+}
+
 export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
   readonly #now: () => number;
   readonly #domFallbackEnabled: boolean;
+  readonly #canUseAdvanced: (input: DeviceActionExecutionInput) => boolean;
+  readonly #onDiagnostic: ((event: CommandRouteDiagnostic) => void) | undefined;
 
   constructor(
     private readonly advanced: CommandTransport,
     private readonly legacy: LegacyWebCommandExecutor,
-    options: { now?: () => number; domFallbackEnabled?: boolean } = {}
+    options: AdvancedFirstCommandExecutorOptions = {}
   ) {
     this.#now = options.now ?? Date.now;
     this.#domFallbackEnabled = options.domFallbackEnabled ?? true;
+    this.#canUseAdvanced = options.canUseAdvanced ?? (() => false);
+    this.#onDiagnostic = options.onDiagnostic;
   }
 
   async executeDeviceAction(
     input: DeviceActionExecutionInput
   ): Promise<CommandTransportReceipt> {
+    if (!this.#canUseAdvanced(input)) {
+      return await this.#executeVerifiedWeb(input);
+    }
     const routed = {
       deviceId: input.deviceId,
       component: input.component,
@@ -93,6 +114,47 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
     }
   }
 
+  async #executeVerifiedWeb(
+    input: DeviceActionExecutionInput
+  ): Promise<CommandTransportReceipt> {
+    this.#diagnostic({
+      transport: "location_native",
+      stage: "dispatch",
+      outcome: "attempt"
+    });
+    const sentAtMs = this.#now();
+    try {
+      const transport = (await this.legacy.executeDeviceAction(input)) ?? "location_native";
+      this.#diagnostic({
+        transport,
+        stage: "receipt",
+        outcome: "accepted"
+      });
+      return {
+        state: "ACCEPTED",
+        transport,
+        sentAtMs,
+        acceptedAtMs: this.#now()
+      };
+    } catch (error) {
+      this.#diagnostic({
+        transport: "location_native",
+        stage: "dispatch",
+        outcome: "failed",
+        code: safeCommandCode(error)
+      });
+      throw error;
+    }
+  }
+
+  #diagnostic(event: CommandRouteDiagnostic): void {
+    try {
+      this.#onDiagnostic?.(event);
+    } catch {
+      // Diagnostics must never change command execution.
+    }
+  }
+
   async executeScene(
     input: Parameters<NonNullable<SafeCommandExecutor["executeScene"]>>[0]
   ): Promise<void> {
@@ -106,4 +168,14 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
     if (!this.legacy.executeLocationAction) throw new Error("command_control_not_found");
     await this.legacy.executeLocationAction(input);
   }
+}
+
+function safeCommandCode(error: unknown): string {
+  if (
+    error instanceof Error &&
+    /^command_[a-z0-9_]+$/u.test(error.message)
+  ) {
+    return error.message;
+  }
+  return "command_execution_failed";
 }

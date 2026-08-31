@@ -276,7 +276,14 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   const commandExecutor = new AdvancedFirstCommandExecutor(
     advancedCommandExecutor,
     legacyCommandExecutor,
-    { domFallbackEnabled: deps.config.domFallbackEnabled ?? true }
+    {
+      domFallbackEnabled: deps.config.domFallbackEnabled ?? true,
+      canUseAdvanced: () => false,
+      onDiagnostic: ({ transport, stage, outcome, code }) =>
+        log.info(
+          `command_route:${transport}:${stage}:${outcome}${code ? `:${code}` : ""}`
+        )
+    }
   );
   const commands = new CommandConfirmationCoordinator({
     devices,
