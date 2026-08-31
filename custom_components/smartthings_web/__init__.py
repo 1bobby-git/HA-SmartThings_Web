@@ -547,6 +547,8 @@ def _migrate_entity_registry(
 
     def remove_registry_entity(entity_id: str) -> None:
         """Remove one row and release its ID for this same migration pass."""
+        if not inventory.ready:
+            return
         if registry.async_get(entity_id) is None:
             return
         registry.async_remove(entity_id)

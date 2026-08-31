@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import models as models_module  # noqa: E402
 
 from models import (  # noqa: E402
+    BridgeAdvancedDeviceMetadata,
     BridgeControl,
     BridgeDevice,
     BridgeDevicePresentation,
@@ -559,6 +560,31 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         runtime.apply_inventory(latest)
 
         self.assertEqual(runtime.inventory.device_aliases, {"dev_602": "dev_001"})
+
+    def test_inventory_merge_preserves_advanced_identity_and_health_metadata(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        current_device = current.devices["dev_001"]
+        current_device.advanced = BridgeAdvancedDeviceMetadata(
+            owner_id="identifier_owner",
+            execution_context="CLOUD",
+        )
+        current_device.health_updated_at = "2026-08-24T21:10:00Z"
+        latest = inventory(11, 21, "2026-08-24T21:11:00Z")
+        latest_device = latest.devices["dev_001"]
+        latest_device.advanced = BridgeAdvancedDeviceMetadata(
+            owner_id="identifier_owner",
+            parent_device_id="dev_parent",
+            execution_context="CLOUD",
+            linked_device_ids=("dev_602",),
+        )
+        latest_device.health_updated_at = "2026-08-24T21:11:00Z"
+        runtime = SmartThingsWebRuntime(FakeClient(), "loc_001", current)
+
+        runtime.apply_inventory(latest)
+
+        merged = runtime.inventory.devices["dev_001"]
+        self.assertEqual(merged.advanced, latest_device.advanced)
+        self.assertEqual(merged.health_updated_at, "2026-08-24T21:11:00Z")
 
     def test_control_kind_keeps_plain_switches_out_of_binary_sensor_and_light(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")

@@ -39,13 +39,13 @@ canonicalization은 같은 location, room, 정규화 이름, type, owner를 공�
 
 2026-09-01 KST 전용 worktree 실행 결과:
 
-- targeted Vitest: 6 files, 105 tests passed
-- full Vitest: 67 files, 857 tests passed
-- Home Assistant Python unittest discovery: 232 tests passed
+- targeted Vitest: 6 files, 107 tests passed
+- full Vitest: 67 files, 859 tests passed
+- Home Assistant Python unittest discovery: 234 tests passed
 - `npm run typecheck`: passed
 - `npm run build`: passed
 - `npm run package:addon`: passed
-- add-on package manifest SHA-256: `28396a06c2477908fd4509bfb3a54178545ea375828ed41215d0fa40157c09d3`
+- add-on package manifest SHA-256: `14e0ab39db2c00fa1a99c39a524bbc2cc02a751b0d1425b38e441a5a5dc3b90e`
 - `npm run audit:secrets`: passed
 - `npm run audit:api-free`: passed
 - `npm run audit:fixtures`: passed

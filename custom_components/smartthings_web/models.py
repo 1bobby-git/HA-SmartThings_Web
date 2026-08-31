@@ -293,6 +293,16 @@ class SmartThingsWebRuntime:
                     if authoritative
                     else {**existing.controls, **latest_device.controls}
                 ),
+                advanced=deepcopy(
+                    latest_device.advanced
+                    if latest_device.advanced is not None
+                    else existing.advanced
+                ),
+                health_updated_at=(
+                    latest_device.health_updated_at
+                    if latest_device.health_updated_at is not None
+                    else existing.health_updated_at
+                ),
             )
         merged = BridgeInventory(
             sequence=latest.sequence if allow_sequence_reset else max(current.sequence, latest.sequence),

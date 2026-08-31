@@ -3358,6 +3358,74 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         self.assertIsNotNone(registry.async_get(switch_entity_ids["main"]))
         self.assertIsNotNone(registry.async_get(refresh_entity_ids["main"]))
 
+    def test_non_ready_cached_inventory_never_removes_control_rows(self) -> None:
+        """Defer destructive cleanup until the Bridge has a complete inventory."""
+        switch = BridgeState(
+            "main",
+            "identifier_switch",
+            "switch",
+            "off",
+            None,
+            "2026-08-31T14:00:00Z",
+            component_role="main",
+        )
+        device = BridgeDevice(
+            "dev_cached",
+            "loc_001",
+            None,
+            "Cached Light",
+            "switch",
+            True,
+            states={switch.key: switch},
+            controls={
+                component: BridgeControl(
+                    component,
+                    "button",
+                    "Refresh",
+                    component=component,
+                    capability="identifier_refresh",
+                    attribute="refresh",
+                    commands=("refresh",),
+                )
+                for component in ("main", "secondary")
+            },
+        )
+        registry = FakeRegistry(
+            [
+                self._registry_entry(
+                    "switch.cached_light",
+                    "uuid_cached_light",
+                    unique_id="dev_cached_main_identifier_switch_switch",
+                ),
+                self._registry_entry(
+                    "button.cached_light_refresh_2",
+                    "uuid_cached_light",
+                    domain="button",
+                    unique_id="dev_cached_button_secondary",
+                ),
+            ]
+        )
+        self.patch_registry(registry)
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(
+                entry_id="entry_001",
+                data={CONF_LOCATION_ID: "loc_001"},
+            ),
+            BridgeInventory(
+                sequence=1,
+                ready=False,
+                bridge_version="0.1.147",
+                protocol_version="4",
+                locations={"loc_001": "Home"},
+                rooms={},
+                devices={device.device_id: device},
+            ),
+        )
+
+        self.assertEqual(registry.removed, [])
+
     def test_bounded_retry_rechecks_dynamic_entity_without_registry_feedback(self) -> None:
         """Retry discovery without subscribing to our own registry mutations."""
         registry = FakeRegistry([])
