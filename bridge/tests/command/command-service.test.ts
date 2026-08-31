@@ -82,6 +82,21 @@ describe("SafeCommandService", () => {
     ).rejects.toMatchObject({ code: "component_command_rollback_failed" });
   });
 
+  test("rolls back when the first Advanced status refresh fails", async () => {
+    const fixture = multiSwitchFixture(["main", "switch2"]);
+    fixture.resync
+      .mockRejectedValueOnce(new Error("private Advanced status detail"))
+      .mockImplementationOnce(async () => {
+        fixture.setSwitchStates("on");
+        return { authoritativeSnapshot: false, startedAtMs: Date.now() };
+      });
+
+    await expect(
+      fixture.service.execute(aggregateCommand("off", "request_status_failure"))
+    ).rejects.toMatchObject({ code: "command_confirmation_timeout" });
+    expect(fixture.executeComponentTransaction).toHaveBeenCalledTimes(2);
+  });
+
   test("preserves a fixed component partial-failure code from the executor", async () => {
     const fixture = multiSwitchFixture(["main", "switch2"]);
     fixture.executeComponentTransaction.mockRejectedValueOnce(

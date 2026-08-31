@@ -21,7 +21,7 @@
 
 2026-09-01 KST 전용 worktree 후보 검증 결과:
 
-- full Vitest: 68 files, 876 tests passed
+- full Vitest: 68 files, 877 tests passed
 - Home Assistant Python unittest discovery: 235 tests passed
 - `npm run typecheck`: passed
 - `npm run build`: passed
