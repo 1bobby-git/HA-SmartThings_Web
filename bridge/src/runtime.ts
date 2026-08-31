@@ -326,6 +326,13 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     auth,
     devices,
     commands,
+    maintenance: {
+      reloadInventory: async () => await reconciliation.request("reload"),
+      reconnectRealtime: async () => {
+        if (!recoverCurrentPushSocket) throw new Error("realtime_reconnect_unavailable");
+        recoverCurrentPushSocket();
+      }
+    },
     images: cameraImages,
     physicalActionProbe,
     getProbeEvidence

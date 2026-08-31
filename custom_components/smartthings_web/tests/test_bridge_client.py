@@ -202,6 +202,23 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
         self.assertEqual(request.await_args.kwargs["timeout_seconds"], 35)
         self.assertEqual(result.status, "accepted_unconfirmed")
 
+    async def test_maintenance_methods_call_authenticated_local_routes(self) -> None:
+        client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
+        request = AsyncMock(return_value={"accepted": True})
+        client._request_json = request  # type: ignore[method-assign]
+
+        await client.async_reload_inventory()
+        await client.async_reconnect_realtime()
+
+        self.assertEqual(
+            [call.args[:2] for call in request.await_args_list],
+            [
+                ("POST", "/api/v1/maintenance/reload-inventory"),
+                ("POST", "/api/v1/maintenance/reconnect-realtime"),
+            ],
+        )
+        self.assertTrue(all(call.kwargs["auth"] for call in request.await_args_list))
+
     async def test_event_stream_yields_data_events_and_ignores_keepalives(self) -> None:
         session = _FakeEventSession(
             200,

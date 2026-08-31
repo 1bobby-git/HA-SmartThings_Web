@@ -141,6 +141,19 @@ class SmartThingsWebBridgeClient:
         """Fetch non-secret Bridge health metadata for repairs/diagnostics."""
         return await self._request_json("GET", "/health/details")
 
+    async def async_reload_inventory(self) -> None:
+        """Request one coalesced Advanced inventory reconciliation."""
+        await self._async_maintenance("/api/v1/maintenance/reload-inventory")
+
+    async def async_reconnect_realtime(self) -> None:
+        """Request a bounded Location realtime reconnect."""
+        await self._async_maintenance("/api/v1/maintenance/reconnect-realtime")
+
+    async def _async_maintenance(self, path: str) -> None:
+        raw = await self._request_json("POST", path, auth=True, timeout_seconds=30)
+        if raw.get("accepted") is not True:
+            raise BridgeClientError("bridge_response_invalid")
+
     async def async_execute_switch(
         self,
         device_id: str,

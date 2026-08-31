@@ -29,6 +29,9 @@ sys.modules["homeassistant.exceptions"] = exceptions
 from smartthings_web.services import (  # noqa: E402
     EXECUTE_COMMAND_SCHEMA,
     async_handle_execute_command,
+    async_handle_reconnect_realtime,
+    async_handle_reload_inventory,
+    async_handle_refresh_device,
 )
 
 
@@ -117,6 +120,41 @@ class SmartThingsWebServiceTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(payload=payload), self.assertRaises(vol.Invalid):
                 EXECUTE_COMMAND_SCHEMA(payload)
+
+    async def test_maintenance_services_use_the_local_client_only(self) -> None:
+        client = SimpleNamespace(
+            async_reload_inventory=AsyncMock(),
+            async_reconnect_realtime=AsyncMock(),
+            async_execute_command=AsyncMock(),
+        )
+        entry = SimpleNamespace(
+            runtime_data=SimpleNamespace(
+                client=client,
+                inventory=SimpleNamespace(devices={"dev_001": object()}),
+            )
+        )
+        hass = SimpleNamespace(
+            config_entries=SimpleNamespace(async_entries=lambda _domain: [entry])
+        )
+
+        await async_handle_reload_inventory(hass, SimpleNamespace(data={}))
+        await async_handle_reconnect_realtime(hass, SimpleNamespace(data={}))
+        await async_handle_refresh_device(
+            hass, SimpleNamespace(data={"device_id": "dev_001"})
+        )
+
+        client.async_reload_inventory.assert_awaited_once()
+        client.async_reconnect_realtime.assert_awaited_once()
+        client.async_execute_command.assert_awaited_once_with(
+            target_type="device",
+            target_id="dev_001",
+            component="main",
+            capability="refresh",
+            command="refresh",
+            arguments=[],
+            confirm=False,
+            timeout=30,
+        )
 
 
 if __name__ == "__main__":
