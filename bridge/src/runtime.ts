@@ -119,6 +119,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   const status = new RuntimeStatusStore({
     initial: {
       bridgeVersion,
+      architectureVersion: "advanced-primary-v1",
       dbAvailable: true,
       protocolVersion: protocolVersionFor(protocolIntegritySnapshot),
       protocolChangeCount: protocolIntegritySnapshot?.changeCount ?? 0,
@@ -200,6 +201,12 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         authoritativeWholeSnapshot: true
       });
       cameraImages.observeInventory(devices.snapshot());
+      status.update({
+        advancedInventoryLastSyncAtMs: Date.now(),
+        advancedInventoryDeviceCount: snapshot.devices.length,
+        advancedInventoryLocationCount: snapshot.locations.length,
+        advancedInventoryPageCount: snapshot.pageCount
+      });
     }
   });
   const refreshCommandSnapshot = (): Promise<CommandResyncEvidence> => {
@@ -243,7 +250,18 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     executor: commandExecutor,
     timeoutMs: 30_000,
     resyncAfterMs: 1_000,
-    resync: refreshCommandSnapshot
+    resync: refreshCommandSnapshot,
+    onPendingCountChange: (count) => status.update({ pendingCommandCount: count }),
+    onResult: (result) => {
+      const current = status.getSnapshot();
+      status.update({
+        lastCommandTransport: result.transport,
+        lastCommandConfirmation: result.lifecycle,
+        ...(result.transport === "dom"
+          ? { domFallbackCount: current.domFallbackCount + 1 }
+          : {})
+      });
+    }
   });
   const getProbeEvidence = () =>
     probeEvidenceFrom(
@@ -418,6 +436,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           },
           () => {
             void reconciliation.request("reconnect").catch(() => {
+              const current = status.getSnapshot();
+              status.update({ adapterFailureCount: current.adapterFailureCount + 1 });
               log.warn("advanced_reconnect_reconciliation_failed");
             });
           },
@@ -435,6 +455,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         recoverCurrentPushSocket = recoverSmartThingsWebSocket;
         detailDiscovery.reset();
         await reconciliation.request("startup").catch(() => {
+          const current = status.getSnapshot();
+          status.update({ adapterFailureCount: current.adapterFailureCount + 1 });
           log.warn("advanced_primary_inventory_sync_failed");
         });
         assigned = true;

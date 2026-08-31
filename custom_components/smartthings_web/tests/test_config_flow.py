@@ -91,7 +91,12 @@ from smartthings_web.config_flow import (  # noqa: E402
 )
 from smartthings_web.const import (  # noqa: E402
     CONF_BRIDGE_TOKEN,
+    CONF_COMMAND_CONFIRMATION_TIMEOUT,
     CONF_CONTROL_MODE,
+    CONF_DEBUG_PROTOCOL_LOGGING,
+    CONF_DOM_FALLBACK_ENABLED,
+    CONF_INVENTORY_RECONCILIATION_INTERVAL,
+    CONF_STATUS_RECHECK_ENABLED,
     CONTROL_MODE_READ_ONLY,
     CONTROL_MODE_SAFE_CONTROL,
 )
@@ -126,17 +131,46 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await flow.async_step_location({"location_id": "loc_001"})
 
         self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(result["options"], {CONF_CONTROL_MODE: CONTROL_MODE_SAFE_CONTROL})
+        self.assertEqual(
+            result["options"],
+            {
+                CONF_CONTROL_MODE: CONTROL_MODE_SAFE_CONTROL,
+                CONF_COMMAND_CONFIRMATION_TIMEOUT: 30,
+                CONF_STATUS_RECHECK_ENABLED: True,
+                CONF_INVENTORY_RECONCILIATION_INTERVAL: 21600,
+                CONF_DOM_FALLBACK_ENABLED: True,
+                CONF_DEBUG_PROTOCOL_LOGGING: False,
+            },
+        )
 
     async def test_options_flow_updates_control_mode(self) -> None:
         entry = SimpleNamespace(options={CONF_CONTROL_MODE: CONTROL_MODE_READ_ONLY})
         flow = SmartThingsWebOptionsFlow()
         flow.config_entry = entry
 
-        result = await flow.async_step_init({CONF_CONTROL_MODE: CONTROL_MODE_SAFE_CONTROL})
+        result = await flow.async_step_init(
+            {
+                CONF_CONTROL_MODE: CONTROL_MODE_SAFE_CONTROL,
+                CONF_COMMAND_CONFIRMATION_TIMEOUT: 45,
+                CONF_STATUS_RECHECK_ENABLED: False,
+                CONF_INVENTORY_RECONCILIATION_INTERVAL: 7200,
+                CONF_DOM_FALLBACK_ENABLED: False,
+                CONF_DEBUG_PROTOCOL_LOGGING: True,
+            }
+        )
 
         self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(result["data"], {CONF_CONTROL_MODE: CONTROL_MODE_SAFE_CONTROL})
+        self.assertEqual(
+            result["data"],
+            {
+                CONF_CONTROL_MODE: CONTROL_MODE_SAFE_CONTROL,
+                CONF_COMMAND_CONFIRMATION_TIMEOUT: 45,
+                CONF_STATUS_RECHECK_ENABLED: False,
+                CONF_INVENTORY_RECONCILIATION_INTERVAL: 7200,
+                CONF_DOM_FALLBACK_ENABLED: False,
+                CONF_DEBUG_PROTOCOL_LOGGING: True,
+            },
+        )
         self.assertTrue(flow.automatic_reload)
 
     async def test_reauth_asks_only_for_pairing_code_and_updates_token(self) -> None:

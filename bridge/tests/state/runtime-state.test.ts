@@ -58,6 +58,15 @@ describe("RuntimeStatusStore", () => {
       protocolChangeCount: 0,
       protocolMismatchSurface: undefined,
       restartCount: 0,
+      architectureVersion: "unknown",
+      advancedInventoryDeviceCount: 0,
+      advancedInventoryLocationCount: 0,
+      advancedInventoryPageCount: 0,
+      adapterFailureCount: 0,
+      pendingCommandCount: 0,
+      domFallbackCount: 0,
+      lastCommandTransport: undefined,
+      lastCommandConfirmation: undefined,
       bridgeVersion: "0.0.0-dev",
       browserVersion: "unknown",
       protocolVersion: "unknown",
@@ -70,6 +79,7 @@ describe("RuntimeStatusStore", () => {
       lastPushAtMs: undefined,
       lastParserSuccessAtMs: undefined,
       lastBrowserStartAtMs: undefined,
+      advancedInventoryLastSyncAtMs: undefined,
       lastStateChangeAtMs: 1_000
     });
   });

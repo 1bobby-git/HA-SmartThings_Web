@@ -54,6 +54,15 @@ export interface RuntimeStatusSnapshot {
   protocolChangeCount: number;
   protocolMismatchSurface: ProtocolMismatchSurface | undefined;
   restartCount: number;
+  architectureVersion: string;
+  advancedInventoryDeviceCount: number;
+  advancedInventoryLocationCount: number;
+  advancedInventoryPageCount: number;
+  adapterFailureCount: number;
+  pendingCommandCount: number;
+  domFallbackCount: number;
+  lastCommandTransport: string | undefined;
+  lastCommandConfirmation: string | undefined;
   bridgeVersion: string;
   browserVersion: string;
   protocolVersion: string;
@@ -66,6 +75,7 @@ export interface RuntimeStatusSnapshot {
   lastPushAtMs: number | undefined;
   lastParserSuccessAtMs: number | undefined;
   lastBrowserStartAtMs: number | undefined;
+  advancedInventoryLastSyncAtMs: number | undefined;
   lastStateChangeAtMs: number;
 }
 
@@ -103,6 +113,15 @@ const snapshotKeys = new Set<keyof RuntimeStatusSnapshot>([
   "protocolChangeCount",
   "protocolMismatchSurface",
   "restartCount",
+  "architectureVersion",
+  "advancedInventoryDeviceCount",
+  "advancedInventoryLocationCount",
+  "advancedInventoryPageCount",
+  "adapterFailureCount",
+  "pendingCommandCount",
+  "domFallbackCount",
+  "lastCommandTransport",
+  "lastCommandConfirmation",
   "bridgeVersion",
   "browserVersion",
   "protocolVersion",
@@ -115,6 +134,7 @@ const snapshotKeys = new Set<keyof RuntimeStatusSnapshot>([
   "lastPushAtMs",
   "lastParserSuccessAtMs",
   "lastBrowserStartAtMs",
+  "advancedInventoryLastSyncAtMs",
   "lastStateChangeAtMs"
 ]);
 
@@ -129,6 +149,12 @@ const counterKeys = new Set<keyof RuntimeStatusSnapshot>([
   "detailDiscoveryFailureCount",
   "protocolChangeCount",
   "restartCount"
+  ,"advancedInventoryDeviceCount"
+  ,"advancedInventoryLocationCount"
+  ,"advancedInventoryPageCount"
+  ,"adapterFailureCount"
+  ,"pendingCommandCount"
+  ,"domFallbackCount"
 ]);
 
 const booleanKeys = new Set<keyof RuntimeStatusSnapshot>([
@@ -151,6 +177,7 @@ const timestampKeys = new Set<keyof RuntimeStatusSnapshot>([
   "lastPushAtMs",
   "lastParserSuccessAtMs",
   "lastBrowserStartAtMs",
+  "advancedInventoryLastSyncAtMs",
   "lastStateChangeAtMs"
 ]);
 
@@ -158,6 +185,12 @@ const versionKeys = new Set<keyof RuntimeStatusSnapshot>([
   "bridgeVersion",
   "browserVersion",
   "protocolVersion"
+  ,"architectureVersion"
+]);
+
+const diagnosticStringKeys = new Set<keyof RuntimeStatusSnapshot>([
+  "lastCommandTransport",
+  "lastCommandConfirmation"
 ]);
 
 const protocolMismatchSurfaces = new Set<ProtocolMismatchSurface>([
@@ -203,6 +236,15 @@ export class RuntimeStatusStore {
       protocolChangeCount: 0,
       protocolMismatchSurface: undefined,
       restartCount: 0,
+      architectureVersion: "unknown",
+      advancedInventoryDeviceCount: 0,
+      advancedInventoryLocationCount: 0,
+      advancedInventoryPageCount: 0,
+      adapterFailureCount: 0,
+      pendingCommandCount: 0,
+      domFallbackCount: 0,
+      lastCommandTransport: undefined,
+      lastCommandConfirmation: undefined,
       bridgeVersion: "0.0.0-dev",
       browserVersion: "unknown",
       protocolVersion: "unknown",
@@ -215,6 +257,7 @@ export class RuntimeStatusStore {
       lastPushAtMs: undefined,
       lastParserSuccessAtMs: undefined,
       lastBrowserStartAtMs: undefined,
+      advancedInventoryLastSyncAtMs: undefined,
       lastStateChangeAtMs: now,
       ...initial
     });
@@ -297,6 +340,13 @@ function validatePatch(patch: RuntimeStatusPatch, now: number): void {
     }
     if (value !== undefined && versionKeys.has(key) && !isSafeVersion(value)) {
       throw new Error(`unsafe runtime status version: ${String(key)}`);
+    }
+    if (
+      value !== undefined &&
+      diagnosticStringKeys.has(key) &&
+      (typeof value !== "string" || !/^[A-Za-z0-9_.:-]{1,64}$/u.test(value))
+    ) {
+      throw new Error(`unsafe runtime diagnostic string: ${String(key)}`);
     }
   }
 }

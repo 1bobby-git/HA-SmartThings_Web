@@ -25,6 +25,8 @@ export interface SafeCommandRequest {
   clientRequestId: string;
   controlId?: string;
   controlLabel?: string;
+  confirm?: boolean;
+  timeout?: number;
 }
 
 export interface SafeCommandResult {
@@ -164,6 +166,8 @@ interface SafeCommandServiceOptions {
   resyncAfterMs?: number;
   confirmationStabilityMs?: number;
   resync: () => Promise<CommandResyncEvidence | undefined>;
+  onPendingCountChange?: (count: number) => void;
+  onResult?: (result: SafeCommandResult) => void;
 }
 
 interface DedupeEntry {
@@ -177,8 +181,8 @@ type ResolvedDeviceRequest = SafeCommandRequest & {
   nativeCommand?: string;
 };
 
-const oldRequestKeys = ["deviceId", "component", "capability", "command", "arguments", "clientRequestId"] as const;
-const newRequestKeys = ["targetType", "targetId", "component", "capability", "attribute", "command", "arguments", "clientRequestId", "controlId", "controlLabel"] as const;
+const oldRequestKeys = ["deviceId", "component", "capability", "command", "arguments", "clientRequestId", "confirm", "timeout"] as const;
+const newRequestKeys = ["targetType", "targetId", "component", "capability", "attribute", "command", "arguments", "clientRequestId", "controlId", "controlLabel", "confirm", "timeout"] as const;
 const tokenPattern = /^[A-Za-z0-9_.:-]{1,160}$/u;
 const devicePattern = /^dev_[0-9]{3,32}$/u;
 const targetPattern = /^(?:dev|loc|identifier)_[A-Za-z0-9_]{3,64}$/u;
@@ -201,7 +205,10 @@ export class SafeCommandService {
       }
       return existing.result;
     }
-    const result = this.#enqueue(request);
+    const result = this.#enqueue(request).then((value) => {
+      this.options.onResult?.(value);
+      return value;
+    });
     this.#dedupe.set(request.clientRequestId, { fingerprint, result });
     while (this.#dedupe.size > dedupeLimit) {
       const oldest = this.#dedupe.keys().next().value as string | undefined;
@@ -219,8 +226,12 @@ export class SafeCommandService {
       () => undefined
     );
     this.#queues.set(request.targetId, queueTail);
+    this.options.onPendingCountChange?.(this.#queues.size);
     void queueTail.finally(() => {
-      if (this.#queues.get(request.targetId) === queueTail) this.#queues.delete(request.targetId);
+      if (this.#queues.get(request.targetId) === queueTail) {
+        this.#queues.delete(request.targetId);
+        this.options.onPendingCountChange?.(this.#queues.size);
+      }
     });
     return operation;
   }
@@ -275,7 +286,7 @@ export class SafeCommandService {
       ...(effective.optionCommand ? { optionCommand: effective.optionCommand } : {}),
       ...(effective.nativeCommand ? { nativeCommand: effective.nativeCommand } : {})
     };
-    if (isStatelessCommand(effective.command)) {
+    if (isStatelessCommand(effective.command) || effective.confirm === false) {
       try {
         if (!this.options.executor.executeDeviceAction) {
           throw new SafeCommandError("command_execution_failed");
@@ -321,7 +332,11 @@ export class SafeCommandService {
       wait.cancel();
       throw commandError(error);
     }
-    wait.startTimeout(this.options.timeoutMs, this.options.resyncAfterMs, Date.now());
+    wait.startTimeout(
+      effective.timeout === undefined ? this.options.timeoutMs : effective.timeout * 1_000,
+      this.options.resyncAfterMs,
+      Date.now()
+    );
     const evidence = await wait.result;
     return confirmed(
       request.clientRequestId,
@@ -463,6 +478,18 @@ function normalizeRequest(targetType: SafeCommandRequest["targetType"], targetId
     throw new SafeCommandError("invalid_arguments");
   }
   if (typeof input.clientRequestId !== "string" || !clientRequestPattern.test(input.clientRequestId)) throw new SafeCommandError("invalid_client_request_id");
+  if (input.confirm !== undefined && typeof input.confirm !== "boolean") {
+    throw new SafeCommandError("invalid_arguments");
+  }
+  if (
+    input.timeout !== undefined &&
+    (typeof input.timeout !== "number" ||
+      !Number.isSafeInteger(input.timeout) ||
+      input.timeout < 1 ||
+      input.timeout > 120)
+  ) {
+    throw new SafeCommandError("invalid_arguments");
+  }
   return {
     targetType,
     targetId,
@@ -472,6 +499,8 @@ function normalizeRequest(targetType: SafeCommandRequest["targetType"], targetId
     ...(typeof input.attribute === "string" ? { attribute: input.attribute } : {}),
     ...(typeof input.controlId === "string" ? { controlId: input.controlId } : {}),
     ...(typeof input.controlLabel === "string" ? { controlLabel: input.controlLabel } : {}),
+    ...(typeof input.confirm === "boolean" ? { confirm: input.confirm } : {}),
+    ...(typeof input.timeout === "number" ? { timeout: input.timeout } : {}),
     command: input.command,
     arguments: input.arguments.map((value) => jsonValue(value) as BridgeJsonValue),
     clientRequestId: input.clientRequestId

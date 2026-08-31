@@ -13,11 +13,18 @@ from .bridge_client import BridgeAuthError, BridgeClientError, SmartThingsWebBri
 from .const import (
     CONF_BRIDGE_TOKEN,
     CONF_BRIDGE_URL,
+    CONF_COMMAND_CONFIRMATION_TIMEOUT,
     CONF_CONTROL_MODE,
+    CONF_DEBUG_PROTOCOL_LOGGING,
+    CONF_DOM_FALLBACK_ENABLED,
+    CONF_INVENTORY_RECONCILIATION_INTERVAL,
     CONF_LOCATION_ID,
+    CONF_STATUS_RECHECK_ENABLED,
     CONTROL_MODE_READ_ONLY,
     CONTROL_MODE_SAFE_CONTROL,
     DEFAULT_BRIDGE_URL,
+    DEFAULT_COMMAND_CONFIRMATION_TIMEOUT,
+    DEFAULT_INVENTORY_RECONCILIATION_INTERVAL,
     DOMAIN,
 )
 from .models import BridgeInventory, location_name
@@ -114,7 +121,14 @@ class SmartThingsWebConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_BRIDGE_TOKEN: token,
                     CONF_LOCATION_ID: location_id,
                 },
-                options={CONF_CONTROL_MODE: CONTROL_MODE_SAFE_CONTROL},
+                options={
+                    CONF_CONTROL_MODE: CONTROL_MODE_SAFE_CONTROL,
+                    CONF_COMMAND_CONFIRMATION_TIMEOUT: DEFAULT_COMMAND_CONFIRMATION_TIMEOUT,
+                    CONF_STATUS_RECHECK_ENABLED: True,
+                    CONF_INVENTORY_RECONCILIATION_INTERVAL: DEFAULT_INVENTORY_RECONCILIATION_INTERVAL,
+                    CONF_DOM_FALLBACK_ENABLED: True,
+                    CONF_DEBUG_PROTOCOL_LOGGING: False,
+                },
             )
         return self.async_show_form(
             step_id="location",
@@ -167,11 +181,37 @@ class SmartThingsWebOptionsFlow(_OptionsFlowBase):
         """Update integration options."""
         entry = self._entry
         current = entry.options.get(CONF_CONTROL_MODE, CONTROL_MODE_SAFE_CONTROL)
+        confirmation_timeout = entry.options.get(
+            CONF_COMMAND_CONFIRMATION_TIMEOUT, DEFAULT_COMMAND_CONFIRMATION_TIMEOUT
+        )
+        status_recheck = entry.options.get(CONF_STATUS_RECHECK_ENABLED, True)
+        reconciliation_interval = entry.options.get(
+            CONF_INVENTORY_RECONCILIATION_INTERVAL,
+            DEFAULT_INVENTORY_RECONCILIATION_INTERVAL,
+        )
+        dom_fallback = entry.options.get(CONF_DOM_FALLBACK_ENABLED, True)
+        debug_protocol = entry.options.get(CONF_DEBUG_PROTOCOL_LOGGING, False)
         if user_input is not None:
             return self.async_create_entry(
                 title="",
                 data={
                     CONF_CONTROL_MODE: user_input.get(CONF_CONTROL_MODE, current),
+                    CONF_COMMAND_CONFIRMATION_TIMEOUT: user_input.get(
+                        CONF_COMMAND_CONFIRMATION_TIMEOUT, confirmation_timeout
+                    ),
+                    CONF_STATUS_RECHECK_ENABLED: user_input.get(
+                        CONF_STATUS_RECHECK_ENABLED, status_recheck
+                    ),
+                    CONF_INVENTORY_RECONCILIATION_INTERVAL: user_input.get(
+                        CONF_INVENTORY_RECONCILIATION_INTERVAL,
+                        reconciliation_interval,
+                    ),
+                    CONF_DOM_FALLBACK_ENABLED: user_input.get(
+                        CONF_DOM_FALLBACK_ENABLED, dom_fallback
+                    ),
+                    CONF_DEBUG_PROTOCOL_LOGGING: user_input.get(
+                        CONF_DEBUG_PROTOCOL_LOGGING, debug_protocol
+                    ),
                 },
             )
         return self.async_show_form(
@@ -180,7 +220,24 @@ class SmartThingsWebOptionsFlow(_OptionsFlowBase):
                 {
                     vol.Required(CONF_CONTROL_MODE, default=current): vol.In(
                         CONTROL_MODE_OPTIONS
-                    )
+                    ),
+                    vol.Required(
+                        CONF_COMMAND_CONFIRMATION_TIMEOUT,
+                        default=confirmation_timeout,
+                    ): vol.All(int, vol.Range(min=1, max=120)),
+                    vol.Required(
+                        CONF_STATUS_RECHECK_ENABLED, default=status_recheck
+                    ): bool,
+                    vol.Required(
+                        CONF_INVENTORY_RECONCILIATION_INTERVAL,
+                        default=reconciliation_interval,
+                    ): vol.All(int, vol.Range(min=900, max=604800)),
+                    vol.Required(
+                        CONF_DOM_FALLBACK_ENABLED, default=dom_fallback
+                    ): bool,
+                    vol.Required(
+                        CONF_DEBUG_PROTOCOL_LOGGING, default=debug_protocol
+                    ): bool,
                 }
             ),
         )

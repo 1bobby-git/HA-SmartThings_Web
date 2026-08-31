@@ -54,6 +54,7 @@ from .models import (
     sensor_state_owned_by_primary_domain,
     state_has_entity_value,
 )
+from .services import async_setup_services
 from .naming import (
     canonical_entity_object_id,
     canonical_primary_control_object_id,
@@ -106,6 +107,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
     runtime_client = ReadOnlyBridgeClient(client) if _control_mode(entry) == CONTROL_MODE_READ_ONLY else client
     runtime = SmartThingsWebRuntime(client=runtime_client, location_id=location_id, inventory=inventory)
     entry.runtime_data = runtime
+    await async_setup_services(hass)
     _migrate_entity_registry(hass, entry, inventory)
     registered_metadata: dict[str, tuple[object, ...]] = {}
 

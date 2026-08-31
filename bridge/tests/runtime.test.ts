@@ -412,6 +412,18 @@ describe("createBridgeRuntime", () => {
           String((request as { path?: unknown }).path).endsWith("/commands")
       )
     ).toBe(true);
+    const health = await fetch(`${baseUrl}/health/details`).then(
+      (value) => value.json() as Promise<{ details: Record<string, unknown> }>
+    );
+    expect(health.details).toMatchObject({
+      architectureVersion: "advanced-primary-v1",
+      advancedInventoryDeviceCount: expect.any(Number),
+      advancedInventoryPageCount: expect.any(Number),
+      pendingCommandCount: 0,
+      domFallbackCount: 0,
+      lastCommandTransport: "advanced",
+      lastCommandConfirmation: "CONFIRMED_BY_EVENT"
+    });
   });
 
   test("accepts stateless refresh without inventing a persistent confirmation state", async () => {

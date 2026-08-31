@@ -10,6 +10,37 @@ import { DeviceStore } from "../../src/state/device-store.js";
 import { RuntimeStatusStore } from "../../src/state/runtime-state.js";
 
 describe("SafeCommandService", () => {
+  test("returns the transport receipt for an explicitly unconfirmed stateful command", async () => {
+    const store = readyDeviceStore();
+    const resync = vi.fn(async () => undefined);
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: {
+        executeDeviceAction: vi.fn(async () => ({
+          state: "ACCEPTED" as const,
+          transport: "advanced" as const,
+          acceptedAtMs: Date.now()
+        }))
+      },
+      timeoutMs: 1_000,
+      resync
+    });
+
+    await expect(
+      service.execute({
+        ...command("on", "request_no_confirm"),
+        confirm: false,
+        timeout: 25
+      })
+    ).resolves.toMatchObject({
+      status: "accepted_unconfirmed",
+      confirmation: "accepted_receipt",
+      transport: "advanced"
+    });
+    expect(resync).not.toHaveBeenCalled();
+  });
+
   test("confirms switch commands only after a newer matching push event", async () => {
     const store = readyDeviceStore();
     const executor: SafeCommandExecutor = {
