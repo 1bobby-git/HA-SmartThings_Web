@@ -398,7 +398,7 @@ Not-tested: Live bathroom light rollback."
 - Modify: `README.md`
 - Create: `docs/advanced-primary-architecture-0.1.148-verification.md`
 
-- [ ] **Step 1: Bump version surfaces**
+- [x] **Step 1: Bump version surfaces**
 
 ```powershell
 npm version 0.1.148 --no-git-tag-version
@@ -406,7 +406,7 @@ npm version 0.1.148 --no-git-tag-version
 
 Update runtime, protocol, add-on, integration, version tests, changelog, and README to `0.1.148`.
 
-- [ ] **Step 2: Run complete local gates**
+- [x] **Step 2: Run complete local gates**
 
 ```powershell
 npm test -- --pool=threads --maxWorkers=1 --no-file-parallelism
@@ -420,7 +420,7 @@ npm run audit:fixtures
 git diff --check
 ```
 
-- [ ] **Step 3: Record candidate evidence and commit**
+- [x] **Step 3: Record candidate evidence and commit**
 
 Record exact test counts and package manifest SHA in the verification document, clearly separating local evidence from live HAOS proof.
 
