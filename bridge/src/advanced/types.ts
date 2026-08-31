@@ -33,3 +33,30 @@ export interface AdvancedCommandBody {
     arguments: unknown[];
   }>;
 }
+
+export interface AdvancedCapabilitySchema extends Record<string, unknown> {
+  type?: "array" | "boolean" | "integer" | "number" | "object" | "string";
+  enum?: unknown[];
+  minimum?: number;
+  maximum?: number;
+}
+
+export interface AdvancedCapabilityArgumentDefinition {
+  name: string;
+  required: boolean;
+  sensitive: boolean;
+  unit?: string;
+  schema: AdvancedCapabilitySchema;
+}
+
+export interface AdvancedCapabilityCommandDefinition {
+  name: string;
+  arguments: AdvancedCapabilityArgumentDefinition[];
+}
+
+export interface AdvancedCapabilityDefinition {
+  id: string;
+  version: number;
+  attributes: Record<string, unknown>;
+  commands: Record<string, AdvancedCapabilityCommandDefinition>;
+}
