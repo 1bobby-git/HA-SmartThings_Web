@@ -12,6 +12,14 @@ import {
 import { BrowserSupervisor } from "./browser/browser-supervisor.js";
 import { SmartThingsWebUiCommandExecutor } from "./browser/command-page.js";
 import { DeviceDetailDiscovery } from "./browser/device-detail-discovery.js";
+import { AuthenticatedSmartThingsSession } from "./advanced/authenticated-session.js";
+import { AdvancedInventoryAdapter } from "./advanced/inventory-adapter.js";
+import { AdvancedCommandAdapter } from "./advanced/command-adapter.js";
+import {
+  CapabilityDefinitionCache,
+  parseCapabilityDefinition
+} from "./advanced/capability-cache.js";
+import { AdvancedFirstCommandExecutor } from "./command/advanced-first-executor.js";
 import {
   SafeCommandService,
   type CommandResyncEvidence
@@ -158,6 +166,20 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   let sessionTouchInFlight = false;
   let sessionTouchReadySinceMs: number | undefined;
   let lastSessionTouchAttemptAtMs = 0;
+  const authenticatedSession = new AuthenticatedSmartThingsSession({
+    currentKeeper: () => currentKeeperManager?.currentKeeper(),
+    openAdvancedPage: async () => {
+      const manager = currentKeeperManager;
+      if (!manager) throw new Error("advanced_session_unavailable");
+      return await manager.openAdvancedPage();
+    }
+  });
+  const advancedInventory = new AdvancedInventoryAdapter(authenticatedSession);
+  const capabilityCache = new CapabilityDefinitionCache(async (capabilityId, version) =>
+    parseCapabilityDefinition(
+      await advancedInventory.getCapabilityDefinition(capabilityId, version)
+    )
+  );
   const refreshCommandSnapshot = (): Promise<CommandResyncEvidence> => {
     return (async () => {
       const startedAtMs = Date.now();
@@ -165,21 +187,20 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       if (!keeper || classifySmartThingsUrl(keeper.url()) !== "smartthings_location") {
         throw new Error("command_browser_unavailable");
       }
-      const snapshots = await fetchAdvancedDeviceSnapshots(keeper, [
-        ADVANCED_DEVICE_SNAPSHOT_URLS[1]
-      ]);
-      if (snapshots.length === 0) throw new Error("advanced_snapshot_unavailable");
-      for (const snapshot of snapshots) {
-        volatileIdentifiers.observeRawAdvancedDeviceSnapshot(snapshot);
-        cameraImages.observeRawAdvancedDeviceSnapshot(snapshot);
-        devices.observeAdvancedDeviceSnapshot(redactor(snapshot));
-        cameraImages.observeInventory(devices.snapshot());
-      }
-      log.info(`command_diag:advanced_snapshot_refreshed:${snapshots.length}`);
+      const inventory = await advancedInventory.getDevices();
+      if (inventory.devices.length === 0) throw new Error("advanced_snapshot_unavailable");
+      const snapshot = { items: inventory.devices };
+      volatileIdentifiers.observeRawAdvancedDeviceSnapshot(snapshot);
+      cameraImages.observeRawAdvancedDeviceSnapshot(snapshot);
+      devices.observeAdvancedDeviceSnapshot(redactor(snapshot), {
+        authoritativeWholeSnapshot: true
+      });
+      cameraImages.observeInventory(devices.snapshot());
+      log.info(`command_diag:advanced_snapshot_refreshed:${inventory.pageCount}`);
       return { authoritativeSnapshot: true, startedAtMs };
     })();
   };
-  const commandExecutor = new SmartThingsWebUiCommandExecutor(
+  const legacyCommandExecutor = new SmartThingsWebUiCommandExecutor(
     () => currentKeeperManager,
     (rawLocationId) =>
       aliases.alias("location", aliases.alias("location", rawLocationId)),
@@ -189,6 +210,16 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       resolveRawDeviceId: (alias) => volatileIdentifiers.rawDeviceId(alias),
       resolveRawIdentifier: (alias) => volatileIdentifiers.rawIdentifier(alias)
     }
+  );
+  const advancedCommandExecutor = new AdvancedCommandAdapter({
+    session: authenticatedSession,
+    capabilityCache,
+    resolveRawDeviceId: (alias) => volatileIdentifiers.rawDeviceId(alias),
+    resolveRawIdentifier: (alias) => volatileIdentifiers.rawIdentifier(alias)
+  });
+  const commandExecutor = new AdvancedFirstCommandExecutor(
+    advancedCommandExecutor,
+    legacyCommandExecutor
   );
   const commands = new SafeCommandService({
     devices,
@@ -205,15 +236,15 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     );
   const detailDiscovery = new DeviceDetailDiscovery({
     inventory: () => devices.snapshot(),
-    inspector: commandExecutor,
+    inspector: legacyCommandExecutor,
     resolveCameraImageUrl: (deviceId) => cameraImages.thumbnailRequestUrl(deviceId),
     canInspect: () => {
       const report = createHealthReport(status.getSnapshot());
       return (
         report.ready &&
         report.details.state === "CONNECTED" &&
-        !commandExecutor.hasWarmCommandPage() &&
-        !commandExecutor.hasForegroundOperation() &&
+        !legacyCommandExecutor.hasWarmCommandPage() &&
+        !legacyCommandExecutor.hasForegroundOperation() &&
         !sessionTouchInFlight &&
         isProbeBrowserIsolated(currentContext, currentKeeperManager) &&
         physicalActionProbe.snapshot(getProbeEvidence()).state !== "armed"
@@ -362,8 +393,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
               context === currentContext &&
               keeperManager === currentKeeperManager &&
               report.ready &&
-              !commandExecutor.hasWarmCommandPage() &&
-              !commandExecutor.hasForegroundOperation() &&
+              !legacyCommandExecutor.hasWarmCommandPage() &&
+              !legacyCommandExecutor.hasForegroundOperation() &&
               !sessionTouchInFlight &&
               isProbeBrowserIsolated(context, keeperManager) &&
               physicalActionProbe.snapshot(getProbeEvidence()).state !== "armed"
@@ -380,6 +411,9 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         currentKeeperManager = keeperManager;
         recoverCurrentPushSocket = recoverSmartThingsWebSocket;
         detailDiscovery.reset();
+        await refreshCommandSnapshot().catch(() => {
+          log.warn("advanced_primary_inventory_sync_failed");
+        });
         assigned = true;
         return context;
       } finally {
@@ -492,8 +526,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       now - sessionTouchReadySinceMs < SESSION_TOUCH_INTERVAL_MS ||
       now - lastSessionTouchAttemptAtMs < SESSION_TOUCH_INTERVAL_MS ||
       sessionTouchInFlight ||
-      commandExecutor.hasForegroundOperation() ||
-      commandExecutor.hasWarmCommandPage() ||
+      legacyCommandExecutor.hasForegroundOperation() ||
+      legacyCommandExecutor.hasWarmCommandPage() ||
       detailDiscovery.isRunning() ||
       !isProbeBrowserIsolated(context, keeperManager) ||
       physicalActionProbe.snapshot(getProbeEvidence()).state === "armed"

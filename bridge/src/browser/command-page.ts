@@ -233,7 +233,7 @@ export class SmartThingsWebUiCommandExecutor {
     optionLabel?: string;
     optionCommand?: string;
     nativeCommand?: string;
-  }): Promise<void> {
+  }): Promise<"location_native" | "dom"> {
     this.#diagnostic("foreground_requested");
     const manager = this.getManager();
     if (!manager) {
@@ -242,7 +242,7 @@ export class SmartThingsWebUiCommandExecutor {
     const native = await this.#executeNativeDeviceAction(manager, input);
     if (native === "sent") {
       this.#diagnostic("native_command_sent");
-      return;
+      return "location_native";
     }
     if (native === "failed") {
       this.#diagnostic("native_command_failed");
@@ -253,6 +253,7 @@ export class SmartThingsWebUiCommandExecutor {
       this.#diagnostic("foreground_ready");
       return this.#executeDeviceActionFallback(manager, input);
     });
+    return "dom";
   }
 
   async #executeDeviceActionFallback(manager: CommandPageManagerLike, input: {

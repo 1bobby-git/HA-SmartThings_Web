@@ -79,6 +79,30 @@ class FakePage extends FakeEmitter {
     this.currentUrl = url;
   });
   readonly evaluate = vi.fn(async (pageFunction?: unknown, argument?: unknown) => {
+    if (
+      typeof argument === "object" &&
+      argument !== null &&
+      typeof (argument as { endpoint?: unknown }).endpoint === "string"
+    ) {
+      this.advancedRequestCalls.push(argument);
+      const request = argument as { method?: unknown; path?: unknown };
+      if (request.method === "POST") {
+        await this.onAdvancedCommand?.();
+        return {
+          ok: true,
+          status: 200,
+          value: this.advancedCommandResponse
+        };
+      }
+      if (typeof request.path === "string" && request.path.endsWith("/status")) {
+        return { ok: true, status: 200, value: this.advancedStatusResponse };
+      }
+      return {
+        ok: true,
+        status: 200,
+        value: this.advancedSnapshots[0] ?? { items: [] }
+      };
+    }
     this.evaluateCalls.push([pageFunction, argument]);
     if (
       typeof argument === "object" &&
@@ -94,7 +118,11 @@ class FakePage extends FakeEmitter {
     this.closed = true;
   });
   readonly evaluateCalls: unknown[][] = [];
+  readonly advancedRequestCalls: unknown[] = [];
   advancedSnapshots: unknown[] = [];
+  advancedCommandResponse: unknown = { results: [{ status: "UNSUPPORTED" }] };
+  advancedStatusResponse: unknown = { components: {} };
+  onAdvancedCommand: (() => void | Promise<void>) | undefined;
   sessionTouchOutcome: "ok" | "reauth" | "failed" = "ok";
   onSessionTouch: (() => void | Promise<void>) | undefined;
 
@@ -253,11 +281,13 @@ describe("createBridgeRuntime", () => {
     expect(isWholeAdvancedDevicesSnapshotUrl(reversed.toString())).toBe(true);
   });
 
-  test("wires the authenticated command API through an isolated UI page and push confirmation", async () => {
+  test("uses the Advanced command endpoint first and confirms it from the Location push", async () => {
     const root = createTempRoot();
-    const context = new FakeContext([
-      new FakePage("https://my.smartthings.com/location/raw-location-001")
-    ]);
+    const keeper = new FakePage("https://my.smartthings.com/location/raw-location-001");
+    keeper.advancedCommandResponse = {
+      results: [{ id: "advanced-command-001", status: "ACCEPTED" }]
+    };
+    const context = new FakeContext([keeper]);
     const runtime = await createBridgeRuntime(
       createDeps(root, { chromium: { launchPersistentContext: vi.fn(async () => context) } })
     );
@@ -334,7 +364,7 @@ describe("createBridgeRuntime", () => {
     expect(target).toBeDefined();
     const state = target?.states.find((candidate) => candidate.attribute === "switch");
     expect(state).toBeDefined();
-    context.onCommandToggle = async () => {
+    keeper.onAdvancedCommand = async () => {
       await socket.emit("framereceived", {
         payload: buildDeviceEventFrame({
           eventId: "command-event-001",
@@ -364,13 +394,24 @@ describe("createBridgeRuntime", () => {
     const responseBody = await response.json();
     expect({ status: response.status, body: responseBody }).toMatchObject({
       status: 200,
-      body: { status: "confirmed", confirmation: "device_event" }
+      body: {
+        status: "confirmed",
+        confirmation: "device_event",
+        transport: "advanced"
+      }
     });
     expect(
       context.existingPages.filter(
         (page) => !page.closed && page.url() !== "https://my.smartthings.com/advanced"
       )
-    ).toHaveLength(2);
+    ).toHaveLength(1);
+    expect(
+      keeper.advancedRequestCalls.some(
+        (request) =>
+          (request as { method?: unknown }).method === "POST" &&
+          String((request as { path?: unknown }).path).endsWith("/commands")
+      )
+    ).toBe(true);
   });
 
   test("confirms refresh commands from authoritative Advanced resync evidence", async () => {

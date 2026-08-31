@@ -6,6 +6,10 @@ import type {
   BridgeSceneExpectedState,
   DeviceStore
 } from "../state/device-store.js";
+import type {
+  CommandTransportName,
+  CommandTransportReceipt
+} from "./command-router.js";
 import { createHealthReport } from "../server/health.js";
 import type { RuntimeStatusStore } from "../state/runtime-state.js";
 
@@ -28,7 +32,7 @@ export interface SafeCommandResult {
   clientRequestId: string;
   status: "confirmed" | "already_confirmed";
   sequence: number;
-  transport: "smartthings_web_ui";
+  transport: "smartthings_web_ui" | CommandTransportName;
   confirmation: "device_event" | "inventory_snapshot" | "security_arm_state_event" | "current_state";
 }
 
@@ -62,8 +66,7 @@ type DeviceActionCommand =
 
 type LocationAction = "armAway" | "armStay" | "disarm";
 
-export interface SafeCommandExecutor {
-  executeDeviceAction?(input: {
+export interface DeviceActionExecutionInput {
     action: string;
     arguments: BridgeJsonValue[];
     attribute: string;
@@ -80,7 +83,12 @@ export interface SafeCommandExecutor {
     optionLabel?: string;
     optionCommand?: string;
     nativeCommand?: string;
-  }): Promise<void>;
+}
+
+export interface SafeCommandExecutor {
+  executeDeviceAction?(
+    input: DeviceActionExecutionInput
+  ): Promise<void | CommandTransportReceipt | "location_native" | "dom">;
   executeScene?(input: {
     action?: string;
     locationId: string;
@@ -263,9 +271,10 @@ export class SafeCommandService {
           resync: this.options.resync
         });
     const roomName = device.roomId ? snapshot.rooms.find((room) => room.id === device.roomId)?.name : undefined;
+    let executionResult: void | CommandTransportReceipt | "location_native" | "dom";
     try {
       if (!this.options.executor.executeDeviceAction) throw new SafeCommandError("command_execution_failed");
-      await this.options.executor.executeDeviceAction({
+      executionResult = await this.options.executor.executeDeviceAction({
         action: effective.command,
         arguments: effective.arguments,
         attribute,
@@ -292,7 +301,8 @@ export class SafeCommandService {
     return confirmed(
       request.clientRequestId,
       evidence.sequence,
-      evidence.source === "inventory_snapshot" ? "inventory_snapshot" : "device_event"
+      evidence.source === "inventory_snapshot" ? "inventory_snapshot" : "device_event",
+      transportForExecution(executionResult)
     );
   }
 
@@ -1409,8 +1419,21 @@ function alreadyConfirmed(clientRequestId: string, sequence: number): SafeComman
   return { schemaVersion: 1, clientRequestId, status: "already_confirmed", sequence, transport: "smartthings_web_ui", confirmation: "current_state" };
 }
 
-function confirmed(clientRequestId: string, sequence: number, confirmation: SafeCommandResult["confirmation"]): SafeCommandResult {
-  return { schemaVersion: 1, clientRequestId, status: "confirmed", sequence, transport: "smartthings_web_ui", confirmation };
+function confirmed(
+  clientRequestId: string,
+  sequence: number,
+  confirmation: SafeCommandResult["confirmation"],
+  transport: SafeCommandResult["transport"] = "smartthings_web_ui"
+): SafeCommandResult {
+  return { schemaVersion: 1, clientRequestId, status: "confirmed", sequence, transport, confirmation };
+}
+
+function transportForExecution(
+  result: void | CommandTransportReceipt | "location_native" | "dom"
+): SafeCommandResult["transport"] {
+  if (result === "location_native" || result === "dom") return result;
+  if (result && typeof result === "object") return result.transport;
+  return "smartthings_web_ui";
 }
 
 function commandError(error: unknown): SafeCommandError {
