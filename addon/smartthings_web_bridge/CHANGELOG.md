@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.143
+
+- Map the Advanced inventory's reserved `main` presence role to the current SmartThings location name, so mobile multi-place presence sensors can use `Home` alongside their named places instead of falling back to numbers.
+
 ## 0.1.142
 
 - Replace stale numbered mobile-presence entity IDs with the current Advanced component roles, preserving user-renamed rows.

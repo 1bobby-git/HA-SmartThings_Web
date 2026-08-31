@@ -2069,6 +2069,37 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertEqual(names[fridge.key], "Temperature (냉장실)")
         self.assertEqual(names[freezer.key], "Temperature (냉동실)")
 
+    def test_duplicate_presence_names_map_main_role_to_location_name(self) -> None:
+        roles = ("부모님댁", "친정집", "main", "회사")
+        states = [
+            BridgeState(
+                f"identifier_component_{index}",
+                f"identifier_capability_{index}",
+                "presence",
+                "present" if role == "main" else "not present",
+                None,
+                "2026-08-31T00:00:00Z",
+                component_role=role,
+            )
+            for index, role in enumerate(roles, 1)
+        ]
+
+        names = models_module.disambiguated_state_names(
+            [(state, "Presence") for state in states],
+            all_states=states,
+            main_presence_name="Home",
+        )
+
+        self.assertEqual(
+            [names[state.key] for state in states],
+            [
+                "Presence (부모님댁)",
+                "Presence (친정집)",
+                "Presence (Home)",
+                "Presence (회사)",
+            ],
+        )
+
     def test_duplicate_state_names_localize_known_component_roles(self) -> None:
         roles = {
             "refrigerator": "냉장고",

@@ -1427,15 +1427,17 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         state_specs = [
             ("identifier_7091628e9151", "부모님댁", "presence", "1"),
             ("identifier_bf4c9146a548", "친정집", "presence_2", "2"),
-            ("identifier_cd4f3cfbf2aa", "Home", "presence_3", "3"),
+            ("identifier_cd4f3cfbf2aa", "main", "presence_3", "3"),
             ("identifier_d5fc226da81d", "회사", "presence_4", "4"),
         ]
         states = [
             BridgeState(
                 component,
-                "presenceSensor",
+                "identifier_149a650ca9d",
                 "presence",
-                "present" if role == "Home" else "not present",
+                "present"
+                if component == "identifier_cd4f3cfbf2aa"
+                else "not present",
                 None,
                 "2026-08-31T06:00:00Z",
                 component_role=role,
@@ -1460,7 +1462,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
                 ),
                 domain="binary_sensor",
                 platform=DOMAIN,
-                unique_id=f"dev_332_{component}_presenceSensor_presence",
+                unique_id=f"dev_332_{component}_identifier_149a650ca9d_presence",
                 device_id="uuid_jump3",
                 config_entry_id="entry_001",
                 name=None,

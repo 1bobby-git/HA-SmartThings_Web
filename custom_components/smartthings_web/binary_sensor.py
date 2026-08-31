@@ -17,6 +17,7 @@ from .models import (
     SmartThingsWebRuntime,
     disambiguated_state_names,
     is_readonly_appliance_switch,
+    location_name,
 )
 
 
@@ -100,6 +101,11 @@ async def async_setup_entry(
             name_overrides = disambiguated_state_names(
                 ((state, description.name) for state, description in candidates),
                 all_states=device.states.values(),
+                main_presence_name=(
+                    location_name(runtime.inventory, device.location_id)
+                    if device.location_id in runtime.inventory.locations
+                    else None
+                ),
             )
             for state, description in candidates:
                 unique_id = "_".join((device.device_id, *state.key))

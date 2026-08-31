@@ -46,6 +46,7 @@ from .models import (
     is_fan_device,
     is_image_device,
     is_media_device,
+    location_name,
     number_controls,
     room_free_display_name,
     secondary_switch_name_overrides,
@@ -1108,7 +1109,12 @@ def _canonical_registry_suggested_object_id(
             ):
                 return primary_object_id
             return final_object_id or primary_object_id
-        entity_name = _generated_registry_state_name(entity_entry, device, state)
+        entity_name = _generated_registry_state_name(
+            entity_entry,
+            device,
+            state,
+            inventory,
+        )
         secondary_switch_role = secondary_switch_name_overrides(device).get(state.key)
         if (
             domain_value == Platform.SWITCH
@@ -1194,7 +1200,14 @@ def _canonical_registry_object_id_base(
             and secondary_switch_role is not None
         ):
             return slugify(secondary_switch_role) or None
-        return slugify(_generated_registry_state_name(entity_entry, device, state)) or None
+        return slugify(
+            _generated_registry_state_name(
+                entity_entry,
+                device,
+                state,
+                inventory,
+            )
+        ) or None
     fallback_suffix = _fallback_entity_suffix_name(entity_entry, device)
     if fallback_suffix is not None:
         return fallback_suffix
@@ -1416,8 +1429,13 @@ def _canonical_generated_state_entity_id(
     )
     if role is not None:
         entity_name = role
-    elif _numbered_generated_state_row(entity_entry, device, state):
-        entity_name = _generated_registry_state_name(entity_entry, device, state)
+    elif _numbered_generated_state_row(entity_entry, device, state, inventory):
+        entity_name = _generated_registry_state_name(
+            entity_entry,
+            device,
+            state,
+            inventory,
+        )
     else:
         return None
     object_id = canonical_entity_object_id(inventory, device, entity_name)
@@ -1480,6 +1498,7 @@ def _numbered_generated_state_row(
     entity_entry: object,
     device: object,
     state: object,
+    inventory: BridgeInventory,
 ) -> bool:
     """Return whether a generated numbered row can now use a stable role."""
     siblings = [
@@ -1488,7 +1507,15 @@ def _numbered_generated_state_row(
         if getattr(item, "attribute", None) == getattr(state, "attribute", None)
     ]
     sibling_count = len(siblings)
-    if sibling_count < 2 or not _registry_state_qualifier_names(state):
+    location_backed_main_presence = (
+        getattr(state, "attribute", None) == "presence"
+        and str(getattr(state, "component_role", "")).strip().lower() == "main"
+        and getattr(device, "location_id", None) in inventory.locations
+    )
+    if sibling_count < 2 or (
+        not _registry_state_qualifier_names(state)
+        and not location_backed_main_presence
+    ):
         return False
     values = (
         getattr(entity_entry, "original_name", None),
@@ -1531,7 +1558,12 @@ def _stale_fallback_generated_entity_id(
         None,
     )
     if state is not None:
-        object_name = _generated_registry_state_name(entity_entry, device, state)
+        object_name = _generated_registry_state_name(
+            entity_entry,
+            device,
+            state,
+            inventory,
+        )
         canonical_object_id = canonical_entity_object_id(inventory, device, object_name)
     else:
         object_name = _fallback_entity_suffix_name(entity_entry, device)
@@ -1572,6 +1604,7 @@ def _generated_registry_state_name(
     entity_entry: object,
     device: object,
     state: object,
+    inventory: BridgeInventory,
 ) -> str:
     """Return the entity-local name that current setup would suggest."""
     base = None
@@ -1601,6 +1634,11 @@ def _generated_registry_state_name(
     names = disambiguated_state_names(
         [(item, base) for item in siblings],
         all_states=getattr(device, "states", {}).values(),
+        main_presence_name=(
+            location_name(inventory, getattr(device, "location_id", ""))
+            if getattr(device, "location_id", None) in inventory.locations
+            else None
+        ),
     )
     name = names.get(getattr(state, "key", ()), base)
     prefix = f"{base} ("

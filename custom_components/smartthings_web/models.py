@@ -560,24 +560,33 @@ def disambiguated_state_names(
     items: Iterable[tuple[BridgeState, str]],
     *,
     all_states: Iterable[BridgeState] | None = None,
+    main_presence_name: str | None = None,
 ) -> dict[tuple[str, str, str], str]:
     """Return explicit names only for states sharing the same display name."""
     grouped: dict[str, list[BridgeState]] = {}
     for state, name in items:
         grouped.setdefault(name, []).append(state)
 
-    component_role_hints = (
-        _unique_component_role_hints(all_states) if all_states is not None else {}
-    )
+    all_state_items = tuple(all_states) if all_states is not None else ()
     names: dict[tuple[str, str, str], str] = {}
     for base_name, states in grouped.items():
         if len(states) < 2:
             continue
+        primary_component_name = (
+            main_presence_name
+            if all(state.attribute == "presence" for state in states)
+            else None
+        )
+        component_role_hints = _unique_component_role_hints(
+            all_state_items,
+            main_component_name=primary_component_name,
+        )
         ordered = sorted(states, key=lambda state: state.key)
         qualifiers = _unique_state_qualifiers(
             ordered,
             "component",
             component_role_hints=component_role_hints,
+            main_component_name=primary_component_name,
         )
         if qualifiers is None:
             qualifiers = _unique_state_qualifiers(ordered, "capability")
@@ -614,9 +623,14 @@ def _unique_state_qualifiers(
     field_name: Literal["component", "capability"],
     *,
     component_role_hints: dict[str, str] | None = None,
+    main_component_name: str | None = None,
 ) -> list[str] | None:
     qualifiers = [
-        _readable_state_role(state, field_name)
+        _readable_state_role(
+            state,
+            field_name,
+            main_component_name=main_component_name,
+        )
         or (
             component_role_hints.get(state.component)
             if field_name == "component" and component_role_hints is not None
@@ -633,10 +647,16 @@ def _unique_state_qualifiers(
 
 def _unique_component_role_hints(
     states: Iterable[BridgeState],
+    *,
+    main_component_name: str | None = None,
 ) -> dict[str, str]:
     roles_by_component: dict[str, set[str]] = {}
     for state in states:
-        role = _readable_state_role(state, "component")
+        role = _readable_state_role(
+            state,
+            "component",
+            main_component_name=main_component_name,
+        )
         if role is not None:
             roles_by_component.setdefault(state.component, set()).add(role)
     return {
@@ -647,9 +667,20 @@ def _unique_component_role_hints(
 
 
 def _readable_state_role(
-    state: BridgeState, field_name: Literal["component", "capability"]
+    state: BridgeState,
+    field_name: Literal["component", "capability"],
+    *,
+    main_component_name: str | None = None,
 ) -> str | None:
     role = state.component_role if field_name == "component" else state.capability_role
+    if (
+        field_name == "component"
+        and isinstance(role, str)
+        and role.strip().lower() == "main"
+        and main_component_name is not None
+    ):
+        safe_name = _safe_role(main_component_name)
+        return _readable_state_token(safe_name, "location") if safe_name else None
     return _readable_state_token(role, field_name) if role else None
 
 
