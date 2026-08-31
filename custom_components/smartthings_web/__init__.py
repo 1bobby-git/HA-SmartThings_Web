@@ -40,6 +40,7 @@ from .models import (
     IMAGE_ATTRIBUTES,
     SmartThingsWebRuntime,
     button_controls,
+    control_kind,
     disambiguated_state_names,
     entity_unique_id,
     firmware_states,
@@ -48,6 +49,7 @@ from .models import (
     is_media_device,
     location_name,
     number_controls,
+    noncanonical_refresh_controls,
     room_free_display_name,
     secondary_switch_name_overrides,
     sensor_state_allowed,
@@ -407,6 +409,8 @@ def _migrate_entity_registry(
     stale_null_update_ids: set[str] = set()
     stale_primary_sensor_ids: set[str] = set()
     synthetic_refresh_ids: set[str] = set()
+    stale_unobserved_switch_ids: set[str] = set()
+    stale_noncanonical_refresh_ids: set[str] = set()
     number_state_ids_by_device: dict[str, set[str]] = {}
     switch_ids: set[str] = set()
     primary_domain_switch_ids: set[str] = set()
@@ -461,8 +465,14 @@ def _migrate_entity_registry(
             old_to_new[old_unique_id] = new_unique_id
             if state.attribute == "switch":
                 switch_ids.update((old_unique_id, new_unique_id))
+                if control_kind(device, state) is None:
+                    stale_unobserved_switch_ids.add(new_unique_id)
                 if is_media_device(device) or is_fan_device(device):
                     primary_domain_switch_ids.update((old_unique_id, new_unique_id))
+        for control in noncanonical_refresh_controls(device):
+            stale_noncanonical_refresh_ids.add(
+                f"{device.device_id}_button_{control.control_id}"
+            )
         for control in number_controls(device):
             state = _matching_control_state(device, control)
             control_unique_id = f"{device.device_id}_number_{control.control_id}"
@@ -660,6 +670,18 @@ def _migrate_entity_registry(
         if (
             entity_entry.domain == Platform.SENSOR
             and entity_entry.unique_id in stale_primary_sensor_ids
+        ):
+            remove_registry_entity(entity_entry.entity_id)
+            continue
+        if (
+            entity_entry.domain == Platform.SWITCH
+            and entity_entry.unique_id in stale_unobserved_switch_ids
+        ):
+            remove_registry_entity(entity_entry.entity_id)
+            continue
+        if (
+            entity_entry.domain == Platform.BUTTON
+            and entity_entry.unique_id in stale_noncanonical_refresh_ids
         ):
             remove_registry_entity(entity_entry.entity_id)
             continue

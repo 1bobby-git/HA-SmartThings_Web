@@ -356,7 +356,7 @@ Not-tested: Existing HA registry cleanup and rendered UI."
 - Modify: `custom_components/smartthings_web/__init__.py`
 - Modify: `custom_components/smartthings_web/tests/test_init.py`
 
-- [ ] **Step 1: Add a failing scoped migration test**
+- [x] **Step 1: Add a failing scoped migration test**
 
 Add a `test_migration_removes_non_executable_switches_and_duplicate_refresh` fixture with one device containing four switch states, one exact main toggle, and four Refresh controls. Seed registry rows for all eight controls and assert after `_migrate_entity_registry()`:
 
@@ -376,7 +376,7 @@ self.assertIsNotNone(registry.async_get("switch.geosil_ganjeobdeung"))
 self.assertIsNotNone(registry.async_get("button.geosil_ganjeobdeung_refresh"))
 ```
 
-- [ ] **Step 2: Run the exact test and verify RED**
+- [x] **Step 2: Run the exact test and verify RED**
 
 ```powershell
 python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_init.py'
@@ -384,7 +384,7 @@ python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_
 
 Expected: the six stale rows remain because `expected_uids` currently includes every state/control.
 
-- [ ] **Step 3: Build explicit stale sets in `_migrate_entity_registry()`**
+- [x] **Step 3: Build explicit stale sets in `_migrate_entity_registry()`**
 
 Add:
 
@@ -412,7 +412,7 @@ if (
 
 Import and use `noncanonical_refresh_controls(device)` for the stale Refresh set so registry migration uses the same allowlist logic as button discovery.
 
-- [ ] **Step 4: Run migration and platform tests**
+- [x] **Step 4: Run migration and platform tests**
 
 ```powershell
 python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_init.py'
@@ -422,7 +422,7 @@ python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_
 
 Expected: all pass and only the intended stale rows are removed.
 
-- [ ] **Step 5: Commit Task 3**
+- [x] **Step 5: Commit Task 3**
 
 ```powershell
 git add custom_components/smartthings_web/__init__.py custom_components/smartthings_web/tests/test_init.py

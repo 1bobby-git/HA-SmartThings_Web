@@ -1535,6 +1535,17 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             "air_purifier",
             True,
             states={aquarium_switch.key: aquarium_switch},
+            controls={
+                "action:main:switch": BridgeControl(
+                    "action:main:switch",
+                    "toggle",
+                    "Power",
+                    component="main",
+                    capability="switch",
+                    attribute="switch",
+                    commands=("on", "off"),
+                )
+            },
         )
         bathroom_fan = BridgeDevice(
             "dev_145",
@@ -1781,6 +1792,18 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             "switch",
             True,
             states={state.key: state for state in states},
+            controls={
+                f"action:{state.component}:{state.capability}:switch": BridgeControl(
+                    f"action:{state.component}:{state.capability}:switch",
+                    "toggle",
+                    "Power",
+                    component=state.component,
+                    capability=state.capability,
+                    attribute=state.attribute,
+                    commands=("on", "off"),
+                )
+                for state in states
+            },
         )
         registry_entries = [
             SimpleNamespace(
@@ -1893,6 +1916,18 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             "switch",
             True,
             states={state.key: state for state in states},
+            controls={
+                f"action:{state.component}:{state.capability}:switch": BridgeControl(
+                    f"action:{state.component}:{state.capability}:switch",
+                    "toggle",
+                    "Power",
+                    component=state.component,
+                    capability=state.capability,
+                    attribute=state.attribute,
+                    commands=("on", "off"),
+                )
+                for state in states
+            },
         )
         registry_entries = [
             SimpleNamespace(
@@ -3193,6 +3228,136 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             ],
         )
 
+    def test_migration_removes_non_executable_switches_and_duplicate_refresh(self) -> None:
+        """Keep one exact main control and remove Advanced-only UI artifacts."""
+        components = ("main", "switch2", "switch3", "switch4")
+        states = {
+            state.key: state
+            for component in components
+            for state in (
+                BridgeState(
+                    component,
+                    "identifier_switch",
+                    "switch",
+                    "off",
+                    None,
+                    "2026-08-31T14:00:00Z",
+                    component_role=component,
+                ),
+            )
+        }
+        controls = {
+            "action:main:identifier_switch:switch": BridgeControl(
+                "action:main:identifier_switch:switch",
+                "toggle",
+                "Power",
+                component="main",
+                capability="identifier_switch",
+                attribute="switch",
+                commands=("on", "off"),
+            ),
+            **{
+                f"advanced:refresh:{component}:identifier_refresh": BridgeControl(
+                    f"advanced:refresh:{component}:identifier_refresh",
+                    "button",
+                    "Refresh",
+                    component=component,
+                    capability="identifier_refresh",
+                    attribute="refresh",
+                    commands=("refresh",),
+                )
+                for component in components
+            },
+        }
+        device = BridgeDevice(
+            "dev_151",
+            "loc_001",
+            "room_g",
+            "거실 간접등",
+            "switch",
+            True,
+            states=states,
+            controls=controls,
+        )
+        switch_entity_ids = {
+            "main": "switch.ganjeobdeung",
+            "switch2": "switch.geosil_ganjeobdeung_seuwici_2",
+            "switch3": "switch.geosil_ganjeobdeung_seuwici_3",
+            "switch4": "switch.geosil_ganjeobdeung_seuwici_4",
+        }
+        refresh_entity_ids = {
+            "main": "button.ganjeobdeung_refresh",
+            "switch2": "button.geosil_ganjeobdeung_refresh_2",
+            "switch3": "button.geosil_ganjeobdeung_refresh_3",
+            "switch4": "button.geosil_ganjeobdeung_refresh_4",
+        }
+        registry = FakeRegistry(
+            [
+                self._registry_entry(
+                    entity_id,
+                    "uuid_indirect_light",
+                    unique_id=(
+                        f"dev_151_{component}_identifier_switch_switch"
+                    ),
+                )
+                for component, entity_id in switch_entity_ids.items()
+            ]
+            + [
+                self._registry_entry(
+                    entity_id,
+                    "uuid_indirect_light",
+                    domain="button",
+                    unique_id=(
+                        "dev_151_button_"
+                        f"advanced:refresh:{component}:identifier_refresh"
+                    ),
+                )
+                for component, entity_id in refresh_entity_ids.items()
+            ]
+        )
+        self.patch_registry(registry)
+        integration.dr.async_get = lambda _hass: SimpleNamespace(
+            devices=[
+                SimpleNamespace(
+                    id="uuid_indirect_light",
+                    identifiers={(DOMAIN, "dev_151")},
+                    area_id="geosil",
+                    config_entries={"entry_001"},
+                )
+            ]
+        )
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(
+                entry_id="entry_001",
+                data={CONF_LOCATION_ID: "loc_001"},
+            ),
+            BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.147",
+                protocol_version="4",
+                locations={"loc_001": "Home"},
+                rooms={"room_g": ("loc_001", "Geosil")},
+                devices={device.device_id: device},
+            ),
+        )
+
+        self.assertEqual(
+            set(registry.removed),
+            {
+                switch_entity_ids["switch2"],
+                switch_entity_ids["switch3"],
+                switch_entity_ids["switch4"],
+                refresh_entity_ids["switch2"],
+                refresh_entity_ids["switch3"],
+                refresh_entity_ids["switch4"],
+            },
+        )
+        self.assertIsNotNone(registry.async_get(switch_entity_ids["main"]))
+        self.assertIsNotNone(registry.async_get(refresh_entity_ids["main"]))
+
     def test_bounded_retry_rechecks_dynamic_entity_without_registry_feedback(self) -> None:
         """Retry discovery without subscribing to our own registry mutations."""
         registry = FakeRegistry([])
@@ -3611,6 +3776,17 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             device_type="Switch",
             online=True,
             states={state.key: state},
+            controls={
+                "action:main:switch": BridgeControl(
+                    "action:main:switch",
+                    "toggle",
+                    "Power",
+                    component="main",
+                    capability="switch",
+                    attribute="switch",
+                    commands=("on", "off"),
+                )
+            },
         )
 
     def patch_registry(
