@@ -720,6 +720,6 @@ Read registry counts for `dev_151`, `dev_185`, and aliased `dev_602`. Require on
 
 Update the `0.1.147` verification record with timestamps, exact SHA/version/hash, command lifecycle/transport, before/after state, registry counts, and UI evidence paths. Re-run the documentation gate and push the evidence commit.
 
-- [ ] **Step 10: Complete ultragoal quality gate**
+- [x] **Step 10: Complete ultragoal quality gate**
 
 Run post-cleaner verification, scoped `ai-slop-cleaner`, repeat verification, and final `$code-review`. When recommendation is `APPROVE` and architect status is `CLEAR`, call `update_goal({status: "complete"})`, save the fresh goal snapshot, checkpoint the final OMX story with the required quality-gate JSON, and confirm `omx ultragoal status` reports `8/8 complete`.
