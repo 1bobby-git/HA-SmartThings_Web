@@ -53,7 +53,10 @@ from .models import (
     sensor_state_owned_by_primary_domain,
     state_has_entity_value,
 )
-from .naming import canonical_entity_object_id
+from .naming import (
+    canonical_entity_object_id,
+    canonical_primary_control_object_id,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -284,7 +287,9 @@ def _entity_registry_topology_fingerprint(
                 controls,
             )
         )
-    return (rooms, tuple(devices))
+    # Readiness gates destructive orphan cleanup, so false -> true must run one
+    # migration even when the device topology itself is unchanged.
+    return (inventory.ready, rooms, tuple(devices))
 
 
 async def _event_loop(entry: SmartThingsWebConfigEntry) -> None:
@@ -738,6 +743,13 @@ def _migrate_entity_registry(
             current_device_ids,
             current_entity_ids,
         )
+        canonical_primary_entity_id = _canonical_generated_primary_entity_id(
+            entity_entry,
+            owner_device,
+            inventory,
+        )
+        if canonical_primary_entity_id is not None:
+            new_entity_id = canonical_primary_entity_id
         canonical_state_entity_id = _canonical_generated_state_entity_id(
             entity_entry,
             owner_device,
@@ -750,7 +762,11 @@ def _migrate_entity_registry(
             owner_device,
             inventory,
         )
-        if numbered_entity_id is not None:
+        if (
+            numbered_entity_id is not None
+            and canonical_primary_entity_id is None
+            and canonical_state_entity_id is None
+        ):
             new_entity_id = numbered_entity_id
         renamed_this_entry = False
         if new_entity_id is not None and registry.async_get(new_entity_id) is not None:
@@ -1000,7 +1016,11 @@ def _relocate_primary_name_collisions(
         )
         if device is None:
             continue
-        object_id = canonical_entity_object_id(inventory, device)
+        object_id = (
+            canonical_primary_control_object_id(inventory, device)
+            if domain_value == "fan"
+            else canonical_entity_object_id(inventory, device)
+        )
         if not object_id:
             continue
         target = f"{domain_value}.{object_id}"
@@ -1050,7 +1070,11 @@ def _canonical_registry_suggested_object_id(
     unique_id = str(getattr(entity_entry, "unique_id", ""))
     primary_domain = domain_value in {"climate", "cover", "fan", "media_player"}
     if primary_domain and unique_id == f"{device_id}_{domain_value}":
-        base = canonical_entity_object_id(inventory, device)
+        base = (
+            canonical_primary_control_object_id(inventory, device)
+            if domain_value == "fan"
+            else canonical_entity_object_id(inventory, device)
+        )
         if not base:
             return None
         final_object_id = final_entity_id.partition(".")[2]
@@ -1074,6 +1098,16 @@ def _canonical_registry_suggested_object_id(
         None,
     )
     if state is not None:
+        if _registry_state_is_primary_control(domain_value, device, state):
+            primary_object_id = canonical_primary_control_object_id(inventory, device)
+            final_object_id = final_entity_id.partition(".")[2]
+            legacy_object_id = canonical_entity_object_id(inventory, device, "switch")
+            if (
+                primary_object_id
+                and final_object_id in {primary_object_id, legacy_object_id}
+            ):
+                return primary_object_id
+            return final_object_id or primary_object_id
         entity_name = _generated_registry_state_name(entity_entry, device, state)
         secondary_switch_role = secondary_switch_name_overrides(device).get(state.key)
         if (
@@ -1132,6 +1166,10 @@ def _canonical_registry_object_id_base(
     """Return the generated entity-local object ID base without stale fallbacks."""
     unique_id = getattr(entity_entry, "unique_id", None)
     device_id = getattr(device, "device_id", "")
+    domain = getattr(entity_entry, "domain", "")
+    domain_value = getattr(domain, "value", domain)
+    if domain_value == "fan" and unique_id == f"{device_id}_fan":
+        return None
     state = next(
         (
             item
@@ -1141,6 +1179,14 @@ def _canonical_registry_object_id_base(
         None,
     )
     if state is not None:
+        if _registry_state_is_primary_control(domain_value, device, state):
+            primary_object_id = canonical_primary_control_object_id(inventory, device)
+            legacy_object_id = canonical_entity_object_id(inventory, device, "switch")
+            current_object_id = str(
+                getattr(entity_entry, "entity_id", "")
+            ).partition(".")[2]
+            if current_object_id in {primary_object_id, legacy_object_id}:
+                return None
         secondary_switch_role = secondary_switch_name_overrides(device).get(state.key)
         if (
             getattr(entity_entry, "domain", "") == Platform.SWITCH
@@ -1169,28 +1215,41 @@ def _remove_orphan_bridge_device_cards(
     registry_entries: Sequence[object],
     removed_entity_ids: set[str],
 ) -> None:
-    """Detach config-entry links for Bridge device cards the session replaced.
-
-    When the Bridge assigns a fresh alias to a physical device, the previous
-    session's card lingers with zero entities. Removing this config entry from
-    such a card lets Home Assistant retire it automatically once nothing else
-    references it, so one physical device keeps exactly one card.
-    """
+    """Remove cards for deleted Bridge device aliases without touching locations."""
+    if not inventory.ready:
+        # A cached or reconnect snapshot may intentionally retain only the last
+        # known devices. Destructive cleanup waits for a current complete view.
+        return
     device_registry = dr.async_get(hass)
-    if device_registry is None:
+    entity_registry = er.async_get(hass)
+    if device_registry is None or entity_registry is None:
         return
     current_device_ids = {
         device.device_id
         for device in inventory.devices.values()
         if device.location_id == entry.data[CONF_LOCATION_ID]
     }
-    active_refs: set[str] = set()
-    for entity_entry in registry_entries:
-        if entity_entry.entity_id in removed_entity_ids:
-            continue
-        device_id = getattr(entity_entry, "device_id", None)
-        if device_id:
-            active_refs.add(device_id)
+
+    def entries_for_device(device_id: str) -> list[object]:
+        lookup = getattr(er, "async_entries_for_device", None)
+        if callable(lookup):
+            try:
+                return list(
+                    lookup(
+                        entity_registry,
+                        device_id,
+                        include_disabled_entities=True,
+                    )
+                )
+            except TypeError:
+                return list(lookup(entity_registry, device_id))
+        return [
+            row
+            for row in registry_entries
+            if getattr(row, "device_id", None) == device_id
+            and getattr(row, "entity_id", None) not in removed_entity_ids
+        ]
+
     for row in _iter_device_registry_rows(device_registry):
         if entry.entry_id not in (getattr(row, "config_entries", None) or set()):
             continue
@@ -1200,19 +1259,51 @@ def _remove_orphan_bridge_device_cards(
             for ident in row_identifiers
             if isinstance(ident, tuple) and len(ident) >= 2 and ident[0] == DOMAIN
         ]
-        if not ours:
+        stale_device_aliases = [
+            bridge_id
+            for bridge_id in ours
+            if re.fullmatch(r"dev_[0-9]{3,32}", bridge_id)
+            and bridge_id not in current_device_ids
+        ]
+        if not stale_device_aliases or any(
+            bridge_id in current_device_ids for bridge_id in ours
+        ):
             continue
         row_id = getattr(row, "id", None)
-        if not row_id or row_id in active_refs:
+        if not row_id:
             continue
-        if any(bridge_id in current_device_ids for bridge_id in ours):
-            continue
+
+        for entity_entry in entries_for_device(row_id):
+            if getattr(entity_entry, "platform", None) != DOMAIN:
+                continue
+            config_entry_id = getattr(entity_entry, "config_entry_id", None)
+            if config_entry_id not in {None, entry.entry_id}:
+                continue
+            entity_id = getattr(entity_entry, "entity_id", None)
+            if not isinstance(entity_id, str) or not entity_id:
+                continue
+            if entity_registry.async_get(entity_id) is not None:
+                entity_registry.async_remove(entity_id)
+                removed_entity_ids.add(entity_id)
+
+        remaining_entries = entries_for_device(row_id)
+        remaining_config_entries = set(
+            getattr(row, "config_entries", None) or set()
+        ) - {entry.entry_id}
+        if not remaining_entries and not remaining_config_entries:
+            remove_device = getattr(device_registry, "async_remove_device", None)
+            if callable(remove_device):
+                remove_device(row_id)
+                continue
         update_device = getattr(device_registry, "async_update_device", None)
         if callable(update_device):
             try:
                 update_device(row_id, remove_config_entry=entry.entry_id)
             except TypeError:
-                pass
+                _LOGGER.warning(
+                    "SmartThings Web could not detach a stale shared device card "
+                    "because Home Assistant rejected the registry update"
+                )
 
 
 def _iter_device_registry_rows(device_registry: object) -> list[object]:
@@ -1295,8 +1386,6 @@ def _canonical_generated_state_entity_id(
     if device is None or getattr(entity_entry, "name", None) is not None:
         return None
     domain = getattr(entity_entry, "domain", "") or ""
-    if domain != Platform.SWITCH:
-        return None
     state = next(
         (
             item
@@ -1308,17 +1397,110 @@ def _canonical_generated_state_entity_id(
     )
     if state is None:
         return None
-    if getattr(state, "attribute", None) != "switch":
+    if _registry_state_is_primary_control(domain, device, state):
+        object_id = canonical_primary_control_object_id(inventory, device)
+        if not object_id:
+            return None
+        legacy_object_id = canonical_entity_object_id(inventory, device, "switch")
+        current_object_id = str(
+            getattr(entity_entry, "entity_id", "")
+        ).partition(".")[2]
+        if current_object_id != legacy_object_id:
+            return None
+        target = f"{domain}.{object_id}"
+        return target if target != getattr(entity_entry, "entity_id", "") else None
+    role = (
+        secondary_switch_name_overrides(device).get(state.key)
+        if domain == Platform.SWITCH and getattr(state, "attribute", None) == "switch"
+        else None
+    )
+    if role is not None:
+        entity_name = role
+    elif _numbered_generated_state_row(entity_entry, device, state):
+        entity_name = _generated_registry_state_name(entity_entry, device, state)
+    else:
         return None
-    role = secondary_switch_name_overrides(device).get(state.key)
-    if role is None:
-        return None
-    entity_name = role
     object_id = canonical_entity_object_id(inventory, device, entity_name)
     if not object_id:
         return None
     target = f"{domain}.{object_id}"
     return target if target != getattr(entity_entry, "entity_id", "") else None
+
+
+def _canonical_generated_primary_entity_id(
+    entity_entry: object,
+    device: object | None,
+    inventory: BridgeInventory,
+) -> str | None:
+    """Return the stable room-free ID for generated device-level controls."""
+    if device is None or getattr(entity_entry, "name", None) is not None:
+        return None
+    domain = getattr(entity_entry, "domain", "") or ""
+    domain_value = getattr(domain, "value", domain)
+    device_id = str(getattr(device, "device_id", ""))
+    if domain_value != "fan":
+        return None
+    if getattr(entity_entry, "unique_id", "") != f"{device_id}_{domain_value}":
+        return None
+    object_id = canonical_primary_control_object_id(inventory, device)
+    if not object_id:
+        return None
+    target = f"{domain_value}.{object_id}"
+    return target if target != getattr(entity_entry, "entity_id", "") else None
+
+
+def _registry_state_is_primary_control(
+    domain: object,
+    device: object,
+    state: object,
+) -> bool:
+    """Return whether a state row is the device's domain-independent main control."""
+    domain_value = getattr(domain, "value", domain)
+    if domain_value not in {"light", "switch"}:
+        return False
+    if getattr(state, "attribute", None) != "switch":
+        return False
+    if secondary_switch_name_overrides(device).get(getattr(state, "key", ())) is not None:
+        return False
+    role = str(
+        getattr(state, "component_role", None)
+        or getattr(state, "component", "")
+    ).strip().lower()
+    if role == "main":
+        return True
+    switch_states = [
+        candidate
+        for candidate in getattr(device, "states", {}).values()
+        if getattr(candidate, "attribute", None) == "switch"
+    ]
+    return len(switch_states) == 1
+
+
+def _numbered_generated_state_row(
+    entity_entry: object,
+    device: object,
+    state: object,
+) -> bool:
+    """Return whether a generated numbered row can now use a stable role."""
+    siblings = [
+        item
+        for item in getattr(device, "states", {}).values()
+        if getattr(item, "attribute", None) == getattr(state, "attribute", None)
+    ]
+    sibling_count = len(siblings)
+    if sibling_count < 2 or not _registry_state_qualifier_names(state):
+        return False
+    values = (
+        getattr(entity_entry, "original_name", None),
+        getattr(entity_entry, "object_id_base", None),
+        getattr(entity_entry, "suggested_object_id", None),
+        getattr(entity_entry, "entity_id", "").partition(".")[2],
+    )
+    return any(
+        isinstance(value, str)
+        and _generated_numeric_qualifier(value, sibling_count) is not None
+        for value in values
+    )
 
 def _stale_fallback_generated_entity_id(
     entity_entry: object,
@@ -1404,14 +1586,18 @@ def _generated_registry_state_name(
         ):
             base = candidate
             break
-    if base is None:
-        base = _readable_registry_state_attribute(state)
-    base = _normalized_registry_state_name_base(base.strip(), state)
     siblings = [
         item
         for item in getattr(device, "states", {}).values()
         if getattr(item, "attribute", None) == getattr(state, "attribute", None)
     ]
+    if base is None:
+        base = _readable_registry_state_attribute(state)
+    base = _normalized_registry_state_name_base(
+        base.strip(),
+        state,
+        len(siblings),
+    )
     names = disambiguated_state_names(
         [(item, base) for item in siblings],
         all_states=getattr(device, "states", {}).values(),
@@ -1423,7 +1609,11 @@ def _generated_registry_state_name(
     return name
 
 
-def _normalized_registry_state_name_base(base: str, state: object) -> str:
+def _normalized_registry_state_name_base(
+    base: str,
+    state: object,
+    sibling_count: int,
+) -> str:
     """Remove stale role suffixes before current sibling disambiguation runs."""
     for qualifier in _registry_state_qualifier_names(state):
         qualifier_variants = list(
@@ -1453,7 +1643,25 @@ def _normalized_registry_state_name_base(base: str, state: object) -> str:
             if trimmed_base is None:
                 break
             base = trimmed_base
+    numeric_qualifier = _generated_numeric_qualifier(base, sibling_count)
+    if numeric_qualifier is not None:
+        match = re.search(r"(?:\((\d+)\)|[\s_-]+(\d+))$", base.strip())
+        if match is not None:
+            trimmed = base[: match.start()].strip(" _-")
+            if trimmed:
+                base = trimmed
     return base
+
+
+def _generated_numeric_qualifier(value: str, sibling_count: int) -> int | None:
+    """Return an old generated sibling number when it is in the valid range."""
+    if sibling_count < 2:
+        return None
+    match = re.search(r"(?:\((\d+)\)|[\s_-]+(\d+))$", value.strip())
+    if match is None:
+        return None
+    number = int(match.group(1) or match.group(2))
+    return number if 1 <= number <= sibling_count else None
 
 
 def _registry_state_qualifier_names(state: object) -> tuple[str, ...]:

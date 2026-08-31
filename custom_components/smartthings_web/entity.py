@@ -19,7 +19,10 @@ from .models import (
     entity_unique_id,
     room_free_display_name,
 )
-from .naming import canonical_entity_object_id
+from .naming import (
+    canonical_entity_object_id,
+    canonical_primary_control_object_id,
+)
 
 
 _LAUNDRY_APPLIANCE_TYPES = {"dryer", "washer"}
@@ -98,6 +101,7 @@ def _normalized_device_type(value: str | None) -> str:
 
 
 _PRIMARY_DEVICE_ENTITY_SUFFIXES = {"climate", "cover", "fan", "image", "media_player"}
+_PRIMARY_CONTROL_DEVICE_ENTITY_SUFFIXES = {"fan"}
 
 _ENTITY_PLATFORM_DOMAINS = {
     "binary_sensor",
@@ -132,6 +136,14 @@ def suggested_entity_object_id(
     once.
     """
     return canonical_entity_object_id(runtime.inventory, device, entity_name)
+
+
+def suggested_primary_control_object_id(
+    runtime: SmartThingsWebRuntime,
+    device: BridgeDevice,
+) -> str | None:
+    """Return the domain-independent object ID for the device's main control."""
+    return canonical_primary_control_object_id(runtime.inventory, device)
 
 
 def _set_initial_entity_id(entity: Entity, object_id: str | None) -> None:
@@ -174,6 +186,8 @@ class SmartThingsWebEntity(Entity):
         device: BridgeDevice,
         state: BridgeState,
         name: str | None,
+        *,
+        primary_control: bool = False,
     ) -> None:
         self.runtime = runtime
         self.device_id = device.device_id
@@ -181,14 +195,18 @@ class SmartThingsWebEntity(Entity):
         if name is not None:
             self._attr_name = name
         self._attr_unique_id = entity_unique_id(device.device_id, state)
-        self._attr_suggested_object_id = suggested_entity_object_id(
-            runtime, device, name or state.attribute
+        self._attr_suggested_object_id = (
+            suggested_primary_control_object_id(runtime, device)
+            if primary_control
+            else suggested_entity_object_id(runtime, device, name or state.attribute)
         )
         _set_initial_entity_id(self, self._attr_suggested_object_id)
         self._attr_device_info = device_info_for(
             device,
             display_name=room_free_display_name(runtime, device),
         )
+        if primary_control:
+            _attach_visuals(self, device)
 
     @property
     def available(self) -> bool:
@@ -246,8 +264,13 @@ class SmartThingsWebDeviceEntity(Entity):
             if name is not None
             else None if suffix in _PRIMARY_DEVICE_ENTITY_SUFFIXES else suffix
         )
-        self._attr_suggested_object_id = suggested_entity_object_id(
-            runtime, device, object_name
+        primary_control = (
+            name is None and suffix in _PRIMARY_CONTROL_DEVICE_ENTITY_SUFFIXES
+        )
+        self._attr_suggested_object_id = (
+            suggested_primary_control_object_id(runtime, device)
+            if primary_control
+            else suggested_entity_object_id(runtime, device, object_name)
         )
         _set_initial_entity_id(self, self._attr_suggested_object_id)
         self._attr_device_info = device_info_for(

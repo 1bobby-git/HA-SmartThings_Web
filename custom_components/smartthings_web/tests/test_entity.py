@@ -22,6 +22,10 @@ homeassistant_util.slugify = lambda value: {  # type: ignore[attr-defined]
     "온습도계": "onseubdogye",
     "거실 에어컨": "geosil_eeokeon",
     "에어컨": "eeokeon",
+    "화장실": "hwajangsil",
+    "화장실 환풍기": "hwajangsil_hwanpunggi",
+    "환풍기": "hwanpunggi",
+    "어항": "eohang",
     "거실창문센서": "geosil_cangmunsenseo",
     "창문센서": "cangmunsenseo",
     "Refresh": "refresh",
@@ -366,6 +370,77 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
             entity._attr_suggested_object_id,
             "geosil_onseubdogye_temperature",
         )
+
+    def test_primary_control_uses_device_base_without_switch_suffix_or_room_prefix(self) -> None:
+        state = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "off",
+            None,
+            "2026-08-30T06:00:00.000Z",
+        )
+        aquarium = BridgeDevice(
+            "dev_aquarium",
+            "loc_001",
+            None,
+            "어항",
+            "air_purifier",
+            True,
+            states={state.key: state},
+        )
+        bathroom_fan = BridgeDevice(
+            "dev_bathroom_fan",
+            "loc_001",
+            "room_bathroom",
+            "화장실 환풍기",
+            "fan",
+            True,
+            states={state.key: state},
+        )
+        runtime = SmartThingsWebRuntime(
+            object(),
+            "loc_001",
+            BridgeInventory(
+                1,
+                True,
+                "0.1.142",
+                "4",
+                {},
+                {"room_bathroom": ("loc_001", "화장실")},
+                {
+                    aquarium.device_id: aquarium,
+                    bathroom_fan.device_id: bathroom_fan,
+                },
+            ),
+        )
+
+        class SmartThingsWebSwitch(SmartThingsWebEntity):
+            """Stand in for the switch platform."""
+
+        class SmartThingsWebFan(SmartThingsWebDeviceEntity):
+            """Stand in for the fan platform."""
+
+        SmartThingsWebSwitch.__module__ = "smartthings_web.switch"
+        SmartThingsWebFan.__module__ = "smartthings_web.fan"
+
+        switch = SmartThingsWebSwitch(
+            runtime, aquarium, state, None, primary_control=True
+        )
+        fan = SmartThingsWebFan(runtime, bathroom_fan, "fan", None)
+        state_sensor = SmartThingsWebEntity(runtime, bathroom_fan, state, None)
+
+        self.assertEqual(switch._attr_suggested_object_id, "eohang")
+        self.assertEqual(switch.entity_id, "switch.eohang")
+        self.assertEqual(switch._attr_icon, "mdi:air-purifier")
+        self.assertEqual(fan._attr_suggested_object_id, "hwanpunggi")
+        self.assertEqual(fan.entity_id, "fan.hwanpunggi")
+        self.assertEqual(
+            state_sensor._attr_suggested_object_id,
+            "hwajangsil_hwanpunggi_switch",
+        )
+        self.assertNotIn("_attr_icon", state_sensor.__dict__)
+        self.assertNotIn("_attr_entity_picture", state_sensor.__dict__)
 
     def test_named_entity_suggests_the_full_canonical_object_id(self) -> None:
         """Bypass HA's area template when the SmartThings name has the room."""

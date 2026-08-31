@@ -102,6 +102,7 @@ class SmartThingsWebSwitch(SmartThingsWebEntity, SwitchEntity):
             device,
             state,
             name,
+            primary_control=state.attribute == "switch" and name_override is None,
         )
 
     @property

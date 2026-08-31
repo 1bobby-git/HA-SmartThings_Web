@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.142
+
+- Replace stale numbered mobile-presence entity IDs with the current Advanced component roles, preserving user-renamed rows.
+- Remove deleted `dev_N` Home Assistant entities and device cards only from a current ready inventory, while preserving location cards and shared foreign references.
+- Move Refresh buttons into device settings with a dedicated refresh icon, and attach device artwork to the primary switch or light control instead.
+- Keep main switch IDs free of the redundant `_switch` suffix and reuse the same room-free base when that control is represented as a fan.
+
 ## 0.1.141
 
 - Keep the authenticated SmartThings location session warm with a bounded same-origin `/location` GET after the Bridge has been fully `CONNECTED` and ready for five minutes.

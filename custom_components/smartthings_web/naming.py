@@ -26,6 +26,37 @@ def canonical_entity_object_id(
     return f"{base}_{suffix}"
 
 
+def canonical_primary_control_object_id(
+    inventory: BridgeInventory,
+    device: BridgeDevice,
+) -> str | None:
+    """Return the stable room-free ID shared by a device's main control.
+
+    SmartThings device names often repeat the assigned room (for example
+    ``화장실 환풍기`` in room ``화장실``).  Home Assistant may represent the
+    same physical power control as a switch today and a fan tomorrow, so the
+    main control must keep the device's own base name rather than inheriting a
+    room prefix or a platform suffix.
+    """
+    device_name = device.name.strip()
+    if device.room_id:
+        room = inventory.rooms.get(device.room_id)
+        if room is not None and room[0] == device.location_id:
+            room_name = room[1].strip()
+            has_room_prefix = (
+                bool(room_name)
+                and device_name.casefold().startswith(room_name.casefold())
+                and len(device_name) > len(room_name)
+                and device_name[len(room_name)] in " _-"
+            )
+            if has_room_prefix:
+                remainder = device_name[len(room_name) :].strip(" _-")
+                remainder_slug = slugify(remainder)
+                if remainder_slug:
+                    return remainder_slug
+    return slugify(device_name) or None
+
+
 def _canonical_device_slug(
     inventory: BridgeInventory,
     device: BridgeDevice,

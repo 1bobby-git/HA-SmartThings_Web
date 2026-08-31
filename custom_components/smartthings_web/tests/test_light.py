@@ -57,7 +57,14 @@ entity_module = ModuleType("smartthings_web.entity")
 class SmartThingsWebEntity:
     """Minimal integration entity base stub."""
 
-    def __init__(self, runtime: object, device: object, state: object, *_args: object) -> None:
+    def __init__(
+        self,
+        runtime: object,
+        device: object,
+        state: object,
+        *_args: object,
+        **_kwargs: object,
+    ) -> None:
         self.runtime = runtime
         self.device_id = device.device_id  # type: ignore[attr-defined]
         self.state_key = state.key  # type: ignore[attr-defined]

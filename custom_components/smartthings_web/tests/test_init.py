@@ -84,6 +84,9 @@ def _install_homeassistant_stubs() -> None:
     entity_registry = ModuleType("homeassistant.helpers.entity_registry")
     entity_registry.async_get = lambda _hass: None  # type: ignore[attr-defined]
     entity_registry.async_entries_for_config_entry = lambda _registry, _entry_id: []  # type: ignore[attr-defined]
+    entity_registry.async_entries_for_device = (  # type: ignore[attr-defined]
+        lambda _registry, _device_id, include_disabled_entities=False: []
+    )
     sys.modules["homeassistant.helpers.entity_registry"] = entity_registry
 
     issue_registry = ModuleType("homeassistant.helpers.issue_registry")
@@ -1418,6 +1421,201 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             "hwajangsil_doeosenseo_contact",
         )
         self.assertEqual(registry_entry.object_id_base, "contact")
+
+    def test_replaces_numbered_presence_ids_with_current_advanced_roles(self) -> None:
+        """Role metadata must repair old Presence (1)..(4) registry rows."""
+        state_specs = [
+            ("identifier_7091628e9151", "부모님댁", "presence", "1"),
+            ("identifier_bf4c9146a548", "친정집", "presence_2", "2"),
+            ("identifier_cd4f3cfbf2aa", "Home", "presence_3", "3"),
+            ("identifier_d5fc226da81d", "회사", "presence_4", "4"),
+        ]
+        states = [
+            BridgeState(
+                component,
+                "presenceSensor",
+                "presence",
+                "present" if role == "Home" else "not present",
+                None,
+                "2026-08-31T06:00:00Z",
+                component_role=role,
+            )
+            for component, role, _base, _number in state_specs
+        ]
+        device = BridgeDevice(
+            "dev_332",
+            "loc_001",
+            None,
+            "Jaebunyi Jump3",
+            "mobile",
+            True,
+            states={state.key: state for state in states},
+        )
+        registry_entries = [
+            SimpleNamespace(
+                entity_id=(
+                    "binary_sensor.jaebunyi_jump3_presence"
+                    if number == "1"
+                    else f"binary_sensor.jaebunyi_jump3_presence_{number}_{number}"
+                ),
+                domain="binary_sensor",
+                platform=DOMAIN,
+                unique_id=f"dev_332_{component}_presenceSensor_presence",
+                device_id="uuid_jump3",
+                config_entry_id="entry_001",
+                name=None,
+                disabled_by=None,
+                original_name=f"Presence ({number})",
+                object_id_base=base,
+                suggested_object_id=(
+                    "jaebunyi_jump3_presence"
+                    if number == "1"
+                    else f"jaebunyi_jump3_presence_{number}"
+                ),
+            )
+            for component, _role, base, number in state_specs
+        ]
+        registry = FakeRegistry(registry_entries)
+        self.patch_registry(registry)
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.142",
+            protocol_version="4",
+            locations={"loc_001": "Home"},
+            rooms={},
+            devices={device.device_id: device},
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_001"},
+        )
+
+        _migrate_entity_registry(object(), entry, inventory)
+
+        self.assertCountEqual(
+            [new for _old, new in registry.renamed],
+            [
+                "binary_sensor.jaebunyi_jump3_presence_부모님댁",
+                "binary_sensor.jaebunyi_jump3_presence_친정집",
+                "binary_sensor.jaebunyi_jump3_presence_home",
+                "binary_sensor.jaebunyi_jump3_presence_회사",
+            ],
+        )
+        self.assertCountEqual(
+            [entry.object_id_base for entry in registry.entries],
+            [
+                "presence_부모님댁",
+                "presence_친정집",
+                "presence_home",
+                "presence_회사",
+            ],
+        )
+
+    def test_primary_controls_share_room_free_base_across_switch_and_fan(self) -> None:
+        """Representation changes must not add a room or ``_switch`` suffix."""
+        aquarium_switch = BridgeState(
+            "main", "switch", "switch", "off", None, "2026-08-31T06:00:00Z"
+        )
+        fan_switch = BridgeState(
+            "main", "switch", "switch", "off", None, "2026-08-31T06:00:00Z"
+        )
+        fan_mode = BridgeState(
+            "main", "fanMode", "fanMode", "auto", None, "2026-08-31T06:00:00Z"
+        )
+        aquarium = BridgeDevice(
+            "dev_167",
+            "loc_001",
+            None,
+            "Eohang",
+            "air_purifier",
+            True,
+            states={aquarium_switch.key: aquarium_switch},
+        )
+        bathroom_fan = BridgeDevice(
+            "dev_145",
+            "loc_001",
+            "room_bathroom",
+            "Hwajangsil Hwanpunggi",
+            "fan",
+            True,
+            states={fan_switch.key: fan_switch, fan_mode.key: fan_mode},
+        )
+        switch_entry = SimpleNamespace(
+            entity_id="switch.eohang_switch",
+            domain="switch",
+            platform=DOMAIN,
+            unique_id="dev_167_main_switch_switch",
+            device_id="uuid_aquarium",
+            config_entry_id="entry_001",
+            name=None,
+            disabled_by=None,
+            original_name=None,
+            object_id_base="switch",
+            suggested_object_id="eohang_switch",
+        )
+        old_fan_switch_entry = SimpleNamespace(
+            entity_id="switch.hwanpunggi",
+            domain="switch",
+            platform=DOMAIN,
+            unique_id="dev_145_main_switch_switch",
+            device_id="uuid_fan",
+            config_entry_id="entry_001",
+            name=None,
+            disabled_by=None,
+            original_name=None,
+            object_id_base="switch",
+            suggested_object_id="hwanpunggi_switch",
+        )
+        fan_entry = SimpleNamespace(
+            entity_id="fan.hwajangsil_hwanpunggi",
+            domain="fan",
+            platform=DOMAIN,
+            unique_id="dev_145_fan",
+            device_id="uuid_fan",
+            config_entry_id="entry_001",
+            name=None,
+            disabled_by=None,
+            original_name=None,
+            object_id_base="hwajangsil_hwanpunggi",
+            suggested_object_id="hwajangsil_hwanpunggi",
+        )
+        registry = FakeRegistry(
+            [switch_entry, old_fan_switch_entry, fan_entry]
+        )
+        self.patch_registry(registry)
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.142",
+            protocol_version="4",
+            locations={"loc_001": "Home"},
+            rooms={"room_bathroom": ("loc_001", "Hwajangsil")},
+            devices={
+                aquarium.device_id: aquarium,
+                bathroom_fan.device_id: bathroom_fan,
+            },
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_001"},
+        )
+
+        _migrate_entity_registry(object(), entry, inventory)
+
+        self.assertIn("switch.hwanpunggi", registry.removed)
+        self.assertIn(
+            ("switch.eohang_switch", "switch.eohang"),
+            registry.renamed,
+        )
+        self.assertIn(
+            ("fan.hwajangsil_hwanpunggi", "fan.hwanpunggi"),
+            registry.renamed,
+        )
+        self.assertEqual(switch_entry.suggested_object_id, "eohang")
+        self.assertIsNone(switch_entry.object_id_base)
+        self.assertEqual(fan_entry.suggested_object_id, "hwanpunggi")
+        self.assertIsNone(fan_entry.object_id_base)
 
     def test_rebases_stale_fallback_device_ids_to_current_device_name(self) -> None:
         """Repair IDs frozen before the Bridge learned the SmartThings name."""
@@ -3071,37 +3269,72 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             ],
         )
 
-    def test_detaches_only_unreferenced_stale_bridge_device_card(self) -> None:
-        """Retire an old alias card without touching current or active devices."""
+    def test_removes_stale_bridge_entities_and_card_but_preserves_locations(self) -> None:
+        """Deleted dev_N aliases disappear; loc_N location cards stay intact."""
         updates: list[tuple[str, str]] = []
+        removed_devices: list[str] = []
+        registry = FakeRegistry(
+            [
+                SimpleNamespace(
+                    entity_id="sensor.deleted_battery",
+                    domain="sensor",
+                    platform=DOMAIN,
+                    unique_id="dev_999_main_battery_battery",
+                    device_id="uuid_orphan",
+                    config_entry_id="entry_001",
+                    name=None,
+                    disabled_by=None,
+                    original_name="Battery",
+                    object_id_base="battery",
+                    suggested_object_id="deleted_battery",
+                ),
+                SimpleNamespace(
+                    entity_id="sensor.location_status",
+                    domain="sensor",
+                    platform=DOMAIN,
+                    unique_id="loc_009_status",
+                    device_id="uuid_location",
+                    config_entry_id="entry_001",
+                    name=None,
+                    disabled_by=None,
+                    original_name="Status",
+                    object_id_base="status",
+                    suggested_object_id="location_status",
+                ),
+            ]
+        )
         device_registry = SimpleNamespace(
             devices=[
                 SimpleNamespace(
                     id="uuid_active",
-                    identifiers={(DOMAIN, "dev_active")},
+                    identifiers={(DOMAIN, "dev_001")},
                     config_entries={"entry_001"},
                 ),
                 SimpleNamespace(
-                    id="uuid_current_empty",
-                    identifiers={(DOMAIN, "dev_current_empty")},
+                    id="uuid_location",
+                    identifiers={(DOMAIN, "loc_009")},
                     config_entries={"entry_001"},
                 ),
                 SimpleNamespace(
                     id="uuid_orphan",
-                    identifiers={(DOMAIN, "dev_old_alias")},
+                    identifiers={(DOMAIN, "dev_999")},
                     config_entries={"entry_001"},
-                ),
-                SimpleNamespace(
-                    id="uuid_other_entry",
-                    identifiers={(DOMAIN, "dev_old_other")},
-                    config_entries={"entry_999"},
                 ),
             ],
             async_update_device=lambda device_id, *, remove_config_entry: updates.append(
                 (device_id, remove_config_entry)
             ),
+            async_remove_device=lambda device_id: removed_devices.append(device_id),
         )
         integration.dr.async_get = lambda _hass: device_registry
+        integration.er.async_get = lambda _hass: registry
+        integration.er.async_entries_for_device = (
+            lambda current_registry, device_id, include_disabled_entities=False: [
+                row
+                for row in current_registry.entries
+                if getattr(row, "device_id", None) == device_id
+            ]
+        )
         entry = SimpleNamespace(
             entry_id="entry_001",
             data={CONF_LOCATION_ID: "loc_001"},
@@ -3114,25 +3347,206 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             locations={"loc_001": "Home"},
             rooms={},
             devices={
-                "dev_active": self._bridge_device("dev_active", "Active"),
-                "dev_current_empty": self._bridge_device(
-                    "dev_current_empty", "Current Empty"
-                ),
+                "dev_001": self._bridge_device("dev_001", "Active"),
             },
         )
-        registry_entries = [
-            SimpleNamespace(entity_id="switch.active", device_id="uuid_active")
-        ]
 
         integration._remove_orphan_bridge_device_cards(
             object(),
             entry,
             inventory,
-            registry_entries,
+            list(registry.entries),
             set(),
         )
 
-        self.assertEqual(updates, [("uuid_orphan", "entry_001")])
+        self.assertEqual(registry.removed, ["sensor.deleted_battery"])
+        self.assertEqual(removed_devices, ["uuid_orphan"])
+        self.assertEqual(updates, [])
+        self.assertIsNotNone(registry.async_get("sensor.location_status"))
+
+    def test_deleted_bridge_card_keeps_foreign_references(self) -> None:
+        """Remove only this entry's entity when another integration shares a card."""
+        updates: list[tuple[str, str]] = []
+        removed_devices: list[str] = []
+        own = SimpleNamespace(
+            entity_id="sensor.deleted_signal",
+            domain="sensor",
+            platform=DOMAIN,
+            unique_id="dev_998_main_signal_signal",
+            device_id="uuid_shared",
+            config_entry_id="entry_001",
+            name=None,
+            disabled_by=None,
+            original_name="Signal",
+            object_id_base="signal",
+            suggested_object_id="deleted_signal",
+        )
+        foreign = SimpleNamespace(
+            entity_id="sensor.foreign",
+            domain="sensor",
+            platform="other_integration",
+            unique_id="foreign_signal",
+            device_id="uuid_shared",
+            config_entry_id="entry_foreign",
+            name=None,
+            disabled_by=None,
+            original_name="Foreign",
+            object_id_base="foreign",
+            suggested_object_id="foreign",
+        )
+        registry = FakeRegistry([own, foreign])
+        device_registry = SimpleNamespace(
+            devices=[
+                SimpleNamespace(
+                    id="uuid_shared",
+                    identifiers={(DOMAIN, "dev_998")},
+                    config_entries={"entry_001", "entry_foreign"},
+                )
+            ],
+            async_update_device=lambda device_id, *, remove_config_entry: updates.append(
+                (device_id, remove_config_entry)
+            ),
+            async_remove_device=lambda device_id: removed_devices.append(device_id),
+        )
+        integration.dr.async_get = lambda _hass: device_registry
+        integration.er.async_get = lambda _hass: registry
+        integration.er.async_entries_for_device = (
+            lambda current_registry, device_id, include_disabled_entities=False: [
+                row
+                for row in current_registry.entries
+                if getattr(row, "device_id", None) == device_id
+            ]
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_001"},
+        )
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.142",
+            protocol_version="4",
+            locations={"loc_001": "Home"},
+            rooms={},
+            devices={},
+        )
+
+        integration._remove_orphan_bridge_device_cards(
+            object(), entry, inventory, list(registry.entries), set()
+        )
+
+        self.assertEqual(registry.removed, ["sensor.deleted_signal"])
+        self.assertEqual(updates, [("uuid_shared", "entry_001")])
+        self.assertEqual(removed_devices, [])
+        self.assertIsNotNone(registry.async_get("sensor.foreign"))
+
+    def test_cached_inventory_never_removes_device_cards(self) -> None:
+        """Deletion waits for a current authoritative inventory."""
+        removed_devices: list[str] = []
+        device_registry = SimpleNamespace(
+            devices=[
+                SimpleNamespace(
+                    id="uuid_cached",
+                    identifiers={(DOMAIN, "dev_997")},
+                    config_entries={"entry_001"},
+                )
+            ],
+            async_remove_device=lambda device_id: removed_devices.append(device_id),
+        )
+        integration.dr.async_get = lambda _hass: device_registry
+        integration.er.async_get = lambda _hass: FakeRegistry([])
+
+        integration._remove_orphan_bridge_device_cards(
+            object(),
+            SimpleNamespace(
+                entry_id="entry_001",
+                data={CONF_LOCATION_ID: "loc_001"},
+            ),
+            BridgeInventory(
+                sequence=1,
+                ready=False,
+                bridge_version="0.1.142",
+                protocol_version="4",
+                locations={"loc_001": "Home"},
+                rooms={},
+                devices={},
+            ),
+            [],
+            set(),
+        )
+
+        self.assertEqual(removed_devices, [])
+
+    def test_inventory_readiness_changes_registry_migration_fingerprint(self) -> None:
+        """A fresh authoritative view must retry deferred device deletion."""
+        cached = BridgeInventory(
+            sequence=1,
+            ready=False,
+            bridge_version="0.1.142",
+            protocol_version="4",
+            locations={"loc_001": "Home"},
+            rooms={},
+            devices={},
+        )
+        current = BridgeInventory(
+            sequence=2,
+            ready=True,
+            bridge_version="0.1.142",
+            protocol_version="4",
+            locations={"loc_001": "Home"},
+            rooms={},
+            devices={},
+        )
+
+        self.assertNotEqual(
+            integration._entity_registry_topology_fingerprint(cached, "loc_001"),
+            integration._entity_registry_topology_fingerprint(current, "loc_001"),
+        )
+
+    def test_shared_card_detach_failure_is_visible(self) -> None:
+        """An unsupported registry signature must not fail silently."""
+        registry = FakeRegistry([])
+
+        def reject_update(_device_id: str, *, remove_config_entry: str) -> None:
+            raise TypeError(remove_config_entry)
+
+        device_registry = SimpleNamespace(
+            devices=[
+                SimpleNamespace(
+                    id="uuid_shared_failure",
+                    identifiers={(DOMAIN, "dev_996")},
+                    config_entries={"entry_001", "entry_foreign"},
+                )
+            ],
+            async_update_device=reject_update,
+        )
+        integration.dr.async_get = lambda _hass: device_registry
+        integration.er.async_get = lambda _hass: registry
+        integration.er.async_entries_for_device = (
+            lambda _registry, _device_id, include_disabled_entities=False: []
+        )
+
+        with self.assertLogs("smartthings_web.__init__", level="WARNING") as logs:
+            integration._remove_orphan_bridge_device_cards(
+                object(),
+                SimpleNamespace(
+                    entry_id="entry_001",
+                    data={CONF_LOCATION_ID: "loc_001"},
+                ),
+                BridgeInventory(
+                    sequence=1,
+                    ready=True,
+                    bridge_version="0.1.142",
+                    protocol_version="4",
+                    locations={"loc_001": "Home"},
+                    rooms={},
+                    devices={},
+                ),
+                [],
+                set(),
+            )
+
+        self.assertIn("could not detach a stale shared device card", logs.output[0])
 
     @staticmethod
     def _registry_entry(

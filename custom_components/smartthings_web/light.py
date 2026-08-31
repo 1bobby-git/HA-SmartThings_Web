@@ -65,7 +65,19 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
     def __init__(
         self, runtime: SmartThingsWebRuntime, device: BridgeDevice, state: BridgeState
     ) -> None:
-        super().__init__(runtime, device, state, None)
+        primary_role = (state.component_role or state.component).strip().lower()
+        light_states = [
+            candidate
+            for candidate in device.states.values()
+            if control_kind(device, candidate) == "light"
+        ]
+        super().__init__(
+            runtime,
+            device,
+            state,
+            None,
+            primary_control=primary_role == "main" or len(light_states) == 1,
+        )
         level_control = _control(device, "level")
         color_temperature_control = _control(device, "colorTemperature")
         if color_temperature_control is not None:

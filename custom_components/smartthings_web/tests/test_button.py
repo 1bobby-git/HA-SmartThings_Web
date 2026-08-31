@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock
 
@@ -35,6 +35,10 @@ exceptions_module = ModuleType("homeassistant.exceptions")
 exceptions_module.HomeAssistantError = type("HomeAssistantError", (Exception,), {})
 sys.modules["homeassistant.exceptions"] = exceptions_module
 
+const_module = ModuleType("homeassistant.const")
+const_module.EntityCategory = SimpleNamespace(CONFIG="config")  # type: ignore[attr-defined]
+sys.modules["homeassistant.const"] = const_module
+
 sys.modules.setdefault("homeassistant.helpers", ModuleType("homeassistant.helpers"))
 entity_platform = ModuleType("homeassistant.helpers.entity_platform")
 entity_platform.AddConfigEntryEntitiesCallback = object  # type: ignore[attr-defined]
@@ -50,6 +54,8 @@ class SmartThingsWebDeviceEntity:
         self.runtime = runtime
         self.device_id = device.device_id  # type: ignore[attr-defined]
         self._attr_suggested_object_id = f"{device.device_id}_{_args[0]}"
+        self._attr_entity_picture = "https://client.smartthings.com/icons/oneui/custom/on"
+        self._attr_icon = "mdi:device-artwork"
 
     @property
     def bridge_device(self):
@@ -175,6 +181,33 @@ class ButtonDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(added[0]._attr_translation_key, "refresh")
         self.assertEqual(added[0]._attr_suggested_object_id, "window_sensor_refresh")
         self.assertEqual(added[0].entity_id, "button.window_sensor_refresh")
+
+    async def test_refresh_button_is_a_config_entity_with_refresh_icon(self) -> None:
+        control = BridgeControl(
+            "refresh",
+            "button",
+            "Refresh",
+            component="main",
+            capability="refresh",
+            commands=("refresh",),
+        )
+        device = BridgeDevice(
+            "dev_001",
+            "loc_001",
+            None,
+            "Window sensor",
+            "sensor",
+            True,
+            controls={control.control_id: control},
+        )
+        runtime = self._bootstrap_runtime(device)
+
+        button = SmartThingsWebButton(runtime, device, control)
+
+        self.assertEqual(button._attr_translation_key, "refresh")
+        self.assertEqual(button._attr_entity_category, "config")
+        self.assertEqual(button._attr_icon, "mdi:refresh")
+        self.assertIsNone(button._attr_entity_picture)
 
     async def test_observed_refresh_button_sends_refresh_command(self) -> None:
         control = BridgeControl(

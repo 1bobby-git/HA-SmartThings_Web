@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from homeassistant.components.button import ButtonEntity
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -93,6 +94,9 @@ class SmartThingsWebButton(SmartThingsWebDeviceEntity, ButtonEntity):
         )
         if refresh:
             self._attr_translation_key = "refresh"
+            self._attr_entity_picture = None
+            self._attr_icon = "mdi:refresh"
+            self._attr_entity_category = EntityCategory.CONFIG
             self._attr_suggested_object_id = suggested_entity_object_id(
                 runtime, device, "refresh"
             )
