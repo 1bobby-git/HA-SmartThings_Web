@@ -87,7 +87,7 @@ describe("AdvancedFirstCommandExecutor", () => {
     expect(fallback.executeDeviceAction).not.toHaveBeenCalled();
   });
 
-  test("uses the existing native-before-DOM executor only after Advanced is unsupported", async () => {
+  test("maps Advanced unsupported to command_control_not_found without legacy fallback", async () => {
     const fallback = legacy();
     const executor = new AdvancedFirstCommandExecutor(
       advanced(async () => {
@@ -97,16 +97,50 @@ describe("AdvancedFirstCommandExecutor", () => {
       { now: () => 20, canUseAdvanced: () => true }
     );
 
-    await expect(executor.executeDeviceAction(action)).resolves.toEqual({
-      state: "ACCEPTED",
-      transport: "location_native",
-      sentAtMs: 20,
-      acceptedAtMs: 20
-    });
-    expect(fallback.executeDeviceAction).toHaveBeenCalledOnce();
+    await expect(executor.executeDeviceAction(action)).rejects.toThrow(
+      "command_control_not_found"
+    );
+    expect(fallback.executeDeviceAction).not.toHaveBeenCalled();
   });
 
-  test("uses explicit Location native and DOM adapters in the required order", async () => {
+  test("routes requireAdvanced actions only to Advanced and maps unsupported without legacy fallback", async () => {
+    const fallback = legacy();
+    const advancedTransport = advanced(async () => {
+      throw new CommandTransportError("unsupported", "advanced");
+    });
+    const executor = new AdvancedFirstCommandExecutor(
+      advancedTransport,
+      fallback,
+      { canUseAdvanced: () => false }
+    );
+
+    await expect(
+      executor.executeDeviceAction({ ...action, requireAdvanced: true })
+    ).rejects.toThrowError("command_control_not_found");
+    expect(advancedTransport.execute).toHaveBeenCalledOnce();
+    expect(fallback.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["authentication", "command_login_required"],
+    ["transient", "command_execution_failed"]
+  ] as const)("maps requireAdvanced %s errors without legacy calls", async (code, expected) => {
+    const fallback = legacy();
+    const executor = new AdvancedFirstCommandExecutor(
+      advanced(async () => {
+        throw new CommandTransportError(code, "advanced");
+      }),
+      fallback,
+      { canUseAdvanced: () => false }
+    );
+
+    await expect(
+      executor.executeDeviceAction({ ...action, requireAdvanced: true })
+    ).rejects.toThrowError(expected);
+    expect(fallback.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test("does not create Location native or DOM fallback after Advanced unsupported", async () => {
     const order: string[] = [];
     const combined = vi.fn(async () => {
       throw new Error("combined path must not run");
@@ -133,11 +167,13 @@ describe("AdvancedFirstCommandExecutor", () => {
       { now: () => 30, canUseAdvanced: () => true }
     );
 
-    await expect(executor.executeDeviceAction(action)).resolves.toMatchObject({
-      transport: "dom"
-    });
-    expect(order).toEqual(["advanced", "location-native", "dom"]);
+    await expect(executor.executeDeviceAction(action)).rejects.toThrow(
+      "command_control_not_found"
+    );
+    expect(order).toEqual(["advanced"]);
     expect(combined).not.toHaveBeenCalled();
+    expect(fallback.executeLocationNative).not.toHaveBeenCalled();
+    expect(fallback.executeDomFallback).not.toHaveBeenCalled();
   });
 
   test("keeps DOM fallback disabled when Bridge configuration turns it off", async () => {
