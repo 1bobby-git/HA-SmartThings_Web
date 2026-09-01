@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.156
+
+- Home Assistant 2026.8.3에서 `smartthings_web.list_commands` response service가 coroutine 객체를 반환해 500이 나던 문제를 수정합니다.
+- 모든 `smartthings_web` 서비스 등록 핸들러를 HA가 async 함수로 인식하는 wrapper로 바꿔 response-support 서비스는 dict 응답을 직접 반환하고, write/maintenance 서비스는 기존 동작을 유지합니다.
+- 0.1.155의 Advanced command catalog, safe service, global entity parity, icon/name migration, parity audit 동작은 그대로 유지합니다.
+
 ## 0.1.155
 
 - 전체 Advanced capability catalog를 안전 정책으로 필터링해 `list_commands`, `execute_command`, `speak` Home Assistant 서비스로 노출합니다.

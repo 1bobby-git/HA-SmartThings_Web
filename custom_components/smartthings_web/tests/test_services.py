@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
@@ -135,6 +136,40 @@ class SmartThingsWebServiceTests(unittest.IsolatedAsyncioTestCase):
         await async_setup_services(SimpleNamespace(services=services))
 
         self.assertEqual(registrations["list_commands"]["supports_response"], "only")
+
+    async def test_setup_registers_awaitable_service_handlers_with_response_dicts(self) -> None:
+        registrations: dict[str, object] = {}
+        services = SimpleNamespace(
+            has_service=lambda _domain, _service: False,
+            async_register=lambda _domain, service, handler, schema, **_kwargs: registrations.__setitem__(
+                service, handler
+            ),
+        )
+        client = SimpleNamespace(
+            async_list_commands=AsyncMock(return_value=_catalog(_descriptor(command="on")))
+        )
+        runtime = SimpleNamespace(
+            client=client,
+            inventory=SimpleNamespace(devices={"dev_001": object()}),
+        )
+        hass = SimpleNamespace(
+            services=services,
+            config_entries=SimpleNamespace(
+                async_entries=lambda _domain: [SimpleNamespace(runtime_data=runtime)]
+            ),
+        )
+
+        await async_setup_services(hass)
+
+        for service, handler in registrations.items():
+            with self.subTest(service=service):
+                self.assertTrue(inspect.iscoroutinefunction(handler))
+        result = await registrations["list_commands"](
+            SimpleNamespace(data=LIST_COMMANDS_SCHEMA({"device_id": "dev_001"}))
+        )
+
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result["device_id"], "dev_001")
 
     async def test_execute_command_routes_direct_alias_as_advanced_command(self) -> None:
         client = SimpleNamespace(async_execute_command=AsyncMock())

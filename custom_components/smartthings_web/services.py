@@ -176,10 +176,17 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             register(
                 DOMAIN,
                 service,
-                lambda call, handler=handler: handler(hass, call),
+                _bind_service_handler(hass, handler),
                 schema=schema,
                 **kwargs,
             )
+
+
+def _bind_service_handler(hass: HomeAssistant, handler: Any) -> Any:
+    async def _service_handler(call: ServiceCall) -> Any:
+        return await handler(hass, call)
+
+    return _service_handler
 
 
 async def async_handle_execute_command(hass: HomeAssistant, call: ServiceCall) -> None:
