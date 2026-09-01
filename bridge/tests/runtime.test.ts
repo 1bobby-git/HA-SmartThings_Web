@@ -749,6 +749,73 @@ describe("createBridgeRuntime", () => {
     });
   });
 
+  test("clears stale Advanced catalog when an authoritative device loses all components", async () => {
+    const root = createTempRoot();
+    const keeper = new FakePage("https://my.smartthings.com/location/raw-location-001");
+    keeper.advancedSnapshots = [advancedSwitchInventory("raw-command-device-001", "raw-location-001")];
+    keeper.advancedResponses.set(
+      "/advanced/cupcake-api/api/capabilities/switch/1",
+      capabilityDefinition("switch", {
+        on: { name: "on", arguments: [] },
+        off: { name: "off", arguments: [] }
+      })
+    );
+    const context = new FakeContext([keeper]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, { chromium: { launchPersistentContext: vi.fn(async () => context) } })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    const baseUrl = `http://127.0.0.1:${runtime.port}`;
+    const token = await exchangeBridgeToken(baseUrl);
+    const headers = { authorization: `Bearer ${token}` };
+    await waitFor(async () => {
+      const inventory = await fetch(`${baseUrl}/api/v1/inventory`, { headers }).then(
+        (response) => response.json() as Promise<{
+          devices: Array<{
+            advancedCommands?: unknown[];
+            controls?: Array<{ id: string }>;
+          }>;
+        }>
+      );
+      return inventory.devices[0]?.advancedCommands?.length === 2 &&
+        inventory.devices[0]?.controls?.some((control) => control.id.startsWith("advanced:")) === true;
+    });
+
+    keeper.advancedSnapshots = [
+      {
+        items: [
+          {
+            deviceId: "raw-command-device-001",
+            locationId: "raw-location-001",
+            label: "Safe plug",
+            components: []
+          }
+        ]
+      }
+    ];
+    await fetch(`${baseUrl}/api/v1/maintenance/reload-inventory`, {
+      method: "POST",
+      headers
+    });
+
+    await waitFor(async () => {
+      const inventory = await fetch(`${baseUrl}/api/v1/inventory`, { headers }).then(
+        (response) => response.json() as Promise<{
+          devices: Array<{
+            advancedCommands?: unknown[];
+            commandOmissions?: unknown[];
+            controls?: Array<{ id: string }>;
+          }>;
+        }>
+      );
+      const device = inventory.devices[0];
+      return device?.advancedCommands === undefined &&
+        device?.commandOmissions === undefined &&
+        device?.controls?.some((control) => control.id.startsWith("advanced:")) !== true;
+    });
+  });
+
   test("emits path-free startup stage markers in order", async () => {
     const root = createTempRoot();
     const log = {

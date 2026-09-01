@@ -17,6 +17,7 @@ import { AdvancedInventoryAdapter } from "./advanced/inventory-adapter.js";
 import { AdvancedCommandAdapter } from "./advanced/command-adapter.js";
 import {
   AdvancedCommandCatalog,
+  type AdvancedCommandCatalogResult,
   type CapabilityBinding as AdvancedCommandCatalogBinding
 } from "./advanced/command-catalog.js";
 import {
@@ -190,17 +191,31 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   const capabilityCache = new CapabilityDefinitionCache(loadCapabilityDefinition);
   const advancedCommandCatalog = new AdvancedCommandCatalog(loadCapabilityDefinition);
   let advancedCommandCatalogGeneration = 0;
-  const buildAdvancedCommandCatalog = async (): Promise<void> => {
+  const buildAdvancedCommandCatalog = async (
+    authoritativeDeviceIds: ReadonlySet<string>
+  ): Promise<void> => {
     const generation = ++advancedCommandCatalogGeneration;
-    const bindings = advancedCommandCatalogBindings(devices, volatileIdentifiers);
-    if (bindings.length === 0) return;
+    const { bindings, unresolvedDeviceIds } = advancedCommandCatalogBindings(
+      devices,
+      volatileIdentifiers,
+      authoritativeDeviceIds
+    );
     try {
-      const catalog = await advancedCommandCatalog.build(bindings);
+      const catalog: AdvancedCommandCatalogResult = bindings.length > 0
+        ? await advancedCommandCatalog.build(bindings)
+        : {
+            commandsByDevice: new Map(),
+            omissionsByDevice: new Map(),
+            omissions: []
+          };
       if (generation !== advancedCommandCatalogGeneration) return;
       const currentDevices = new Map(devices.snapshot().devices.map((device) => [device.id, device]));
-      const deviceIds = new Set(bindings.map((binding) => binding.deviceId));
       let preservedFailure = false;
-      for (const deviceId of [...deviceIds].sort()) {
+      for (const deviceId of [...authoritativeDeviceIds].sort()) {
+        if (unresolvedDeviceIds.has(deviceId)) {
+          preservedFailure = true;
+          continue;
+        }
         const nextCommands = catalog.commandsByDevice.get(deviceId) ?? [];
         const nextOmissions = catalog.omissionsByDevice.get(deviceId) ?? [];
         const currentDevice = currentDevices.get(deviceId);
@@ -255,7 +270,12 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         authoritativeWholeSnapshot: true
       });
       cameraImages.observeInventory(devices.snapshot());
-      void buildAdvancedCommandCatalog();
+      void buildAdvancedCommandCatalog(
+        authoritativeDeviceIdsFromSanitizedSnapshot(
+          sanitized.devices,
+          (deviceId) => aliases.alias("device", deviceId)
+        )
+      );
       status.update({
         advancedInventoryLastSyncAtMs: Date.now(),
         advancedInventoryDeviceCount: snapshot.devices.length,
@@ -1119,17 +1139,33 @@ function compareSearchParam(
 
 function advancedCommandCatalogBindings(
   devices: DeviceStore,
-  volatileIdentifiers: VolatileIdentifierMap
-): AdvancedCommandCatalogBinding[] {
+  volatileIdentifiers: VolatileIdentifierMap,
+  authoritativeDeviceIds: ReadonlySet<string>
+): {
+  bindings: AdvancedCommandCatalogBinding[];
+  unresolvedDeviceIds: Set<string>;
+} {
   const bindings: AdvancedCommandCatalogBinding[] = [];
+  const unresolvedDeviceIds = new Set<string>();
   for (const device of devices.snapshot().devices) {
+    if (!authoritativeDeviceIds.has(device.id)) continue;
+    const capabilityBindings = devices.capabilityBindings(device.id);
+    if (capabilityBindings.length === 0) continue;
     const rawDeviceId = volatileIdentifiers.rawDeviceId(device.id);
-    if (!rawDeviceId) continue;
-    for (const binding of devices.capabilityBindings(device.id)) {
+    if (!rawDeviceId) {
+      unresolvedDeviceIds.add(device.id);
+      continue;
+    }
+    const deviceBindings: AdvancedCommandCatalogBinding[] = [];
+    for (const binding of capabilityBindings) {
       const rawComponent = volatileIdentifiers.rawIdentifier(binding.component);
       const rawCapability = volatileIdentifiers.rawIdentifier(binding.capability);
-      if (!rawComponent || !rawCapability) continue;
-      bindings.push({
+      if (!rawComponent || !rawCapability) {
+        unresolvedDeviceIds.add(device.id);
+        deviceBindings.length = 0;
+        break;
+      }
+      deviceBindings.push({
         deviceId: device.id,
         component: binding.component,
         ...(binding.componentRole ? { componentRole: binding.componentRole } : {}),
@@ -1138,15 +1174,57 @@ function advancedCommandCatalogBindings(
         version: binding.version
       });
     }
+    bindings.push(...deviceBindings);
   }
-  return bindings.sort((left, right) =>
-    [
-      left.deviceId.localeCompare(right.deviceId),
-      left.component.localeCompare(right.component),
-      left.capability.localeCompare(right.capability),
-      left.version - right.version
-    ].find((result) => result !== 0) ?? 0
-  );
+  return {
+    bindings: bindings.sort((left, right) =>
+      [
+        left.deviceId.localeCompare(right.deviceId),
+        left.component.localeCompare(right.component),
+        left.capability.localeCompare(right.capability),
+        left.version - right.version
+      ].find((result) => result !== 0) ?? 0
+    ),
+    unresolvedDeviceIds
+  };
+}
+
+function authoritativeDeviceIdsFromSanitizedSnapshot(
+  value: unknown,
+  normalizeDeviceId: (deviceId: string) => string
+): Set<string> {
+  const root = runtimeRecord(value);
+  const rows = Array.isArray(value)
+    ? value
+    : Array.isArray(root?.items)
+      ? root.items
+      : Array.isArray(root?.devices)
+        ? root.devices
+        : Array.isArray(root?.data)
+          ? root.data
+          : [];
+  const result = new Set<string>();
+  for (const rowValue of rows) {
+    const row = runtimeRecord(rowValue);
+    const id = typeof row?.deviceId === "string"
+      ? row.deviceId
+      : typeof row?.device_id === "string"
+        ? row.device_id
+        : typeof row?.id === "string"
+          ? row.id
+          : undefined;
+    if (id && /^dev_[A-Za-z0-9]{3,64}$/u.test(id)) {
+      const normalized = normalizeDeviceId(id);
+      if (/^dev_[A-Za-z0-9]{3,64}$/u.test(normalized)) result.add(normalized);
+    }
+  }
+  return result;
+}
+
+function runtimeRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 function createStatusCapturePipeline(
