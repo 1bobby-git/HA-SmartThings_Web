@@ -576,6 +576,63 @@ describe("SafeCommandService", () => {
     );
   });
 
+  test("enforces descriptor string maxLength for Advanced TTS arguments", async () => {
+    const store = readyDeviceStore();
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_speechSynthesis", "speak", {
+        confirmation: "accepted_receipt",
+        arguments: [
+          {
+            name: "phrase",
+            required: true,
+            sensitive: false,
+            schema: { type: "string", maxLength: 1000 }
+          }
+        ]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => ({
+        state: "ACCEPTED" as const,
+        transport: "advanced" as const,
+        acceptedAtMs: Date.now()
+      }))
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        targetType: "device",
+        targetId: "dev_001",
+        component: "main",
+        capability: "identifier_speechSynthesis",
+        command: "speak",
+        arguments: ["x".repeat(1000)],
+        requireAdvanced: true,
+        clientRequestId: "request_tts_catalog_1000"
+      })
+    ).resolves.toMatchObject({ status: "accepted_unconfirmed" });
+    await expect(
+      service.execute({
+        targetType: "device",
+        targetId: "dev_001",
+        component: "main",
+        capability: "identifier_speechSynthesis",
+        command: "speak",
+        arguments: ["x".repeat(1001)],
+        requireAdvanced: true,
+        clientRequestId: "request_tts_catalog_1001"
+      })
+    ).rejects.toMatchObject({ code: "invalid_arguments" });
+    expect(executor.executeDeviceAction).toHaveBeenCalledTimes(1);
+  });
+
   test("rejects token-safe arbitrary commands without an exact persisted descriptor", async () => {
     const executor: SafeCommandExecutor = {
       executeDeviceAction: vi.fn(async () => undefined)

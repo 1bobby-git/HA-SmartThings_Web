@@ -50,6 +50,7 @@ from models import (  # noqa: E402
     option_values,
     parse_control,
     parse_command_result,
+    primary_switch_state,
     primary_state_attributes,
     safe_generic_toggle_control,
     select_controls,
@@ -811,6 +812,37 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         }
 
         self.assertEqual(control_kind(device, switch), "switch")
+
+    def test_single_switch_role_state_is_primary_not_secondary_named(self) -> None:
+        current = inventory(10, 20, "2026-09-01T00:00:00Z")
+        device = current.devices["dev_001"]
+        state = BridgeState(
+            "identifier_component_switch",
+            "identifier_capability_switch",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+            component_role="Switch",
+        )
+        device.states = {state.key: state}
+        device.controls = {
+            "advanced:switch:switch:switch": BridgeControl(
+                "advanced:switch:switch:switch",
+                "toggle",
+                "Power",
+                component=state.component,
+                capability=state.capability,
+                attribute=state.attribute,
+                commands=("on", "off"),
+                transport="advanced",
+            )
+        }
+
+        self.assertEqual(control_kind(device, state), "switch")
+        self.assertTrue(primary_switch_state(device, state))
+        self.assertEqual(models_module.switch_name_overrides(device), {})
+        self.assertEqual(models_module.secondary_switch_name_overrides(device), {})
 
     def test_control_kind_accepts_advanced_reversible_light_only_with_light_evidence(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")

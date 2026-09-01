@@ -3055,6 +3055,44 @@ describe("DeviceStore", () => {
     expect(JSON.stringify(device)).not.toContain("550e8400-e29b-41d4-a716-446655440000");
   });
 
+  test("keeps bounded string length schema in Advanced command catalogs", () => {
+    const store = new DeviceStore();
+    observeSnapshotState(store, {
+      componentId: "main",
+      capabilityId: "speechSynthesis",
+      attributeName: "phrase",
+      value: "",
+      timestamp: "2026-09-01T00:00:00.000Z"
+    });
+
+    store.observeAdvancedCommandCatalog("dev_001", [
+      advancedDescriptor("main", "speechSynthesis", "speak", "Speak", [], {
+        type: "string",
+        maxLength: 1000
+      }),
+      advancedDescriptor("main", "speechSynthesis", "speakBadMinimum", "Speak bad minimum", [], {
+        type: "string",
+        minLength: -1
+      } as never),
+      advancedDescriptor("main", "speechSynthesis", "speakBadMaximum", "Speak bad maximum", [], {
+        type: "string",
+        maxLength: 2049
+      } as never),
+      advancedDescriptor("main", "speechSynthesis", "speakBadRange", "Speak bad range", [], {
+        type: "string",
+        minLength: 10,
+        maxLength: 4
+      } as never)
+    ], []);
+
+    const device = store.snapshot().devices[0];
+    expect(device?.advancedCommands?.map((command) => command.command)).toEqual(["speak"]);
+    expect(device?.advancedCommands?.[0]?.arguments[0]?.schema).toEqual({
+      type: "string",
+      maxLength: 1000
+    });
+  });
+
   test("does not publish or persist unchanged Advanced command catalog observations", () => {
     const root = mkdtempSync(join(tmpdir(), "stw-device-store-catalog-noop-"));
     try {
@@ -3111,7 +3149,9 @@ describe("DeviceStore", () => {
       first.observeAdvancedCommandCatalog("dev_001", [
         advancedDescriptor("main", "switch", "on", "Power", [], {
           type: "string",
-          enum: ["on", "off"]
+          enum: ["on", "off"],
+          minLength: 1,
+          maxLength: 3
         }),
         advancedDescriptor("main", "switch", "off", "Power")
       ], []);
@@ -3128,6 +3168,12 @@ describe("DeviceStore", () => {
       const afterRestart = restored.snapshot();
       expect(afterRestart.devices[0]?.advancedCommands?.[0]?.arguments).toEqual([]);
       afterRestart.devices[0]?.advancedCommands?.[1]?.arguments[0]?.schema.enum?.push("mutated");
+      expect(restored.snapshot().devices[0]?.advancedCommands?.[1]?.arguments[0]?.schema).toEqual({
+        type: "string",
+        enum: ["on", "off"],
+        minLength: 1,
+        maxLength: 3
+      });
       expect(restored.snapshot().devices[0]?.advancedCommands?.[1]?.arguments[0]?.schema.enum).toEqual([
         "on",
         "off"

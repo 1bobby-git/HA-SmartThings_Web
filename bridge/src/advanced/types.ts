@@ -39,6 +39,8 @@ export interface AdvancedCapabilitySchema extends Record<string, unknown> {
   enum?: unknown[];
   minimum?: number;
   maximum?: number;
+  minLength?: number;
+  maxLength?: number;
 }
 
 export interface AdvancedCapabilityArgumentDefinition {

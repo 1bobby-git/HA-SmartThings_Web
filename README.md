@@ -20,6 +20,7 @@
 기존 `smartthings_web` config entry, entity ID, unique ID, device registry identifier, area와 사용자 이름은 유지됩니다. Web 표시명은 generated `original_name`에만 반영하고, device class가 없는 범용 센서는 장치 유형 아이콘을 받으며, 온도 같은 기능형 센서는 Home Assistant device class 아이콘을 유지합니다. 범용 명령은 `smartthings_web.execute_command` 서비스를 사용하며 `device_id`, `component`, `capability`, `command`와 선택적인 `arguments`, `confirm`, `timeout`을 받습니다.
 
 명령 확인에는 `smartthings_web.list_commands`와 `smartthings_web.speak`도 제공합니다. `speak`는 안전한 `speechSynthesis.speak` descriptor가 정확히 하나일 때만 1-1024자 control-character 없는 문구를 전달합니다. 운영 서비스로 `smartthings_web.reload_inventory`, `smartthings_web.refresh_device`, `smartthings_web.reconnect_realtime`도 제공합니다. 앱 옵션에서 confirmation timeout, status recheck, 저빈도 reconciliation interval, DOM fallback, protocol debug logging을 설정할 수 있으며 잘못된 값은 시작 전에 거부됩니다. 패키지에 포함된 `npm run audit:web-parity`는 Bridge inventory와 Home Assistant projection을 비교해 위험 명령, 중복 unique ID, 중복 generated name, 설명 없는 safe omission을 검사합니다.
+화면에서 서비스와 TTS를 실행하는 방법은 [SmartThings Web 서비스 UI 사용법](docs/smartthings-web-services-ui-guide.md)에 정리되어 있습니다.
 
 ## 빠른 설치
 

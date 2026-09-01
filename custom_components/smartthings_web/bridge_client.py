@@ -48,6 +48,7 @@ _MAX_SCHEMA_DEPTH = 32
 _MAX_SCHEMA_NODES = 512
 _MAX_SCHEMA_BYTES = 8192
 _MAX_ENUM_STRING_LENGTH = 1024
+_MAX_STRING_LENGTH = 2048
 _CATALOG_KEYS = {"schemaVersion", "deviceId", "commands", "omissions"}
 _COMMAND_DESCRIPTOR_KEYS = {
     "component",
@@ -64,7 +65,7 @@ _COMMAND_DESCRIPTOR_KEYS = {
 }
 _COMMAND_ARGUMENT_KEYS = {"name", "required", "sensitive", "unit", "schema"}
 _COMMAND_OMISSION_KEYS = {"component", "capability", "command", "reason"}
-_COMMAND_SCHEMA_KEYS = {"type", "enum", "minimum", "maximum"}
+_COMMAND_SCHEMA_KEYS = {"type", "enum", "minimum", "maximum", "minLength", "maxLength"}
 _COMMAND_OMISSION_REASONS = {
     "definition_unavailable",
     "dangerous_command",
@@ -708,15 +709,26 @@ def _safe_command_schema(raw: Any) -> dict[str, Any] | None:
         return None
     minimum = schema.get("minimum")
     maximum = schema.get("maximum")
+    min_length = schema.get("minLength")
+    max_length = schema.get("maxLength")
     if (
         (minimum is not None and (not isinstance(minimum, (int, float)) or isinstance(minimum, bool)))
         or (maximum is not None and (not isinstance(maximum, (int, float)) or isinstance(maximum, bool)))
+        or (min_length is not None and not _safe_string_length_bound(min_length))
+        or (max_length is not None and not _safe_string_length_bound(max_length))
         or (
             isinstance(minimum, (int, float))
             and not isinstance(minimum, bool)
             and isinstance(maximum, (int, float))
             and not isinstance(maximum, bool)
             and minimum > maximum
+        )
+        or (
+            isinstance(min_length, int)
+            and not isinstance(min_length, bool)
+            and isinstance(max_length, int)
+            and not isinstance(max_length, bool)
+            and min_length > max_length
         )
     ):
         return None
@@ -726,6 +738,10 @@ def _safe_command_schema(raw: Any) -> dict[str, Any] | None:
             return None
         schema["enum"] = enum_values
     return schema
+
+
+def _safe_string_length_bound(raw: Any) -> bool:
+    return isinstance(raw, int) and not isinstance(raw, bool) and 0 <= raw <= _MAX_STRING_LENGTH
 
 
 def _safe_enum_values(raw: Any) -> list[Any] | None:

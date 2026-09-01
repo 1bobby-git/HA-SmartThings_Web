@@ -1522,7 +1522,22 @@ class EntityRegistryMigrationTests(unittest.TestCase):
     def test_primary_controls_share_room_free_base_across_switch_and_fan(self) -> None:
         """Representation changes must not add a room or ``_switch`` suffix."""
         aquarium_switch = BridgeState(
-            "main", "switch", "switch", "off", None, "2026-08-31T06:00:00Z"
+            "identifier_component_switch",
+            "identifier_capability_switch",
+            "switch",
+            "off",
+            None,
+            "2026-08-31T06:00:00Z",
+            component_role="Switch",
+        )
+        custom_switch = BridgeState(
+            "identifier_component_switch",
+            "identifier_capability_switch",
+            "switch",
+            "off",
+            None,
+            "2026-08-31T06:00:00Z",
+            component_role="Switch",
         )
         fan_switch = BridgeState(
             "main", "switch", "switch", "off", None, "2026-08-31T06:00:00Z"
@@ -1543,8 +1558,28 @@ class EntityRegistryMigrationTests(unittest.TestCase):
                     "action:main:switch",
                     "toggle",
                     "Power",
-                    component="main",
-                    capability="switch",
+                    component=aquarium_switch.component,
+                    capability=aquarium_switch.capability,
+                    attribute="switch",
+                    commands=("on", "off"),
+                )
+            },
+        )
+        custom_named_switch = BridgeDevice(
+            "dev_168",
+            "loc_001",
+            None,
+            "Synthetic",
+            "switch",
+            True,
+            states={custom_switch.key: custom_switch},
+            controls={
+                "action:switch:switch": BridgeControl(
+                    "action:switch:switch",
+                    "toggle",
+                    "Power",
+                    component=custom_switch.component,
+                    capability=custom_switch.capability,
                     attribute="switch",
                     commands=("on", "off"),
                 )
@@ -1563,7 +1598,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             entity_id="switch.eohang_switch",
             domain="switch",
             platform=DOMAIN,
-            unique_id="dev_167_main_switch_switch",
+            unique_id="dev_167_identifier_component_switch_identifier_capability_switch_switch",
             device_id="uuid_aquarium",
             config_entry_id="entry_001",
             name=None,
@@ -1571,6 +1606,19 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             original_name=None,
             object_id_base="switch",
             suggested_object_id="eohang_switch",
+        )
+        custom_switch_entry = SimpleNamespace(
+            entity_id="switch.user_kept_synthetic_switch",
+            domain="switch",
+            platform=DOMAIN,
+            unique_id="dev_168_identifier_component_switch_identifier_capability_switch_switch",
+            device_id="uuid_custom_switch",
+            config_entry_id="entry_001",
+            name="User kept switch",
+            disabled_by=None,
+            original_name="Synthetic Switch",
+            object_id_base="switch",
+            suggested_object_id="synthetic_switch",
         )
         old_fan_switch_entry = SimpleNamespace(
             entity_id="switch.hwanpunggi",
@@ -1599,7 +1647,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             suggested_object_id="hwajangsil_hwanpunggi",
         )
         registry = FakeRegistry(
-            [switch_entry, old_fan_switch_entry, fan_entry]
+            [switch_entry, custom_switch_entry, old_fan_switch_entry, fan_entry]
         )
         self.patch_registry(registry)
         inventory = BridgeInventory(
@@ -1611,6 +1659,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             rooms={"room_bathroom": ("loc_001", "Hwajangsil")},
             devices={
                 aquarium.device_id: aquarium,
+                custom_named_switch.device_id: custom_named_switch,
                 bathroom_fan.device_id: bathroom_fan,
             },
         )
@@ -1632,6 +1681,8 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         )
         self.assertEqual(switch_entry.suggested_object_id, "eohang")
         self.assertIsNone(switch_entry.object_id_base)
+        self.assertEqual(custom_switch_entry.entity_id, "switch.user_kept_synthetic_switch")
+        self.assertEqual(custom_switch_entry.suggested_object_id, "synthetic_switch")
         self.assertEqual(fan_entry.suggested_object_id, "hwanpunggi")
         self.assertIsNone(fan_entry.object_id_base)
 

@@ -35,4 +35,6 @@ After manual VNC login, the add-on reached `CONNECTED`, observed 213 devices, in
 
 Version 0.1.28 was then verified on the same HAOS install: the persisted login session restored after add-on updates and Bridge-only restart, the complete inventory was reacquired after a local sequence reset, and readiness stayed true beyond the former 120-second boundary. A targeted manual contact-open action produced one passing component-less candidate and updated Home Assistant about 134 ms after its Bridge source time. Host-reboot recovery and long-idle durability remain unverified.
 
+Home Assistant service usage for `smartthings_web.list_commands`, `smartthings_web.execute_command`, `smartthings_web.speak`, `smartthings_web.reload_inventory`, `smartthings_web.refresh_device`, and `smartthings_web.reconnect_realtime` is documented in `docs/smartthings-web-services-ui-guide.md`. Use Home Assistant Developer Tools -> Actions, select a SmartThings Web device, and copy the component/capability/command values from `list_commands` before executing Advanced-only commands.
+
 The current evidence gate is `DECISION: LIMITED`. Before Phase 2, collect sanitized evidence for long-idle delivery, keep-login behavior across a host reboot, network outage recovery, commands, and complete API independence. Keep Phase 2 closed until the gate reaches GO.

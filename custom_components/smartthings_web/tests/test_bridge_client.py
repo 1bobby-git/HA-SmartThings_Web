@@ -441,7 +441,11 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
                     parse_command_catalog({**valid, "commands": [command]}, "dev_001")
 
     def test_parse_command_catalog_enforces_schema_key_and_nested_bounds(self) -> None:
-        schema: dict[str, object] = {"type": "string", "enum": ["Hello", "Goodnight"]}
+        schema: dict[str, object] = {
+            "type": "string",
+            "enum": ["Hello", "Goodnight"],
+            "maxLength": 1000,
+        }
         descriptor = {
             "component": "main",
             "capability": "speechSynthesis",
@@ -468,6 +472,7 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
         }
         catalog = parse_command_catalog(valid, "dev_001")
         self.assertEqual(catalog.commands[0].arguments[0].schema["enum"], ["Hello", "Goodnight"])
+        self.assertEqual(catalog.commands[0].arguments[0].schema["maxLength"], 1000)
         schema["enum"].append("mutated")  # type: ignore[union-attr]
         self.assertEqual(catalog.commands[0].arguments[0].schema["enum"], ["Hello", "Goodnight"])
 
@@ -495,6 +500,9 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
             array_enum,
             control_string_enum,
             long_string_enum,
+            {"type": "string", "minLength": -1},
+            {"type": "string", "maxLength": 2049},
+            {"type": "string", "minLength": 8, "maxLength": 4},
         ):
             with self.subTest(schema=bad_schema):
                 bad_descriptor = {
@@ -533,6 +541,8 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
                                     "enum": enum_values,
                                     "minimum": 1,
                                     "maximum": 32,
+                                    "minLength": 1,
+                                    "maxLength": 1000,
                                 },
                             }
                         ],
@@ -549,6 +559,8 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
 
         self.assertEqual(catalog.commands[0].arguments[0].schema["type"], "string")
         self.assertEqual(catalog.commands[0].arguments[0].schema["enum"], enum_values)
+        self.assertEqual(catalog.commands[0].arguments[0].schema["minLength"], 1)
+        self.assertEqual(catalog.commands[0].arguments[0].schema["maxLength"], 1000)
         enum_values.append("mutated")
         self.assertEqual(catalog.commands[0].arguments[0].schema["enum"], ["Hello", 12, 3.5, True, False, None])
         self.assertEqual(catalog.omissions, {"schema_invalid": 1})

@@ -45,9 +45,10 @@ interface DefinitionResult {
 const DEFAULT_CONCURRENCY = 4;
 const STATELESS_COMMAND_PATTERN =
   /^(?:speak|refresh|press|push|momentary|ping|beep|identify|refresh[A-Z].*)$/u;
-const PUBLIC_SCHEMA_KEYS = new Set(["type", "enum", "minimum", "maximum"]);
+const PUBLIC_SCHEMA_KEYS = new Set(["type", "enum", "minimum", "maximum", "minLength", "maxLength"]);
 const MAX_PUBLIC_ENUM_VALUES = 128;
 const MAX_PUBLIC_ENUM_STRING_LENGTH = 1024;
+const MAX_PUBLIC_STRING_LENGTH = 2048;
 const CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/u;
 
 export class AdvancedCommandCatalog {
@@ -207,19 +208,30 @@ function parseSchema(value: Record<string, unknown>): AdvancedCapabilitySchema |
   if (value.enum !== undefined && enumValues === undefined) return undefined;
   const minimum = value.minimum;
   const maximum = value.maximum;
+  const minLength = value.minLength;
+  const maxLength = value.maxLength;
   if (
     (minimum !== undefined && (typeof minimum !== "number" || !Number.isFinite(minimum))) ||
-    (maximum !== undefined && (typeof maximum !== "number" || !Number.isFinite(maximum)))
+    (maximum !== undefined && (typeof maximum !== "number" || !Number.isFinite(maximum))) ||
+    (minLength !== undefined && !validPublicStringLength(minLength)) ||
+    (maxLength !== undefined && !validPublicStringLength(maxLength))
   ) {
     return undefined;
   }
   if (minimum !== undefined && maximum !== undefined && minimum > maximum) return undefined;
+  if (minLength !== undefined && maxLength !== undefined && minLength > maxLength) return undefined;
   const schema: AdvancedCapabilitySchema = {};
   if (type !== undefined) schema.type = type as NonNullable<AdvancedCapabilitySchema["type"]>;
   if (enumValues !== undefined) schema.enum = enumValues;
   if (minimum !== undefined) schema.minimum = minimum;
   if (maximum !== undefined) schema.maximum = maximum;
+  if (minLength !== undefined) schema.minLength = minLength;
+  if (maxLength !== undefined) schema.maxLength = maxLength;
   return schema;
+}
+
+function validPublicStringLength(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= MAX_PUBLIC_STRING_LENGTH;
 }
 
 function parseSafeEnumValues(value: unknown): unknown[] | undefined {
@@ -281,6 +293,8 @@ function cloneSchema(
   if (schema.enum) clone.enum = [...schema.enum];
   if (schema.minimum !== undefined) clone.minimum = schema.minimum;
   if (schema.maximum !== undefined) clone.maximum = schema.maximum;
+  if (schema.minLength !== undefined) clone.minLength = schema.minLength;
+  if (schema.maxLength !== undefined) clone.maxLength = schema.maxLength;
   return clone;
 }
 

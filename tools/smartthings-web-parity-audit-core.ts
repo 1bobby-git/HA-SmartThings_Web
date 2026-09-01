@@ -360,7 +360,7 @@ function parseArgument(value: unknown): AdvancedCommandDescriptor["arguments"][n
 
 function parseSchema(value: unknown): NonNullable<AdvancedCommandDescriptor["arguments"][number]["schema"]> {
   if (!isRecord(value)) invalid();
-  const allowed = new Set(["type", "enum", "minimum", "maximum"]);
+  const allowed = new Set(["type", "enum", "minimum", "maximum", "minLength", "maxLength"]);
   if (Object.keys(value).some((key) => !allowed.has(key))) invalid();
   const schema: NonNullable<AdvancedCommandDescriptor["arguments"][number]["schema"]> = {};
   if (value.type !== undefined) {
@@ -394,7 +394,23 @@ function parseSchema(value: unknown): NonNullable<AdvancedCommandDescriptor["arg
   }
   if (value.minimum !== undefined) schema.minimum = parseFiniteNumber(value.minimum);
   if (value.maximum !== undefined) schema.maximum = parseFiniteNumber(value.maximum);
+  if (value.minLength !== undefined) schema.minLength = parseStringLength(value.minLength);
+  if (value.maxLength !== undefined) schema.maxLength = parseStringLength(value.maxLength);
+  if (
+    schema.minLength !== undefined &&
+    schema.maxLength !== undefined &&
+    schema.minLength > schema.maxLength
+  ) {
+    invalid();
+  }
   return schema;
+}
+
+function parseStringLength(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > 2048) {
+    invalid();
+  }
+  return value;
 }
 
 function parseOmissions(value: unknown): AdvancedCommandOmission[] {

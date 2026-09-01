@@ -209,9 +209,10 @@ const SNAPSHOT_QUERIES = new Set<SnapshotQuery>([
 ]);
 const ID_PATTERN = /^(?:loc|dev|identifier)_[A-Za-z0-9]{3,64}$/u;
 const TOKEN_PATTERN = /^[A-Za-z0-9_.:-]{1,160}$/u;
-const ADVANCED_COMMAND_SCHEMA_KEYS = new Set(["type", "enum", "minimum", "maximum"]);
+const ADVANCED_COMMAND_SCHEMA_KEYS = new Set(["type", "enum", "minimum", "maximum", "minLength", "maxLength"]);
 const ADVANCED_COMMAND_MAX_ENUM_VALUES = 128;
 const ADVANCED_COMMAND_MAX_ENUM_STRING_LENGTH = 1024;
+const ADVANCED_COMMAND_MAX_STRING_LENGTH = 2048;
 const ADVANCED_COMMAND_CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/u;
 const INVENTORY_PERSIST_COALESCE_MS = 25;
 const INVENTORY_PERSIST_RETRY_MS = 250;
@@ -2189,10 +2190,15 @@ function parseAdvancedSchema(value: unknown): AdvancedCommandDescriptor["argumen
   }
   const minimum = copyRecord.minimum;
   const maximum = copyRecord.maximum;
+  const minLength = copyRecord.minLength;
+  const maxLength = copyRecord.maxLength;
   if (
     (minimum !== undefined && (typeof minimum !== "number" || !Number.isFinite(minimum))) ||
     (maximum !== undefined && (typeof maximum !== "number" || !Number.isFinite(maximum))) ||
-    (typeof minimum === "number" && typeof maximum === "number" && minimum > maximum)
+    (minLength !== undefined && !validAdvancedStringLength(minLength)) ||
+    (maxLength !== undefined && !validAdvancedStringLength(maxLength)) ||
+    (typeof minimum === "number" && typeof maximum === "number" && minimum > maximum) ||
+    (typeof minLength === "number" && typeof maxLength === "number" && minLength > maxLength)
   ) {
     return undefined;
   }
@@ -2205,7 +2211,13 @@ function parseAdvancedSchema(value: unknown): AdvancedCommandDescriptor["argumen
   if (enumValues !== undefined) schema.enum = enumValues;
   if (typeof minimum === "number") schema.minimum = minimum;
   if (typeof maximum === "number") schema.maximum = maximum;
+  if (typeof minLength === "number") schema.minLength = minLength;
+  if (typeof maxLength === "number") schema.maxLength = maxLength;
   return schema;
+}
+
+function validAdvancedStringLength(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= ADVANCED_COMMAND_MAX_STRING_LENGTH;
 }
 
 function parseAdvancedEnumValues(value: unknown): unknown[] | undefined {

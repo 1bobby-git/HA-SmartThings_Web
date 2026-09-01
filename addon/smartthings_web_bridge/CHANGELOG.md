@@ -4,6 +4,9 @@
 
 - Home Assistant 2026.8.3에서 `smartthings_web.list_commands` response service가 coroutine 객체를 반환해 500이 나던 문제를 수정합니다.
 - 모든 `smartthings_web` 서비스 등록 핸들러를 HA가 async 함수로 인식하는 wrapper로 바꿔 response-support 서비스는 dict 응답을 직접 반환하고, write/maintenance 서비스는 기존 동작을 유지합니다.
+- SmartThings Advanced의 `maxLength`가 있는 `speechSynthesis.speak` schema를 안전하게 허용해 Galaxy Home Mini TTS command가 catalog에서 누락되지 않도록 합니다.
+- 단일 `componentRole=Switch` 전원 채널을 primary switch로 판정해 생성 entity ID의 중복 `_switch` suffix를 제거하고, 사용자 지정 entity ID는 보존합니다.
+- Home Assistant Actions 화면에서 `list_commands`, `execute_command`, `speak`, 운영 서비스를 쓰는 UI 가이드를 추가합니다.
 - 0.1.155의 Advanced command catalog, safe service, global entity parity, icon/name migration, parity audit 동작은 그대로 유지합니다.
 
 ## 0.1.155

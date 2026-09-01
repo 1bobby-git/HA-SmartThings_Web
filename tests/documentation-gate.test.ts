@@ -14,6 +14,7 @@ const requiredDocs = [
   "docs/api-free-audit.md",
   "docs/official-parity-matrix.md",
   "docs/customize-compatibility.md",
+  "docs/smartthings-web-services-ui-guide.md",
   "docs/security.md",
   "protocol/fixtures/README.md"
 ];
@@ -33,6 +34,7 @@ describe("Phase 1 documentation gate", () => {
     const security = readFileSync("docs/security.md", "utf8");
     const apiFree = readFileSync("docs/api-free-audit.md", "utf8");
     const addonDocs = readFileSync("addon/smartthings_web_bridge/DOCS.md", "utf8");
+    const serviceGuide = readFileSync("docs/smartthings-web-services-ui-guide.md", "utf8");
     const addonReadme = readFileSync("addon/smartthings_web_bridge/README.md", "utf8");
     const addonChangelog = readFileSync("addon/smartthings_web_bridge/CHANGELOG.md", "utf8");
     const evidencePath = "protocol/fixtures/2026-08-20-controlled-chrome-summary.json";
@@ -79,6 +81,18 @@ describe("Phase 1 documentation gate", () => {
     expect(readme).toContain("same contract cannot self-heal");
     expect(readme).toContain("numeric `protocol_version` bump");
     expect(readme).toContain("npx tsx tools/haos-capture-origin-audit.ts");
+    expect(readme).toContain("docs/smartthings-web-services-ui-guide.md");
+    expect(serviceGuide).toContain("개발자 도구");
+    expect(serviceGuide).toContain("작업");
+    expect(serviceGuide).toContain("smartthings_web.list_commands");
+    expect(serviceGuide).toContain("smartthings_web.execute_command");
+    expect(serviceGuide).toContain("smartthings_web.speak");
+    expect(serviceGuide).toContain("smartthings_web.reload_inventory");
+    expect(serviceGuide).toContain("smartthings_web.refresh_device");
+    expect(serviceGuide).toContain("smartthings_web.reconnect_realtime");
+    expect(serviceGuide).toContain("maxLength");
+    expect(serviceGuide).toContain("Advanced-only");
+    expect(addonDocs).toContain("docs/smartthings-web-services-ui-guide.md");
     expect(readme).not.toContain("Current gate: `DECISION: STOP`");
     expect(feasibility).toContain("bounded controlled Chrome sample");
     expect(feasibility).toContain("not a GO decision");

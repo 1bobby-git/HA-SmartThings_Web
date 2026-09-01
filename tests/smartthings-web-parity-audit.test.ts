@@ -167,7 +167,7 @@ describe("SmartThings Web parity audit", () => {
                     required: true,
                     sensitive: false,
                     unit: "text",
-                    schema: { type: "string" }
+                    schema: { type: "string", maxLength: 1000 }
                   },
                   {
                     name: "payload",
@@ -201,6 +201,44 @@ describe("SmartThings Web parity audit", () => {
     expect(json).not.toContain("안녕하세요");
     expect(json).not.toContain("payload");
     expect(json).not.toContain("phrase");
+  });
+
+  test("accepts bounded Advanced command string length schema", () => {
+    const report = evaluateWebParity(
+      {
+        devices: [
+          {
+            id: "dev_001",
+            controls: [],
+            advancedCommands: [
+              {
+                component: "main",
+                capability: "speechSynthesis",
+                capabilityVersion: 1,
+                command: "speak",
+                arguments: [
+                  {
+                    name: "phrase",
+                    required: true,
+                    sensitive: false,
+                    schema: { type: "string", maxLength: 1000 }
+                  }
+                ],
+                transport: "advanced",
+                confirmation: "accepted_receipt",
+                label: "Speak",
+                labelSource: "capability"
+              }
+            ],
+            commandOmissions: []
+          }
+        ]
+      },
+      []
+    );
+
+    expect(report.summary.safeCommands).toBe(1);
+    expect(reportHasFailingParity(report)).toBe(false);
   });
 
   test("accepts safe command capability roles but rejects raw-shaped roles", () => {
@@ -638,6 +676,39 @@ describe("SmartThings Web parity audit", () => {
           refreshToken: "redacted"
         }
       ]
+    ],
+    [
+      "invalid string length schema",
+      {
+        devices: [
+          {
+            id: "dev_001",
+            controls: [],
+            advancedCommands: [
+              {
+                component: "main",
+                capability: "speechSynthesis",
+                capabilityVersion: 1,
+                command: "speak",
+                arguments: [
+                  {
+                    name: "phrase",
+                    required: true,
+                    sensitive: false,
+                    schema: { type: "string", maxLength: 2049 }
+                  }
+                ],
+                transport: "advanced",
+                confirmation: "accepted_receipt",
+                label: "Speak",
+                labelSource: "capability"
+              }
+            ],
+            commandOmissions: []
+          }
+        ]
+      },
+      []
     ]
   ])("fails closed without leaking report data for %s", (_name, inventory, projection) => {
     expect(() => evaluateWebParity(inventory, projection)).toThrow(/web_parity_audit_input_invalid/);

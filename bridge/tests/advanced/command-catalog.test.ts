@@ -36,6 +36,20 @@ const speakDefinition = definition("smartthings.speechSynthesis", {
   }
 });
 
+const boundedSpeakDefinition = definition("smartthings.speechSynthesis", {
+  speak: {
+    name: "speak",
+    arguments: [
+      {
+        name: "phrase",
+        required: true,
+        sensitive: false,
+        schema: { type: "string", maxLength: 1000 }
+      }
+    ]
+  }
+});
+
 describe("AdvancedCommandCatalog", () => {
   test("deduplicates definition loads and emits speech synthesis speak for alias devices", async () => {
     const loaded: string[] = [];
@@ -96,6 +110,28 @@ describe("AdvancedCommandCatalog", () => {
         command: "speak"
       })
     ]);
+  });
+
+  test("accepts bounded public string lengths for speech synthesis speak", async () => {
+    const catalog = new AdvancedCommandCatalog(async () => boundedSpeakDefinition);
+
+    const result = await catalog.build([
+      binding("dev_speaker", "main", "speechSynthesis", "smartthings.speechSynthesis")
+    ]);
+
+    expect(result.commandsByDevice.get("dev_speaker")).toEqual([
+      expect.objectContaining({
+        capability: "speechSynthesis",
+        command: "speak",
+        arguments: [
+          expect.objectContaining({
+            name: "phrase",
+            schema: { type: "string", maxLength: 1000 }
+          })
+        ]
+      })
+    ]);
+    expect(result.omissions).toEqual([]);
   });
 
   test("omits dangerous and sensitive commands without exposing raw identifiers", async () => {
@@ -316,6 +352,39 @@ describe("AdvancedCommandCatalog", () => {
               schema: { type: "number", minimum: 10, maximum: 1 }
             }
           ]
+        },
+        setBadMinLength: {
+          name: "setBadMinLength",
+          arguments: [
+            {
+              name: "value",
+              required: true,
+              sensitive: false,
+              schema: { type: "string", minLength: -1 } as never
+            }
+          ]
+        },
+        setBadMaxLength: {
+          name: "setBadMaxLength",
+          arguments: [
+            {
+              name: "value",
+              required: true,
+              sensitive: false,
+              schema: { type: "string", maxLength: 2049 } as never
+            }
+          ]
+        },
+        setInvertedLength: {
+          name: "setInvertedLength",
+          arguments: [
+            {
+              name: "value",
+              required: true,
+              sensitive: false,
+              schema: { type: "string", minLength: 8, maxLength: 4 } as never
+            }
+          ]
         }
       })
     );
@@ -335,11 +404,14 @@ describe("AdvancedCommandCatalog", () => {
       maximum: 10
     });
     expect(result.omissions).toEqual([
+      { component: "main", capability: "custom", command: "setBadMaxLength", reason: "schema_invalid" },
+      { component: "main", capability: "custom", command: "setBadMinLength", reason: "schema_invalid" },
       { component: "main", capability: "custom", command: "setEnumControlString", reason: "schema_invalid" },
       { component: "main", capability: "custom", command: "setEnumLongString", reason: "schema_invalid" },
       { component: "main", capability: "custom", command: "setEnumNestedObject", reason: "schema_invalid" },
       { component: "main", capability: "custom", command: "setEnumObject", reason: "schema_invalid" },
       { component: "main", capability: "custom", command: "setEnumRawObject", reason: "schema_invalid" },
+      { component: "main", capability: "custom", command: "setInvertedLength", reason: "schema_invalid" },
       { component: "main", capability: "custom", command: "setInvertedRange", reason: "schema_invalid" },
       { component: "main", capability: "custom", command: "setItems", reason: "schema_invalid" },
       { component: "main", capability: "custom", command: "setMaximumNaN", reason: "schema_invalid" },

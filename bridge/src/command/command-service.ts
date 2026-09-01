@@ -1916,10 +1916,12 @@ function validateAdvancedDescriptorValue(
     throw new SafeCommandError("invalid_arguments");
   }
   if (schema.type === "string") {
+    const minLength = Math.max(1, schema.minLength ?? 1);
+    const maxLength = Math.min(2048, schema.maxLength ?? 2048);
     if (
       typeof value !== "string" ||
-      value.length < 1 ||
-      value.length > 2048 ||
+      value.length < minLength ||
+      value.length > maxLength ||
       /[\u0000-\u001f\u007f]/u.test(value)
     ) {
       throw new SafeCommandError("invalid_arguments");

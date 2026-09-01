@@ -728,7 +728,7 @@ def switch_name_overrides(
             label = None
         if label is None and _main_power_switch_state(device, state):
             label = "전원"
-        if label is None:
+        if label is None and not primary_switch_state(device, state):
             label = _readable_state_token(state.component_role or state.component, "component")
         if label is None and state.capability_role is not None:
             label = _readable_state_token(state.capability_role, "capability")
@@ -782,6 +782,7 @@ def secondary_switch_name_overrides(
         for state in device.states.values()
         if control_kind(device, state) == "switch"
         and state.attribute == "switch"
+        and not primary_switch_state(device, state)
         and (state.component_role or state.component).strip().lower() != "main"
     ]
     names: dict[tuple[str, str, str], str] = {}
@@ -837,7 +838,7 @@ def _main_power_switch_state(
         if not allow_identifier_component:
             return False
         component = (state.component_role or state.component).strip().lower()
-        if not component.startswith("identifier_"):
+        if component != "switch" and not component.startswith("identifier_"):
             return False
     control = toggle_control_for_state(device, state)
     label = _localized_web_control_label(control.label if control else None)

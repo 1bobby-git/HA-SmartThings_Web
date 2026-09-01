@@ -17,31 +17,37 @@ Scope: local patch release preparation only. GitHub release publication, HAOS de
 - Protocol contract version: `5`
 - Fix: service registration now uses a true async wrapper per handler, preserving the bound handler and Home Assistant response-support behavior.
 - Compatibility: `list_commands` still registers `supports_response=ONLY`; `execute_command`, `speak`, `reload_inventory`, `refresh_device`, and `reconnect_realtime` keep their existing handler behavior.
+- Follow-up fix: Advanced public command schema now preserves bounded integer `minLength`/`maxLength` keys, so Galaxy Home Mini `speechSynthesis.speak(phrase)` with live `maxLength: 1000` is no longer omitted as `schema_invalid`.
+- Follow-up fix: a single reversible switch state with semantic `componentRole=Switch` is treated as the generated primary switch, so stale generated IDs such as `switch.eohang_switch` migrate to `switch.eohang` while user-named/custom entity IDs are preserved.
+- Documentation: `docs/smartthings-web-services-ui-guide.md` documents Home Assistant Developer Tools -> Actions usage for command and maintenance services.
 
 ## RED / GREEN Evidence
 
 - RED: `python -m pytest custom_components/smartthings_web/tests/test_services.py -k awaitable -q -p pytest_asyncio.plugin` failed before the fix because every registered service handler was not `inspect.iscoroutinefunction(handler)`.
 - GREEN: the same focused test passed after the async wrapper fix: `1 passed, 15 deselected, 6 subtests passed`.
 - GREEN: full service tests passed after the fix: `16 passed, 13 subtests passed`.
+- RED: `npx vitest run bridge/tests/advanced/command-catalog.test.ts bridge/tests/state/device-store.test.ts bridge/tests/command/command-service.test.ts` failed before the schema fix because `maxLength` was outside the public schema contract and descriptor execution was rejected.
+- RED: `python custom_components/smartthings_web/tests/test_models.py` and `python custom_components/smartthings_web/tests/test_init.py` failed before the naming fix because a sole `componentRole=Switch` state was treated as secondary and `switch.eohang_switch` was not renamed.
+- GREEN: the focused schema/naming/docs/parity tests passed after the fix.
 
 ## Local Verification
 
-- Targeted Python: `python -m pytest custom_components/smartthings_web/tests/test_bridge_client.py custom_components/smartthings_web/tests/test_services.py -q -p pytest_asyncio.plugin` -> `44 passed, 52 subtests passed`.
-- Targeted JS/version/package: `npx vitest run bridge/tests/server/http-server.test.ts tests/addon-config.test.ts tests/protocol-version-contract.test.ts tests/addon-package.test.ts tests/smartthings-web-parity-audit.test.ts` -> `5 files, 103 tests passed`.
-- Full Python: `python -m pytest custom_components/smartthings_web/tests -q -p pytest_asyncio.plugin` -> `279 passed, 173 subtests passed`.
-- Full JS: `npx vitest run --maxWorkers=1` -> `72 files, 994 tests passed`.
+- Targeted JS schema/naming/docs/parity: `npx vitest run bridge/tests/advanced/command-catalog.test.ts bridge/tests/state/device-store.test.ts bridge/tests/command/command-service.test.ts tests/smartthings-web-parity-audit.test.ts tests/documentation-gate.test.ts` -> `5 files, 232 tests passed`.
+- Targeted Python parser/naming/migration: `python custom_components/smartthings_web/tests/test_bridge_client.py`; `python custom_components/smartthings_web/tests/test_models.py`; `python custom_components/smartthings_web/tests/test_init.py` -> `all passed`.
+- Full Python: `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest custom_components/smartthings_web/tests -q -p pytest_asyncio.plugin` -> `280 passed, 176 subtests passed`.
+- Full JS: `npx vitest run --maxWorkers=1` -> `72 files, 999 tests passed`.
 - TypeScript: `npm run typecheck` -> passed.
 - Build: `npm run build` -> passed.
 - Secret audit: `npm run audit:secrets` -> passed.
 - API-free audit: `npm run audit:api-free` -> passed.
 - Fixture audit: `npm run audit:fixtures` -> passed.
 - Add-on package: `npm run package:addon` -> passed.
-- Package-root parity smoke: from `dist-addon/smartthings_web_bridge`, `node --import tsx tools\smartthings-web-parity-audit.ts --inventory <safe fixture> --projection <safe fixture>` -> zero-failure report.
+- Package-root parity smoke: from `dist-addon/smartthings_web_bridge`, `node --import tsx tools/smartthings-web-parity-audit.ts --inventory <safe fixture> --projection <safe fixture>` with a `maxLength: 1000` speech descriptor -> `safeCommands=1`, `failures=[]`.
 
 ## Package Output
 
 - Package directory: `dist-addon/smartthings_web_bridge`
-- Package manifest SHA-256: `96e1171e7da7afac5e25f549104c8fa9ba0d69fab88b8aa200eb79063087c46b`
+- Package manifest SHA-256: `b8e8af5e4d1425f70565b282108507e11f6c88dbb2e537fcebaa93c46c82367d`
 
 ## Pending External Evidence
 
