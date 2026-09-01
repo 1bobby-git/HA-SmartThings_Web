@@ -1956,8 +1956,8 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         self.assertEqual(after.name, "내 전원")
         self.assertEqual(after.original_name, "전원")
 
-    def test_registry_migration_keeps_multi_channel_power_as_named_child(self) -> None:
-        """A main power channel is device-level only when it is the sole safe switch."""
+    def test_registry_migration_preserves_multi_channel_switch_entity_ids(self) -> None:
+        """Web label repair must not rename existing switch rows."""
         power = BridgeState(
             "main",
             "switch",
@@ -1978,7 +1978,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             "dev_outlet",
             "loc_001",
             None,
-            "Outlet Strip",
+            "멀티탭",
             "outlet_1",
             True,
             states={power.key: power, status.key: status},
@@ -2009,7 +2009,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             platform=DOMAIN,
             unique_id="dev_outlet_main_switch_switch",
             device_id="ha_device_outlet",
-            name=None,
+            name="내 멀티탭 전원",
             original_name=None,
             disabled_by=None,
             object_id_base=None,
@@ -2044,8 +2044,10 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(power_entry.entity_id, "switch.outlet_strip_전원")
-        self.assertEqual(status_entry.entity_id, "switch.outlet_strip_장치_상태")
+        self.assertEqual(power_entry.entity_id, "switch.meoltitaeb")
+        self.assertEqual(status_entry.entity_id, "switch.meoltitaeb_2")
+        self.assertEqual(power_entry.name, "내 멀티탭 전원")
+        self.assertIsNone(status_entry.name)
         self.assertEqual(power_entry.original_name, "전원")
         self.assertEqual(status_entry.original_name, "장치 상태")
 

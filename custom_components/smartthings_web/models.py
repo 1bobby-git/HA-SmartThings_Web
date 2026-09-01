@@ -775,14 +775,22 @@ def _deduplicated_switch_names(
 def secondary_switch_name_overrides(
     device: BridgeDevice,
 ) -> dict[tuple[str, str, str], str]:
-    """Return generated names for non-primary switch channels on one device."""
-    names = switch_name_overrides(device)
-    return {
-        state.key: label
+    """Return legacy structural names for non-main switch migration repair."""
+    secondary_switches = [
+        state
         for state in device.states.values()
-        if state.key in names and not primary_switch_state(device, state)
-        for label in (names[state.key],)
-    }
+        if control_kind(device, state) == "switch"
+        and state.attribute == "switch"
+        and (state.component_role or state.component).strip().lower() != "main"
+    ]
+    names: dict[tuple[str, str, str], str] = {}
+    for index, state in enumerate(sorted(secondary_switches, key=lambda item: item.key), 2):
+        role_name = _readable_state_token(
+            state.component_role or state.component,
+            "component",
+        )
+        names[state.key] = role_name if role_name is not None else f"스위치 {index}"
+    return names
 
 
 def _localized_web_control_label(value: str | None) -> str | None:

@@ -1148,7 +1148,7 @@ def _canonical_registry_suggested_object_id(
             state,
             inventory,
         )
-        switch_role = switch_name_overrides(device).get(state.key)
+        switch_role = secondary_switch_name_overrides(device).get(state.key)
         if (
             domain_value == Platform.SWITCH
             and getattr(state, "attribute", None) == "switch"
@@ -1265,7 +1265,7 @@ def _canonical_registry_object_id_base(
             ).partition(".")[2]
             if current_object_id in {primary_object_id, legacy_object_id}:
                 return None
-        switch_role = switch_name_overrides(device).get(state.key)
+        switch_role = secondary_switch_name_overrides(device).get(state.key)
         if (
             getattr(entity_entry, "domain", "") == Platform.SWITCH
             and getattr(state, "attribute", None) == "switch"
@@ -1495,7 +1495,7 @@ def _canonical_generated_state_entity_id(
         target = f"{domain}.{object_id}"
         return target if target != getattr(entity_entry, "entity_id", "") else None
     role = (
-        switch_name_overrides(device).get(state.key)
+        secondary_switch_name_overrides(device).get(state.key)
         if domain == Platform.SWITCH and getattr(state, "attribute", None) == "switch"
         else None
     )
