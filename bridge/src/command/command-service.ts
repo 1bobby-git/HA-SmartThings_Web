@@ -209,12 +209,29 @@ interface ComponentVectorState {
 }
 
 interface ComponentSwitchPlan {
-  transaction: ComponentTransactionExecutionInput;
-  rollbackTransaction: ComponentTransactionExecutionInput;
+  componentTransaction?: {
+    forward: ComponentTransactionExecutionInput;
+    rollback: ComponentTransactionExecutionInput;
+  };
+  webTransaction?: {
+    forward: DeviceActionTransactionInput;
+    rollback: DeviceActionTransactionInput;
+  };
   desiredVector: ComponentVectorState[];
   originalVector: ComponentVectorState[];
   verificationDeviceIds: string[];
 }
+
+interface DeviceActionTransactionInput {
+  actions: DeviceActionExecutionInput[];
+  rollbackActions: DeviceActionExecutionInput[];
+}
+
+type DeviceActionExecutionResult =
+  | void
+  | CommandTransportReceipt
+  | "location_native"
+  | "dom";
 
 interface ComponentSwitchEntry {
   deviceId: string;
@@ -323,7 +340,8 @@ export class SafeCommandService {
             effective,
             state,
             this.options.devices,
-            snapshot
+            snapshot,
+            locationNames
           );
     if (componentPlan) {
       if (componentVectorMatches(snapshot, componentPlan.desiredVector)) {
@@ -433,10 +451,24 @@ export class SafeCommandService {
     request: ResolvedDeviceRequest,
     plan: ComponentSwitchPlan
   ): Promise<SafeCommandResult> {
-    const execute = this.options.executor.executeComponentTransaction?.bind(
+    const componentExecute = this.options.executor.executeComponentTransaction?.bind(
       this.options.executor
     );
-    if (!execute) throw new SafeCommandError("command_execution_failed");
+    let executeForward: () => Promise<ReadonlyArray<DeviceActionExecutionResult>>;
+    let executeRollback: () => Promise<ReadonlyArray<DeviceActionExecutionResult>>;
+    const webTransaction = plan.webTransaction;
+    const componentTransaction = plan.componentTransaction;
+    if (webTransaction && !componentTransaction) {
+      executeForward = async () =>
+        await this.#executeDeviceActionTransaction(webTransaction.forward);
+      executeRollback = async () =>
+        await this.#executeDeviceActionTransaction(webTransaction.rollback);
+    } else if (componentTransaction && !webTransaction && componentExecute) {
+      executeForward = async () => await componentExecute(componentTransaction.forward);
+      executeRollback = async () => await componentExecute(componentTransaction.rollback);
+    } else {
+      throw new SafeCommandError("command_execution_failed");
+    }
     const timeoutMs =
       request.timeout === undefined ? this.options.timeoutMs : request.timeout * 1_000;
     const confirmation = waitForComponentVector({
@@ -445,8 +477,10 @@ export class SafeCommandService {
       afterSequence: this.options.devices.currentSequence(),
       resync: () => this.#resyncComponentPlan(plan)
     });
+    let executionTransport: SafeCommandResult["transport"] = "advanced";
     try {
-      await execute(plan.transaction);
+      const receipts = await executeForward();
+      if (webTransaction) executionTransport = transportForExecutions(receipts);
     } catch (error) {
       confirmation.cancel();
       throw commandError(error);
@@ -458,7 +492,7 @@ export class SafeCommandService {
         request.clientRequestId,
         evidence.sequence,
         "inventory_snapshot",
-        "advanced"
+        executionTransport
       );
     } catch (error) {
       if (
@@ -475,7 +509,7 @@ export class SafeCommandService {
       resync: () => this.#resyncComponentPlan(plan)
     });
     try {
-      await execute(plan.rollbackTransaction);
+      await executeRollback();
     } catch {
       rollbackConfirmation.cancel();
       throw new SafeCommandError("component_command_rollback_failed");
@@ -491,6 +525,41 @@ export class SafeCommandService {
       throw new SafeCommandError("component_command_rollback_failed");
     }
     throw new SafeCommandError("command_confirmation_timeout");
+  }
+
+  async #executeDeviceActionTransaction(
+    input: DeviceActionTransactionInput
+  ): Promise<DeviceActionExecutionResult[]> {
+    const execute = this.options.executor.executeDeviceAction?.bind(this.options.executor);
+    if (!execute) throw new Error("command_execution_failed");
+    const receipts: DeviceActionExecutionResult[] = [];
+    const completed: number[] = [];
+    for (const [index, action] of input.actions.entries()) {
+      try {
+        receipts.push(await execute(action));
+        completed.push(index);
+      } catch {
+        let rollbackFailed = false;
+        for (const completedIndex of completed.reverse()) {
+          const rollback = input.rollbackActions[completedIndex];
+          if (!rollback) {
+            rollbackFailed = true;
+            continue;
+          }
+          try {
+            await execute(rollback);
+          } catch {
+            rollbackFailed = true;
+          }
+        }
+        throw new Error(
+          rollbackFailed
+            ? "component_command_rollback_failed"
+            : "component_command_partial_failure"
+        );
+      }
+    }
+    return receipts;
   }
 
   async #resyncComponentPlan(
@@ -1163,7 +1232,8 @@ function buildComponentSwitchPlan(
   request: ResolvedDeviceRequest,
   requestedState: BridgeDeviceState,
   devices: DeviceStore,
-  snapshot: ReturnType<DeviceStore["snapshot"]>
+  snapshot: ReturnType<DeviceStore["snapshot"]>,
+  locationNames: Readonly<Record<string, string>>
 ): ComponentSwitchPlan | undefined {
   const desiredCommand = request.command;
   if (
@@ -1245,15 +1315,63 @@ function buildComponentSwitchPlan(
   const changed = safeEntries.filter((entry) =>
     !stateValuesEqual(entry.state.value, entry.desiredValue)
   );
+  const webAction = (
+    entry: (typeof safeEntries)[number],
+    command: "on" | "off"
+  ) => childWebAction(entry, command, snapshot, locationNames);
+  const childMapped = childDeviceIds.length > 0;
+  const webForward = childMapped
+    ? changed.map((entry) => webAction(entry, entry.desiredCommand))
+    : [];
+  const webForwardRollback = childMapped
+    ? changed.map((entry) => webAction(entry, entry.originalCommand))
+    : [];
+  const webRollback = childMapped
+    ? safeEntries.map((entry) => webAction(entry, entry.originalCommand))
+    : [];
+  if (
+    childMapped &&
+    [...webForward, ...webForwardRollback, ...webRollback].some(
+      (input) => input === undefined
+    )
+  ) {
+    throw new SafeCommandError("unsupported_command");
+  }
+  const webForwardActions = webForward.filter(isDeviceActionExecutionInput);
+  const webForwardRollbackActions = webForwardRollback.filter(
+    isDeviceActionExecutionInput
+  );
+  const webRollbackActions = webRollback.filter(isDeviceActionExecutionInput);
+  const executionPlan: Pick<
+    ComponentSwitchPlan,
+    "componentTransaction" | "webTransaction"
+  > = childMapped
+    ? {
+        webTransaction: {
+          forward: {
+            actions: webForwardActions,
+            rollbackActions: webForwardRollbackActions
+          },
+          rollback: {
+            actions: webRollbackActions,
+            rollbackActions: webRollbackActions
+          }
+        }
+      }
+    : {
+        componentTransaction: {
+          forward: {
+            actions: changed.map((entry) => action(entry, entry.desiredCommand)),
+            rollbackActions: changed.map((entry) => action(entry, entry.originalCommand))
+          },
+          rollback: {
+            actions: safeEntries.map((entry) => action(entry, entry.originalCommand)),
+            rollbackActions: safeEntries.map((entry) => action(entry, entry.originalCommand))
+          }
+        }
+      };
   return {
-    transaction: {
-      actions: changed.map((entry) => action(entry, entry.desiredCommand)),
-      rollbackActions: changed.map((entry) => action(entry, entry.originalCommand))
-    },
-    rollbackTransaction: {
-      actions: safeEntries.map((entry) => action(entry, entry.originalCommand)),
-      rollbackActions: safeEntries.map((entry) => action(entry, entry.originalCommand))
-    },
+    ...executionPlan,
     desiredVector: safeEntries.map((entry) => ({
       deviceId: entry.deviceId,
       component: entry.state.component,
@@ -1362,6 +1480,63 @@ function childMappedSwitchEntries(
   };
   visit(0, safeCandidates, []);
   return assignments.length === 1 ? assignments[0] : undefined;
+}
+
+function childWebAction(
+  entry: ComponentSwitchEntry,
+  command: "on" | "off",
+  snapshot: ReturnType<DeviceStore["snapshot"]>,
+  locationNames: Readonly<Record<string, string>>
+): DeviceActionExecutionInput | undefined {
+  const device = snapshot.devices.find((item) => item.id === entry.deviceId);
+  if (!device) return undefined;
+  const matches = (device.controls ?? []).filter(
+    (control) =>
+      control.kind === "toggle" &&
+      control.component === entry.state.component &&
+      control.capability === entry.state.capability &&
+      control.attribute === entry.state.attribute
+  );
+  const actionMatches = matches.filter((control) => control.id.startsWith("action:"));
+  const control = matches.length === 1
+    ? matches[0]
+    : actionMatches.length === 1
+      ? actionMatches[0]
+      : undefined;
+  if (
+    !control ||
+    dangerousControl(control) ||
+    !controlSupportsCommand(control, command, false)
+  ) {
+    return undefined;
+  }
+  const nativeCommand = observedCommandFor(control, command) ?? command;
+  const roomName = device.roomId
+    ? snapshot.rooms.find((room) => room.id === device.roomId)?.name
+    : undefined;
+  return {
+    action: command,
+    arguments: [],
+    attribute: entry.state.attribute,
+    capability: entry.state.capability,
+    capabilityVersion: entry.capabilityVersion,
+    command,
+    component: entry.state.component,
+    deviceId: entry.deviceId,
+    deviceName: device.name,
+    locationId: device.locationId,
+    locationNames,
+    ...(roomName ? { roomName } : {}),
+    controlId: control.id,
+    controlLabel: control.label,
+    nativeCommand
+  };
+}
+
+function isDeviceActionExecutionInput(
+  value: DeviceActionExecutionInput | undefined
+): value is DeviceActionExecutionInput {
+  return value !== undefined;
 }
 
 function switchCommandForValue(state: BridgeDeviceState): "on" | "off" | undefined {
@@ -2033,6 +2208,17 @@ function transportForExecution(
 ): SafeCommandResult["transport"] {
   if (result === "location_native" || result === "dom") return result;
   if (result && typeof result === "object") return result.transport;
+  return "smartthings_web_ui";
+}
+
+function transportForExecutions(
+  results: ReadonlyArray<DeviceActionExecutionResult>
+): SafeCommandResult["transport"] {
+  const transports = results.map(transportForExecution);
+  if (transports.includes("dom")) return "dom";
+  if (transports.includes("location_native")) return "location_native";
+  if (transports.includes("advanced")) return "advanced";
+  if (transports.includes("internal")) return "internal";
   return "smartthings_web_ui";
 }
 

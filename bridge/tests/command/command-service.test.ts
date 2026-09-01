@@ -4,6 +4,7 @@ import {
   SafeCommandService,
   type ComponentTransactionExecutionInput,
   type CommandResyncEvidence,
+  type DeviceActionExecutionInput,
   type SafeCommandExecutor
 } from "../../src/command/command-service.js";
 import type { SanitizedCaptureRecord } from "../../src/state/capture-store.js";
@@ -44,6 +45,11 @@ describe("SafeCommandService", () => {
   test("routes a composite parent aggregate through its matched child devices", async () => {
     const fixture = multiSwitchFixture(["main", "switch2", "switch3", "switch4"]);
     const mapped = configureChildMappedSwitch(fixture.store);
+    fixture.executeDeviceAction.mockResolvedValue({
+      state: "ACCEPTED",
+      transport: "location_native",
+      acceptedAtMs: Date.now()
+    });
     fixture.resync.mockImplementation(async (request) => {
       if (request?.deviceId === "dev_001") mapped.setParentStates("off");
       else if (request?.deviceId) mapped.setChildState(request.deviceId, "off");
@@ -55,23 +61,53 @@ describe("SafeCommandService", () => {
     ).resolves.toMatchObject({
       status: "confirmed",
       confirmation: "inventory_snapshot",
-      transport: "advanced"
+      transport: "location_native"
     });
 
-    const transaction = fixture.executeComponentTransaction.mock.calls[0]?.[0];
-    expect(transaction?.actions.map((action) => action.deviceId)).toEqual([
+    expect(fixture.executeDeviceAction.mock.calls.map(([action]) => action.deviceId)).toEqual([
       "dev_145",
       "dev_116",
       "dev_117"
     ]);
-    expect(transaction?.actions.every((action) => action.component === "identifier_main")).toBe(
+    expect(fixture.executeDeviceAction.mock.calls.every(([action]) => action.component === "identifier_main")).toBe(
       true
     );
-    expect(transaction?.actions.every((action) => action.command === "off")).toBe(true);
-    expect(fixture.executeDeviceAction).not.toHaveBeenCalled();
+    expect(fixture.executeDeviceAction.mock.calls.every(([action]) => action.command === "off")).toBe(true);
+    expect(fixture.executeComponentTransaction).not.toHaveBeenCalled();
     expect(
       fixture.resync.mock.calls.map(([request]) => request?.deviceId).sort()
     ).toEqual(["dev_001", "dev_116", "dev_117", "dev_145"]);
+  });
+
+  test("rolls back completed child Web commands after partial failure", async () => {
+    const fixture = multiSwitchFixture(["main", "switch2", "switch3", "switch4"]);
+    configureChildMappedSwitch(fixture.store);
+    fixture.executeDeviceAction.mockImplementation(async (action) => {
+      if (action.deviceId === "dev_116" && action.command === "off") {
+        throw new Error("child web failure");
+      }
+      return {
+        state: "ACCEPTED" as const,
+        transport: "location_native" as const,
+        acceptedAtMs: Date.now()
+      };
+    });
+
+    await expect(
+      fixture.service.execute(aggregateCommand("off", "request_child_web_rollback"))
+    ).rejects.toMatchObject({ code: "component_command_partial_failure" });
+    expect(
+      fixture.executeDeviceAction.mock.calls.map(([action]) => [
+        action.deviceId,
+        action.command
+      ])
+    ).toEqual([
+      ["dev_145", "off"],
+      ["dev_116", "off"],
+      ["dev_145", "on"]
+    ]);
+    expect(fixture.executeComponentTransaction).not.toHaveBeenCalled();
+    expect(fixture.resync).not.toHaveBeenCalled();
   });
 
   test.each([
@@ -2910,7 +2946,9 @@ function multiSwitchFixture(
     );
   };
   setSwitchStates("on", "ADVANCED_SNAPSHOT");
-  const executeDeviceAction = vi.fn(async () => {
+  const executeDeviceAction = vi.fn(async (
+    _input: DeviceActionExecutionInput
+  ): Promise<Awaited<ReturnType<NonNullable<SafeCommandExecutor["executeDeviceAction"]>>>> => {
     store.observe(
       received(
         deviceEventFrame(
@@ -2924,6 +2962,7 @@ function multiSwitchFixture(
         )
       )
     );
+    return undefined;
   });
   const executeComponentTransaction = vi.fn(async (input: ComponentTransactionExecutionInput) =>
     advancedReceipts(input.actions.length)
@@ -3085,6 +3124,38 @@ function configureChildMappedSwitch(
     observe([childRow(mapping, value, nextBase())], source);
   };
   setStates("on", "ADVANCED_SNAPSHOT");
+  for (const [index, { childId }] of mappings.entries()) {
+    const ack = 4700 + index;
+    store.observe(sent(`42${ack}["find","api/device/status",{}]`));
+    store.observe(
+      received(
+        `43${ack}[null,[${JSON.stringify({
+          deviceId: childId,
+          locationId: "loc_001",
+          actions: [
+            {
+              deviceId: childId,
+              locationId: "loc_001",
+              componentId: "identifier_main",
+              capabilityId: "identifier_switch",
+              attributeName: "switch",
+              value: "off",
+              command: "on"
+            },
+            {
+              deviceId: childId,
+              locationId: "loc_001",
+              componentId: "identifier_main",
+              capabilityId: "identifier_switch",
+              attributeName: "switch",
+              value: "on",
+              command: "off"
+            }
+          ]
+        })}]]`
+      )
+    );
+  }
   return { setStates, setParentStates, setChildState };
 }
 
