@@ -145,7 +145,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(_subscribe_entity_registry_migration(hass, entry))
-    entry.async_create_background_task(hass, _event_loop(hass, entry), "smartthings_web_events")
+    entry.async_create_background_task(hass, _event_loop(entry, hass), "smartthings_web_events")
     entry.async_create_background_task(
         hass,
         _repair_loop(hass, entry, client),
@@ -298,8 +298,8 @@ def _entity_registry_topology_fingerprint(
 
 
 async def _event_loop(
-    hass: HomeAssistant,
     entry: SmartThingsWebConfigEntry,
+    hass: HomeAssistant | None = None,
 ) -> None:
     """Maintain the Bridge push stream."""
     runtime = entry.runtime_data
@@ -311,6 +311,9 @@ async def _event_loop(
                 await runtime.handle_event(event)
                 reconnect_delay = _EVENT_RECONNECT_MIN_DELAY
         except BridgeAuthError:
+            if hass is None:
+                await asyncio.sleep(5)
+                continue
             entry.async_start_reauth(hass)
             return
         except BridgeClientError:

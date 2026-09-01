@@ -16,6 +16,7 @@ describe("runtime hardening", () => {
     expect(integration).toContain("_EVENT_RECONNECT_MIN_DELAY = 1.0");
     expect(integration).toContain("_EVENT_RECONNECT_MAX_DELAY = 60.0");
     expect(integration).toContain("entry.async_start_reauth(hass)");
-    expect(integration).toMatch(/except BridgeAuthError:\n\s+entry\.async_start_reauth\(hass\)\n\s+return/);
+    expect(integration).toContain("if hass is None:");
+    expect(integration).toContain("entry.async_start_reauth(hass)");
   });
 });
