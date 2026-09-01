@@ -248,13 +248,21 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         });
         cameraImages.observeInventory(devices.snapshot());
         log.info("command_diag:advanced_status_refreshed");
-        return { authoritativeSnapshot: false, startedAtMs };
+        return {
+          source: "advanced_device_status",
+          authoritativeSnapshot: false,
+          startedAtMs
+        };
       }
       await reconciliation.request("command_status");
       const reconciliationStatus = reconciliation.snapshot();
       if (reconciliationStatus.deviceCount === 0) throw new Error("advanced_snapshot_unavailable");
       log.info(`command_diag:advanced_snapshot_refreshed:${reconciliationStatus.pageCount}`);
-      return { authoritativeSnapshot: true, startedAtMs };
+      return {
+        source: "advanced_inventory",
+        authoritativeSnapshot: true,
+        startedAtMs
+      };
     })();
   };
   const legacyCommandExecutor = new SmartThingsWebUiCommandExecutor(

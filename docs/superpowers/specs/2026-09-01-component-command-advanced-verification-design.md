@@ -53,8 +53,8 @@ Advanced health의 실제 `lastUpdatedDate`를 포함해 유효 timestamp가 없
 2. capability definition에서 해당 component의 `switch.on/off` 지원을 확인한다.
 3. main을 포함한 실행 가능한 switch component를 안정된 component 순서로 직렬 실행한다.
 4. 각 POST의 `ACCEPTED`는 접수로만 기록한다.
-5. 모든 POST 후 bounded confirmation window에서 Advanced `/status`를 조기 조회하고, 아직 수렴하지 않았으면 timeout 직전 최종 조회를 한 번 더 수행한다.
-6. 성공한 Advanced status 조회에서 각 component의 `switch` 값이 요청 값과 일치해야 성공한다. Location event만으로는 component transaction을 확정하지 않는다.
+5. 모든 POST 후 bounded confirmation window에서 Advanced `/status`를 조기 조회하고, 아직 수렴하지 않았거나 조기 조회가 멈췄으면 독립된 최종 조회를 timeout 전에 수행한다.
+6. `advanced_device_status` source가 명시된 성공한 Advanced status 조회에서 각 component의 `switch` 값이 요청 값과 일치해야 성공한다. Location event나 전체 inventory evidence만으로는 component transaction을 확정하지 않는다.
 7. Location event가 도착하면 같은 component 상태를 먼저 적용하며 Advanced status와 모순되면 더 최신 timestamp가 이긴다.
 
 `off`는 대상 component 전체를 `off`로 만든다. `on`도 대표 switch 의미에 맞춰 대상 component 전체를 `on`으로 만든다.

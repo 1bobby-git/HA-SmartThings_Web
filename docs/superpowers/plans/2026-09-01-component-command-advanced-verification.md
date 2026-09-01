@@ -356,7 +356,7 @@ Sort states by role: `main`, numeric `switchN`, then component token. Build targ
 
 - [x] **Step 4: Execute, resync, verify, and rollback**
 
-Before normal single-state waiting, use the component plan. Execute the transaction, start the bounded confirmation window, call an early `resync({ deviceId })`, and if the vector has not converged perform one final resync at timeout before rollback. Verify every component state from `devices.snapshot()` only after a successful Advanced status read.
+Before normal single-state waiting, use the component plan. Execute the transaction, start the bounded confirmation window, call an early `resync({ deviceId })`, and if the vector has not converged or the early read hangs perform one independent final resync before timeout and rollback. Verify every component state from `devices.snapshot()` only when `CommandResyncEvidence.source` is `advanced_device_status`.
 
 If every component matches, return:
 

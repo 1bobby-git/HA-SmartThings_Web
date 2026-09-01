@@ -132,6 +132,7 @@ export interface SafeCommandExecutor {
 }
 
 export interface CommandResyncEvidence {
+  source: "advanced_device_status" | "advanced_inventory";
   authoritativeSnapshot: boolean;
   startedAtMs: number;
 }
@@ -862,6 +863,7 @@ function waitForComponentVector(options: {
     matches: () => false,
     acceptsResyncEvidence: (evidence, minStartedAtMs) =>
       evidence !== undefined &&
+      evidence.source === "advanced_device_status" &&
       (minStartedAtMs === undefined || evidence.startedAtMs >= minStartedAtMs) &&
       matchesSnapshot(),
     forceFinalResync: true
@@ -887,6 +889,7 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
   let unsubscribe: () => void = () => undefined;
   let timer: NodeJS.Timeout | undefined;
   let resyncTimer: NodeJS.Timeout | undefined;
+  let finalResyncTimer: NodeJS.Timeout | undefined;
   let stabilityTimer: NodeJS.Timeout | undefined;
   let resyncPromise: Promise<void> | undefined;
   let lastResyncStartedAfterSequence: number | undefined;
@@ -898,6 +901,7 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
     settled = true;
     if (timer) clearTimeout(timer);
     if (resyncTimer) clearTimeout(resyncTimer);
+    if (finalResyncTimer) clearTimeout(finalResyncTimer);
     if (stabilityTimer) clearTimeout(stabilityTimer);
     unsubscribe();
   };
@@ -973,17 +977,16 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
     minStartedAtMs?: number,
     force = false
   ): Promise<void> => {
-    if (!resyncPromise || force) {
-      const previous = force ? resyncPromise : undefined;
-      const next = (async () => {
-        if (previous) await previous;
-        if (settled) return;
-        lastResyncStartedAfterSequence = options.devices.currentSequence();
-        const evidence = await options.resync().catch(() => undefined);
-        if (settleFromResyncEvidence(evidence, minStartedAtMs)) return;
-        await settleFromSnapshot(lastResyncStartedAfterSequence);
-      })();
-      resyncPromise = next;
+    const performResync = async (): Promise<void> => {
+      if (settled) return;
+      lastResyncStartedAfterSequence = options.devices.currentSequence();
+      const evidence = await options.resync().catch(() => undefined);
+      if (settleFromResyncEvidence(evidence, minStartedAtMs)) return;
+      await settleFromSnapshot(lastResyncStartedAfterSequence);
+    };
+    if (force) return performResync();
+    if (!resyncPromise) {
+      resyncPromise = performResync();
     }
     return resyncPromise;
   };
@@ -999,6 +1002,27 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
         Number.isFinite(resyncAfterMs) &&
         resyncAfterMs >= 0 &&
         resyncAfterMs < timeoutMs;
+      if (options.forceFinalResync === true) {
+        const finalLeadMs = Math.min(5_000, Math.max(1, Math.floor(timeoutMs / 3)));
+        const finalResyncAfterMs = Math.max(0, timeoutMs - finalLeadMs);
+        if (hasEarlyResync && resyncAfterMs < finalResyncAfterMs) {
+          resyncTimer = setTimeout(() => {
+            resyncTimer = undefined;
+            void resyncAndCheck(minResyncStartedAtMs);
+          }, resyncAfterMs);
+        }
+        finalResyncTimer = setTimeout(() => {
+          finalResyncTimer = undefined;
+          void resyncAndCheck(minResyncStartedAtMs, true);
+        }, finalResyncAfterMs);
+        timer = setTimeout(() => {
+          timer = undefined;
+          if (settled) return;
+          cleanup();
+          rejectResult(new SafeCommandError("command_confirmation_timeout"));
+        }, timeoutMs);
+        return;
+      }
       if (hasEarlyResync) {
         resyncTimer = setTimeout(() => {
           resyncTimer = undefined;
@@ -1008,11 +1032,7 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
       timer = setTimeout(() => {
         timer = undefined;
         const finalCheck = hasEarlyResync
-          ? options.forceFinalResync === true
-            ? resyncAndCheck(minResyncStartedAtMs, true).then(() =>
-                settleFromSnapshot(lastResyncStartedAfterSequence ?? options.afterSequence)
-              )
-            : settleFromSnapshot(lastResyncStartedAfterSequence ?? options.afterSequence)
+          ? settleFromSnapshot(lastResyncStartedAfterSequence ?? options.afterSequence)
           : resyncAndCheck(minResyncStartedAtMs).then(() =>
               settleFromSnapshot(lastResyncStartedAfterSequence ?? options.afterSequence)
             );

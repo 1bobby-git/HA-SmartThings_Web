@@ -15,7 +15,7 @@ describe("SafeCommandService", () => {
     const fixture = multiSwitchFixture(["main", "switch2", "switch3", "switch4"]);
     fixture.resync.mockImplementationOnce(async () => {
       fixture.setSwitchStates("off");
-      return { authoritativeSnapshot: false, startedAtMs: Date.now() };
+      return deviceStatusEvidence();
     });
 
     const result = await fixture.service.execute(aggregateCommand("off", "request_multi_switch_off"));
@@ -45,12 +45,13 @@ describe("SafeCommandService", () => {
     const fixture = multiSwitchFixture(["main", "switch2"]);
     fixture.resync
       .mockImplementationOnce(async () => ({
+        source: "advanced_device_status",
         authoritativeSnapshot: false,
         startedAtMs: Date.now()
       }))
       .mockImplementationOnce(async () => {
         fixture.setSwitchStates("off");
-        return { authoritativeSnapshot: false, startedAtMs: Date.now() };
+        return deviceStatusEvidence();
       });
 
     await expect(
@@ -64,6 +65,21 @@ describe("SafeCommandService", () => {
     expect(fixture.executeComponentTransaction).toHaveBeenCalledOnce();
   });
 
+  test("requires device-status source evidence for component confirmation", async () => {
+    const fixture = multiSwitchFixture(["main", "switch2"]);
+    fixture.resync
+      .mockImplementationOnce(async () => {
+        fixture.setSwitchStates("off");
+        return inventoryEvidence();
+      })
+      .mockImplementationOnce(async () => deviceStatusEvidence());
+
+    await expect(
+      fixture.service.execute(aggregateCommand("off", "request_status_source"))
+    ).resolves.toMatchObject({ status: "confirmed", transport: "advanced" });
+    expect(fixture.resync).toHaveBeenCalledTimes(2);
+  });
+
   test("does not confirm a matching event vector when Advanced status reads fail", async () => {
     const fixture = multiSwitchFixture(["main", "switch2"]);
     fixture.executeComponentTransaction.mockImplementationOnce(async (input) => {
@@ -75,7 +91,7 @@ describe("SafeCommandService", () => {
       .mockRejectedValueOnce(new Error("private status failure"))
       .mockImplementationOnce(async () => {
         fixture.setSwitchStates("on");
-        return { authoritativeSnapshot: false, startedAtMs: Date.now() };
+        return deviceStatusEvidence();
       });
 
     await expect(
@@ -84,16 +100,39 @@ describe("SafeCommandService", () => {
     expect(fixture.executeComponentTransaction).toHaveBeenCalledTimes(2);
   });
 
+  test("bounds a hanging early Advanced status refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = multiSwitchFixture(["main", "switch2"]);
+      fixture.resync.mockImplementationOnce(
+        async () => await new Promise<CommandResyncEvidence>(() => undefined)
+      );
+
+      const result = fixture.service.execute(
+        aggregateCommand("off", "request_hanging_component_status")
+      );
+      const rejection = expect(result).rejects.toMatchObject({
+        code: "command_confirmation_timeout"
+      });
+      await vi.advanceTimersByTimeAsync(21);
+
+      await rejection;
+      expect(fixture.executeComponentTransaction).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("rolls back when Advanced status does not confirm every component", async () => {
     const fixture = multiSwitchFixture(["main", "switch2", "switch3", "switch4"]);
     fixture.resync
       .mockImplementationOnce(async () => {
         fixture.setSwitchStates({ main: "off", switch2: "off", switch3: "off", switch4: "on" });
-        return { authoritativeSnapshot: false, startedAtMs: Date.now() };
+        return deviceStatusEvidence();
       })
       .mockImplementationOnce(async () => {
         fixture.setSwitchStates("on");
-        return { authoritativeSnapshot: false, startedAtMs: Date.now() };
+        return deviceStatusEvidence();
       });
 
     await expect(
@@ -116,11 +155,11 @@ describe("SafeCommandService", () => {
     fixture.resync
       .mockImplementationOnce(async () => {
         fixture.setSwitchStates({ main: "off", switch2: "off", switch3: "off", switch4: "on" });
-        return { authoritativeSnapshot: false, startedAtMs: Date.now() };
+        return deviceStatusEvidence();
       })
       .mockImplementationOnce(async () => {
         fixture.setSwitchStates({ main: "on", switch2: "on", switch3: "off", switch4: "on" });
-        return { authoritativeSnapshot: false, startedAtMs: Date.now() };
+        return deviceStatusEvidence();
       });
 
     await expect(
@@ -134,7 +173,7 @@ describe("SafeCommandService", () => {
       .mockRejectedValueOnce(new Error("private Advanced status detail"))
       .mockImplementationOnce(async () => {
         fixture.setSwitchStates("on");
-        return { authoritativeSnapshot: false, startedAtMs: Date.now() };
+        return deviceStatusEvidence();
       });
 
     await expect(
@@ -1635,7 +1674,7 @@ describe("SafeCommandService", () => {
   test("does not run an Advanced resync merely to confirm stateless refresh", async () => {
     const store = readyDeviceStore();
     observeRefreshControl(store);
-    const resync = vi.fn(async () => ({ authoritativeSnapshot: true, startedAtMs: Date.now() }));
+    const resync = vi.fn(async () => inventoryEvidence());
     const service = new SafeCommandService({
       devices: store,
       status: connectedStatus(),
@@ -1656,6 +1695,7 @@ describe("SafeCommandService", () => {
     const store = readyDeviceStore();
     observeRefreshControl(store);
     const resync = vi.fn(async () => ({
+      source: "advanced_inventory" as const,
       authoritativeSnapshot: true,
       startedAtMs: 1_000
     }));
@@ -1686,7 +1726,7 @@ describe("SafeCommandService", () => {
         commands: ["press"]
       })
     ]);
-    const resync = vi.fn(async () => ({ authoritativeSnapshot: true, startedAtMs: Date.now() }));
+    const resync = vi.fn(async () => inventoryEvidence());
     const service = new SafeCommandService({
       devices: store,
       status: connectedStatus(),
@@ -1852,7 +1892,7 @@ describe("SafeCommandService", () => {
     }
   ])("does not let %s use the stateless refresh snapshot policy", async ({ setup, request }) => {
     const store = setup(readyDeviceStore());
-    const resync = vi.fn(async () => ({ authoritativeSnapshot: true, startedAtMs: Date.now() }));
+    const resync = vi.fn(async () => inventoryEvidence());
     const service = new SafeCommandService({
       devices: store,
       status: connectedStatus(),
@@ -1869,7 +1909,7 @@ describe("SafeCommandService", () => {
   });
 
   test.each([
-    ["unavailable", async () => ({ authoritativeSnapshot: false, startedAtMs: Date.now() })],
+    ["unavailable", async () => deviceStatusEvidence()],
     ["failed", async () => {
       throw new Error("advanced_snapshot_unavailable");
     }]
@@ -1895,7 +1935,7 @@ describe("SafeCommandService", () => {
   test("does not resync or confirm refresh when browser execution fails", async () => {
     const store = readyDeviceStore();
     observeRefreshControl(store);
-    const resync = vi.fn(async () => ({ authoritativeSnapshot: true, startedAtMs: Date.now() }));
+    const resync = vi.fn(async () => inventoryEvidence());
     const service = new SafeCommandService({
       devices: store,
       status: connectedStatus(),
@@ -1975,7 +2015,7 @@ describe("SafeCommandService", () => {
     const executeScene = vi.fn(async () => {
       sceneCompletedAtMs = Date.now();
     });
-    const resync = vi.fn(async () => ({ authoritativeSnapshot: true, startedAtMs: sceneCompletedAtMs }));
+    const resync = vi.fn(async () => inventoryEvidence(sceneCompletedAtMs));
     const service = new SafeCommandService({
       devices: store,
       status: connectedStatus(),
@@ -2026,7 +2066,7 @@ describe("SafeCommandService", () => {
           '435[null,[{"deviceId":"dev_001","locationId":"loc_001","componentId":"main","capabilityId":"identifier_switch","attributeName":"switch","value":"on","unit":null,"timestamp":"2026-08-25T00:00:02Z"}]]'
         )
       );
-      return { authoritativeSnapshot: true, startedAtMs: 1_000 };
+      return inventoryEvidence(1_000);
     });
     const service = new SafeCommandService({
       devices: store,
@@ -2082,7 +2122,7 @@ describe("SafeCommandService", () => {
     ]);
     const resync = vi.fn(async (): Promise<CommandResyncEvidence | undefined> => {
       store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:02Z")));
-      return { authoritativeSnapshot: true, startedAtMs: 1_000 };
+      return inventoryEvidence(1_000);
     });
     const service = new SafeCommandService({
       devices: store,
@@ -2189,7 +2229,7 @@ describe("SafeCommandService", () => {
       setTimeout(() => {
         store.observe(received(deviceEventFrame("on", "2026-08-25T00:00:03Z")));
       }, 5);
-      return { authoritativeSnapshot: true, startedAtMs: 2_000 };
+      return inventoryEvidence(2_000);
     });
     const service = new SafeCommandService({
       devices: store,
@@ -2240,7 +2280,7 @@ describe("SafeCommandService", () => {
         }
       }
     ]);
-    const resync = vi.fn(async () => ({ authoritativeSnapshot: true, startedAtMs: Date.now() }));
+    const resync = vi.fn(async () => inventoryEvidence());
     const service = new SafeCommandService({
       devices: store,
       status: connectedStatus(),
@@ -2695,6 +2735,22 @@ function advancedReceipts(count: number) {
   }));
 }
 
+function deviceStatusEvidence(startedAtMs = Date.now()): CommandResyncEvidence {
+  return {
+    source: "advanced_device_status",
+    authoritativeSnapshot: false,
+    startedAtMs
+  };
+}
+
+function inventoryEvidence(startedAtMs = Date.now()): CommandResyncEvidence {
+  return {
+    source: "advanced_inventory",
+    authoritativeSnapshot: true,
+    startedAtMs
+  };
+}
+
 function refreshCommand(clientRequestId: string) {
   return {
     targetType: "device",
@@ -2820,6 +2876,7 @@ function multiSwitchFixture(
     advancedReceipts(input.actions.length)
   );
   const resync = vi.fn(async (_request?: { deviceId?: string }): Promise<CommandResyncEvidence> => ({
+    source: "advanced_device_status",
     authoritativeSnapshot: false,
     startedAtMs: Date.now()
   }));

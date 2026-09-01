@@ -9,7 +9,7 @@
 
 ## Advanced 주 데이터·명령 구조
 
-버전 0.1.148은 로그인된 동일 Chromium context에서 SmartThings Advanced 내부 경로를 장치·location·room·상태·health·capability의 주 데이터 소스로 사용합니다. 200개를 넘는 장치는 next link 또는 `isNext/max/page` 규칙으로 끝까지 읽고 `deviceId`로 병합합니다. 단일 component 장치는 관찰된 `/location` native control을 유지하고, 대표 switch 뒤에 정확한 Advanced command schema가 있는 switch component가 둘 이상이면 component별 명령을 직렬 실행합니다. bounded confirmation window의 조기·최종 Advanced `/status` 조회 중 전체 상태 벡터가 일치할 때만 성공하며, 부분 실패나 최종 확인 실패는 원래 상태 벡터로 되돌립니다. 실행할 수 없는 secondary switch와 중복 Refresh는 Home Assistant 제어 엔티티로 노출하지 않습니다.
+버전 0.1.148은 로그인된 동일 Chromium context에서 SmartThings Advanced 내부 경로를 장치·location·room·상태·health·capability의 주 데이터 소스로 사용합니다. 200개를 넘는 장치는 next link 또는 `isNext/max/page` 규칙으로 끝까지 읽고 `deviceId`로 병합합니다. 단일 component 장치는 관찰된 `/location` native control을 유지하고, 대표 switch 뒤에 정확한 Advanced command schema가 있는 switch component가 둘 이상이면 component별 명령을 직렬 실행합니다. bounded confirmation window 안의 독립된 조기·최종 Advanced `/status` 조회 중 `advanced_device_status` 증거와 전체 상태 벡터가 함께 일치할 때만 성공하며, 부분 실패나 최종 확인 실패는 원래 상태 벡터로 되돌립니다. 실행할 수 없는 secondary switch와 중복 Refresh는 Home Assistant 제어 엔티티로 노출하지 않습니다.
 
 `lastUpdatedDate`를 포함한 timestamp가 없는 Advanced `OFFLINE`은 장치를 unavailable로 만들지 않습니다. 더 새로운 Location 상태 이벤트나 성공한 Advanced `/status` 조회는 online 증거가 되고, 그보다 새로운 timestamp가 있는 명시적 health `OFFLINE`은 계속 우선합니다.
 
