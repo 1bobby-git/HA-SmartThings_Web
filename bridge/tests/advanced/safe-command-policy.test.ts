@@ -134,6 +134,27 @@ describe("safeAdvancedCommandReason", () => {
     ).toBe("dangerous_command");
   });
 
+  test("omits every alarm and siren capability command while preserving ordinary mute controls", () => {
+    for (const capability of ["alarm", "siren"]) {
+      for (const command of ["both", "off", "siren", "strobe"]) {
+        expect(
+          safeAdvancedCommandReason(descriptor({ capability, command, label: "Alert output" }))
+        ).toBe("dangerous_command");
+      }
+    }
+
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "audioMute", command: "mute", label: "Audio mute" })
+      )
+    ).toBeUndefined();
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "musicPlayback", command: "mute", label: "Music mute" })
+      )
+    ).toBeUndefined();
+  });
+
   test("omits low-level OCF post and network audio topology commands as dangerous", () => {
     expect(
       safeAdvancedCommandReason(

@@ -7,6 +7,7 @@ type SafeAdvancedCommandReason = Extract<
 
 const LOCK_ACCESS_PATTERN = /(?:\b(?:un)?lock(?:ed|ing)?\b|\baccess\s*control\b|잠금|잠금해제|출입|현관문)/u;
 const ENTRY_DEVICE_PATTERN = /(?:\bdoor\b|\bgarage\b|\bvalve\b|현관문|차고문|밸브|문\s*(?:열기|닫기|잠금|잠금해제))/u;
+const ALARM_SIREN_FAMILY_PATTERN = /(?:\balarm\b|\bsiren\b|알람|사이렌)/u;
 const SECURITY_FAMILY_PATTERN = /(?:\bsecurity\b|\balarm\b|\bsiren\b|보안|경비|알람|사이렌)/u;
 const SECURITY_COMMAND_PATTERN = /(?:\barm\s*(?:away|stay)?\b|\bdisarm\b|\bpanic\b|\bon\b|무장|해제|비상)/u;
 const OCF_POST_PATTERN = /(?:\bocf\b.*\bpost(?:\s*command)?\b|\bpost(?:\s*command)?\b.*\bocf\b|\bpostcommand\b.*\bocf\b|\bocf\b.*\bpostcommand\b)/u;
@@ -22,10 +23,15 @@ export function safeAdvancedCommandReason(
   }
 
   const normalized = normalizeDescriptor(descriptor);
+  const capabilityRole = [descriptor.componentRole, descriptor.capability]
+    .filter((value): value is string => typeof value === "string")
+    .map(normalizeTerm)
+    .join(" ");
 
   if (
     LOCK_ACCESS_PATTERN.test(normalized) ||
     ENTRY_DEVICE_PATTERN.test(normalized) ||
+    ALARM_SIREN_FAMILY_PATTERN.test(capabilityRole) ||
     (SECURITY_FAMILY_PATTERN.test(normalized) && SECURITY_COMMAND_PATTERN.test(normalized)) ||
     OCF_POST_PATTERN.test(normalized) ||
     ((NETWORK_AUDIO_PATTERN.test(normalized) || AUDIO_GROUP_PATTERN.test(normalized)) &&
