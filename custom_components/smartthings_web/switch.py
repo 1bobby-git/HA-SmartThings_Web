@@ -17,9 +17,10 @@ from .models import (
     SmartThingsWebRuntime,
     control_supports_command,
     control_kind,
+    primary_switch_state,
     safe_observed_control,
     safe_generic_toggle_control,
-    secondary_switch_name_overrides,
+    switch_name_overrides,
     toggle_control_for_state,
 )
 
@@ -38,7 +39,7 @@ async def async_setup_entry(
         for device in runtime.inventory.devices.values():
             if device.location_id != runtime.location_id:
                 continue
-            name_overrides = secondary_switch_name_overrides(device)
+            name_overrides = switch_name_overrides(device)
             for state in device.states.values():
                 unique_id = "_".join((device.device_id, *state.key))
                 control = toggle_control_for_state(device, state)
@@ -90,8 +91,11 @@ class SmartThingsWebSwitch(SmartThingsWebEntity, SwitchEntity):
         name_override: str | None = None,
     ) -> None:
         self.control = control
+        is_primary_control = primary_switch_state(device, state)
         name = (
-            name_override
+            None
+            if is_primary_control
+            else name_override
             if name_override is not None
             else control.label
             if control is not None and state.attribute != "switch"
@@ -102,7 +106,7 @@ class SmartThingsWebSwitch(SmartThingsWebEntity, SwitchEntity):
             device,
             state,
             name,
-            primary_control=state.attribute == "switch" and name_override is None,
+            primary_control=is_primary_control,
         )
 
     @property

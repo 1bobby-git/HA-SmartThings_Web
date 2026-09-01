@@ -857,6 +857,213 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
 
         self.assertEqual(control_kind(device, switch), "light")
 
+    def test_same_component_switches_use_distinct_web_labels(self) -> None:
+        current = inventory(10, 20, "2026-09-01T00:00:00Z")
+        device = current.devices["dev_001"]
+        power = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        status = BridgeState(
+            "main",
+            "yjswitchstatus",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        device.name = "멀티탭"
+        device.device_type = "outlet_1"
+        device.states = {power.key: power, status.key: status}
+        device.controls = {
+            "power": BridgeControl(
+                "power",
+                "toggle",
+                "Power",
+                component=power.component,
+                capability=power.capability,
+                attribute=power.attribute,
+                commands=("on", "off"),
+            ),
+            "status": BridgeControl(
+                "status",
+                "toggle",
+                "yjswitchstatus",
+                component=status.component,
+                capability=status.capability,
+                attribute=status.attribute,
+                commands=("on", "off"),
+            ),
+        }
+
+        self.assertEqual(
+            models_module.switch_name_overrides(device),
+            {
+                power.key: "전원",
+                status.key: "장치 상태",
+            },
+        )
+
+    def test_main_switch_capability_supplies_power_label_when_control_label_blank(self) -> None:
+        current = inventory(10, 20, "2026-09-01T00:00:00Z")
+        device = current.devices["dev_001"]
+        power = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        status = BridgeState(
+            "main",
+            "yjswitchstatus",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        device.states = {power.key: power, status.key: status}
+        device.controls = {
+            "power": BridgeControl(
+                "power",
+                "toggle",
+                "",
+                component=power.component,
+                capability=power.capability,
+                attribute=power.attribute,
+                commands=("on", "off"),
+            ),
+            "status": BridgeControl(
+                "status",
+                "toggle",
+                "yjswitchstatus",
+                component=status.component,
+                capability=status.capability,
+                attribute=status.attribute,
+                commands=("on", "off"),
+            ),
+        }
+
+        self.assertEqual(
+            models_module.switch_name_overrides(device),
+            {
+                power.key: "전원",
+                status.key: "장치 상태",
+            },
+        )
+
+    def test_switch_name_overrides_keep_safe_unknown_web_label(self) -> None:
+        current = inventory(10, 20, "2026-09-01T00:00:00Z")
+        device = current.devices["dev_001"]
+        heater = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        device.states = {heater.key: heater}
+        device.controls = {
+            "heater": BridgeControl(
+                "heater",
+                "toggle",
+                "Coffee Heater",
+                component=heater.component,
+                capability=heater.capability,
+                attribute=heater.attribute,
+                commands=("on", "off"),
+            )
+        }
+
+        self.assertEqual(
+            models_module.switch_name_overrides(device),
+            {heater.key: "Coffee Heater"},
+        )
+
+    def test_switch_name_overrides_reject_unsafe_web_label_and_fallback(self) -> None:
+        current = inventory(10, 20, "2026-09-01T00:00:00Z")
+        device = current.devices["dev_001"]
+        state = BridgeState(
+            "heater",
+            "customAux",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        device.states = {state.key: state}
+        device.controls = {
+            "unsafe": BridgeControl(
+                "unsafe",
+                "toggle",
+                "Coffee\nHeater",
+                component=state.component,
+                capability=state.capability,
+                attribute=state.attribute,
+                commands=("on", "off"),
+            )
+        }
+
+        self.assertEqual(
+            models_module.switch_name_overrides(device),
+            {state.key: "Heater"},
+        )
+
+    def test_switch_name_overrides_disambiguate_duplicate_generated_labels(self) -> None:
+        current = inventory(10, 20, "2026-09-01T00:00:00Z")
+        device = current.devices["dev_001"]
+        left = BridgeState(
+            "outlet",
+            "custom.leftSwitch",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        right = BridgeState(
+            "outlet",
+            "custom.rightSwitch",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        device.states = {left.key: left, right.key: right}
+        device.controls = {
+            "left": BridgeControl(
+                "left",
+                "toggle",
+                "",
+                component=left.component,
+                capability=left.capability,
+                attribute=left.attribute,
+                commands=("on", "off"),
+            ),
+            "right": BridgeControl(
+                "right",
+                "toggle",
+                "",
+                component=right.component,
+                capability=right.capability,
+                attribute=right.attribute,
+                commands=("on", "off"),
+            ),
+        }
+
+        self.assertEqual(
+            models_module.switch_name_overrides(device),
+            {
+                left.key: "Outlet (Custom.Left Switch)",
+                right.key: "Outlet (Custom.Right Switch)",
+            },
+        )
+
     def test_parse_control_rejects_unsupported_transport_value(self) -> None:
         self.assertIsNone(
             parse_control(

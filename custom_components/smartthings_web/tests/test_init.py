@@ -196,6 +196,7 @@ class FakeRegistry:
         *,
         new_unique_id: str | None = None,
         new_entity_id: str | None = None,
+        original_name: str | None = None,
     ) -> None:
         entry = next((e for e in self.entries if e.entity_id == entity_id), None)
         if entry is None:
@@ -206,6 +207,8 @@ class FakeRegistry:
         if new_entity_id is not None:
             entry.entity_id = new_entity_id
             self.renamed.append((entity_id, new_entity_id))
+        if original_name is not None:
+            entry.original_name = original_name
 
 
 class EntityRegistryMigrationTests(unittest.TestCase):
@@ -1889,6 +1892,162 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             registry_entries[2].suggested_object_id,
             "geosil_ganjeobdeung_스위치_3",
         )
+
+    def test_registry_migration_updates_switch_original_name_without_user_name_or_entity_id(self) -> None:
+        """Refresh generated Web-label metadata without taking over user names."""
+        state = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        control = BridgeControl(
+            "power",
+            "toggle",
+            "Power",
+            component=state.component,
+            capability=state.capability,
+            attribute=state.attribute,
+            commands=("on", "off"),
+        )
+        device = BridgeDevice(
+            "dev_outlet",
+            "loc_001",
+            None,
+            "멀티탭",
+            "outlet_1",
+            True,
+            states={state.key: state},
+            controls={control.control_id: control},
+        )
+        before = SimpleNamespace(
+            entity_id="switch.meoltitaeb",
+            domain="switch",
+            platform=DOMAIN,
+            unique_id="dev_outlet_main_switch_switch",
+            device_id="ha_device_outlet",
+            name="내 전원",
+            original_name=None,
+            disabled_by=None,
+            object_id_base=None,
+            suggested_object_id=None,
+        )
+        registry = FakeRegistry([before])
+        self.patch_registry(registry)
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}),
+            BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.154",
+                protocol_version="5:test",
+                locations={"loc_001": "Home"},
+                rooms={},
+                devices={device.device_id: device},
+            ),
+        )
+
+        after = registry.async_get("switch.meoltitaeb")
+        self.assertIs(after, before)
+        self.assertEqual(after.name, "내 전원")
+        self.assertEqual(after.original_name, "전원")
+
+    def test_registry_migration_keeps_multi_channel_power_as_named_child(self) -> None:
+        """A main power channel is device-level only when it is the sole safe switch."""
+        power = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        status = BridgeState(
+            "main",
+            "yjswitchstatus",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_outlet",
+            "loc_001",
+            None,
+            "Outlet Strip",
+            "outlet_1",
+            True,
+            states={power.key: power, status.key: status},
+            controls={
+                "power": BridgeControl(
+                    "power",
+                    "toggle",
+                    "Power",
+                    component=power.component,
+                    capability=power.capability,
+                    attribute=power.attribute,
+                    commands=("on", "off"),
+                ),
+                "status": BridgeControl(
+                    "status",
+                    "toggle",
+                    "yjswitchstatus",
+                    component=status.component,
+                    capability=status.capability,
+                    attribute=status.attribute,
+                    commands=("on", "off"),
+                ),
+            },
+        )
+        power_entry = SimpleNamespace(
+            entity_id="switch.meoltitaeb",
+            domain="switch",
+            platform=DOMAIN,
+            unique_id="dev_outlet_main_switch_switch",
+            device_id="ha_device_outlet",
+            name=None,
+            original_name=None,
+            disabled_by=None,
+            object_id_base=None,
+            suggested_object_id=None,
+        )
+        status_entry = SimpleNamespace(
+            entity_id="switch.meoltitaeb_2",
+            domain="switch",
+            platform=DOMAIN,
+            unique_id="dev_outlet_main_yjswitchstatus_switch",
+            device_id="ha_device_outlet",
+            name=None,
+            original_name=None,
+            disabled_by=None,
+            object_id_base=None,
+            suggested_object_id=None,
+        )
+        registry = FakeRegistry([power_entry, status_entry])
+        self.patch_registry(registry)
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}),
+            BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.154",
+                protocol_version="5:test",
+                locations={"loc_001": "Home"},
+                rooms={},
+                devices={device.device_id: device},
+            ),
+        )
+
+        self.assertEqual(power_entry.entity_id, "switch.outlet_strip_전원")
+        self.assertEqual(status_entry.entity_id, "switch.outlet_strip_장치_상태")
+        self.assertEqual(power_entry.original_name, "전원")
+        self.assertEqual(status_entry.original_name, "장치 상태")
 
     def test_rebases_identifier_only_secondary_switch_components_by_order(self) -> None:
         """Keep registry repair aligned with generated unreadable switch names."""

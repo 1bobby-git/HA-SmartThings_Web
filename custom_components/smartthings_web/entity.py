@@ -82,7 +82,7 @@ def _entity_picture_for(device: BridgeDevice) -> str | None:
     return _safe_device_asset_url(fallback, animation=False)
 
 
-def _device_icon_for(device: BridgeDevice) -> str | None:
+def device_icon_for(device: BridgeDevice) -> str | None:
     """Return a safe fallback icon when SmartThings has no static picture."""
     candidates = []
     if device.presentation is not None:
@@ -306,7 +306,7 @@ def _attach_visuals(entity: Entity, device: BridgeDevice) -> None:
     entity_picture = _entity_picture_for(device)
     if entity_picture is not None:
         entity._attr_entity_picture = entity_picture
-    icon = _device_icon_for(device)
+    icon = device_icon_for(device)
     if icon is not None:
         entity._attr_icon = icon
 

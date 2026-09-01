@@ -55,6 +55,7 @@ from .models import (
     sensor_state_allowed,
     sensor_state_owned_by_primary_domain,
     state_has_entity_value,
+    switch_name_overrides,
 )
 from .services import async_setup_services
 from .naming import (
@@ -906,6 +907,12 @@ def _migrate_entity_registry(
             canonical_object_id_base,
             canonical_suggested_object_id,
         )
+        _refresh_generated_registry_original_name(
+            registry,
+            metadata_entry,
+            owner_device,
+            inventory,
+        )
         new_unique_id = old_to_new.get(entity_entry.unique_id)
         if new_unique_id is None:
             continue
@@ -1141,13 +1148,13 @@ def _canonical_registry_suggested_object_id(
             state,
             inventory,
         )
-        secondary_switch_role = secondary_switch_name_overrides(device).get(state.key)
+        switch_role = switch_name_overrides(device).get(state.key)
         if (
             domain_value == Platform.SWITCH
             and getattr(state, "attribute", None) == "switch"
-            and secondary_switch_role is not None
+            and switch_role is not None
         ):
-            entity_name = secondary_switch_role
+            entity_name = switch_role
         return canonical_entity_object_id(inventory, device, entity_name)
     fallback_suffix = _fallback_entity_suffix_name(entity_entry, device)
     if fallback_suffix is not None:
@@ -1190,6 +1197,45 @@ def _refresh_generated_registry_metadata(
     )
 
 
+def _refresh_generated_registry_original_name(
+    registry: object,
+    entity_entry: object,
+    device: object | None,
+    inventory: BridgeInventory,
+) -> None:
+    """Refresh generated original_name metadata while preserving user names."""
+    if getattr(entity_entry, "platform", None) != DOMAIN or device is None:
+        return
+    device_id = str(getattr(device, "device_id", ""))
+    state = next(
+        (
+            item
+            for item in getattr(device, "states", {}).values()
+            if entity_unique_id(device_id, item) == getattr(entity_entry, "unique_id", "")
+        ),
+        None,
+    )
+    if state is None:
+        return
+    domain = getattr(entity_entry, "domain", "")
+    domain_value = getattr(domain, "value", domain)
+    name = (
+        switch_name_overrides(device).get(getattr(state, "key", ()))
+        if domain_value == "switch" and getattr(state, "attribute", None) == "switch"
+        else None
+    )
+    if name is None:
+        name = _generated_registry_state_name(entity_entry, device, state, inventory)
+    if not name or getattr(entity_entry, "original_name", None) == name:
+        return
+    update = getattr(registry, "async_update_entity", None)
+    if callable(update):
+        try:
+            update(getattr(entity_entry, "entity_id", ""), original_name=name)
+        except TypeError:
+            return
+
+
 def _canonical_registry_object_id_base(
     inventory: BridgeInventory,
     device: object,
@@ -1219,13 +1265,13 @@ def _canonical_registry_object_id_base(
             ).partition(".")[2]
             if current_object_id in {primary_object_id, legacy_object_id}:
                 return None
-        secondary_switch_role = secondary_switch_name_overrides(device).get(state.key)
+        switch_role = switch_name_overrides(device).get(state.key)
         if (
             getattr(entity_entry, "domain", "") == Platform.SWITCH
             and getattr(state, "attribute", None) == "switch"
-            and secondary_switch_role is not None
+            and switch_role is not None
         ):
-            return slugify(secondary_switch_role) or None
+            return slugify(switch_role) or None
         return slugify(
             _generated_registry_state_name(
                 entity_entry,
@@ -1449,7 +1495,7 @@ def _canonical_generated_state_entity_id(
         target = f"{domain}.{object_id}"
         return target if target != getattr(entity_entry, "entity_id", "") else None
     role = (
-        secondary_switch_name_overrides(device).get(state.key)
+        switch_name_overrides(device).get(state.key)
         if domain == Platform.SWITCH and getattr(state, "attribute", None) == "switch"
         else None
     )

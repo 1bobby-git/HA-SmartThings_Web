@@ -688,25 +688,153 @@ def disambiguated_state_names(
     return names
 
 
-def secondary_switch_name_overrides(
+WEB_CONTROL_LABELS_KO = {
+    "device status": "장치 상태",
+    "power": "전원",
+    "yjswitchstatus": "장치 상태",
+}
+
+
+def switch_name_overrides(
     device: BridgeDevice,
 ) -> dict[tuple[str, str, str], str]:
-    """Return generated names for secondary switch channels on one device."""
-    secondary_switches = [
+    """Return Web-aligned names for safe switch channels on one device."""
+    switch_states = [
         state
         for state in device.states.values()
         if control_kind(device, state) == "switch"
         and state.attribute == "switch"
-        and (state.component_role or state.component).strip().lower() != "main"
     ]
+    if not switch_states:
+        return {}
     names: dict[tuple[str, str, str], str] = {}
-    for index, state in enumerate(sorted(secondary_switches, key=lambda item: item.key), 2):
-        role_name = _readable_state_token(
-            state.component_role or state.component,
-            "component",
+    ordered = sorted(switch_states, key=lambda item: item.key)
+    secondary_indexes = {
+        state.key: index
+        for index, state in enumerate(
+            (
+                item
+                for item in ordered
+                if not primary_switch_state(device, item)
+            ),
+            2,
         )
-        names[state.key] = role_name if role_name is not None else f"스위치 {index}"
+    }
+    for state in ordered:
+        control = toggle_control_for_state(device, state)
+        label = _web_control_label(control.label if control else None)
+        if label == "전원" and not _main_power_switch_state(device, state):
+            label = None
+        if label is None and _main_power_switch_state(device, state):
+            label = "전원"
+        if label is None:
+            label = _readable_state_token(state.component_role or state.component, "component")
+        if label is None and state.capability_role is not None:
+            label = _readable_state_token(state.capability_role, "capability")
+        if (
+            label is None
+            and (state.component_role or state.component).strip().lower() == "main"
+        ):
+            continue
+        if label is None and state.key in secondary_indexes:
+            label = f"스위치 {secondary_indexes[state.key]}"
+        if label is not None:
+            names[state.key] = label
+    return _deduplicated_switch_names(ordered, names)
+
+
+def _deduplicated_switch_names(
+    states: list[BridgeState],
+    names: dict[tuple[str, str, str], str],
+) -> dict[tuple[str, str, str], str]:
+    grouped: dict[str, list[BridgeState]] = {}
+    for state in states:
+        label = names.get(state.key)
+        if label is not None:
+            grouped.setdefault(label, []).append(state)
+    for label, siblings in grouped.items():
+        if len(siblings) < 2:
+            continue
+        qualifiers = [
+            _readable_state_token(state.capability_role or state.capability, "capability")
+            or _readable_state_token(state.component_role or state.component, "component")
+            for state in siblings
+        ]
+        if (
+            all(qualifier is not None for qualifier in qualifiers)
+            and len(set(qualifiers)) == len(siblings)
+        ):
+            for state, qualifier in zip(siblings, qualifiers, strict=True):
+                names[state.key] = f"{label} ({qualifier})"
+            continue
+        for index, state in enumerate(sorted(siblings, key=lambda item: item.key), 1):
+            names[state.key] = f"{label} {index}"
     return names
+
+
+def secondary_switch_name_overrides(
+    device: BridgeDevice,
+) -> dict[tuple[str, str, str], str]:
+    """Return generated names for non-primary switch channels on one device."""
+    names = switch_name_overrides(device)
+    return {
+        state.key: label
+        for state in device.states.values()
+        if state.key in names and not primary_switch_state(device, state)
+        for label in (names[state.key],)
+    }
+
+
+def _localized_web_control_label(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = " ".join(value.strip().lower().replace("_", " ").replace("-", " ").split())
+    return WEB_CONTROL_LABELS_KO.get(normalized) or WEB_CONTROL_LABELS_KO.get(
+        normalized.replace(" ", "")
+    )
+
+
+def _web_control_label(value: str | None) -> str | None:
+    localized = _localized_web_control_label(value)
+    if localized is not None:
+        return localized
+    safe_name = _safe_role(value)
+    return _readable_state_token(safe_name, "control") if safe_name else None
+
+
+def primary_switch_state(device: BridgeDevice, state: BridgeState) -> bool:
+    """Return whether this state is the device's canonical Web power switch."""
+    if state.attribute != "switch":
+        return False
+    safe_switch_states = [
+        item
+        for item in device.states.values()
+        if item.attribute == "switch" and control_kind(device, item) == "switch"
+    ]
+    if len(safe_switch_states) != 1 or safe_switch_states[0].key != state.key:
+        return False
+    return _main_power_switch_state(device, state, allow_identifier_component=True)
+
+
+def _main_power_switch_state(
+    device: BridgeDevice,
+    state: BridgeState,
+    *,
+    allow_identifier_component: bool = False,
+) -> bool:
+    if state.attribute != "switch":
+        return False
+    if (state.component_role or state.component).strip().lower() != "main":
+        if not allow_identifier_component:
+            return False
+        component = (state.component_role or state.component).strip().lower()
+        if not component.startswith("identifier_"):
+            return False
+    control = toggle_control_for_state(device, state)
+    label = _localized_web_control_label(control.label if control else None)
+    capability = state.capability.strip().lower()
+    capability_power = capability == "switch" or capability.endswith("_switch")
+    return capability_power or (allow_identifier_component and label == "전원")
 
 
 def _unique_state_qualifiers(
