@@ -48,7 +48,7 @@ Scope: local release preparation only. GitHub release publication, HAOS deployme
 ## Package Output
 
 - Package directory: `dist-addon/smartthings_web_bridge`
-- Package manifest SHA-256: `2d62117e5427cdd22ad69ef3829b0297bd68b60342a0f27b0d7e8cc9d1ac98c3`
+- Package manifest SHA-256: `bec18d35168a0e9a1042cce7a3cb74c69fb615315155028c426e62162b733586`
 - Package manifest includes both parity audit files:
   - `tools/smartthings-web-parity-audit.ts`
   - `tools/smartthings-web-parity-audit-core.ts`
