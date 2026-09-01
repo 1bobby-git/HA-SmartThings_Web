@@ -557,6 +557,7 @@ describe("SafeCommandService", () => {
         capability: "identifier_speechSynthesis",
         command: "speak",
         arguments: ["hello from catalog"],
+        requireAdvanced: true,
         clientRequestId: "request_tts_catalog"
       })
     ).resolves.toMatchObject({

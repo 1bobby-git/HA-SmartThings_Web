@@ -248,6 +248,7 @@ class SmartThingsWebBridgeClient:
         control_id: str | None = None,
         control_label: str | None = None,
         arguments: list[Any] | None = None,
+        require_advanced: bool | None = None,
         confirm: bool | None = None,
         timeout: int | None = None,
     ) -> BridgeCommandResult:
@@ -270,6 +271,8 @@ class SmartThingsWebBridgeClient:
             body["controlId"] = control_id
         if control_label is not None:
             body["controlLabel"] = control_label
+        if require_advanced is not None:
+            body["requireAdvanced"] = require_advanced
         if confirm is not None:
             body["confirm"] = confirm
         if timeout is not None:
@@ -440,6 +443,7 @@ class ReadOnlyBridgeClient:
         control_id: str | None = None,
         control_label: str | None = None,
         arguments: list[Any] | None = None,
+        require_advanced: bool | None = None,
         confirm: bool | None = None,
         timeout: int | None = None,
     ) -> BridgeCommandResult:

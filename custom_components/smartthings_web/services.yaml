@@ -1,12 +1,13 @@
 execute_command:
   name: Execute command
-  description: Execute a validated SmartThings Web command through the local Bridge.
+  description: Execute a validated Advanced SmartThings Web command through the local Bridge.
   fields:
     device_id:
-      name: Device ID
+      name: Device
       required: true
       selector:
-        text:
+        device:
+          integration: smartthings_web
     component:
       name: Component
       default: main
@@ -41,6 +42,42 @@ execute_command:
           max: 120
           unit_of_measurement: s
 
+list_commands:
+  name: List commands
+  description: Return the safe Advanced command catalog for one SmartThings Web device.
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: smartthings_web
+
+speak:
+  name: Speak
+  description: Speak one phrase through a unique speechSynthesis.speak Advanced command.
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: smartthings_web
+    phrase:
+      name: Phrase
+      required: true
+      selector:
+        text:
+          multiline: true
+    timeout:
+      name: Confirmation timeout
+      default: 30
+      selector:
+        number:
+          min: 1
+          max: 120
+          unit_of_measurement: s
+
 reload_inventory:
   name: Reload inventory
   description: Run one coalesced Advanced inventory reconciliation.
@@ -53,7 +90,8 @@ refresh_device:
       name: Device ID
       required: true
       selector:
-        text:
+        device:
+          integration: smartthings_web
 
 reconnect_realtime:
   name: Reconnect realtime

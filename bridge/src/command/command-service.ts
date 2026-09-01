@@ -255,7 +255,7 @@ type ResolvedDeviceRequest = SafeCommandRequest & {
 };
 
 const oldRequestKeys = ["deviceId", "component", "capability", "command", "arguments", "clientRequestId", "confirm", "timeout"] as const;
-const newRequestKeys = ["targetType", "targetId", "component", "capability", "attribute", "command", "arguments", "clientRequestId", "controlId", "controlLabel", "confirm", "timeout"] as const;
+const newRequestKeys = ["targetType", "targetId", "component", "capability", "attribute", "command", "arguments", "clientRequestId", "controlId", "controlLabel", "confirm", "timeout", "requireAdvanced"] as const;
 const tokenPattern = /^[A-Za-z0-9_.:-]{1,160}$/u;
 const devicePattern = /^dev_[0-9]{3,32}$/u;
 const targetPattern = /^(?:dev|loc|identifier)_[A-Za-z0-9_]{3,64}$/u;
@@ -750,6 +750,9 @@ function normalizeRequest(targetType: SafeCommandRequest["targetType"], targetId
   if (input.confirm !== undefined && typeof input.confirm !== "boolean") {
     throw new SafeCommandError("invalid_arguments");
   }
+  if (input.requireAdvanced !== undefined && typeof input.requireAdvanced !== "boolean") {
+    throw new SafeCommandError("invalid_arguments");
+  }
   if (
     input.timeout !== undefined &&
     (typeof input.timeout !== "number" ||
@@ -770,6 +773,7 @@ function normalizeRequest(targetType: SafeCommandRequest["targetType"], targetId
     ...(typeof input.controlLabel === "string" ? { controlLabel: input.controlLabel } : {}),
     ...(typeof input.confirm === "boolean" ? { confirm: input.confirm } : {}),
     ...(typeof input.timeout === "number" ? { timeout: input.timeout } : {}),
+    ...(input.requireAdvanced === true ? { requireAdvanced: true } : {}),
     command: input.command,
     arguments: input.arguments.map((value) => jsonValue(value) as BridgeJsonValue),
     clientRequestId: input.clientRequestId

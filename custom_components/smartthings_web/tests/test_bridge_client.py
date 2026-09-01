@@ -238,11 +238,13 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
             capability="switch",
             command="on",
             arguments=[],
+            require_advanced=True,
             confirm=False,
             timeout=25,
         )
 
         body = request.await_args.kwargs["json_body"]
+        self.assertEqual(body["requireAdvanced"], True)
         self.assertEqual(body["confirm"], False)
         self.assertEqual(body["timeout"], 25)
         self.assertEqual(request.await_args.kwargs["timeout_seconds"], 35)
