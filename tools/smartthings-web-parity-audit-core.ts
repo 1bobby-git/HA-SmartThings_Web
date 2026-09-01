@@ -102,6 +102,11 @@ export interface WebParityFailure {
   count?: number;
 }
 
+interface DangerousCommandEvent {
+  group: WebParityFailure;
+  discriminator: string;
+}
+
 export function evaluateWebParity(
   rawInventory: unknown,
   rawProjection: unknown
@@ -158,7 +163,7 @@ export function evaluateWebParity(
       ),
       projectedEntities: projection.length,
       omissions: omissions.length,
-      dangerousCommandsExposed: dangerousFailures.length,
+      dangerousCommandsExposed: sumFailureCounts(dangerousFailures),
       duplicateUniqueIds: duplicateUniqueFailures.length,
       duplicateGeneratedNames: duplicateNameFailures.length
     },
@@ -451,18 +456,20 @@ function isExplainedOmission(omission: WebParityOmission): boolean {
 }
 
 function collectDangerousCommandFailures(inventory: WebParityInventory): WebParityFailure[] {
-  const failures: WebParityFailure[] = [];
+  const events: DangerousCommandEvent[] = [];
   for (const device of inventory.devices) {
     for (const command of device.advancedCommands ?? []) {
       const reason = safeAdvancedCommandReason(command);
       if (!reason) continue;
-      failures.push({
-        code: "dangerous_command_exposed",
-        deviceId: device.id,
-        component: command.component,
-        capability: command.capability,
-        command: command.command,
-        reason
+      events.push({
+        group: {
+          code: "dangerous_command_exposed",
+          deviceId: device.id,
+          component: command.component,
+          capability: command.capability,
+          reason
+        },
+        discriminator: command.command
       });
     }
     for (const control of device.controls ?? []) {
@@ -470,17 +477,20 @@ function collectDangerousCommandFailures(inventory: WebParityInventory): WebPari
       for (const commandDescriptor of commandDescriptors) {
         const reason = safeAdvancedCommandReason(commandDescriptor);
         if (!reason) continue;
-        failures.push({
-          code: "dangerous_command_exposed",
-          deviceId: device.id,
-          ...(control.component !== undefined ? { component: control.component } : {}),
-          ...(control.capability !== undefined ? { capability: control.capability } : {}),
-          reason
+        events.push({
+          group: {
+            code: "dangerous_command_exposed",
+            deviceId: device.id,
+            ...(control.component !== undefined ? { component: control.component } : {}),
+            ...(control.capability !== undefined ? { capability: control.capability } : {}),
+            reason
+          },
+          discriminator: commandDescriptor.command
         });
       }
     }
   }
-  return dedupeFailures(failures);
+  return aggregateDangerousEvents(events);
 }
 
 function controlToDescriptors(control: WebParityControl): AdvancedCommandDescriptor[] {
@@ -661,6 +671,28 @@ function dedupeFailures(failures: WebParityFailure[]): WebParityFailure[] {
   const byKey = new Map<string, WebParityFailure>();
   for (const failure of failures) byKey.set(JSON.stringify(failure), failure);
   return [...byKey.values()].sort(compareFailure);
+}
+
+function aggregateDangerousEvents(events: DangerousCommandEvent[]): WebParityFailure[] {
+  const uniqueEvents = new Set<string>();
+  const grouped = new Map<string, WebParityFailure>();
+  for (const event of events) {
+    const groupKey = JSON.stringify(event.group);
+    const eventKey = `${groupKey}\u0000${event.discriminator}`;
+    if (uniqueEvents.has(eventKey)) continue;
+    uniqueEvents.add(eventKey);
+    const existing = grouped.get(groupKey);
+    if (existing) {
+      existing.count = (existing.count ?? 1) + 1;
+    } else {
+      grouped.set(groupKey, { ...event.group, count: 1 });
+    }
+  }
+  return [...grouped.values()].sort(compareFailure);
+}
+
+function sumFailureCounts(failures: readonly WebParityFailure[]): number {
+  return failures.reduce((total, failure) => total + (failure.count ?? 1), 0);
 }
 
 function compareFailure(left: WebParityFailure, right: WebParityFailure): number {

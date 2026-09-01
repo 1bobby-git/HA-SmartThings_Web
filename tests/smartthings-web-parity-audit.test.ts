@@ -121,7 +121,7 @@ describe("SmartThings Web parity audit", () => {
       ]
     );
 
-    expect(report.summary.dangerousCommandsExposed).toBe(1);
+    expect(report.summary.dangerousCommandsExposed).toBe(2);
     expect(report.summary.duplicateUniqueIds).toBe(1);
     expect(report.summary.duplicateGeneratedNames).toBe(1);
     expect(report.summary.safeCommands).toBe(1);
@@ -249,6 +249,89 @@ describe("SmartThings Web parity audit", () => {
     expect(report.summary.devices).toBe(1);
     expect(report.summary.dangerousCommandsExposed).toBe(1);
     expect(JSON.stringify(report.failures)).not.toContain("unlock");
+  });
+
+  test("counts distinct dangerous commands from one control without echoing command names", () => {
+    const report = evaluateWebParity(
+      {
+        devices: [
+          {
+            id: "dev_001",
+            controls: [
+              {
+                id: "advanced:main:lock:lock",
+                kind: "toggle",
+                component: "main",
+                capability: "lock",
+                attribute: "lock",
+                commands: ["lock", "unlock"],
+                transport: "advanced"
+              }
+            ],
+            advancedCommands: [],
+            commandOmissions: []
+          }
+        ]
+      },
+      []
+    );
+
+    expect(report.summary.dangerousCommandsExposed).toBe(2);
+    expect(report.failures).toEqual([
+      {
+        code: "dangerous_command_exposed",
+        deviceId: "dev_001",
+        component: "main",
+        capability: "lock",
+        reason: "dangerous_command",
+        count: 2
+      }
+    ]);
+    expect(JSON.stringify(report.failures)).not.toContain("\"command\"");
+    expect(JSON.stringify(report.failures)).not.toContain("unlock");
+  });
+
+  test("counts distinct dangerous Advanced descriptors while deduping identical inputs", () => {
+    const descriptor = {
+      component: "main",
+      capability: "lock",
+      capabilityVersion: 1,
+      arguments: [],
+      transport: "advanced",
+      confirmation: "accepted_receipt",
+      label: "Lock",
+      labelSource: "capability"
+    };
+    const report = evaluateWebParity(
+      {
+        devices: [
+          {
+            id: "dev_001",
+            controls: [],
+            advancedCommands: [
+              { ...descriptor, command: "lock" },
+              { ...descriptor, command: "unlock" },
+              { ...descriptor, command: "unlock" }
+            ],
+            commandOmissions: []
+          }
+        ]
+      },
+      []
+    );
+
+    expect(report.summary.dangerousCommandsExposed).toBe(2);
+    expect(report.failures).toEqual([
+      {
+        code: "dangerous_command_exposed",
+        deviceId: "dev_001",
+        component: "main",
+        capability: "lock",
+        reason: "dangerous_command",
+        count: 2
+      }
+    ]);
+    expect(JSON.stringify(report)).not.toContain("unlock");
   });
 
   test("fails closed for invalid omissions but permits known safe omission reasons", () => {
