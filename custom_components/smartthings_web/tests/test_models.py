@@ -42,6 +42,7 @@ from models import (  # noqa: E402
     is_readonly_appliance_switch,
     parse_device_presentation,
     refresh_controls,
+    toggle_control_for_state,
     _safe_device_asset_url,
     location_arm_state,
     location_name,
@@ -939,6 +940,176 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
                 status.key: "장치 상태",
             },
         )
+
+    def test_same_component_advanced_switches_use_web_detail_labels(self) -> None:
+        current = inventory(10, 20, "2026-09-01T00:00:00Z")
+        device = current.devices["dev_001"]
+        power = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        status = BridgeState(
+            "main",
+            "yjswitchstatus",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        device.name = "멀티탭"
+        device.device_type = "outlet_1"
+        device.states = {power.key: power, status.key: status}
+        device.controls = {
+            "advanced:main:switch:switch": BridgeControl(
+                "advanced:main:switch:switch",
+                "toggle",
+                "on",
+                component=power.component,
+                capability=power.capability,
+                attribute=power.attribute,
+                commands=("on", "off"),
+                transport="advanced",
+            ),
+            "identifier_power": BridgeControl(
+                "identifier_power",
+                "toggle",
+                "Power",
+                component=power.component,
+                capability=power.capability,
+                attribute=power.attribute,
+                commands=("on", "off"),
+            ),
+            "advanced:main:yjswitchstatus:switch": BridgeControl(
+                "advanced:main:yjswitchstatus:switch",
+                "toggle",
+                "on",
+                component=status.component,
+                capability=status.capability,
+                attribute=status.attribute,
+                commands=("on", "off"),
+                transport="advanced",
+            ),
+            "identifier_status": BridgeControl(
+                "identifier_status",
+                "toggle",
+                "yjswitchstatus",
+                component=status.component,
+                capability=status.capability,
+                attribute=status.attribute,
+                commands=("on", "off"),
+            ),
+        }
+
+        power_control = toggle_control_for_state(device, power)
+        status_control = toggle_control_for_state(device, status)
+
+        self.assertIsNotNone(power_control)
+        self.assertIsNotNone(status_control)
+        self.assertEqual(power_control.control_id, "advanced:main:switch:switch")
+        self.assertEqual(
+            status_control.control_id,
+            "advanced:main:yjswitchstatus:switch",
+        )
+        self.assertEqual(control_kind(device, power), "switch")
+        self.assertEqual(control_kind(device, status), "switch")
+        self.assertEqual(
+            models_module.switch_name_overrides(device),
+            {
+                power.key: "전원",
+                status.key: "장치 상태",
+            },
+        )
+
+    def test_duplicate_advanced_switch_controls_remain_ambiguous(self) -> None:
+        current = inventory(10, 20, "2026-09-01T00:00:00Z")
+        device = current.devices["dev_001"]
+        state = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        device.states = {state.key: state}
+        device.controls = {
+            "advanced:main:switch:switch": BridgeControl(
+                "advanced:main:switch:switch",
+                "toggle",
+                "on",
+                component=state.component,
+                capability=state.capability,
+                attribute=state.attribute,
+                commands=("on", "off"),
+                transport="advanced",
+            ),
+            "advanced:main:switch:switch:duplicate": BridgeControl(
+                "advanced:main:switch:switch:duplicate",
+                "toggle",
+                "on",
+                component=state.component,
+                capability=state.capability,
+                attribute=state.attribute,
+                commands=("on", "off"),
+                transport="advanced",
+            ),
+            "identifier_power": BridgeControl(
+                "identifier_power",
+                "toggle",
+                "Power",
+                component=state.component,
+                capability=state.capability,
+                attribute=state.attribute,
+                commands=("on", "off"),
+            ),
+        }
+
+        self.assertIsNone(toggle_control_for_state(device, state))
+        self.assertIsNone(control_kind(device, state))
+
+    def test_action_control_stays_preferred_over_advanced_duplicate(self) -> None:
+        current = inventory(10, 20, "2026-09-01T00:00:00Z")
+        device = current.devices["dev_001"]
+        state = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        device.states = {state.key: state}
+        device.controls = {
+            "action:main:switch": BridgeControl(
+                "action:main:switch",
+                "toggle",
+                "Power",
+                component=state.component,
+                capability=state.capability,
+                attribute=state.attribute,
+                commands=("on", "off"),
+            ),
+            "advanced:main:switch:switch": BridgeControl(
+                "advanced:main:switch:switch",
+                "toggle",
+                "on",
+                component=state.component,
+                capability=state.capability,
+                attribute=state.attribute,
+                commands=("on", "off"),
+                transport="advanced",
+            ),
+        }
+
+        self.assertEqual(
+            toggle_control_for_state(device, state).control_id,
+            "action:main:switch",
+        )
+        self.assertEqual(control_kind(device, state), "switch")
 
     def test_main_switch_capability_supplies_power_label_when_control_label_blank(self) -> None:
         current = inventory(10, 20, "2026-09-01T00:00:00Z")

@@ -590,7 +590,26 @@ def toggle_control_for_state(
     action_matches = [
         control for control in matches if control.control_id.startswith("action:")
     ]
-    return action_matches[0] if len(action_matches) == 1 else None
+    if len(action_matches) == 1:
+        return action_matches[0]
+    advanced_matches = [
+        control
+        for control in matches
+        if control.transport == "advanced" and control.control_id.startswith("advanced:")
+    ]
+    if len(advanced_matches) == 1 and _safe_advanced_catalog_toggle(
+        advanced_matches[0]
+    ):
+        return advanced_matches[0]
+    return None
+
+
+def _safe_advanced_catalog_toggle(control: BridgeControl) -> bool:
+    return (
+        control.transport == "advanced"
+        and control.control_id.startswith("advanced:")
+        and safe_generic_toggle_control(control)
+    )
 
 
 def safe_generic_toggle_control(control: BridgeControl) -> bool:
@@ -723,7 +742,9 @@ def switch_name_overrides(
     }
     for state in ordered:
         control = toggle_control_for_state(device, state)
-        label = _web_control_label(control.label if control else None)
+        label = _web_control_label_for_switch_state(device, state)
+        if label is None:
+            label = _web_control_label(control.label if control else None)
         if label == "전원" and not _main_power_switch_state(device, state):
             label = None
         if label is None and _main_power_switch_state(device, state):
@@ -742,6 +763,25 @@ def switch_name_overrides(
         if label is not None:
             names[state.key] = label
     return _deduplicated_switch_names(ordered, names)
+
+
+def _web_control_label_for_switch_state(
+    device: BridgeDevice,
+    state: BridgeState,
+) -> str | None:
+    labels = {
+        label
+        for control in device.controls.values()
+        if control.kind == "toggle"
+        and control.transport != "advanced"
+        and control.component == state.component
+        and control.capability == state.capability
+        and control.attribute == state.attribute
+        and safe_observed_control(control)
+        for label in (_web_control_label(control.label),)
+        if label is not None
+    }
+    return next(iter(labels)) if len(labels) == 1 else None
 
 
 def _deduplicated_switch_names(
