@@ -81,25 +81,25 @@ export type DeviceActionCommand =
 type LocationAction = "armAway" | "armStay" | "disarm";
 
 export interface DeviceActionExecutionInput {
-    action: string;
-    arguments: BridgeJsonValue[];
-    attribute: string;
-    capability: string;
-    capabilityVersion?: number;
-    command: string;
-    component: string;
-    deviceId: string;
-    deviceName: string;
-    locationId: string;
-    locationNames: Readonly<Record<string, string>>;
-    roomName?: string;
-    controlId?: string;
-    controlLabel?: string;
-    optionLabel?: string;
-    optionCommand?: string;
-    nativeCommand?: string;
-    requireAdvanced?: boolean;
-    requireLocationNative?: boolean;
+  action: string;
+  arguments: BridgeJsonValue[];
+  attribute: string;
+  capability: string;
+  capabilityVersion?: number;
+  command: string;
+  component: string;
+  deviceId: string;
+  deviceName: string;
+  locationId: string;
+  locationNames: Readonly<Record<string, string>>;
+  roomName?: string;
+  controlId?: string;
+  controlLabel?: string;
+  optionLabel?: string;
+  optionCommand?: string;
+  nativeCommand?: string;
+  requireAdvanced?: boolean;
+  requireLocationNative?: boolean;
 }
 
 export interface ComponentActionExecutionInput {
@@ -255,8 +255,32 @@ type ResolvedDeviceRequest = SafeCommandRequest & {
   requireAdvanced?: boolean;
 };
 
-const oldRequestKeys = ["deviceId", "component", "capability", "command", "arguments", "clientRequestId", "confirm", "timeout", "requireAdvanced"] as const;
-const newRequestKeys = ["targetType", "targetId", "component", "capability", "attribute", "command", "arguments", "clientRequestId", "controlId", "controlLabel", "confirm", "timeout", "requireAdvanced"] as const;
+const oldRequestKeys = [
+  "deviceId",
+  "component",
+  "capability",
+  "command",
+  "arguments",
+  "clientRequestId",
+  "confirm",
+  "timeout",
+  "requireAdvanced"
+] as const;
+const newRequestKeys = [
+  "targetType",
+  "targetId",
+  "component",
+  "capability",
+  "attribute",
+  "command",
+  "arguments",
+  "clientRequestId",
+  "controlId",
+  "controlLabel",
+  "confirm",
+  "timeout",
+  "requireAdvanced"
+] as const;
 const tokenPattern = /^[A-Za-z0-9_.:-]{1,160}$/u;
 const devicePattern = /^dev_[0-9]{3,32}$/u;
 const targetPattern = /^(?:dev|loc|identifier)_[A-Za-z0-9_]{3,64}$/u;
@@ -316,7 +340,9 @@ export class SafeCommandService {
       throw new SafeCommandError("bridge_not_connected");
     }
     const snapshot = this.options.devices.snapshot();
-    const locationNames = Object.fromEntries(snapshot.locations.map((location) => [location.id, location.name]));
+    const locationNames = Object.fromEntries(
+      snapshot.locations.map((location) => [location.id, location.name])
+    );
     if (request.targetType === "scene") return await this.#executeScene(request, snapshot, locationNames);
     if (request.targetType === "location") return await this.#executeLocation(request, snapshot, locationNames);
     return await this.#executeDevice(request, snapshot, locationNames);
@@ -331,8 +357,16 @@ export class SafeCommandService {
     if (!device) throw new SafeCommandError("device_not_found");
     if (!device.online) throw new SafeCommandError("device_offline");
     const effective = resolveDeviceRequest(device, request);
-    if (!effective.component || !effective.capability) throw new SafeCommandError("capability_not_found");
-    const attribute = effective.attribute ?? (effective.advancedDescriptor?.confirmation === "accepted_receipt" ? effective.command : "switch");
+    if (!effective.component || !effective.capability) {
+      throw new SafeCommandError("capability_not_found");
+    }
+    let attribute = effective.attribute;
+    if (attribute === undefined) {
+      attribute =
+        effective.advancedDescriptor?.confirmation === "accepted_receipt"
+          ? effective.command
+          : "switch";
+    }
     validateCommandAttribute(effective.command, attribute, effective.controlId);
     const state = findState(device, effective.component, effective.capability, attribute);
     if (!state && !allowsMissingCurrentState(effective.command, effective.advancedDescriptor)) {
@@ -343,7 +377,9 @@ export class SafeCommandService {
       );
     }
     const matchAny = confirmsAnyNewDeviceState(effective);
-    const desired = matchAny ? undefined : desiredValueFor(effective.command, effective.arguments, state);
+    const desired = matchAny
+      ? undefined
+      : desiredValueFor(effective.command, effective.arguments, state);
     if (!matchAny && desired === undefined) {
       throw new SafeCommandError(
         effective.advancedDescriptor?.confirmation === "state"
@@ -351,24 +387,26 @@ export class SafeCommandService {
           : "invalid_arguments"
       );
     }
-    const componentPlan =
-      effective.confirm === false || !state
-        ? undefined
-        : buildComponentSwitchPlan(
-            device,
-            effective,
-            state,
-            this.options.devices,
-            snapshot,
-            locationNames
-          );
+    let componentPlan: ComponentSwitchPlan | undefined;
+    if (effective.confirm !== false && state) {
+      componentPlan = buildComponentSwitchPlan(
+        device,
+        effective,
+        state,
+        this.options.devices,
+        snapshot,
+        locationNames
+      );
+    }
     if (componentPlan) {
       if (componentVectorMatches(snapshot, componentPlan.desiredVector)) {
         return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
       }
       return await this.#executeComponentPlan(effective, componentPlan);
     }
-    if (state && desired !== undefined && stateValuesEqual(state.value, desired)) return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
+    if (state && desired !== undefined && stateValuesEqual(state.value, desired)) {
+      return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
+    }
     const roomName = device.roomId ? snapshot.rooms.find((room) => room.id === device.roomId)?.name : undefined;
     const capabilityVersion = this.options.devices.capabilityVersion(
       effective.targetId,
@@ -418,33 +456,39 @@ export class SafeCommandService {
     }
     let receiptCommandId: string | undefined;
     let advancedSentAtMs: number | undefined;
-    const wait = effective.command === "refresh"
-      ? waitForRefreshCommand({
-          devices: this.options.devices,
-          deviceId: effective.targetId,
-          afterSequence: snapshot.sequence,
-          resync: () => this.options.resync({ deviceId: effective.targetId })
-        })
-      : matchAny
-        ? waitForAnyDeviceEvent({
-            devices: this.options.devices,
-            deviceId: effective.targetId,
-            afterSequence: snapshot.sequence,
-            resync: () => this.options.resync({ deviceId: effective.targetId })
-          })
-      : waitForState({
-          devices: this.options.devices,
-          request: effective,
-          attribute,
-          desired,
-          afterSequence: snapshot.sequence,
-          stabilityMs: this.options.confirmationStabilityMs ?? 0,
-          resync: () => this.options.resync({ deviceId: effective.targetId }),
-          minimumEventTimeMs: () =>
-            advancedSentAtMs ??
-            (state?.updatedAt ? Date.parse(state.updatedAt) : undefined),
-          expectedCommandId: () => receiptCommandId
-        });
+    let wait:
+      | ReturnType<typeof waitForRefreshCommand>
+      | ReturnType<typeof waitForAnyDeviceEvent>
+      | ReturnType<typeof waitForState>;
+    if (effective.command === "refresh") {
+      wait = waitForRefreshCommand({
+        devices: this.options.devices,
+        deviceId: effective.targetId,
+        afterSequence: snapshot.sequence,
+        resync: () => this.options.resync({ deviceId: effective.targetId })
+      });
+    } else if (matchAny) {
+      wait = waitForAnyDeviceEvent({
+        devices: this.options.devices,
+        deviceId: effective.targetId,
+        afterSequence: snapshot.sequence,
+        resync: () => this.options.resync({ deviceId: effective.targetId })
+      });
+    } else {
+      wait = waitForState({
+        devices: this.options.devices,
+        request: effective,
+        attribute,
+        desired,
+        afterSequence: snapshot.sequence,
+        stabilityMs: this.options.confirmationStabilityMs ?? 0,
+        resync: () => this.options.resync({ deviceId: effective.targetId }),
+        minimumEventTimeMs: () =>
+          advancedSentAtMs ??
+          (state?.updatedAt ? Date.parse(state.updatedAt) : undefined),
+        expectedCommandId: () => receiptCommandId
+      });
+    }
     let executionResult: void | CommandTransportReceipt | "location_native" | "dom";
     try {
       if (!this.options.executor.executeDeviceAction) throw new SafeCommandError("command_execution_failed");
@@ -2057,11 +2101,11 @@ function validateObservedControlCommand(
     if (typeof option !== "string" || !(control.options ?? []).includes(option)) {
       throw new SafeCommandError("invalid_arguments");
     }
-    if (
-      command === "setOption"
-        ? !safeOptionAttribute(control.attribute)
-        : control.attribute !== "fanMode" && control.attribute !== "airPurifierMode"
-    ) {
+    if (command === "setOption") {
+      if (!safeOptionAttribute(control.attribute)) {
+        throw new SafeCommandError("unsupported_command");
+      }
+    } else if (control.attribute !== "fanMode" && control.attribute !== "airPurifierMode") {
       throw new SafeCommandError("unsupported_command");
     }
     return {
@@ -2098,11 +2142,11 @@ function validateObservedControlCommand(
     command === "setShuffle"
   ) {
     const value = args[0];
-    if (
-      command === "setShuffle"
-        ? typeof value !== "boolean"
-        : typeof value !== "string" || !safeControlLabel(value)
-    ) {
+    if (command === "setShuffle") {
+      if (typeof value !== "boolean") {
+        throw new SafeCommandError("invalid_arguments");
+      }
+    } else if (typeof value !== "string" || !safeControlLabel(value)) {
       throw new SafeCommandError("invalid_arguments");
     }
     if (
@@ -2175,16 +2219,23 @@ function validateObservedControlCommand(
     if (typeof position !== "number" || !Number.isFinite(position)) {
       throw new SafeCommandError("invalid_arguments");
     }
-    if ((control.min !== undefined && position < control.min) || (control.max !== undefined && position > control.max)) {
+    if (
+      (control.min !== undefined && position < control.min) ||
+      (control.max !== undefined && position > control.max)
+    ) {
       throw new SafeCommandError("invalid_arguments");
     }
-    if (!controlSupportsCommand(control, command, false)) throw new SafeCommandError("unsupported_command");
+    if (!controlSupportsCommand(control, command, false)) {
+      throw new SafeCommandError("unsupported_command");
+    }
     return undefined;
   }
   if (isCoverButtonCommand(command)) {
     if (control.kind !== "button") throw new SafeCommandError("capability_not_found");
     if (!COVER_ATTRIBUTES.has(control.attribute)) throw new SafeCommandError("unsupported_command");
-    if (!controlSupportsCommand(control, command, true)) throw new SafeCommandError("unsupported_command");
+    if (!controlSupportsCommand(control, command, true)) {
+      throw new SafeCommandError("unsupported_command");
+    }
     return undefined;
   }
   throw new SafeCommandError("unsupported_command");
@@ -2222,8 +2273,12 @@ function observedCommandFor(
     ...Object.values(control.optionCommands ?? {})
   ].filter((value): value is string => typeof value === "string");
   const exact = normalizeCommandToken(requested);
-  return explicit.find((value) => normalizeCommandToken(value) === exact) ??
-    explicit.find((value) => nativeCommandAliases(requested).includes(normalizeCommandToken(value)));
+  return (
+    explicit.find((value) => normalizeCommandToken(value) === exact) ??
+    explicit.find((value) =>
+      nativeCommandAliases(requested).includes(normalizeCommandToken(value))
+    )
+  );
 }
 
 function nativeCommandAliases(command: string): string[] {
