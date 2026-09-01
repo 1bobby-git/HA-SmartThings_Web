@@ -96,4 +96,32 @@ describe("ComponentCommandExecutor", () => {
       message: "component_command_rollback_failed"
     });
   });
+
+  test("keeps restoration compensation on the original value", async () => {
+    let calls = 0;
+    const transport: CommandTransport = {
+      name: "advanced",
+      execute: vi.fn(async (request) => {
+        calls += 1;
+        if (calls === 2) throw new Error("private restore failure");
+        return {
+          state: "ACCEPTED" as const,
+          transport: "advanced" as const,
+          acceptedAtMs: calls,
+          commandId: request.component
+        };
+      })
+    };
+    const restore = transaction("on");
+    restore.rollbackActions = restore.actions.map((action) => ({ ...action }));
+
+    await expect(new ComponentCommandExecutor(transport).execute(restore)).rejects.toThrow(
+      "component_command_partial_failure"
+    );
+    expect(vi.mocked(transport.execute).mock.calls.map(([request]) => request.command)).toEqual([
+      "on",
+      "on",
+      "on"
+    ]);
+  });
 });

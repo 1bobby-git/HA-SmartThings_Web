@@ -41,6 +41,49 @@ describe("SafeCommandService", () => {
     });
   });
 
+  test("waits for a final Advanced status refresh before rollback", async () => {
+    const fixture = multiSwitchFixture(["main", "switch2"]);
+    fixture.resync
+      .mockImplementationOnce(async () => ({
+        authoritativeSnapshot: false,
+        startedAtMs: Date.now()
+      }))
+      .mockImplementationOnce(async () => {
+        fixture.setSwitchStates("off");
+        return { authoritativeSnapshot: false, startedAtMs: Date.now() };
+      });
+
+    await expect(
+      fixture.service.execute(aggregateCommand("off", "request_delayed_status"))
+    ).resolves.toMatchObject({
+      status: "confirmed",
+      confirmation: "inventory_snapshot",
+      transport: "advanced"
+    });
+    expect(fixture.resync).toHaveBeenCalledTimes(2);
+    expect(fixture.executeComponentTransaction).toHaveBeenCalledOnce();
+  });
+
+  test("does not confirm a matching event vector when Advanced status reads fail", async () => {
+    const fixture = multiSwitchFixture(["main", "switch2"]);
+    fixture.executeComponentTransaction.mockImplementationOnce(async (input) => {
+      fixture.setSwitchStates("off", "LOCATION_EVENT");
+      return advancedReceipts(input.actions.length);
+    });
+    fixture.resync
+      .mockRejectedValueOnce(new Error("private status failure"))
+      .mockRejectedValueOnce(new Error("private status failure"))
+      .mockImplementationOnce(async () => {
+        fixture.setSwitchStates("on");
+        return { authoritativeSnapshot: false, startedAtMs: Date.now() };
+      });
+
+    await expect(
+      fixture.service.execute(aggregateCommand("off", "request_event_without_status"))
+    ).rejects.toMatchObject({ code: "command_confirmation_timeout" });
+    expect(fixture.executeComponentTransaction).toHaveBeenCalledTimes(2);
+  });
+
   test("rolls back when Advanced status does not confirm every component", async () => {
     const fixture = multiSwitchFixture(["main", "switch2", "switch3", "switch4"]);
     fixture.resync
@@ -63,6 +106,9 @@ describe("SafeCommandService", () => {
         expect.objectContaining({ component: "identifier_switch4", command: "on" })
       ])
     );
+    expect(fixture.executeComponentTransaction.mock.calls[1]?.[0].rollbackActions.every(
+      (action) => action.command === "on"
+    )).toBe(true);
   });
 
   test("reports an explicit failure when the original component vector is not restored", async () => {
@@ -2641,6 +2687,14 @@ function aggregateCommand(value: "on" | "off", clientRequestId: string) {
   return { ...command(value, clientRequestId), component: "identifier_main" };
 }
 
+function advancedReceipts(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    state: "ACCEPTED" as const,
+    transport: "advanced" as const,
+    acceptedAtMs: index + 1
+  }));
+}
+
 function refreshCommand(clientRequestId: string) {
   return {
     targetType: "device",
@@ -2763,11 +2817,7 @@ function multiSwitchFixture(
     );
   });
   const executeComponentTransaction = vi.fn(async (input: ComponentTransactionExecutionInput) =>
-    Array.from({ length: input.actions.length }, (_, index) => ({
-      state: "ACCEPTED" as const,
-      transport: "advanced" as const,
-      acceptedAtMs: index + 1
-    }))
+    advancedReceipts(input.actions.length)
   );
   const resync = vi.fn(async (_request?: { deviceId?: string }): Promise<CommandResyncEvidence> => ({
     authoritativeSnapshot: false,

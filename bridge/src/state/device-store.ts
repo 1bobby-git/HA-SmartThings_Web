@@ -587,7 +587,15 @@ export class DeviceStore {
       changed = this.#setDeviceHealth(
         device,
         online,
-        validTimestamp(row.updatedAt ?? row.updated_at ?? row.timestamp ?? row.eventTime ?? row.event_time)
+        validTimestamp(
+          row.updatedAt ??
+            row.updated_at ??
+            row.lastUpdatedDate ??
+            row.last_updated_date ??
+            row.timestamp ??
+            row.eventTime ??
+            row.event_time
+        )
       ) || changed;
     }
     return changed;
@@ -2049,8 +2057,12 @@ function advancedHealthUpdatedAt(source: Record<string, unknown>): string | null
   return validTimestamp(
     source.healthUpdatedAt ??
       source.health_updated_at ??
+      source.lastUpdatedDate ??
+      source.last_updated_date ??
       health?.updatedAt ??
       health?.updated_at ??
+      health?.lastUpdatedDate ??
+      health?.last_updated_date ??
       health?.eventTime
   );
 }

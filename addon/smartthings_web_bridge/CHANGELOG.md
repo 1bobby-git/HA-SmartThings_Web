@@ -2,9 +2,9 @@
 
 ## 0.1.148
 
-- 대표 HA switch 뒤에 둘 이상의 검증 가능한 switch component가 있으면 Advanced component transaction을 안정된 순서로 실행하고 전체 `/status` 벡터가 일치할 때만 성공으로 확인합니다.
-- 일부 component dispatch 또는 상태 확인이 실패하면 완료된 component를 원래 상태 벡터로 되돌리고, 부분 실패와 rollback 실패를 고정된 비민감 오류 코드로 반환합니다.
-- timestamp 없는 Advanced `OFFLINE`은 무시하고, 더 새로운 Location 상태 이벤트나 성공한 Advanced status 조회를 online 증거로 사용하면서 더 최신의 명시적 health `OFFLINE`은 유지합니다.
+- 대표 HA switch 뒤에 둘 이상의 검증 가능한 switch component가 있으면 Advanced component transaction을 안정된 순서로 실행하고 bounded confirmation window의 조기·최종 `/status` 조회에서 전체 벡터가 일치할 때만 성공으로 확인합니다.
+- 일부 component dispatch 또는 상태 확인이 실패하면 완료된 component를 원래 상태 벡터로 되돌립니다. 복구 중 부분 실패의 보상도 원래 값을 유지하며, 부분 실패와 rollback 실패는 고정된 비민감 오류 코드로 반환합니다.
+- 실제 `lastUpdatedDate`를 포함해 timestamp 없는 Advanced `OFFLINE`은 무시하고, 더 새로운 Location 상태 이벤트나 성공한 Advanced status 조회를 online 증거로 사용하면서 더 최신의 명시적 health `OFFLINE`은 유지합니다.
 - 단일 component 장치는 기존의 검증된 Web native 경로를 유지하며 lock, valve, door, garage 유형은 component transaction에서 제외합니다.
 
 ## 0.1.147

@@ -432,52 +432,62 @@ export class SafeCommandService {
       this.options.executor
     );
     if (!execute) throw new SafeCommandError("command_execution_failed");
+    const timeoutMs =
+      request.timeout === undefined ? this.options.timeoutMs : request.timeout * 1_000;
+    const confirmation = waitForComponentVector({
+      devices: this.options.devices,
+      deviceId: request.targetId,
+      expected: plan.desiredVector,
+      afterSequence: this.options.devices.currentSequence(),
+      resync: () => this.options.resync({ deviceId: request.targetId })
+    });
     try {
       await execute(plan.transaction);
     } catch (error) {
+      confirmation.cancel();
       throw commandError(error);
     }
-    const refreshed = await this.#refreshComponentStatus(request.targetId);
-    if (
-      refreshed &&
-      componentVectorMatches(
-        this.options.devices.snapshot(),
-        request.targetId,
-        plan.desiredVector
-      )
-    ) {
+    confirmation.startTimeout(timeoutMs, this.options.resyncAfterMs, Date.now());
+    try {
+      const evidence = await confirmation.result;
       return confirmed(
         request.clientRequestId,
-        this.options.devices.currentSequence(),
+        evidence.sequence,
         "inventory_snapshot",
         "advanced"
       );
+    } catch (error) {
+      if (
+        !(error instanceof SafeCommandError) ||
+        error.code !== "command_confirmation_timeout"
+      ) {
+        throw error;
+      }
     }
+    const rollbackConfirmation = waitForComponentVector({
+      devices: this.options.devices,
+      deviceId: request.targetId,
+      expected: plan.originalVector,
+      afterSequence: this.options.devices.currentSequence(),
+      resync: () => this.options.resync({ deviceId: request.targetId })
+    });
     try {
       await execute(plan.rollbackTransaction);
     } catch {
+      rollbackConfirmation.cancel();
       throw new SafeCommandError("component_command_rollback_failed");
     }
-    const rollbackRefreshed = await this.#refreshComponentStatus(request.targetId);
-    if (
-      !rollbackRefreshed ||
-      !componentVectorMatches(
-        this.options.devices.snapshot(),
-        request.targetId,
-        plan.originalVector
-      )
-    ) {
+    rollbackConfirmation.startTimeout(
+      timeoutMs,
+      this.options.resyncAfterMs,
+      Date.now()
+    );
+    try {
+      await rollbackConfirmation.result;
+    } catch {
       throw new SafeCommandError("component_command_rollback_failed");
     }
     throw new SafeCommandError("command_confirmation_timeout");
-  }
-
-  async #refreshComponentStatus(deviceId: string): Promise<boolean> {
-    try {
-      return (await this.options.resync({ deviceId })) !== undefined;
-    } catch {
-      return false;
-    }
   }
 
   async #executeScene(
@@ -830,6 +840,34 @@ function waitForLocationArmState(options: { devices: DeviceStore; locationId: st
   });
 }
 
+function waitForComponentVector(options: {
+  devices: DeviceStore;
+  deviceId: string;
+  expected: readonly ComponentVectorState[];
+  afterSequence: number;
+  resync: CommandResync;
+}): ConfirmationWait {
+  const matchesSnapshot = () =>
+    componentVectorMatches(
+      options.devices.snapshot(),
+      options.deviceId,
+      options.expected
+    );
+  return waitForPredicate({
+    devices: options.devices,
+    afterSequence: options.afterSequence,
+    resync: options.resync,
+    // Push events may update the vector, but only a successful Advanced status
+    // refresh can confirm or restore an aggregate component transaction.
+    matches: () => false,
+    acceptsResyncEvidence: (evidence, minStartedAtMs) =>
+      evidence !== undefined &&
+      (minStartedAtMs === undefined || evidence.startedAtMs >= minStartedAtMs) &&
+      matchesSnapshot(),
+    forceFinalResync: true
+  });
+}
+
 interface ConfirmationWait {
   result: Promise<ConfirmationEvidence>;
   cancel: () => void;
@@ -843,7 +881,7 @@ interface ConfirmationEvidence {
   commandId?: string;
 }
 
-function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: CommandResync; matches: (event: BridgeDeviceStoreEvent) => boolean; invalidates?: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean; acceptsResyncEvidence?: (evidence: CommandResyncEvidence | undefined, minStartedAtMs?: number) => boolean; acceptsEvidence?: (evidence: ConfirmationEvidence) => boolean; stabilityMs?: number }): ConfirmationWait {
+function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: CommandResync; matches: (event: BridgeDeviceStoreEvent) => boolean; invalidates?: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean; acceptsResyncEvidence?: (evidence: CommandResyncEvidence | undefined, minStartedAtMs?: number) => boolean; acceptsEvidence?: (evidence: ConfirmationEvidence) => boolean; stabilityMs?: number; forceFinalResync?: boolean }): ConfirmationWait {
   let settled = false;
   let interactionComplete = false;
   let unsubscribe: () => void = () => undefined;
@@ -931,16 +969,21 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
     });
     return true;
   };
-  const resyncAndCheck = (minStartedAtMs?: number): Promise<void> => {
-    if (!resyncPromise) {
-      lastResyncStartedAfterSequence = options.devices.currentSequence();
-      resyncPromise = options
-        .resync()
-        .catch(() => undefined)
-        .then(async (evidence) => {
-          if (settleFromResyncEvidence(evidence, minStartedAtMs)) return;
-          await settleFromSnapshot(lastResyncStartedAfterSequence);
-        });
+  const resyncAndCheck = (
+    minStartedAtMs?: number,
+    force = false
+  ): Promise<void> => {
+    if (!resyncPromise || force) {
+      const previous = force ? resyncPromise : undefined;
+      const next = (async () => {
+        if (previous) await previous;
+        if (settled) return;
+        lastResyncStartedAfterSequence = options.devices.currentSequence();
+        const evidence = await options.resync().catch(() => undefined);
+        if (settleFromResyncEvidence(evidence, minStartedAtMs)) return;
+        await settleFromSnapshot(lastResyncStartedAfterSequence);
+      })();
+      resyncPromise = next;
     }
     return resyncPromise;
   };
@@ -965,7 +1008,11 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
       timer = setTimeout(() => {
         timer = undefined;
         const finalCheck = hasEarlyResync
-          ? settleFromSnapshot(lastResyncStartedAfterSequence ?? options.afterSequence)
+          ? options.forceFinalResync === true
+            ? resyncAndCheck(minResyncStartedAtMs, true).then(() =>
+                settleFromSnapshot(lastResyncStartedAfterSequence ?? options.afterSequence)
+              )
+            : settleFromSnapshot(lastResyncStartedAfterSequence ?? options.afterSequence)
           : resyncAndCheck(minResyncStartedAtMs).then(() =>
               settleFromSnapshot(lastResyncStartedAfterSequence ?? options.afterSequence)
             );
@@ -1145,7 +1192,7 @@ function buildComponentSwitchPlan(
     },
     rollbackTransaction: {
       actions: safeEntries.map((entry) => action(entry, entry.originalCommand)),
-      rollbackActions: safeEntries.map((entry) => action(entry, entry.desiredCommand))
+      rollbackActions: safeEntries.map((entry) => action(entry, entry.originalCommand))
     },
     desiredVector: safeEntries.map((entry) => ({
       component: entry.state.component,

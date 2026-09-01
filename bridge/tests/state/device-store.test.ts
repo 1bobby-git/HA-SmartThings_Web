@@ -376,6 +376,22 @@ describe("DeviceStore", () => {
     expect(listener).toHaveBeenCalledWith(expect.objectContaining({ type: "inventory", sequence: 2 }));
   });
 
+  test("reads lastUpdatedDate from the observed device health snapshot", () => {
+    const store = new DeviceStore();
+
+    observeHealthSnapshot(store, {
+      deviceId: "dev_001",
+      locationId: "loc_001",
+      state: "OFFLINE",
+      lastUpdatedDate: "2026-09-01T00:02:00.000Z"
+    });
+
+    expect(store.snapshot().devices[0]).toMatchObject({
+      online: false,
+      healthUpdatedAt: "2026-09-01T00:02:00.000Z"
+    });
+  });
+
   test("a newer Location state event restores online availability", () => {
     const store = new DeviceStore();
     observeSnapshotState(store, {

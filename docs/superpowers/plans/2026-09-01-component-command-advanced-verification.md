@@ -356,7 +356,7 @@ Sort states by role: `main`, numeric `switchN`, then component token. Build targ
 
 - [x] **Step 4: Execute, resync, verify, and rollback**
 
-Before normal single-state waiting, use the component plan. Execute the transaction, call `resync({ deviceId })`, then verify every component state from `devices.snapshot()`.
+Before normal single-state waiting, use the component plan. Execute the transaction, start the bounded confirmation window, call an early `resync({ deviceId })`, and if the vector has not converged perform one final resync at timeout before rollback. Verify every component state from `devices.snapshot()` only after a successful Advanced status read.
 
 If every component matches, return:
 
@@ -364,7 +364,7 @@ If every component matches, return:
 confirmed(clientRequestId, sequence, "inventory_snapshot", "advanced")
 ```
 
-If any component does not match, execute a second component transaction containing the original state vector, resync again, verify rollback, then throw `command_confirmation_timeout`. If rollback does not match, throw `component_command_rollback_failed`.
+If the final Advanced status still does not match, execute a second component transaction containing the original state vector. Its compensation commands must also use the original values so a partial restore cannot reapply the requested vector. Resync again, verify rollback, then throw `command_confirmation_timeout`. If rollback does not match, throw `component_command_rollback_failed`.
 
 - [x] **Step 5: Map safe errors through HTTP and HA**
 

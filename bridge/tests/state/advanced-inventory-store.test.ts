@@ -24,6 +24,69 @@ describe("DeviceStore Advanced primary inventory", () => {
     expect(store.snapshot().devices[0]).not.toHaveProperty("healthUpdatedAt");
   });
 
+  test("applies a newer dated Advanced OFFLINE from lastUpdatedDate", () => {
+    const store = new DeviceStore();
+    store.observeAdvancedDeviceSnapshot({
+      items: [
+        {
+          deviceId: "dev_001",
+          locationId: "loc_001",
+          healthState: {
+            state: "ONLINE",
+            lastUpdatedDate: "2026-09-01T00:01:00.000Z"
+          },
+          components: []
+        }
+      ]
+    });
+
+    store.observeAdvancedDeviceSnapshot({
+      items: [
+        {
+          deviceId: "dev_001",
+          locationId: "loc_001",
+          healthState: {
+            state: "OFFLINE",
+            lastUpdatedDate: "2026-09-01T00:02:00.000Z"
+          },
+          components: []
+        }
+      ]
+    });
+
+    expect(store.snapshot().devices[0]).toMatchObject({
+      online: false,
+      healthUpdatedAt: "2026-09-01T00:02:00.000Z"
+    });
+  });
+
+  test("keeps newer successful status evidence over older Advanced health", () => {
+    const store = new DeviceStore();
+    store.observeAdvancedDeviceSnapshot({
+      items: [{ deviceId: "dev_001", locationId: "loc_001", components: [] }]
+    });
+    store.observeOnlineEvidence("dev_001", Date.parse("2026-09-01T00:03:00.000Z"));
+
+    store.observeAdvancedDeviceSnapshot({
+      items: [
+        {
+          deviceId: "dev_001",
+          locationId: "loc_001",
+          healthState: {
+            state: "OFFLINE",
+            lastUpdatedDate: "2026-09-01T00:02:00.000Z"
+          },
+          components: []
+        }
+      ]
+    });
+
+    expect(store.snapshot().devices[0]).toMatchObject({
+      online: true,
+      healthUpdatedAt: "2026-09-01T00:03:00.000Z"
+    });
+  });
+
   test("merges Advanced locations, rooms, and devices without changing canonical keys", () => {
     const store = new DeviceStore();
     const listener = vi.fn();
