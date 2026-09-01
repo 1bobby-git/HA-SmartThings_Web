@@ -226,6 +226,213 @@ describe("DeviceStore Advanced primary inventory", () => {
     expect(store.capabilityBindings("dev_001")[0]?.component).toBe("identifier_aux");
   });
 
+  test("clears command-only capability bindings removed by a later authoritative Advanced row", () => {
+    const store = new DeviceStore();
+    store.observeAdvancedInventorySnapshot(
+      {
+        locations: [{ locationId: "loc_001", name: "Home" }],
+        rooms: [],
+        devices: [
+          {
+            deviceId: "dev_001",
+            locationId: "loc_001",
+            components: [
+              {
+                id: "identifier_speaker",
+                componentRole: "main",
+                capabilities: [{ id: "identifier_speechSynthesis", version: 1 }]
+              }
+            ]
+          }
+        ]
+      },
+      { authoritativeWholeSnapshot: true }
+    );
+    expect(store.capabilityBindings("dev_001")).toHaveLength(1);
+
+    store.observeAdvancedInventorySnapshot(
+      {
+        locations: [{ locationId: "loc_001", name: "Home" }],
+        rooms: [],
+        devices: [{ deviceId: "dev_001", locationId: "loc_001", components: [] }]
+      },
+      { authoritativeWholeSnapshot: true }
+    );
+
+    expect(store.capabilityBindings("dev_001")).toEqual([]);
+  });
+
+  test("replaces component roles from a later authoritative Advanced row", () => {
+    const store = new DeviceStore();
+    store.observeAdvancedInventorySnapshot(
+      {
+        locations: [{ locationId: "loc_001", name: "Home" }],
+        rooms: [],
+        devices: [
+          {
+            deviceId: "dev_001",
+            locationId: "loc_001",
+            components: [
+              {
+                id: "identifier_speaker",
+                componentRole: "speaker",
+                capabilities: [{ id: "identifier_speechSynthesis", version: 1 }]
+              }
+            ]
+          }
+        ]
+      },
+      { authoritativeWholeSnapshot: true }
+    );
+
+    store.observeAdvancedInventorySnapshot(
+      {
+        locations: [{ locationId: "loc_001", name: "Home" }],
+        rooms: [],
+        devices: [
+          {
+            deviceId: "dev_001",
+            locationId: "loc_001",
+            components: [
+              {
+                id: "identifier_speaker",
+                componentRole: "main",
+                capabilities: [{ id: "identifier_speechSynthesis", version: 1 }]
+              }
+            ]
+          }
+        ]
+      },
+      { authoritativeWholeSnapshot: true }
+    );
+
+    expect(store.capabilityBindings("dev_001")).toEqual([
+      {
+        component: "identifier_speaker",
+        componentRole: "main",
+        capability: "identifier_speechSynthesis",
+        version: 1
+      }
+    ]);
+  });
+
+  test("preserves capability bindings across partial status-only Advanced rows", () => {
+    const store = new DeviceStore();
+    store.observeAdvancedInventorySnapshot(
+      {
+        locations: [{ locationId: "loc_001", name: "Home" }],
+        rooms: [],
+        devices: [
+          {
+            deviceId: "dev_001",
+            locationId: "loc_001",
+            components: [
+              {
+                id: "identifier_speaker",
+                componentRole: "main",
+                capabilities: [{ id: "identifier_speechSynthesis", version: 1 }]
+              }
+            ]
+          }
+        ]
+      },
+      { authoritativeWholeSnapshot: true }
+    );
+
+    store.observeAdvancedDeviceSnapshot({
+      items: [
+        {
+          deviceId: "dev_001",
+          locationId: "loc_001",
+          status: {
+            components: {
+              identifier_main: {
+                identifier_switch: {
+                  switch: {
+                    value: "on",
+                    timestamp: "2026-09-01T02:21:20.000Z"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    });
+
+    expect(store.capabilityBindings("dev_001")).toEqual([
+      {
+        component: "identifier_speaker",
+        componentRole: "main",
+        capability: "identifier_speechSynthesis",
+        version: 1
+      }
+    ]);
+  });
+
+  test("does not restore capability bindings from normalized inventory persistence", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-capability-bindings-"));
+    const sqlitePath = join(root, "bridge.sqlite");
+    let first: DeviceStore | undefined;
+    let second: DeviceStore | undefined;
+    try {
+      first = new DeviceStore({ sqlitePath });
+      first.observeAdvancedInventorySnapshot(
+        {
+          locations: [{ locationId: "loc_001", name: "Home" }],
+          rooms: [],
+          devices: [
+            {
+              deviceId: "dev_001",
+              locationId: "loc_001",
+              components: [
+                {
+                  id: "identifier_speaker",
+                  componentRole: "main",
+                  capabilities: [{ id: "identifier_speechSynthesis", version: 1 }]
+                }
+              ]
+            }
+          ]
+        },
+        { authoritativeWholeSnapshot: true }
+      );
+      expect(first.capabilityBindings("dev_001")).toHaveLength(1);
+      first.close();
+      first = undefined;
+
+      second = new DeviceStore({ sqlitePath });
+      expect(second.capabilityBindings("dev_001")).toEqual([]);
+      second.observeAdvancedInventorySnapshot(
+        {
+          locations: [{ locationId: "loc_001", name: "Home" }],
+          rooms: [],
+          devices: [
+            {
+              deviceId: "dev_001",
+              locationId: "loc_001",
+              components: [
+                {
+                  id: "identifier_speaker",
+                  componentRole: "main",
+                  capabilities: [{ id: "identifier_speechSynthesis", version: 1 }]
+                }
+              ]
+            }
+          ]
+        },
+        { authoritativeWholeSnapshot: true }
+      );
+      expect(second.capabilityBindings("dev_001")).toHaveLength(1);
+      second.close();
+      second = undefined;
+    } finally {
+      first?.close();
+      second?.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("retains redacted Advanced relationship and classification metadata", () => {
     const store = new DeviceStore();
     store.observeAdvancedInventorySnapshot({

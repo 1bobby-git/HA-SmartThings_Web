@@ -722,17 +722,31 @@ export class DeviceStore {
         else delete device.advanced;
         changed = true;
       }
-      for (const [key, version] of advancedCapabilityVersions(
+      const hasExplicitComponents = Array.isArray(row.components);
+      const observedCapabilityVersions = advancedCapabilityVersions(
         row.components,
         this.#normalizeAdvancedAlias
-      )) {
-        device.capabilityVersions.set(key, version);
-      }
-      for (const [component, role] of advancedComponentRoles(
+      );
+      const observedComponentRoles = advancedComponentRoles(
         row.components,
         this.#normalizeAdvancedAlias
-      )) {
-        device.componentRoles.set(component, role);
+      );
+      if (observeRestoredPresence && hasExplicitComponents) {
+        if (!mapsEqual(device.capabilityVersions, observedCapabilityVersions)) {
+          device.capabilityVersions = observedCapabilityVersions;
+          changed = true;
+        }
+        if (!mapsEqual(device.componentRoles, observedComponentRoles)) {
+          device.componentRoles = observedComponentRoles;
+          changed = true;
+        }
+      } else {
+        for (const [key, version] of observedCapabilityVersions) {
+          device.capabilityVersions.set(key, version);
+        }
+        for (const [component, role] of observedComponentRoles) {
+          device.componentRoles.set(component, role);
+        }
       }
       const nextName = safeName(
         row.label ?? row.name ?? row.deviceLabel ?? row.deviceName
@@ -2573,6 +2587,14 @@ function setIfChanged<T>(map: Map<string, T>, key: string, value: T): boolean {
   const current = map.get(key);
   if (current && JSON.stringify(current) === JSON.stringify(value)) return false;
   map.set(key, value);
+  return true;
+}
+
+function mapsEqual<T>(left: ReadonlyMap<string, T>, right: ReadonlyMap<string, T>): boolean {
+  if (left.size !== right.size) return false;
+  for (const [key, value] of left) {
+    if (right.get(key) !== value) return false;
+  }
   return true;
 }
 
