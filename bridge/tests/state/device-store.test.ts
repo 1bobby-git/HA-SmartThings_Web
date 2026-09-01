@@ -524,6 +524,132 @@ describe("DeviceStore", () => {
     }
   });
 
+  test("restores online from newer persisted Location state evidence", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-restored-liveness-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const seeded = new DeviceStore({ sqlitePath });
+      seeded.close();
+      const db = new DatabaseSync(sqlitePath);
+      db.prepare(
+        "INSERT INTO normalized_inventory (schema_version, inventory_json, persisted_at) VALUES (1, ?, ?)"
+      ).run(
+        JSON.stringify({
+          schemaVersion: 1,
+          sequence: 7,
+          locations: [],
+          rooms: [],
+          scenes: [],
+          devices: [
+            {
+              id: "dev_324",
+              locationId: "loc_001",
+              roomId: null,
+              name: "Safe light",
+              type: "light",
+              online: false,
+              healthUpdatedAt: "2026-08-29T12:16:26.043Z",
+              states: [
+                {
+                  component: "identifier_main",
+                  capability: "identifier_colorTemperature",
+                  attribute: "colorTemperature",
+                  value: 2732,
+                  unit: "K",
+                  updatedAt: "2026-08-31T16:41:26.902Z",
+                  source: "LOCATION_EVENT"
+                }
+              ]
+            }
+          ]
+        }),
+        "2026-09-01T00:00:00.000Z"
+      );
+      db.close();
+
+      const restored = new DeviceStore({ sqlitePath });
+      expect(restored.snapshot().devices[0]).toMatchObject({
+        id: "dev_324",
+        online: true,
+        healthUpdatedAt: "2026-08-31T16:41:26.902Z"
+      });
+      restored.close();
+
+      const persisted = new DeviceStore({ sqlitePath });
+      expect(persisted.snapshot().devices[0]).toMatchObject({
+        id: "dev_324",
+        online: true,
+        healthUpdatedAt: "2026-08-31T16:41:26.902Z"
+      });
+      persisted.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
+  test("does not treat a persisted explicit offline state as positive liveness", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-restored-offline-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const seeded = new DeviceStore({ sqlitePath });
+      seeded.close();
+      const db = new DatabaseSync(sqlitePath);
+      db.prepare(
+        "INSERT INTO normalized_inventory (schema_version, inventory_json, persisted_at) VALUES (1, ?, ?)"
+      ).run(
+        JSON.stringify({
+          schemaVersion: 1,
+          sequence: 8,
+          locations: [],
+          rooms: [],
+          scenes: [],
+          devices: [
+            {
+              id: "dev_165",
+              locationId: "loc_001",
+              roomId: null,
+              name: "Offline device",
+              type: "light",
+              online: false,
+              healthUpdatedAt: "2024-07-08T04:00:46.118Z",
+              states: [
+                {
+                  component: "identifier_main",
+                  capability: "identifier_health",
+                  attribute: "DeviceWatch-DeviceStatus",
+                  value: "offline",
+                  unit: null,
+                  updatedAt: "2026-08-31T22:59:03.625Z",
+                  source: "LOCATION_EVENT"
+                }
+              ]
+            }
+          ]
+        }),
+        "2026-09-01T00:00:00.000Z"
+      );
+      db.close();
+
+      const restored = new DeviceStore({ sqlitePath });
+      expect(restored.snapshot().devices[0]).toMatchObject({
+        id: "dev_165",
+        online: false,
+        healthUpdatedAt: "2024-07-08T04:00:46.118Z"
+      });
+      restored.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
   test("publishes live state before coalesced inventory persistence", () => {
     const root = mkdtempSync(join(tmpdir(), "stw-device-store-live-first-"));
     try {

@@ -241,12 +241,13 @@ export class DeviceStore {
       `);
       const restored = this.#loadPersistedInventory();
       if (restored) {
-        this.#restore(restored);
+        const livenessReconciled = this.#restore(restored);
         // Devices restored from a previous session start as unconfirmed. Keep
         // them through login/reconnect gaps and remove only entries missing
         // from the next complete consumer device snapshot. Partial location,
         // room, scene, and Advanced responses are not authoritative inventory.
         this.#sessionPendingDeviceIds = new Set(restored.devices.map((d) => d.id));
+        if (livenessReconciled) this.#schedulePersist();
       }
     }
   }
@@ -975,13 +976,14 @@ export class DeviceStore {
     }
   }
 
-  #restore(inventory: BridgeInventory): void {
+  #restore(inventory: BridgeInventory): boolean {
+    let livenessReconciled = false;
     this.#sequence = inventory.sequence;
     for (const location of inventory.locations) this.#locations.set(location.id, { ...location });
     for (const room of inventory.rooms) this.#rooms.set(room.id, { ...room });
     for (const scene of inventory.scenes) this.#scenes.set(scene.id, cloneScene(scene));
     for (const device of inventory.devices) {
-      this.#devices.set(device.id, {
+      const restored: MutableDevice = {
         id: device.id,
         locationId: device.locationId,
         roomId: device.roomId,
@@ -994,8 +996,20 @@ export class DeviceStore {
         controls: new Map((device.controls ?? []).map((control) => [control.id, cloneControl(control)])),
         capabilityVersions: new Map(),
         ...(device.advanced ? { advanced: cloneAdvancedMetadata(device.advanced) } : {})
-      });
+      };
+      const positiveEvidenceAt = latestPersistedPositiveEvidenceAt(restored.states.values());
+      if (
+        !restored.online &&
+        positiveEvidenceAt &&
+        !isOlderOrUndated(positiveEvidenceAt, restored.healthUpdatedAt)
+      ) {
+        restored.online = true;
+        restored.healthUpdatedAt = positiveEvidenceAt;
+        livenessReconciled = true;
+      }
+      this.#devices.set(device.id, restored);
     }
+    return livenessReconciled;
   }
 
   #schedulePersist(): void {
@@ -2341,6 +2355,32 @@ function isOlderOrUndated(candidate: string | null, current: string | null): boo
   if (current === null) return false;
   if (candidate === null) return true;
   return Date.parse(candidate) <= Date.parse(current);
+}
+
+function latestPersistedPositiveEvidenceAt(
+  states: Iterable<BridgeDeviceState>
+): string | null {
+  let latest: string | null = null;
+  for (const state of states) {
+    if (
+      !state.updatedAt ||
+      (state.source !== "LOCATION_EVENT" && state.source !== "COMMAND_STATUS_RECHECK") ||
+      explicitNegativeLivenessState(state)
+    ) {
+      continue;
+    }
+    if (latest === null || Date.parse(state.updatedAt) > Date.parse(latest)) {
+      latest = state.updatedAt;
+    }
+  }
+  return latest;
+}
+
+function explicitNegativeLivenessState(state: BridgeDeviceState): boolean {
+  if (typeof state.value !== "string") return false;
+  return ["offline", "unavailable", "disconnected", "not connected", "not_connected"].includes(
+    state.value.trim().toLowerCase()
+  );
 }
 
 function isStrictlyOlderOrUndated(candidate: string | null, current: string | null): boolean {
