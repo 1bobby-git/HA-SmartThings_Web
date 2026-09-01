@@ -1851,6 +1851,9 @@ def parse_control(raw: Any) -> BridgeControl | None:
     component = raw.get("component")
     capability = raw.get("capability")
     attribute = raw.get("attribute")
+    transport = raw.get("transport")
+    if transport is not None and transport not in {"advanced", "location_native"}:
+        return None
     minimum = raw.get("min")
     maximum = raw.get("max")
     step = raw.get("step")
@@ -1879,9 +1882,7 @@ def parse_control(raw: Any) -> BridgeControl | None:
         step=float(step)
         if isinstance(step, (int, float)) and not isinstance(step, bool)
         else None,
-        transport=raw.get("transport")
-        if raw.get("transport") in {"advanced", "location_native"}
-        else None,
+        transport=transport if isinstance(transport, str) else None,
     )
 
 

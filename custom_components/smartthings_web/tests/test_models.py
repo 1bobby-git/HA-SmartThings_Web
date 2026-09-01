@@ -48,6 +48,7 @@ from models import (  # noqa: E402
     number_controls,
     numeric_range_for,
     option_values,
+    parse_control,
     parse_command_result,
     primary_state_attributes,
     safe_generic_toggle_control,
@@ -783,6 +784,94 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         }
 
         self.assertEqual(control_kind(device, switch), "light")
+
+    def test_control_kind_accepts_advanced_reversible_switch_catalog_control(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        switch = BridgeState(
+            component="main",
+            capability="switch",
+            attribute="switch",
+            value="off",
+            unit=None,
+            updated_at="2026-08-24T21:10:00Z",
+        )
+        device.states = {switch.key: switch}
+        device.controls = {
+            "advanced:main:switch:switch": BridgeControl(
+                "advanced:main:switch:switch",
+                "toggle",
+                "Power",
+                component=switch.component,
+                capability=switch.capability,
+                attribute=switch.attribute,
+                commands=("on", "off"),
+                transport="advanced",
+            )
+        }
+
+        self.assertEqual(control_kind(device, switch), "switch")
+
+    def test_control_kind_accepts_advanced_reversible_light_only_with_light_evidence(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        switch = BridgeState(
+            component="main",
+            capability="switch",
+            attribute="switch",
+            value="off",
+            unit=None,
+            updated_at="2026-08-24T21:10:00Z",
+        )
+        level = BridgeState(
+            component="main",
+            capability="switchLevel",
+            attribute="level",
+            value=20,
+            unit="%",
+            updated_at="2026-08-24T21:10:00Z",
+        )
+        device.states = {switch.key: switch, level.key: level}
+        device.controls = {
+            "advanced:main:switch:switch": BridgeControl(
+                "advanced:main:switch:switch",
+                "toggle",
+                "Power",
+                component=switch.component,
+                capability=switch.capability,
+                attribute=switch.attribute,
+                commands=("on", "off"),
+                transport="advanced",
+            ),
+            "advanced:main:switchLevel:level": BridgeControl(
+                "advanced:main:switchLevel:level",
+                "slider",
+                "Level",
+                component=level.component,
+                capability=level.capability,
+                attribute=level.attribute,
+                commands=("setLevel",),
+                transport="advanced",
+            ),
+        }
+
+        self.assertEqual(control_kind(device, switch), "light")
+
+    def test_parse_control_rejects_unsupported_transport_value(self) -> None:
+        self.assertIsNone(
+            parse_control(
+                {
+                    "id": "advanced:main:switch:switch",
+                    "kind": "toggle",
+                    "label": "Power",
+                    "component": "main",
+                    "capability": "switch",
+                    "attribute": "switch",
+                    "commands": ["on", "off"],
+                    "transport": "browser_dom",
+                }
+            )
+        )
 
     def test_unique_id_contains_attribute_once(self) -> None:
         state = next(iter(inventory(10, 20, "2026-08-24T21:10:00Z").devices["dev_001"].states.values()))

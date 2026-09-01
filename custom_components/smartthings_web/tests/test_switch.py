@@ -416,6 +416,25 @@ class SmartThingsWebSwitchTests(unittest.IsolatedAsyncioTestCase):
 
         client.async_execute_command.assert_not_awaited()
 
+    async def test_switch_becomes_unavailable_when_reversible_control_is_lost(self) -> None:
+        device, state = _device(with_control=True)
+        control_id = "toggle:identifier_cd4f3cfbf2aa:identifier_74292182f118:switch"
+        client = SimpleNamespace(async_execute_command=AsyncMock())
+        entity = SmartThingsWebSwitch(_runtime(device, client), device, state)
+        self.assertTrue(entity.available)
+
+        device.controls[control_id] = BridgeControl(
+            control_id,
+            "toggle",
+            "Power",
+            component=state.component,
+            capability=state.capability,
+            attribute=state.attribute,
+            commands=("on",),
+        )
+
+        self.assertFalse(entity.available)
+
 
 if __name__ == "__main__":
     unittest.main()

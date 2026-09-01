@@ -88,12 +88,89 @@ entity_module.SmartThingsWebEntity = SmartThingsWebEntity  # type: ignore[attr-d
 entity_module.device_info_for = lambda *_args, **_kwargs: {}  # type: ignore[attr-defined]
 sys.modules["smartthings_web.entity"] = entity_module
 
-from smartthings_web.light import SmartThingsWebLight  # noqa: E402
-from smartthings_web.models import BridgeControl, BridgeDevice, BridgeState  # noqa: E402
+from smartthings_web.light import SmartThingsWebLight, async_setup_entry  # noqa: E402
+from smartthings_web.models import (  # noqa: E402
+    BridgeControl,
+    BridgeDevice,
+    BridgeInventory,
+    BridgeState,
+    SmartThingsWebRuntime,
+)
 
 
 class SmartThingsWebLightTests(unittest.TestCase):
     """Map exact observed power and range controls to one light entity."""
+
+    def test_setup_exposes_advanced_catalog_backed_light_toggle(self) -> None:
+        switch = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "off",
+            None,
+            "2026-08-26T00:00:00Z",
+        )
+        level = BridgeState(
+            "main",
+            "switchLevel",
+            "level",
+            40,
+            "%",
+            "2026-08-26T00:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_light",
+            "loc_001",
+            None,
+            "Mood Light",
+            "light",
+            True,
+            states={switch.key: switch, level.key: level},
+            controls={
+                "advanced:main:switch:switch": BridgeControl(
+                    "advanced:main:switch:switch",
+                    "toggle",
+                    "Power",
+                    component=switch.component,
+                    capability=switch.capability,
+                    attribute=switch.attribute,
+                    commands=("on", "off"),
+                    transport="advanced",
+                ),
+                "advanced:main:switchLevel:level": BridgeControl(
+                    "advanced:main:switchLevel:level",
+                    "slider",
+                    "Level",
+                    component=level.component,
+                    capability=level.capability,
+                    attribute=level.attribute,
+                    commands=("setLevel",),
+                    transport="advanced",
+                ),
+            },
+        )
+        runtime = SmartThingsWebRuntime(
+            object(),
+            "loc_001",
+            BridgeInventory(
+                1,
+                True,
+                "0.1.154",
+                "5:test",
+                {"loc_001": "Home"},
+                {},
+                {device.device_id: device},
+            ),
+        )
+        entry = SimpleNamespace(
+            runtime_data=runtime,
+            async_on_unload=lambda _callback: None,
+        )
+        added: list[SmartThingsWebLight] = []
+
+        asyncio.run(async_setup_entry(object(), entry, added.extend))
+
+        self.assertEqual([entity.state_key for entity in added], [switch.key])
 
     def test_light_preserves_raw_values_and_targets_exact_controls(self) -> None:
         states = [
@@ -184,6 +261,75 @@ class SmartThingsWebLightTests(unittest.TestCase):
         )
         self.assertEqual(client.calls[1]["arguments"], [50])
         self.assertEqual(client.calls[2]["arguments"], [3200])
+
+    def test_light_becomes_unavailable_when_reversible_control_is_lost(self) -> None:
+        switch = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "off",
+            None,
+            "2026-08-26T00:00:00Z",
+        )
+        level = BridgeState(
+            "main",
+            "switchLevel",
+            "level",
+            40,
+            "%",
+            "2026-08-26T00:00:00Z",
+        )
+        control_id = "advanced:main:switch:switch"
+        device = BridgeDevice(
+            "dev_light",
+            "loc_001",
+            None,
+            "Mood Light",
+            "light",
+            True,
+            states={switch.key: switch, level.key: level},
+            controls={
+                control_id: BridgeControl(
+                    control_id,
+                    "toggle",
+                    "Power",
+                    component=switch.component,
+                    capability=switch.capability,
+                    attribute=switch.attribute,
+                    commands=("on", "off"),
+                    transport="advanced",
+                ),
+                "advanced:main:switchLevel:level": BridgeControl(
+                    "advanced:main:switchLevel:level",
+                    "slider",
+                    "Level",
+                    component=level.component,
+                    capability=level.capability,
+                    attribute=level.attribute,
+                    commands=("setLevel",),
+                    transport="advanced",
+                ),
+            },
+        )
+        runtime = SimpleNamespace(
+            client=object(),
+            inventory=SimpleNamespace(devices={device.device_id: device}),
+        )
+        entity = SmartThingsWebLight(runtime, device, switch)
+        self.assertTrue(entity.available)
+
+        device.controls[control_id] = BridgeControl(
+            control_id,
+            "toggle",
+            "Power",
+            component=switch.component,
+            capability=switch.capability,
+            attribute=switch.attribute,
+            commands=("on",),
+            transport="advanced",
+        )
+
+        self.assertFalse(entity.available)
 
 
 if __name__ == "__main__":

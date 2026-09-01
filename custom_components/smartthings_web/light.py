@@ -111,6 +111,7 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
             super().available
             and control is not None
             and safe_observed_control(control)
+            and control_kind(device, state) == "light"
         )
 
     @property
@@ -187,7 +188,11 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
             if device is not None and state is not None
             else None
         )
-        if control is None or not safe_observed_control(control):
+        if (
+            control is None
+            or not safe_observed_control(control)
+            or control_kind(device, state) != "light"
+        ):
             raise HomeAssistantError("SmartThings Web light has no observed power control")
         try:
             await self.runtime.client.async_execute_command(

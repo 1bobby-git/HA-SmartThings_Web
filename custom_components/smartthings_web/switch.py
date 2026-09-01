@@ -125,6 +125,7 @@ class SmartThingsWebSwitch(SmartThingsWebEntity, SwitchEntity):
             super().available
             and control is not None
             and safe_observed_control(control)
+            and safe_generic_toggle_control(control)
         )
 
     @property
