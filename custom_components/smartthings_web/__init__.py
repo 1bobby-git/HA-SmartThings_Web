@@ -1966,7 +1966,11 @@ def _strip_generated_device_slug_prefix(
 def _collapse_repeated_slug_suffix(value: str, suffix: str) -> str:
     """Collapse generated ``attr_device_device`` feedback loops."""
     duplicate_suffix = f"_{suffix}_{suffix}"
+    had_repeated_suffix = False
     while value.endswith(duplicate_suffix):
+        had_repeated_suffix = True
+        value = value[: -(len(suffix) + 1)]
+    if had_repeated_suffix and value.endswith(f"_{suffix}"):
         value = value[: -(len(suffix) + 1)]
     return value
 

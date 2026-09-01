@@ -3485,21 +3485,21 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             [
                 (
                     f"sensor.{corrupted_object_id}",
-                    "sensor.naengjanggo_supported_full_fridge_modes_naengjanggo",
+                    "sensor.naengjanggo_supported_full_fridge_modes",
                 )
             ],
         )
         self.assertEqual(
             registry_entry.entity_id,
-            "sensor.naengjanggo_supported_full_fridge_modes_naengjanggo",
+            "sensor.naengjanggo_supported_full_fridge_modes",
         )
         self.assertEqual(
             registry_entry.object_id_base,
-            "supported_full_fridge_modes_naengjanggo",
+            "supported_full_fridge_modes",
         )
         self.assertEqual(
             registry_entry.suggested_object_id,
-            "naengjanggo_supported_full_fridge_modes_naengjanggo",
+            "naengjanggo_supported_full_fridge_modes",
         )
         self.assertLess(len(registry_entry.entity_id), 80)
 
