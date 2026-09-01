@@ -22,6 +22,7 @@
     "audit:api-free": "tsx tools/api-free-audit.ts",
     "audit:api-free:runtime": "tsx tools/haos-runtime-api-audit.ts",
     "audit:fixtures": "tsx tools/sanitized-fixture-audit.ts",
+    "audit:web-parity": "tsx tools/smartthings-web-parity-audit.ts",
     "audit:secrets": "tsx tools/secret-scan.ts",
     "perf:live-control:event": "tsx tools/haos-live-control-event-benchmark.ts",
     "perf:live-control": "tsx tools/haos-live-control-benchmark.ts",
