@@ -1291,6 +1291,7 @@ function buildComponentSwitchPlan(
     };
   };
   const childDeviceIds = device.advanced?.childDeviceIds ?? [];
+  const learnedChildMappings = devices.componentChildMappings(device.id);
   let parentVerificationStates: BridgeDeviceState[] = [];
   let safeEntries: ComponentSwitchEntry[];
   if (childDeviceIds.length > 0) {
@@ -1298,12 +1299,27 @@ function buildComponentSwitchPlan(
       states,
       childDeviceIds,
       snapshot,
-      entryFor
+      entryFor,
+      learnedChildMappings
     );
     if (!childEntries) throw new SafeCommandError("unsupported_command");
+    const secondaryStates = states.filter((state) => componentRole(state) !== "main");
+    const mappings = secondaryStates.map((state, index) => {
+      const childEntry = childEntries[index];
+      if (!childEntry) throw new SafeCommandError("unsupported_command");
+      return {
+        component: state.component,
+        childDeviceId: childEntry.deviceId
+      };
+    });
+    devices.rememberComponentChildMappings(
+      device.id,
+      mappings
+    );
     safeEntries = childEntries;
     parentVerificationStates = states;
   } else {
+    if (learnedChildMappings) throw new SafeCommandError("unsupported_command");
     const entries = states.map((state) => entryFor(device.id, state));
     if (entries.some((entry) => entry === undefined)) return undefined;
     safeEntries = entries.filter(
@@ -1422,7 +1438,8 @@ function childMappedSwitchEntries(
   parentStates: readonly BridgeDeviceState[],
   childDeviceIds: readonly string[],
   snapshot: ReturnType<DeviceStore["snapshot"]>,
-  entryFor: (deviceId: string, state: BridgeDeviceState) => ComponentSwitchEntry | undefined
+  entryFor: (deviceId: string, state: BridgeDeviceState) => ComponentSwitchEntry | undefined,
+  learnedMappings?: ReadonlyMap<string, string>
 ): ComponentSwitchEntry[] | undefined {
   const secondaryStates = parentStates.filter((state) => componentRole(state) !== "main");
   if (secondaryStates.length === 0 || secondaryStates.length !== childDeviceIds.length) {
@@ -1488,7 +1505,25 @@ function childMappedSwitchEntries(
     }
   };
   visit(0, safeCandidates, []);
-  return assignments.length === 1 ? assignments[0] : undefined;
+  if (assignments.length === 1) return assignments[0];
+  if (!learnedMappings || learnedMappings.size !== secondaryStates.length) {
+    return undefined;
+  }
+  const learnedChildIds = secondaryStates.map((state) => learnedMappings.get(state.component));
+  if (
+    learnedChildIds.some((deviceId) => deviceId === undefined) ||
+    new Set(learnedChildIds).size !== childDeviceIds.length ||
+    !childDeviceIds.every((deviceId) => learnedChildIds.includes(deviceId))
+  ) {
+    return undefined;
+  }
+  const entries = learnedChildIds.map((deviceId) => {
+    const candidate = safeCandidates.find((item) => item.device.id === deviceId);
+    return candidate ? entryFor(candidate.device.id, candidate.state) : undefined;
+  });
+  return entries.every((entry): entry is ComponentSwitchEntry => entry !== undefined)
+    ? entries
+    : undefined;
 }
 
 function childWebAction(

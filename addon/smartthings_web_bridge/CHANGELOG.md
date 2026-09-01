@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.153
+
+- targeted Advanced `/status` 응답이 parent의 `childDeviceIds` 관계 메타데이터를 지우던 문제를 수정합니다.
+- exact timestamp correlation으로 한 번 검증된 component-child 매핑을 별도 저장하고 재시작 뒤에도 복원해 연속 on/off가 같은 child Web 경로를 유지합니다.
+- 0.1.152의 Location-native-only 실행, DOM 차단, parent+child Advanced status 확인과 rollback 경계를 유지합니다.
+
 ## 0.1.152
 
 - composite child direct Advanced `/commands`도 404인 live 증거에 따라, 실제 child 실행은 관찰된 Location-native child control을 stable role 순서로 직렬 사용합니다.

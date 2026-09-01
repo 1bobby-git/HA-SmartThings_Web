@@ -33,7 +33,8 @@
 
 ## HAOS 검증
 
-- 명령 전 parent/child all-off
-- parent HA `turn_on` → child Web receipt → parent+child Advanced status all-on → HA parent on
-- parent HA `turn_off` → parent+child Advanced status all-off → HA parent off
-- 최종 상태는 명령 전 all-off와 동일해야 한다.
+- `f82ba7b`/0.1.152 배포와 Core 재시작 후 명령 전 parent/child all-off를 확인했다.
+- parent HA `turn_on`은 HTTP 200, child 3개 Location-native receipt, parent+child all-on을 통과했다.
+- 이어진 parent HA `turn_off`은 HTTP 500이었다. targeted status-only refresh가 parent의 `childDeviceIds`를 지워 기존 실패 경로인 parent Advanced component transaction으로 되돌아간 것이 원인이었다.
+- 세 child HA switch를 개별 `turn_off`하여 parent/child 모두 원래 all-off로 복구했다.
+- 이 릴리스는 반복 제어 게이트를 통과하지 못했으며 0.1.153에서 관계 보존과 검증된 매핑 지속성을 수정한다.

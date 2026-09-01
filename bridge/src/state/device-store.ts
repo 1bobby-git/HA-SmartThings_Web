@@ -175,6 +175,11 @@ interface MutableDevice {
   advanced?: BridgeAdvancedDeviceMetadata;
 }
 
+interface ComponentChildMapping {
+  component: string;
+  childDeviceId: string;
+}
+
 const SNAPSHOT_QUERIES = new Set<SnapshotQuery>([
   "api/location",
   "api/scene",
@@ -206,6 +211,7 @@ export class DeviceStore {
     ttlMs: 5 * 60_000,
     maxEntries: 100_000
   });
+  readonly #componentChildMappings = new Map<string, Map<string, string>>();
   readonly #normalizeStateToken: StateTokenNormalizer;
   readonly #normalizeAdvancedAlias: AdvancedAliasNormalizer;
   readonly #identifierRole: IdentifierRoleResolver;
@@ -237,8 +243,14 @@ export class DeviceStore {
           schema_version INTEGER PRIMARY KEY,
           inventory_json TEXT NOT NULL,
           persisted_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS component_child_mappings (
+          parent_device_id TEXT PRIMARY KEY,
+          mapping_json TEXT NOT NULL,
+          persisted_at TEXT NOT NULL
         )
       `);
+      this.#loadComponentChildMappings();
       const restored = this.#loadPersistedInventory();
       if (restored) {
         const livenessReconciled = this.#restore(restored);
@@ -360,6 +372,45 @@ export class DeviceStore {
     return this.#devices
       .get(deviceId)
       ?.capabilityVersions.get(`${component}\u0000${capability}`);
+  }
+
+  componentChildMappings(parentDeviceId: string): ReadonlyMap<string, string> | undefined {
+    const mappings = this.#componentChildMappings.get(parentDeviceId);
+    return mappings ? new Map(mappings) : undefined;
+  }
+
+  rememberComponentChildMappings(
+    parentDeviceId: string,
+    mappings: readonly ComponentChildMapping[]
+  ): void {
+    const normalized = normalizedComponentChildMappings(parentDeviceId, mappings);
+    if (!normalized) return;
+    const next = new Map(normalized.map((entry) => [entry.component, entry.childDeviceId]));
+    const current = this.#componentChildMappings.get(parentDeviceId);
+    if (
+      current &&
+      JSON.stringify([...current.entries()]) === JSON.stringify([...next.entries()])
+    ) {
+      return;
+    }
+    this.#componentChildMappings.set(parentDeviceId, next);
+    if (!this.#db) return;
+    try {
+      this.#db
+        .prepare(`
+          INSERT INTO component_child_mappings (
+            parent_device_id,
+            mapping_json,
+            persisted_at
+          ) VALUES (?, ?, ?)
+          ON CONFLICT(parent_device_id) DO UPDATE SET
+            mapping_json = excluded.mapping_json,
+            persisted_at = excluded.persisted_at
+        `)
+        .run(parentDeviceId, JSON.stringify(normalized), new Date().toISOString());
+    } catch {
+      this.#onPersistenceError?.();
+    }
   }
 
   subscribe(listener: Listener): () => void {
@@ -626,7 +677,12 @@ export class DeviceStore {
       if (!id || !locationId) continue;
       if (observeRestoredPresence) this.#confirmRestoredDevice(id);
       const device = this.#ensureDevice(id, locationId);
-      const advanced = advancedDeviceMetadata(row, this.#normalizeAdvancedAlias);
+      const observedAdvanced = advancedDeviceMetadata(row, this.#normalizeAdvancedAlias);
+      const advanced = observeRestoredPresence
+        ? observedAdvanced
+        : observedAdvanced
+          ? { ...device.advanced, ...observedAdvanced }
+          : device.advanced;
       if (JSON.stringify(device.advanced) !== JSON.stringify(advanced)) {
         if (advanced) device.advanced = advanced;
         else delete device.advanced;
@@ -973,6 +1029,34 @@ export class DeviceStore {
       return parsePersistedInventory(JSON.parse(row.inventoryJson));
     } catch {
       return undefined;
+    }
+  }
+
+  #loadComponentChildMappings(): void {
+    if (!this.#db) return;
+    try {
+      const rows = this.#db
+        .prepare(`
+          SELECT parent_device_id AS parentDeviceId, mapping_json AS mappingJson
+          FROM component_child_mappings
+        `)
+        .all() as Array<{ parentDeviceId?: unknown; mappingJson?: unknown }>;
+      for (const row of rows) {
+        if (typeof row.parentDeviceId !== "string" || typeof row.mappingJson !== "string") {
+          continue;
+        }
+        const parsed = normalizedComponentChildMappings(
+          row.parentDeviceId,
+          JSON.parse(row.mappingJson) as unknown
+        );
+        if (!parsed) continue;
+        this.#componentChildMappings.set(
+          row.parentDeviceId,
+          new Map(parsed.map((entry) => [entry.component, entry.childDeviceId]))
+        );
+      }
+    } catch {
+      this.#onPersistenceError?.();
     }
   }
 
@@ -2240,6 +2324,30 @@ function unwrapSceneTypedValue(value: unknown): unknown {
 function arrayOfDeviceIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => safeId(item, "dev")).filter((item): item is string => item !== null);
+}
+
+function normalizedComponentChildMappings(
+  parentDeviceId: string,
+  value: unknown
+): ComponentChildMapping[] | undefined {
+  if (safeId(parentDeviceId, "dev") !== parentDeviceId || !Array.isArray(value)) {
+    return undefined;
+  }
+  const parsed: ComponentChildMapping[] = [];
+  for (const raw of value) {
+    const row = asRecord(raw);
+    const component = readString(row?.component);
+    const childDeviceId = safeId(row?.childDeviceId, "dev");
+    if (!safeToken(component) || !childDeviceId) return undefined;
+    parsed.push({ component, childDeviceId });
+  }
+  if (parsed.length === 0) return undefined;
+  const components = new Set(parsed.map((entry) => entry.component));
+  const childDeviceIds = new Set(parsed.map((entry) => entry.childDeviceId));
+  if (components.size !== parsed.length || childDeviceIds.size !== parsed.length) {
+    return undefined;
+  }
+  return parsed.sort((left, right) => left.component.localeCompare(right.component));
 }
 
 function parseStoredAdvancedMetadata(

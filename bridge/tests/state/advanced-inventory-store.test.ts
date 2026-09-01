@@ -217,6 +217,54 @@ describe("DeviceStore Advanced primary inventory", () => {
     });
   });
 
+  test("preserves Advanced relationships across targeted status-only refreshes", () => {
+    const store = new DeviceStore();
+    store.observeAdvancedInventorySnapshot(
+      {
+        locations: [{ locationId: "loc_001", name: "Home" }],
+        rooms: [],
+        devices: [
+          {
+            deviceId: "dev_parent",
+            locationId: "loc_001",
+            childDevices: [{ deviceId: "dev_child" }, { deviceId: "dev_other" }],
+            components: []
+          }
+        ]
+      },
+      { authoritativeWholeSnapshot: true }
+    );
+
+    store.observeAdvancedDeviceSnapshot(
+      {
+        items: [
+          {
+            deviceId: "dev_parent",
+            locationId: "loc_001",
+            status: {
+              components: {
+                identifier_main: {
+                  identifier_switch: {
+                    switch: {
+                      value: "on",
+                      timestamp: "2026-09-01T02:21:20.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      { source: "COMMAND_STATUS_RECHECK" }
+    );
+
+    expect(store.snapshot().devices[0]?.advanced?.childDeviceIds).toEqual([
+      "dev_child",
+      "dev_other"
+    ]);
+  });
+
   test("restores redacted Advanced metadata from normalized inventory persistence", () => {
     const root = mkdtempSync(join(tmpdir(), "stw-advanced-metadata-"));
     const sqlitePath = join(root, "bridge.sqlite");
@@ -245,6 +293,34 @@ describe("DeviceStore Advanced primary inventory", () => {
         ownerId: "identifier_owner",
         parentDeviceId: "dev_parent",
         restricted: true
+      });
+      second.close();
+      second = undefined;
+    } finally {
+      first?.close();
+      second?.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("persists an exact learned component-to-child mapping across restarts", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-component-child-map-"));
+    const sqlitePath = join(root, "bridge.sqlite");
+    let first: DeviceStore | undefined;
+    let second: DeviceStore | undefined;
+    try {
+      first = new DeviceStore({ sqlitePath });
+      first.rememberComponentChildMappings("dev_parent", [
+        { component: "identifier_switch2", childDeviceId: "dev_child" },
+        { component: "identifier_switch3", childDeviceId: "dev_other" }
+      ]);
+      first.close();
+      first = undefined;
+
+      second = new DeviceStore({ sqlitePath });
+      expect(Object.fromEntries(second.componentChildMappings("dev_parent") ?? [])).toEqual({
+        identifier_switch2: "dev_child",
+        identifier_switch3: "dev_other"
       });
       second.close();
       second = undefined;

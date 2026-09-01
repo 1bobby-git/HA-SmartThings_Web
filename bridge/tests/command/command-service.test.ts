@@ -42,17 +42,18 @@ describe("SafeCommandService", () => {
     });
   });
 
-  test("routes a composite parent aggregate through its matched child devices", async () => {
+  test("keeps consecutive composite commands on their matched child devices", async () => {
     const fixture = multiSwitchFixture(["main", "switch2", "switch3", "switch4"]);
     const mapped = configureChildMappedSwitch(fixture.store);
+    let resyncState: "on" | "off" = "off";
     fixture.executeDeviceAction.mockResolvedValue({
       state: "ACCEPTED",
       transport: "location_native",
       acceptedAtMs: Date.now()
     });
     fixture.resync.mockImplementation(async (request) => {
-      if (request?.deviceId === "dev_001") mapped.setParentStates("off");
-      else if (request?.deviceId) mapped.setChildState(request.deviceId, "off");
+      if (request?.deviceId === "dev_001") mapped.setParentStates(resyncState);
+      else if (request?.deviceId) mapped.setChildState(request.deviceId, resyncState);
       return deviceStatusEvidence();
     });
 
@@ -82,6 +83,24 @@ describe("SafeCommandService", () => {
     expect(
       fixture.resync.mock.calls.map(([request]) => request?.deviceId).sort()
     ).toEqual(["dev_001", "dev_116", "dev_117", "dev_145"]);
+
+    resyncState = "on";
+    fixture.executeDeviceAction.mockClear();
+    fixture.executeComponentTransaction.mockClear();
+    fixture.resync.mockClear();
+    await expect(
+      fixture.service.execute(aggregateCommand("on", "request_child_route_again"))
+    ).resolves.toMatchObject({
+      status: "confirmed",
+      confirmation: "inventory_snapshot",
+      transport: "location_native"
+    });
+    expect(fixture.executeDeviceAction.mock.calls.map(([action]) => action.deviceId)).toEqual([
+      "dev_145",
+      "dev_116",
+      "dev_117"
+    ]);
+    expect(fixture.executeComponentTransaction).not.toHaveBeenCalled();
   });
 
   test("rolls back completed child Web commands after partial failure", async () => {
