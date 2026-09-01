@@ -291,6 +291,10 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       onDiagnostic: ({ transport, stage, outcome, code }) =>
         log.info(
           `command_route:${transport}:${stage}:${outcome}${code ? `:${code}` : ""}`
+        ),
+      onComponentDiagnostic: ({ phase, ordinal, outcome, code }) =>
+        log.info(
+          `command_component:${phase}:${ordinal}:${outcome}${code ? `:${code}` : ""}`
         )
     }
   );

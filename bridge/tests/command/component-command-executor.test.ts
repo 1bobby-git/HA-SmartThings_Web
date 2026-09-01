@@ -7,6 +7,7 @@ import type {
   CommandTransportReceipt,
   RoutedCommandRequest
 } from "../../src/command/command-router.js";
+import { CommandTransportError } from "../../src/command/command-router.js";
 
 function transaction(command: "on" | "off"): ComponentTransactionExecutionInput {
   const components = ["main", "switch2", "switch3", "switch4"];
@@ -123,5 +124,39 @@ describe("ComponentCommandExecutor", () => {
       "on",
       "on"
     ]);
+  });
+
+  test("records only ordinal and safe transport failure diagnostics", async () => {
+    const diagnostics: object[] = [];
+    const transport: CommandTransport = {
+      name: "advanced",
+      execute: vi.fn(async (request) => {
+        if (request.component === "switch2") {
+          throw new CommandTransportError("unsupported", "advanced");
+        }
+        return {
+          state: "ACCEPTED" as const,
+          transport: "advanced" as const,
+          acceptedAtMs: 1
+        };
+      })
+    };
+    const input = transaction("off");
+    input.actions = input.actions.slice(0, 2);
+    input.rollbackActions = input.rollbackActions.slice(0, 2);
+
+    await expect(
+      new ComponentCommandExecutor(transport, (event) => diagnostics.push(event)).execute(input)
+    ).rejects.toThrow("component_command_partial_failure");
+    expect(diagnostics).toEqual([
+      { phase: "dispatch", ordinal: 1, outcome: "attempt" },
+      { phase: "dispatch", ordinal: 1, outcome: "accepted" },
+      { phase: "dispatch", ordinal: 2, outcome: "attempt" },
+      { phase: "dispatch", ordinal: 2, outcome: "failed", code: "unsupported" },
+      { phase: "rollback", ordinal: 1, outcome: "attempt" },
+      { phase: "rollback", ordinal: 1, outcome: "accepted" }
+    ]);
+    expect(JSON.stringify(diagnostics)).not.toContain("dev_001");
+    expect(JSON.stringify(diagnostics)).not.toContain("switch2");
   });
 });

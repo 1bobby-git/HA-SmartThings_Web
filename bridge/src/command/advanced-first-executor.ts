@@ -3,7 +3,10 @@ import type {
   DeviceActionExecutionInput,
   SafeCommandExecutor
 } from "./command-service.js";
-import { ComponentCommandExecutor } from "./component-command-executor.js";
+import {
+  ComponentCommandExecutor,
+  type ComponentCommandDiagnostic
+} from "./component-command-executor.js";
 import {
   CommandTransportError,
   OrderedCommandRouter,
@@ -37,6 +40,7 @@ export interface AdvancedFirstCommandExecutorOptions {
   domFallbackEnabled?: boolean;
   canUseAdvanced?: (input: DeviceActionExecutionInput) => boolean;
   onDiagnostic?: (event: CommandRouteDiagnostic) => void;
+  onComponentDiagnostic?: (event: ComponentCommandDiagnostic) => void;
 }
 
 export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
@@ -51,7 +55,10 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
     private readonly legacy: LegacyWebCommandExecutor,
     options: AdvancedFirstCommandExecutorOptions = {}
   ) {
-    this.#componentExecutor = new ComponentCommandExecutor(advanced);
+    this.#componentExecutor = new ComponentCommandExecutor(
+      advanced,
+      options.onComponentDiagnostic
+    );
     this.#now = options.now ?? Date.now;
     this.#domFallbackEnabled = options.domFallbackEnabled ?? true;
     this.#canUseAdvanced = options.canUseAdvanced ?? (() => false);
