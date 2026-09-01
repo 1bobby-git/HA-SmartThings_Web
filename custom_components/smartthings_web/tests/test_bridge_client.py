@@ -298,6 +298,43 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
             "GET", "/api/v1/commands/catalog?deviceId=dev_001", auth=True
         )
 
+    async def test_list_commands_returns_fresh_deep_copied_catalogs(self) -> None:
+        client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
+        payload = {
+            "schemaVersion": 1,
+            "deviceId": "dev_001",
+            "commands": [
+                {
+                    "component": "main",
+                    "capability": "speechSynthesis",
+                    "capabilityVersion": 1,
+                    "command": "speak",
+                    "arguments": [
+                        {
+                            "name": "phrase",
+                            "required": True,
+                            "sensitive": False,
+                            "schema": {"type": "string", "enum": ["Hello"]},
+                        }
+                    ],
+                    "transport": "advanced",
+                    "confirmation": "accepted_receipt",
+                    "label": "Speak",
+                    "labelSource": "capability",
+                }
+            ],
+            "omissions": {},
+        }
+        request = AsyncMock(return_value=payload)
+        client._request_json = request  # type: ignore[method-assign]
+
+        first = await client.async_list_commands("dev_001")
+        first.commands[0].arguments[0].schema["enum"].append("mutated")
+        second = await client.async_list_commands("dev_001")
+
+        self.assertIsNot(first, second)
+        self.assertEqual(second.commands[0].arguments[0].schema["enum"], ["Hello"])
+
     async def test_list_commands_rejects_raw_device_ids_before_url_construction(self) -> None:
         client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
         request = AsyncMock()
@@ -442,6 +479,45 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
                 }
                 with self.assertRaisesRegex(BridgeClientError, "bridge_response_invalid"):
                     parse_command_catalog({**valid, "commands": [bad_descriptor]}, "dev_001")
+
+    def test_parse_command_catalog_accepts_device_store_shaped_public_schema(self) -> None:
+        catalog = parse_command_catalog(
+            {
+                "schemaVersion": 1,
+                "deviceId": "dev_001",
+                "commands": [
+                    {
+                        "component": "main",
+                        "capability": "speechSynthesis",
+                        "capabilityVersion": 1,
+                        "command": "speak",
+                        "arguments": [
+                            {
+                                "name": "phrase",
+                                "required": True,
+                                "sensitive": False,
+                                "schema": {
+                                    "type": "string",
+                                    "enum": ["Hello", "Goodnight"],
+                                    "minimum": 1,
+                                    "maximum": 32,
+                                },
+                            }
+                        ],
+                        "transport": "advanced",
+                        "confirmation": "accepted_receipt",
+                        "label": "Speak",
+                        "labelSource": "capability",
+                    }
+                ],
+                "omissions": {"schema_invalid": 1},
+            },
+            "dev_001",
+        )
+
+        self.assertEqual(catalog.commands[0].arguments[0].schema["type"], "string")
+        self.assertEqual(catalog.commands[0].arguments[0].schema["enum"], ["Hello", "Goodnight"])
+        self.assertEqual(catalog.omissions, {"schema_invalid": 1})
 
     async def test_event_stream_yields_data_events_and_ignores_keepalives(self) -> None:
         session = _FakeEventSession(

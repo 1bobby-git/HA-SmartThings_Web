@@ -207,6 +207,7 @@ const SNAPSHOT_QUERIES = new Set<SnapshotQuery>([
 ]);
 const ID_PATTERN = /^(?:loc|dev|identifier)_[A-Za-z0-9]{3,64}$/u;
 const TOKEN_PATTERN = /^[A-Za-z0-9_.:-]{1,160}$/u;
+const ADVANCED_COMMAND_SCHEMA_KEYS = new Set(["type", "enum", "minimum", "maximum"]);
 const INVENTORY_PERSIST_COALESCE_MS = 25;
 const INVENTORY_PERSIST_RETRY_MS = 250;
 const CAMERA_IMAGE_ATTRIBUTES = new Set([
@@ -539,7 +540,7 @@ export class DeviceStore {
   ): void {
     const device = this.#devices.get(deviceId);
     if (!device) return;
-    const parsedCommands = parseAdvancedCommandDescriptors(commands);
+    const parsedCommands = parseAdvancedCommandDescriptors(commands, { dropInvalid: true });
     const parsedOmissions = parseAdvancedCommandOmissions(omissions);
     if (!parsedCommands || !parsedOmissions) return;
     const nextControls = new Map(
@@ -2072,7 +2073,10 @@ function controlFromParts(input: Record<string, unknown> | undefined): BridgeDev
   };
 }
 
-function parseAdvancedCommandDescriptors(value: unknown): AdvancedCommandDescriptor[] | undefined {
+function parseAdvancedCommandDescriptors(
+  value: unknown,
+  options: { dropInvalid?: boolean } = {}
+): AdvancedCommandDescriptor[] | undefined {
   if (!Array.isArray(value) || value.length > 256) return undefined;
   const result: AdvancedCommandDescriptor[] = [];
   const seen = new Set<string>();
@@ -2100,10 +2104,14 @@ function parseAdvancedCommandDescriptors(value: unknown): AdvancedCommandDescrip
       !label ||
       !["visible_web", "capability", "role", "fallback"].includes(String(labelSource))
     ) {
+      if (options.dropInvalid) continue;
       return undefined;
     }
     const args = parseAdvancedArguments(item?.arguments);
-    if (!args) return undefined;
+    if (!args) {
+      if (options.dropInvalid) continue;
+      return undefined;
+    }
     const descriptor: AdvancedCommandDescriptor = {
       component,
       ...(componentRole ? { componentRole } : {}),
@@ -2117,7 +2125,10 @@ function parseAdvancedCommandDescriptors(value: unknown): AdvancedCommandDescrip
       labelSource: labelSource as AdvancedCommandDescriptor["labelSource"]
     };
     const key = `${component}\u0000${capability}\u0000${command}\u0000${JSON.stringify(args)}`;
-    if (seen.has(key)) return undefined;
+    if (seen.has(key)) {
+      if (options.dropInvalid) continue;
+      return undefined;
+    }
     seen.add(key);
     result.push(descriptor);
   }
@@ -2157,6 +2168,7 @@ function parseAdvancedArguments(
 function parseAdvancedSchema(value: unknown): AdvancedCommandDescriptor["arguments"][number]["schema"] | undefined {
   const record = asRecord(value);
   if (!record) return undefined;
+  if (!Object.keys(record).every((key) => ADVANCED_COMMAND_SCHEMA_KEYS.has(key))) return undefined;
   const copy = jsonValue(record);
   const copyRecord = asRecord(copy);
   if (!copyRecord) return undefined;
@@ -2179,7 +2191,14 @@ function parseAdvancedSchema(value: unknown): AdvancedCommandDescriptor["argumen
   if (copyRecord.enum !== undefined) {
     if (!Array.isArray(copyRecord.enum) || copyRecord.enum.length > 128) return undefined;
   }
-  return copyRecord as AdvancedCommandDescriptor["arguments"][number]["schema"];
+  const schema: AdvancedCommandDescriptor["arguments"][number]["schema"] = {};
+  if (typeof type === "string") {
+    schema.type = type as NonNullable<AdvancedCommandDescriptor["arguments"][number]["schema"]["type"]>;
+  }
+  if (Array.isArray(copyRecord.enum)) schema.enum = [...copyRecord.enum];
+  if (typeof minimum === "number") schema.minimum = minimum;
+  if (typeof maximum === "number") schema.maximum = maximum;
+  return schema;
 }
 
 function parseAdvancedCommandOmissions(value: unknown): AdvancedCommandOmission[] | undefined {

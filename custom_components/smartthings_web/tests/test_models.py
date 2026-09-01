@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 import sys
 import unittest
@@ -640,6 +641,32 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         )
         latest.devices["dev_001"].commands[0].arguments[0].schema["enum"].append("mutated")
         self.assertEqual(merged.commands[0].arguments[0].schema["enum"], ["Hello"])
+
+    def test_command_catalog_models_are_frozen(self) -> None:
+        argument = BridgeCommandArgument(
+            name="phrase",
+            required=True,
+            sensitive=False,
+            unit=None,
+            schema={"type": "string"},
+        )
+        descriptor = BridgeCommandDescriptor(
+            component="main",
+            component_role="main",
+            capability="speechSynthesis",
+            capability_version=1,
+            command="speak",
+            arguments=(argument,),
+            transport="advanced",
+            confirmation="accepted_receipt",
+            label="Speak",
+            label_source="capability",
+        )
+
+        with self.assertRaises(FrozenInstanceError):
+            argument.name = "other"  # type: ignore[misc]
+        with self.assertRaises(FrozenInstanceError):
+            descriptor.command = "other"  # type: ignore[misc]
 
     def test_control_kind_keeps_plain_switches_out_of_binary_sensor_and_light(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")

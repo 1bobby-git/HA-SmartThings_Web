@@ -152,6 +152,64 @@ describe("AdvancedCommandCatalog", () => {
     ]);
   });
 
+  test("rejects command definition schemas outside the public catalog contract", async () => {
+    const catalog = new AdvancedCommandCatalog(async () =>
+      definition("smartthings.custom", {
+        setItems: {
+          name: "setItems",
+          arguments: [
+            {
+              name: "value",
+              required: true,
+              sensitive: false,
+              schema: { type: "array", items: { type: "string" } } as never
+            }
+          ]
+        },
+        setProperties: {
+          name: "setProperties",
+          arguments: [
+            {
+              name: "value",
+              required: true,
+              sensitive: false,
+              schema: { type: "object", properties: { mode: { type: "string" } } } as never
+            }
+          ]
+        },
+        setMode: {
+          name: "setMode",
+          arguments: [
+            {
+              name: "mode",
+              required: true,
+              sensitive: false,
+              schema: { type: "string", enum: ["auto", "cool"], minimum: 0, maximum: 10 }
+            }
+          ]
+        }
+      })
+    );
+
+    const result = await catalog.build([
+      binding("dev_safe", "main", "custom", "smartthings.custom")
+    ]);
+
+    expect(result.commandsByDevice.get("dev_safe")?.map((descriptor) => descriptor.command)).toEqual([
+      "setMode"
+    ]);
+    expect(result.commandsByDevice.get("dev_safe")?.[0]?.arguments[0]?.schema).toEqual({
+      type: "string",
+      enum: ["auto", "cool"],
+      minimum: 0,
+      maximum: 10
+    });
+    expect(result.omissions).toEqual([
+      { component: "main", capability: "custom", command: "setItems", reason: "schema_invalid" },
+      { component: "main", capability: "custom", command: "setProperties", reason: "schema_invalid" }
+    ]);
+  });
+
   test("retains aggregate omissions while grouping omissions per device", async () => {
     const catalog = new AdvancedCommandCatalog(async (capability, version) =>
       definition(capability, { unlock: { name: "unlock", arguments: [] } }, version)

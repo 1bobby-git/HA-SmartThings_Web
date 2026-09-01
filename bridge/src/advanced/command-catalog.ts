@@ -40,6 +40,7 @@ interface DefinitionResult {
 const DEFAULT_CONCURRENCY = 4;
 const STATELESS_COMMAND_PATTERN =
   /^(?:speak|refresh|press|push|momentary|ping|beep|identify|refresh[A-Z].*)$/u;
+const PUBLIC_SCHEMA_KEYS = new Set(["type", "enum", "minimum", "maximum"]);
 
 export class AdvancedCommandCatalog {
   readonly #cache: CapabilityDefinitionCache;
@@ -186,6 +187,7 @@ function parseArguments(values: unknown[]): AdvancedCapabilityCommandDefinition[
 }
 
 function parseSchema(value: Record<string, unknown>): AdvancedCapabilitySchema | undefined {
+  if (!Object.keys(value).every((key) => PUBLIC_SCHEMA_KEYS.has(key))) return undefined;
   const type = value.type;
   if (
     type !== undefined &&
@@ -200,13 +202,12 @@ function parseSchema(value: Record<string, unknown>): AdvancedCapabilitySchema |
     ? value.maximum
     : undefined;
   if (minimum !== undefined && maximum !== undefined && minimum > maximum) return undefined;
-  return {
-    ...value,
-    ...(type !== undefined ? { type: type as NonNullable<AdvancedCapabilitySchema["type"]> } : {}),
-    ...(Array.isArray(value.enum) ? { enum: [...value.enum] } : {}),
-    ...(minimum !== undefined ? { minimum } : {}),
-    ...(maximum !== undefined ? { maximum } : {})
-  };
+  const schema: AdvancedCapabilitySchema = {};
+  if (type !== undefined) schema.type = type as NonNullable<AdvancedCapabilitySchema["type"]>;
+  if (Array.isArray(value.enum)) schema.enum = [...value.enum];
+  if (minimum !== undefined) schema.minimum = minimum;
+  if (maximum !== undefined) schema.maximum = maximum;
+  return schema;
 }
 
 function safeToken(value: string): boolean {
@@ -241,10 +242,12 @@ function descriptorFor(
 function cloneSchema(
   schema: AdvancedCapabilityCommandDefinition["arguments"][number]["schema"]
 ): AdvancedCapabilityCommandDefinition["arguments"][number]["schema"] {
-  return {
-    ...schema,
-    ...(schema.enum ? { enum: [...schema.enum] } : {})
-  };
+  const clone: AdvancedCapabilityCommandDefinition["arguments"][number]["schema"] = {};
+  if (schema.type !== undefined) clone.type = schema.type;
+  if (schema.enum) clone.enum = [...schema.enum];
+  if (schema.minimum !== undefined) clone.minimum = schema.minimum;
+  if (schema.maximum !== undefined) clone.maximum = schema.maximum;
+  return clone;
 }
 
 function omission(

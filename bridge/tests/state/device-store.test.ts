@@ -3008,6 +3008,36 @@ describe("DeviceStore", () => {
     ]);
   });
 
+  test("drops Advanced command descriptors with schema keys outside the public contract", () => {
+    const store = new DeviceStore();
+    observeSnapshotState(store, {
+      componentId: "main",
+      capabilityId: "speechSynthesis",
+      attributeName: "phrase",
+      value: "",
+      timestamp: "2026-09-01T00:00:00.000Z"
+    });
+
+    store.observeAdvancedCommandCatalog("dev_001", [
+      advancedDescriptor("main", "speechSynthesis", "speak", "Speak", [], {
+        type: "string",
+        enum: ["Hello", "Goodnight"]
+      }),
+      advancedDescriptor("main", "speechSynthesis", "speakRaw", "Speak raw", [], {
+        type: "array",
+        items: { type: "string" }
+      } as never)
+    ], []);
+
+    const device = store.snapshot().devices[0];
+    expect(device?.advancedCommands?.map((command) => command.command)).toEqual(["speak"]);
+    expect(device?.advancedCommands?.[0]?.arguments[0]?.schema).toEqual({
+      type: "string",
+      enum: ["Hello", "Goodnight"]
+    });
+    expect(JSON.stringify(device)).not.toContain("items");
+  });
+
   test("does not publish or persist unchanged Advanced command catalog observations", () => {
     const root = mkdtempSync(join(tmpdir(), "stw-device-store-catalog-noop-"));
     try {

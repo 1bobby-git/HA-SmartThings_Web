@@ -54,7 +54,7 @@ class BridgeAdvancedDeviceMetadata:
     linked_device_ids: tuple[str, ...] = ()
 
 
-@dataclass
+@dataclass(frozen=True)
 class BridgeCommandArgument:
     """One safe Advanced command argument definition."""
 
@@ -65,7 +65,7 @@ class BridgeCommandArgument:
     unit: str | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class BridgeCommandDescriptor:
     """One safe Advanced command descriptor exposed by the Bridge."""
 
