@@ -210,6 +210,53 @@ describe("AdvancedCommandCatalog", () => {
             }
           ]
         },
+        setEnumRawObject: {
+          name: "setEnumRawObject",
+          arguments: [
+            {
+              name: "mode",
+              required: true,
+              sensitive: false,
+              schema: {
+                type: "string",
+                enum: [{ rawDeviceId: "550e8400-e29b-41d4-a716-446655440000" }]
+              } as never
+            }
+          ]
+        },
+        setEnumNestedObject: {
+          name: "setEnumNestedObject",
+          arguments: [
+            {
+              name: "mode",
+              required: true,
+              sensitive: false,
+              schema: { type: "string", enum: [{ items: { type: "string" } }] } as never
+            }
+          ]
+        },
+        setEnumControlString: {
+          name: "setEnumControlString",
+          arguments: [
+            {
+              name: "mode",
+              required: true,
+              sensitive: false,
+              schema: { type: "string", enum: ["safe", "bad\u0001value"] }
+            }
+          ]
+        },
+        setEnumLongString: {
+          name: "setEnumLongString",
+          arguments: [
+            {
+              name: "mode",
+              required: true,
+              sensitive: false,
+              schema: { type: "string", enum: ["x".repeat(1025)] }
+            }
+          ]
+        },
         setMinimumText: {
           name: "setMinimumText",
           arguments: [
@@ -261,13 +308,18 @@ describe("AdvancedCommandCatalog", () => {
       maximum: 10
     });
     expect(result.omissions).toEqual([
+      { component: "main", capability: "custom", command: "setEnumControlString", reason: "schema_invalid" },
+      { component: "main", capability: "custom", command: "setEnumLongString", reason: "schema_invalid" },
+      { component: "main", capability: "custom", command: "setEnumNestedObject", reason: "schema_invalid" },
       { component: "main", capability: "custom", command: "setEnumObject", reason: "schema_invalid" },
+      { component: "main", capability: "custom", command: "setEnumRawObject", reason: "schema_invalid" },
       { component: "main", capability: "custom", command: "setInvertedRange", reason: "schema_invalid" },
       { component: "main", capability: "custom", command: "setItems", reason: "schema_invalid" },
       { component: "main", capability: "custom", command: "setMaximumNaN", reason: "schema_invalid" },
       { component: "main", capability: "custom", command: "setMinimumText", reason: "schema_invalid" },
       { component: "main", capability: "custom", command: "setProperties", reason: "schema_invalid" }
     ]);
+    expect(JSON.stringify(result)).not.toContain("550e8400-e29b-41d4-a716-446655440000");
   });
 
   test("retains aggregate omissions while grouping omissions per device", async () => {

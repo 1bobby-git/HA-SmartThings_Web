@@ -208,6 +208,9 @@ const SNAPSHOT_QUERIES = new Set<SnapshotQuery>([
 const ID_PATTERN = /^(?:loc|dev|identifier)_[A-Za-z0-9]{3,64}$/u;
 const TOKEN_PATTERN = /^[A-Za-z0-9_.:-]{1,160}$/u;
 const ADVANCED_COMMAND_SCHEMA_KEYS = new Set(["type", "enum", "minimum", "maximum"]);
+const ADVANCED_COMMAND_MAX_ENUM_VALUES = 128;
+const ADVANCED_COMMAND_MAX_ENUM_STRING_LENGTH = 1024;
+const ADVANCED_COMMAND_CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/u;
 const INVENTORY_PERSIST_COALESCE_MS = 25;
 const INVENTORY_PERSIST_RETRY_MS = 250;
 const CAMERA_IMAGE_ATTRIBUTES = new Set([
@@ -2188,17 +2191,37 @@ function parseAdvancedSchema(value: unknown): AdvancedCommandDescriptor["argumen
   ) {
     return undefined;
   }
-  if (copyRecord.enum !== undefined) {
-    if (!Array.isArray(copyRecord.enum) || copyRecord.enum.length > 128) return undefined;
-  }
+  const enumValues = copyRecord.enum === undefined ? undefined : parseAdvancedEnumValues(copyRecord.enum);
+  if (copyRecord.enum !== undefined && enumValues === undefined) return undefined;
   const schema: AdvancedCommandDescriptor["arguments"][number]["schema"] = {};
   if (typeof type === "string") {
     schema.type = type as NonNullable<AdvancedCommandDescriptor["arguments"][number]["schema"]["type"]>;
   }
-  if (Array.isArray(copyRecord.enum)) schema.enum = [...copyRecord.enum];
+  if (enumValues !== undefined) schema.enum = enumValues;
   if (typeof minimum === "number") schema.minimum = minimum;
   if (typeof maximum === "number") schema.maximum = maximum;
   return schema;
+}
+
+function parseAdvancedEnumValues(value: unknown): unknown[] | undefined {
+  if (!Array.isArray(value) || value.length > ADVANCED_COMMAND_MAX_ENUM_VALUES) return undefined;
+  const enumValues: unknown[] = [];
+  for (const item of value) {
+    if (item === null || typeof item === "boolean") {
+      enumValues.push(item);
+    } else if (typeof item === "number" && Number.isFinite(item)) {
+      enumValues.push(item);
+    } else if (
+      typeof item === "string" &&
+      item.length <= ADVANCED_COMMAND_MAX_ENUM_STRING_LENGTH &&
+      !ADVANCED_COMMAND_CONTROL_CHAR_PATTERN.test(item)
+    ) {
+      enumValues.push(item);
+    } else {
+      return undefined;
+    }
+  }
+  return enumValues;
 }
 
 function parseAdvancedCommandOmissions(value: unknown): AdvancedCommandOmission[] | undefined {

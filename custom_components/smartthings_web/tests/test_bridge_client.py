@@ -460,10 +460,23 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
             cursor["enum"] = [nested]
             cursor = nested
         oversize_nested_enum = {"type": "array", "enum": [{"type": "string"} for _ in range(129)]}
+        raw_object_enum = {
+            "type": "string",
+            "enum": [{"rawDeviceId": "550e8400-e29b-41d4-a716-446655440000"}],
+        }
+        nested_object_enum = {"type": "string", "enum": [{"items": {"type": "string"}}]}
+        array_enum = {"type": "string", "enum": [["nested"]]}
+        control_string_enum = {"type": "string", "enum": ["safe", "bad\u0001value"]}
+        long_string_enum = {"type": "string", "enum": ["x" * 1025]}
         for bad_schema in (
             {"type": "string", "pattern": ".*"},
             deep,
             oversize_nested_enum,
+            raw_object_enum,
+            nested_object_enum,
+            array_enum,
+            control_string_enum,
+            long_string_enum,
         ):
             with self.subTest(schema=bad_schema):
                 bad_descriptor = {
@@ -481,6 +494,7 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
                     parse_command_catalog({**valid, "commands": [bad_descriptor]}, "dev_001")
 
     def test_parse_command_catalog_accepts_device_store_shaped_public_schema(self) -> None:
+        enum_values = ["Hello", 12, 3.5, True, False, None]
         catalog = parse_command_catalog(
             {
                 "schemaVersion": 1,
@@ -498,7 +512,7 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
                                 "sensitive": False,
                                 "schema": {
                                     "type": "string",
-                                    "enum": ["Hello", "Goodnight"],
+                                    "enum": enum_values,
                                     "minimum": 1,
                                     "maximum": 32,
                                 },
@@ -516,7 +530,9 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(catalog.commands[0].arguments[0].schema["type"], "string")
-        self.assertEqual(catalog.commands[0].arguments[0].schema["enum"], ["Hello", "Goodnight"])
+        self.assertEqual(catalog.commands[0].arguments[0].schema["enum"], enum_values)
+        enum_values.append("mutated")
+        self.assertEqual(catalog.commands[0].arguments[0].schema["enum"], ["Hello", 12, 3.5, True, False, None])
         self.assertEqual(catalog.omissions, {"schema_invalid": 1})
 
     async def test_event_stream_yields_data_events_and_ignores_keepalives(self) -> None:
@@ -837,6 +853,100 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
         device = parsed.devices["dev_001"]
         self.assertEqual([descriptor.command for descriptor in device.commands], ["on"])
         self.assertEqual(device.states[("main", "switch", "switch")].value, "on")
+
+    def test_inventory_drops_descriptors_with_structured_enum_members(self) -> None:
+        valid = {
+            "component": "main",
+            "capability": "speechSynthesis",
+            "capabilityVersion": 1,
+            "command": "speak",
+            "arguments": [
+                {
+                    "name": "phrase",
+                    "required": True,
+                    "sensitive": False,
+                    "schema": {"type": "string", "enum": ["Hello", 1, True, None]},
+                }
+            ],
+            "transport": "advanced",
+            "confirmation": "accepted_receipt",
+            "label": "Speak",
+            "labelSource": "capability",
+        }
+        parsed = parse_inventory(
+            {
+                "schemaVersion": 1,
+                "devices": [
+                    {
+                        "id": "dev_001",
+                        "locationId": "loc_001",
+                        "name": "Speaker",
+                        "advancedCommands": [
+                            valid,
+                            {
+                                **valid,
+                                "command": "speakRaw",
+                                "arguments": [
+                                    {
+                                        "name": "phrase",
+                                        "required": True,
+                                        "sensitive": False,
+                                        "schema": {
+                                            "type": "string",
+                                            "enum": [
+                                                {
+                                                    "rawDeviceId": "550e8400-e29b-41d4-a716-446655440000"
+                                                }
+                                            ],
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                **valid,
+                                "command": "speakNested",
+                                "arguments": [
+                                    {
+                                        "name": "phrase",
+                                        "required": True,
+                                        "sensitive": False,
+                                        "schema": {"type": "string", "enum": [["nested"]]},
+                                    }
+                                ],
+                            },
+                            {
+                                **valid,
+                                "command": "speakControl",
+                                "arguments": [
+                                    {
+                                        "name": "phrase",
+                                        "required": True,
+                                        "sensitive": False,
+                                        "schema": {"type": "string", "enum": ["safe", "bad\u0001value"]},
+                                    }
+                                ],
+                            },
+                            {
+                                **valid,
+                                "command": "speakLong",
+                                "arguments": [
+                                    {
+                                        "name": "phrase",
+                                        "required": True,
+                                        "sensitive": False,
+                                        "schema": {"type": "string", "enum": ["x" * 1025]},
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                ],
+            }
+        )
+
+        device = parsed.devices["dev_001"]
+        self.assertEqual([descriptor.command for descriptor in device.commands], ["speak"])
+        self.assertNotIn("550e8400-e29b-41d4-a716-446655440000", str(device.commands))
 
     def test_inventory_keeps_device_names_pristine_for_room_free_display(self) -> None:
         parsed = parse_inventory(

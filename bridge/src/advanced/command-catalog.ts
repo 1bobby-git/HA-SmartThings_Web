@@ -41,6 +41,9 @@ const DEFAULT_CONCURRENCY = 4;
 const STATELESS_COMMAND_PATTERN =
   /^(?:speak|refresh|press|push|momentary|ping|beep|identify|refresh[A-Z].*)$/u;
 const PUBLIC_SCHEMA_KEYS = new Set(["type", "enum", "minimum", "maximum"]);
+const MAX_PUBLIC_ENUM_VALUES = 128;
+const MAX_PUBLIC_ENUM_STRING_LENGTH = 1024;
+const CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/u;
 
 export class AdvancedCommandCatalog {
   readonly #cache: CapabilityDefinitionCache;
@@ -195,7 +198,8 @@ function parseSchema(value: Record<string, unknown>): AdvancedCapabilitySchema |
   ) {
     return undefined;
   }
-  if (value.enum !== undefined && !Array.isArray(value.enum)) return undefined;
+  const enumValues = value.enum === undefined ? undefined : parseSafeEnumValues(value.enum);
+  if (value.enum !== undefined && enumValues === undefined) return undefined;
   const minimum = value.minimum;
   const maximum = value.maximum;
   if (
@@ -207,10 +211,31 @@ function parseSchema(value: Record<string, unknown>): AdvancedCapabilitySchema |
   if (minimum !== undefined && maximum !== undefined && minimum > maximum) return undefined;
   const schema: AdvancedCapabilitySchema = {};
   if (type !== undefined) schema.type = type as NonNullable<AdvancedCapabilitySchema["type"]>;
-  if (Array.isArray(value.enum)) schema.enum = [...value.enum];
+  if (enumValues !== undefined) schema.enum = enumValues;
   if (minimum !== undefined) schema.minimum = minimum;
   if (maximum !== undefined) schema.maximum = maximum;
   return schema;
+}
+
+function parseSafeEnumValues(value: unknown): unknown[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_PUBLIC_ENUM_VALUES) return undefined;
+  const enumValues: unknown[] = [];
+  for (const item of value) {
+    if (item === null || typeof item === "boolean") {
+      enumValues.push(item);
+    } else if (typeof item === "number" && Number.isFinite(item)) {
+      enumValues.push(item);
+    } else if (
+      typeof item === "string" &&
+      item.length <= MAX_PUBLIC_ENUM_STRING_LENGTH &&
+      !CONTROL_CHAR_PATTERN.test(item)
+    ) {
+      enumValues.push(item);
+    } else {
+      return undefined;
+    }
+  }
+  return enumValues;
 }
 
 function safeToken(value: string): boolean {

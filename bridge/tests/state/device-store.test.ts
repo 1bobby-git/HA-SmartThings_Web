@@ -3026,6 +3026,22 @@ describe("DeviceStore", () => {
       advancedDescriptor("main", "speechSynthesis", "speakRaw", "Speak raw", [], {
         type: "array",
         items: { type: "string" }
+      } as never),
+      advancedDescriptor("main", "speechSynthesis", "speakUuid", "Speak uuid", [], {
+        type: "string",
+        enum: [{ rawDeviceId: "550e8400-e29b-41d4-a716-446655440000" }]
+      } as never),
+      advancedDescriptor("main", "speechSynthesis", "speakNested", "Speak nested", [], {
+        type: "string",
+        enum: [{ items: { type: "string" } }]
+      } as never),
+      advancedDescriptor("main", "speechSynthesis", "speakControl", "Speak control", [], {
+        type: "string",
+        enum: ["safe", "bad\u0001value"]
+      }),
+      advancedDescriptor("main", "speechSynthesis", "speakLong", "Speak long", [], {
+        type: "string",
+        enum: ["x".repeat(1025)]
       } as never)
     ], []);
 
@@ -3036,6 +3052,7 @@ describe("DeviceStore", () => {
       enum: ["Hello", "Goodnight"]
     });
     expect(JSON.stringify(device)).not.toContain("items");
+    expect(JSON.stringify(device)).not.toContain("550e8400-e29b-41d4-a716-446655440000");
   });
 
   test("does not publish or persist unchanged Advanced command catalog observations", () => {

@@ -47,6 +47,7 @@ _MAX_OMISSION_COUNT = 512
 _MAX_SCHEMA_DEPTH = 32
 _MAX_SCHEMA_NODES = 512
 _MAX_SCHEMA_BYTES = 8192
+_MAX_ENUM_STRING_LENGTH = 1024
 _CATALOG_KEYS = {"schemaVersion", "deviceId", "commands", "omissions"}
 _COMMAND_DESCRIPTOR_KEYS = {
     "component",
@@ -710,12 +711,32 @@ def _safe_command_schema(raw: Any) -> dict[str, Any] | None:
         )
     ):
         return None
-    enum_values = schema.get("enum")
-    if enum_values is not None and (
-        not isinstance(enum_values, list) or len(enum_values) > _MAX_ENUM_VALUES
-    ):
-        return None
+    if "enum" in schema:
+        enum_values = _safe_enum_values(schema.get("enum"))
+        if enum_values is None:
+            return None
+        schema["enum"] = enum_values
     return schema
+
+
+def _safe_enum_values(raw: Any) -> list[Any] | None:
+    if not isinstance(raw, list) or len(raw) > _MAX_ENUM_VALUES:
+        return None
+    values: list[Any] = []
+    for item in raw:
+        if item is None or isinstance(item, bool):
+            values.append(item)
+        elif isinstance(item, (int, float)) and not isinstance(item, bool) and isfinite(item):
+            values.append(item)
+        elif (
+            isinstance(item, str)
+            and len(item) <= _MAX_ENUM_STRING_LENGTH
+            and not re.search(r"[\u0000-\u001f\u007f]", item)
+        ):
+            values.append(item)
+        else:
+            return None
+    return values
 
 
 def _parse_command_omissions(raw: Any, *, strict: bool) -> dict[str, int] | None:
