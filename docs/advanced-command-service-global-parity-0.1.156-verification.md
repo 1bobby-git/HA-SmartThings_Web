@@ -47,7 +47,7 @@ Scope: local patch release preparation only. GitHub release publication, HAOS de
 ## Package Output
 
 - Package directory: `dist-addon/smartthings_web_bridge`
-- Package manifest SHA-256: `b8e8af5e4d1425f70565b282108507e11f6c88dbb2e537fcebaa93c46c82367d`
+- Package manifest SHA-256: `556e80d2d9a0f9213b8dfa1e300b9e54a7c12ae7fcda954f8267afc49d1aac20`
 
 ## Pending External Evidence
 
