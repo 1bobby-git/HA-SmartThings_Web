@@ -721,6 +721,8 @@ def _safe_command_schema(raw: Any) -> dict[str, Any] | None:
 def _parse_command_omissions(raw: Any, *, strict: bool) -> dict[str, int] | None:
     if raw is None:
         return {}
+    if strict and not isinstance(raw, dict):
+        return None
     if isinstance(raw, dict):
         counts: dict[str, int] = {}
         for reason, count in raw.items():

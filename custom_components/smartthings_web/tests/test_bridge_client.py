@@ -321,6 +321,17 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
             {**valid, "deviceId": "dev_002"},
             {**valid, "commands": [{} for _ in range(257)]},
             {**valid, "omissions": {"schema_invalid": 513}},
+            {
+                **valid,
+                "omissions": [
+                    {
+                        "component": "main",
+                        "capability": "switch",
+                        "command": "on",
+                        "reason": "schema_invalid",
+                    }
+                ],
+            },
             {**valid, "token": "secret-token"},
             {**valid, "rawDeviceId": "550e8400-e29b-41d4-a716-446655440000"},
         ):
