@@ -21,7 +21,7 @@ Scope: Advanced command POST execution plus global generated entity-ID convergen
 
 ## Required Local Gates
 
-- Full Python integration tests: `290 passed, 176 subtests passed`.
+- Full Python integration tests: `291 passed, 176 subtests passed`.
 - Full JavaScript tests: `72 files, 1002 tests passed`.
 - TypeScript typecheck and build: passed.
 - Secret, API-free, and fixture audits: passed.
