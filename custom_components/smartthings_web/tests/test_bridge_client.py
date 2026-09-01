@@ -321,10 +321,116 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
             {**valid, "deviceId": "dev_002"},
             {**valid, "commands": [{} for _ in range(257)]},
             {**valid, "omissions": {"schema_invalid": 513}},
+            {**valid, "token": "secret-token"},
+            {**valid, "rawDeviceId": "550e8400-e29b-41d4-a716-446655440000"},
         ):
             with self.subTest(raw=raw):
                 with self.assertRaisesRegex(BridgeClientError, "bridge_response_invalid"):
                     parse_command_catalog(raw, "dev_001")
+
+    def test_parse_command_catalog_rejects_unknown_descriptor_and_argument_fields(self) -> None:
+        descriptor = {
+            "component": "main",
+            "capability": "speechSynthesis",
+            "capabilityVersion": 1,
+            "command": "speak",
+            "arguments": [
+                {
+                    "name": "phrase",
+                    "required": True,
+                    "sensitive": False,
+                    "schema": {"type": "string"},
+                }
+            ],
+            "transport": "advanced",
+            "confirmation": "accepted_receipt",
+            "label": "Speak",
+            "labelSource": "visible_web",
+        }
+        valid = {
+            "schemaVersion": 1,
+            "deviceId": "dev_001",
+            "commands": [descriptor],
+            "omissions": {},
+        }
+        self.assertEqual(parse_command_catalog(valid, "dev_001").commands[0].command, "speak")
+        for command in (
+            {**descriptor, "rawCapability": "550e8400-e29b-41d4-a716-446655440000"},
+            {**descriptor, "token": "secret-token"},
+            {
+                **descriptor,
+                "arguments": [
+                    {
+                        "name": "phrase",
+                        "required": True,
+                        "sensitive": False,
+                        "schema": {"type": "string"},
+                        "raw": "secret",
+                    }
+                ],
+            },
+        ):
+            with self.subTest(command=command):
+                with self.assertRaisesRegex(BridgeClientError, "bridge_response_invalid"):
+                    parse_command_catalog({**valid, "commands": [command]}, "dev_001")
+
+    def test_parse_command_catalog_enforces_schema_key_and_nested_bounds(self) -> None:
+        schema: dict[str, object] = {"type": "string", "enum": ["Hello", "Goodnight"]}
+        descriptor = {
+            "component": "main",
+            "capability": "speechSynthesis",
+            "capabilityVersion": 1,
+            "command": "speak",
+            "arguments": [
+                {
+                    "name": "phrase",
+                    "required": True,
+                    "sensitive": False,
+                    "schema": schema,
+                }
+            ],
+            "transport": "advanced",
+            "confirmation": "accepted_receipt",
+            "label": "Speak",
+            "labelSource": "visible_web",
+        }
+        valid = {
+            "schemaVersion": 1,
+            "deviceId": "dev_001",
+            "commands": [descriptor],
+            "omissions": {},
+        }
+        catalog = parse_command_catalog(valid, "dev_001")
+        self.assertEqual(catalog.commands[0].arguments[0].schema["enum"], ["Hello", "Goodnight"])
+        schema["enum"].append("mutated")  # type: ignore[union-attr]
+        self.assertEqual(catalog.commands[0].arguments[0].schema["enum"], ["Hello", "Goodnight"])
+
+        deep: dict[str, object] = {"type": "object"}
+        cursor = deep
+        for _ in range(80):
+            nested: dict[str, object] = {"type": "object"}
+            cursor["enum"] = [nested]
+            cursor = nested
+        oversize_nested_enum = {"type": "array", "enum": [{"type": "string"} for _ in range(129)]}
+        for bad_schema in (
+            {"type": "string", "pattern": ".*"},
+            deep,
+            oversize_nested_enum,
+        ):
+            with self.subTest(schema=bad_schema):
+                bad_descriptor = {
+                    **descriptor,
+                    "arguments": [
+                        {
+                            "name": "phrase",
+                            "required": True,
+                            "sensitive": False,
+                            "schema": bad_schema,
+                        }
+                    ],
+                }
+                with self.assertRaisesRegex(BridgeClientError, "bridge_response_invalid"):
+                    parse_command_catalog({**valid, "commands": [bad_descriptor]}, "dev_001")
 
     async def test_event_stream_yields_data_events_and_ignores_keepalives(self) -> None:
         session = _FakeEventSession(
@@ -510,7 +616,11 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
         self.assertEqual(descriptor.component_role, "main")
         self.assertEqual(descriptor.arguments[0].name, "phrase")
         self.assertEqual(descriptor.arguments[0].schema, enum_schema)
-        self.assertEqual(device.command_omissions, {"dangerous_command": 1})
+        self.assertEqual(len(device.command_omissions), 1)
+        self.assertEqual(device.command_omissions[0].component, "main")
+        self.assertEqual(device.command_omissions[0].capability, "lock")
+        self.assertEqual(device.command_omissions[0].command, "unlock")
+        self.assertEqual(device.command_omissions[0].reason, "dangerous_command")
         enum_schema["enum"].append("mutated")
         self.assertEqual(descriptor.arguments[0].schema["enum"], ["Hello", "Goodnight"])
         descriptor.arguments[0].schema["enum"].append("local")
@@ -582,7 +692,64 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
 
         device = parsed.devices["dev_001"]
         self.assertEqual([descriptor.command for descriptor in device.commands], ["on"])
-        self.assertEqual(device.command_omissions, {"schema_invalid": 1})
+        self.assertEqual(
+            [(omission.capability, omission.reason) for omission in device.command_omissions],
+            [("switch", "schema_invalid")],
+        )
+
+    def test_inventory_drops_descriptors_with_unknown_fields_but_retains_device_state(self) -> None:
+        valid = {
+            "component": "main",
+            "capability": "switch",
+            "capabilityVersion": 1,
+            "command": "on",
+            "arguments": [],
+            "transport": "advanced",
+            "confirmation": "state",
+            "label": "Power",
+            "labelSource": "capability",
+        }
+        parsed = parse_inventory(
+            {
+                "schemaVersion": 1,
+                "devices": [
+                    {
+                        "id": "dev_001",
+                        "locationId": "loc_001",
+                        "name": "Lamp",
+                        "states": [
+                            {
+                                "component": "main",
+                                "capability": "switch",
+                                "attribute": "switch",
+                                "value": "on",
+                            }
+                        ],
+                        "advancedCommands": [
+                            valid,
+                            {**valid, "command": "off", "rawCapability": "secret-token"},
+                            {
+                                **valid,
+                                "command": "setLevel",
+                                "arguments": [
+                                    {
+                                        "name": "level",
+                                        "required": True,
+                                        "sensitive": False,
+                                        "schema": {"type": "integer"},
+                                        "raw": "secret",
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                ],
+            }
+        )
+
+        device = parsed.devices["dev_001"]
+        self.assertEqual([descriptor.command for descriptor in device.commands], ["on"])
+        self.assertEqual(device.states[("main", "switch", "switch")].value, "on")
 
     def test_inventory_keeps_device_names_pristine_for_room_free_display(self) -> None:
         parsed = parse_inventory(

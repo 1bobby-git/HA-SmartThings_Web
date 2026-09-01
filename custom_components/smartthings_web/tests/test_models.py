@@ -16,6 +16,7 @@ from models import (  # noqa: E402
     BridgeAdvancedDeviceMetadata,
     BridgeCommandArgument,
     BridgeCommandDescriptor,
+    BridgeCommandOmission,
     BridgeControl,
     BridgeDevice,
     BridgeDevicePresentation,
@@ -612,14 +613,31 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
                 label_source="visible_web",
             ),
         )
-        latest.devices["dev_001"].command_omissions = {"sensitive_argument": 1}
+        latest.devices["dev_001"].command_omissions = (
+            BridgeCommandOmission(
+                component="main",
+                capability="speechSynthesis",
+                command="speak",
+                reason="sensitive_argument",
+            ),
+        )
         runtime = SmartThingsWebRuntime(FakeClient(), "loc_001", current)
 
         runtime.apply_inventory(latest)
 
         merged = runtime.inventory.devices["dev_001"]
         self.assertEqual(merged.commands[0].arguments[0].schema["enum"], ["Hello"])
-        self.assertEqual(merged.command_omissions, {"sensitive_argument": 1})
+        self.assertEqual(
+            merged.command_omissions,
+            (
+                BridgeCommandOmission(
+                    component="main",
+                    capability="speechSynthesis",
+                    command="speak",
+                    reason="sensitive_argument",
+                ),
+            ),
+        )
         latest.devices["dev_001"].commands[0].arguments[0].schema["enum"].append("mutated")
         self.assertEqual(merged.commands[0].arguments[0].schema["enum"], ["Hello"])
 

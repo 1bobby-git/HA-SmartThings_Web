@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from copy import deepcopy
 from dataclasses import dataclass
 from ipaddress import ip_address
 import json
@@ -20,6 +19,7 @@ from .models import (
     BridgeAdvancedDeviceMetadata,
     BridgeCommandArgument,
     BridgeCommandDescriptor,
+    BridgeCommandOmission,
     BridgeCommandResult,
     BridgeDevice,
     BridgeInventory,
@@ -44,6 +44,25 @@ _MAX_COMMANDS = 256
 _MAX_ARGUMENTS = 16
 _MAX_ENUM_VALUES = 128
 _MAX_OMISSION_COUNT = 512
+_MAX_SCHEMA_DEPTH = 32
+_MAX_SCHEMA_NODES = 512
+_MAX_SCHEMA_BYTES = 8192
+_CATALOG_KEYS = {"schemaVersion", "deviceId", "commands", "omissions"}
+_COMMAND_DESCRIPTOR_KEYS = {
+    "component",
+    "componentRole",
+    "capability",
+    "capabilityVersion",
+    "command",
+    "arguments",
+    "transport",
+    "confirmation",
+    "label",
+    "labelSource",
+}
+_COMMAND_ARGUMENT_KEYS = {"name", "required", "sensitive", "unit", "schema"}
+_COMMAND_OMISSION_KEYS = {"component", "capability", "command", "reason"}
+_COMMAND_SCHEMA_KEYS = {"type", "enum", "minimum", "maximum"}
 _COMMAND_OMISSION_REASONS = {
     "definition_unavailable",
     "dangerous_command",
@@ -468,7 +487,9 @@ def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:
         advanced = _parse_advanced_metadata(item.get("advanced"))
         health_updated_at = item.get("healthUpdatedAt")
         commands = _parse_command_descriptors(item.get("advancedCommands"), strict=False)
-        command_omissions = _parse_command_omissions(item.get("commandOmissions"), strict=False)
+        command_omissions = _parse_command_omission_records(
+            item.get("commandOmissions"), strict=False
+        )
         devices[device_id] = BridgeDevice(
             device_id=device_id,
             location_id=location_id,
@@ -516,7 +537,8 @@ def parse_command_catalog(raw: dict[str, Any], device_id: str) -> BridgeCommandC
     if not _DEVICE_ALIAS.fullmatch(device_id):
         raise BridgeClientError("invalid_device_id")
     if (
-        raw.get("schemaVersion") != 1
+        set(raw) != _CATALOG_KEYS
+        or raw.get("schemaVersion") != 1
         or raw.get("deviceId") != device_id
         or not isinstance(raw.get("commands"), list)
         or len(raw["commands"]) > _MAX_COMMANDS
@@ -576,6 +598,8 @@ def _parse_command_descriptors(
 def _parse_command_descriptor(raw: Any) -> BridgeCommandDescriptor | None:
     if not isinstance(raw, dict):
         return None
+    if not set(raw).issubset(_COMMAND_DESCRIPTOR_KEYS):
+        return None
     component = _safe_command_token(raw.get("component"), allow_public=True)
     component_role = _safe_command_role(raw.get("componentRole"))
     capability = _safe_command_token(raw.get("capability"), allow_public=True)
@@ -623,6 +647,8 @@ def _parse_command_arguments(raw: Any) -> tuple[BridgeCommandArgument, ...] | No
     for item in raw:
         if not isinstance(item, dict):
             return None
+        if not set(item).issubset(_COMMAND_ARGUMENT_KEYS):
+            return None
         name = _safe_command_token(item.get("name"), allow_public=True)
         schema = _safe_command_schema(item.get("schema"))
         unit = item.get("unit")
@@ -652,8 +678,13 @@ def _parse_command_arguments(raw: Any) -> tuple[BridgeCommandArgument, ...] | No
 def _safe_command_schema(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
-    schema = deepcopy(raw)
-    if not _json_safe(schema):
+    try:
+        if len(json.dumps(raw, sort_keys=True, separators=(",", ":"))) > _MAX_SCHEMA_BYTES:
+            return None
+    except (TypeError, ValueError):
+        return None
+    schema = _clone_schema(raw, depth=0, nodes=[0])
+    if schema is None:
         return None
     schema_type = schema.get("type")
     if schema_type is not None and schema_type not in {
@@ -732,8 +763,57 @@ def _parse_command_omissions(raw: Any, *, strict: bool) -> dict[str, int] | None
     return counts
 
 
+def _parse_command_omission_records(
+    raw: Any, *, strict: bool
+) -> tuple[BridgeCommandOmission, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or len(raw) > _MAX_OMISSION_COUNT:
+        return ()
+    omissions: list[BridgeCommandOmission] = []
+    seen: set[tuple[str, str, str | None, str]] = set()
+    for item in raw:
+        parsed = _parse_command_omission(item)
+        if parsed is None:
+            if strict:
+                return ()
+            continue
+        key = (
+            parsed["component"],
+            parsed["capability"],
+            parsed.get("command"),
+            parsed["reason"],
+        )
+        if key in seen:
+            if strict:
+                return ()
+            continue
+        seen.add(key)
+        omissions.append(
+            BridgeCommandOmission(
+                component=parsed["component"],
+                capability=parsed["capability"],
+                command=parsed.get("command"),
+                reason=parsed["reason"],
+            )
+        )
+    return tuple(
+        sorted(
+            omissions,
+            key=lambda item: (
+                item.component,
+                item.capability,
+                item.command or "",
+                item.reason,
+            ),
+        )
+    )
+
+
 def _parse_command_omission(raw: Any) -> dict[str, str] | None:
     if not isinstance(raw, dict):
+        return None
+    if not set(raw).issubset(_COMMAND_OMISSION_KEYS):
         return None
     component = _safe_command_token(raw.get("component"), allow_public=True)
     capability = _safe_command_token(raw.get("capability"), allow_public=True)
@@ -798,24 +878,37 @@ def _safe_display(raw: Any) -> str | None:
     return text
 
 
-def _json_safe(raw: Any) -> bool:
+def _clone_schema(raw: Any, *, depth: int, nodes: list[int]) -> Any:
+    nodes[0] += 1
+    if depth > _MAX_SCHEMA_DEPTH or nodes[0] > _MAX_SCHEMA_NODES:
+        return None
     if raw is None or isinstance(raw, str):
-        return True
+        return raw
     if isinstance(raw, bool):
-        return True
+        return raw
     if isinstance(raw, (int, float)):
-        return not isinstance(raw, bool) and isfinite(raw)
+        return raw if not isinstance(raw, bool) and isfinite(raw) else None
     if isinstance(raw, list):
-        return len(raw) <= _MAX_ENUM_VALUES and all(_json_safe(item) for item in raw)
+        if len(raw) > _MAX_ENUM_VALUES:
+            return None
+        items = []
+        for item in raw:
+            cloned = _clone_schema(item, depth=depth + 1, nodes=nodes)
+            if cloned is None and item is not None:
+                return None
+            items.append(cloned)
+        return items
     if isinstance(raw, dict):
-        return len(raw) <= 64 and all(
-            isinstance(key, str)
-            and key not in {"__proto__", "prototype", "constructor"}
-            and len(key) <= 80
-            and _json_safe(value)
-            for key, value in raw.items()
-        )
-    return False
+        if not set(raw).issubset(_COMMAND_SCHEMA_KEYS):
+            return None
+        result: dict[str, Any] = {}
+        for key, value in raw.items():
+            cloned = _clone_schema(value, depth=depth + 1, nodes=nodes)
+            if cloned is None and value is not None:
+                return None
+            result[key] = cloned
+        return result
+    return None
 
 
 def _parse_advanced_metadata(raw: Any) -> BridgeAdvancedDeviceMetadata | None:

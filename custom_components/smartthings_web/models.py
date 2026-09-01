@@ -81,6 +81,16 @@ class BridgeCommandDescriptor:
     component_role: str | None = None
 
 
+@dataclass(frozen=True)
+class BridgeCommandOmission:
+    """One omitted Advanced command record from the Bridge inventory."""
+
+    component: str
+    capability: str
+    command: str | None
+    reason: str
+
+
 @dataclass
 class BridgeDevice:
     """One Bridge device."""
@@ -95,7 +105,7 @@ class BridgeDevice:
     states: dict[tuple[str, str, str], BridgeState] = field(default_factory=dict)
     controls: dict[str, "BridgeControl"] = field(default_factory=dict)
     commands: tuple[BridgeCommandDescriptor, ...] = ()
-    command_omissions: dict[str, int] = field(default_factory=dict)
+    command_omissions: tuple[BridgeCommandOmission, ...] = ()
     advanced: BridgeAdvancedDeviceMetadata | None = None
     health_updated_at: str | None = None
 
