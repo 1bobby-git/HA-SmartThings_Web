@@ -187,6 +187,61 @@ describe("AdvancedCommandCatalog", () => {
               schema: { type: "string", enum: ["auto", "cool"], minimum: 0, maximum: 10 }
             }
           ]
+        },
+        refreshBare: {
+          name: "refreshBare",
+          arguments: [
+            {
+              name: "mode",
+              required: true,
+              sensitive: false,
+              schema: { type: "string" }
+            }
+          ]
+        },
+        setEnumObject: {
+          name: "setEnumObject",
+          arguments: [
+            {
+              name: "mode",
+              required: true,
+              sensitive: false,
+              schema: { type: "string", enum: { auto: true } } as never
+            }
+          ]
+        },
+        setMinimumText: {
+          name: "setMinimumText",
+          arguments: [
+            {
+              name: "level",
+              required: true,
+              sensitive: false,
+              schema: { type: "number", minimum: "0" } as never
+            }
+          ]
+        },
+        setMaximumNaN: {
+          name: "setMaximumNaN",
+          arguments: [
+            {
+              name: "level",
+              required: true,
+              sensitive: false,
+              schema: { type: "number", maximum: Number.NaN }
+            }
+          ]
+        },
+        setInvertedRange: {
+          name: "setInvertedRange",
+          arguments: [
+            {
+              name: "level",
+              required: true,
+              sensitive: false,
+              schema: { type: "number", minimum: 10, maximum: 1 }
+            }
+          ]
         }
       })
     );
@@ -196,16 +251,21 @@ describe("AdvancedCommandCatalog", () => {
     ]);
 
     expect(result.commandsByDevice.get("dev_safe")?.map((descriptor) => descriptor.command)).toEqual([
+      "refreshBare",
       "setMode"
     ]);
-    expect(result.commandsByDevice.get("dev_safe")?.[0]?.arguments[0]?.schema).toEqual({
+    expect(result.commandsByDevice.get("dev_safe")?.[1]?.arguments[0]?.schema).toEqual({
       type: "string",
       enum: ["auto", "cool"],
       minimum: 0,
       maximum: 10
     });
     expect(result.omissions).toEqual([
+      { component: "main", capability: "custom", command: "setEnumObject", reason: "schema_invalid" },
+      { component: "main", capability: "custom", command: "setInvertedRange", reason: "schema_invalid" },
       { component: "main", capability: "custom", command: "setItems", reason: "schema_invalid" },
+      { component: "main", capability: "custom", command: "setMaximumNaN", reason: "schema_invalid" },
+      { component: "main", capability: "custom", command: "setMinimumText", reason: "schema_invalid" },
       { component: "main", capability: "custom", command: "setProperties", reason: "schema_invalid" }
     ]);
   });

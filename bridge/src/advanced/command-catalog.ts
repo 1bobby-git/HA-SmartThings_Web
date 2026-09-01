@@ -195,12 +195,15 @@ function parseSchema(value: Record<string, unknown>): AdvancedCapabilitySchema |
   ) {
     return undefined;
   }
-  const minimum = typeof value.minimum === "number" && Number.isFinite(value.minimum)
-    ? value.minimum
-    : undefined;
-  const maximum = typeof value.maximum === "number" && Number.isFinite(value.maximum)
-    ? value.maximum
-    : undefined;
+  if (value.enum !== undefined && !Array.isArray(value.enum)) return undefined;
+  const minimum = value.minimum;
+  const maximum = value.maximum;
+  if (
+    (minimum !== undefined && (typeof minimum !== "number" || !Number.isFinite(minimum))) ||
+    (maximum !== undefined && (typeof maximum !== "number" || !Number.isFinite(maximum)))
+  ) {
+    return undefined;
+  }
   if (minimum !== undefined && maximum !== undefined && minimum > maximum) return undefined;
   const schema: AdvancedCapabilitySchema = {};
   if (type !== undefined) schema.type = type as NonNullable<AdvancedCapabilitySchema["type"]>;
