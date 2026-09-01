@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.158
+
+- 같은 이름의 generated primary switch가 여러 location에 있을 때 숫자나 `_switch` suffix 대신 location/room-qualified ID로 순서와 무관하게 수렴합니다.
+- multi-switch 장치에서도 Web의 `전원` control 하나를 primary로 식별하고 Web 표시명은 유지합니다.
+- 이미 수천 자까지 늘어난 generated entity ID와 restore metadata의 앞/뒤 반복 slug를 한 번의 migration으로 복구하고 이후 재시작에서 다시 늘지 않게 합니다.
+- 0.1.157의 SmartThings Advanced POST CSRF 처리와 command service 동작을 그대로 포함합니다.
+
 ## 0.1.157
 
 - SmartThings Advanced command POST를 실행할 때 로그인된 페이지 context 안에서 CSRF 토큰을 읽어 `x-csrf-token` 헤더로만 전달합니다.
