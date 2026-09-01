@@ -3579,6 +3579,28 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         }
         self.assertEqual(results, [expected, expected])
 
+    def test_primary_switch_collision_preserves_arbitrary_custom_entity_id(self) -> None:
+        """Do not rewrite a user-chosen ID just because the row has no name."""
+        registry, devices = self._primary_switch_collision_registry(
+            home_entity_id="switch.my_custom_multitap",
+        )
+        home_entry = registry.async_get("switch.my_custom_multitap")
+        spark_entry = registry.async_get("switch.meoltitaeb")
+        assert home_entry is not None
+        assert spark_entry is not None
+        self.patch_registry(registry, config_entries=[home_entry])
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(entry_id="entry_home", data={CONF_LOCATION_ID: "loc_home"}),
+            self._primary_switch_collision_inventory(devices),
+        )
+
+        self.assertEqual(registry.renamed, [])
+        self.assertEqual(home_entry.entity_id, "switch.my_custom_multitap")
+        self.assertEqual(home_entry.suggested_object_id, "my_custom_multitap")
+        self.assertEqual(spark_entry.entity_id, "switch.meoltitaeb")
+
     def test_preserves_user_named_numbered_id_and_restore_suggestion(self) -> None:
         """Never reinterpret a user-named registry row as generated cleanup."""
         state = BridgeState(
@@ -4397,6 +4419,8 @@ class EntityRegistryMigrationTests(unittest.TestCase):
     @classmethod
     def _primary_switch_collision_registry(
         cls,
+        *,
+        home_entity_id: str = "switch.meoltitaeb_switch",
     ) -> tuple[FakeRegistry, dict[str, BridgeDevice]]:
         devices = {
             "dev_191": cls._primary_switch_collision_device(
@@ -4412,7 +4436,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         }
         entries = [
             SimpleNamespace(
-                entity_id="switch.meoltitaeb_switch",
+                entity_id=home_entity_id,
                 domain="switch",
                 platform=DOMAIN,
                 unique_id="dev_191_main_switch_switch",

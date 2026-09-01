@@ -1174,6 +1174,19 @@ def _primary_switch_collision_targets(
                 "switch."
                 f"{_qualified_primary_switch_object_id(inventory, device, object_id)}"
             )
+            entity_entry = next(
+                (
+                    row
+                    for row in current_registry_entries
+                    if str(getattr(row, "unique_id", "")) == unique_id
+                ),
+                None,
+            )
+            if entity_entry is None or not _generated_primary_switch_entity_id(
+                entity_entry,
+                object_id,
+            ):
+                continue
             if candidate in assigned:
                 device_suffix = (
                     slugify(str(getattr(device, "device_id", ""))) or unique_id
@@ -1184,6 +1197,42 @@ def _primary_switch_collision_targets(
             targets[unique_id] = candidate
             assigned.add(candidate)
     return targets
+
+
+def _generated_primary_switch_entity_id(entity_entry: object, object_id: str) -> bool:
+    """Return whether the current switch ID is one of our generated forms."""
+    current_object_id = str(getattr(entity_entry, "entity_id", "")).partition(".")[2]
+    if not current_object_id:
+        return False
+    generated = {
+        object_id,
+        f"{object_id}_switch",
+    }
+    if current_object_id in generated:
+        return True
+    for generated_object_id in generated:
+        numbered_prefix = f"{generated_object_id}_"
+        if current_object_id.startswith(numbered_prefix):
+            suffix = current_object_id[len(numbered_prefix) :]
+            if suffix.isdigit() and int(suffix) >= 2:
+                return True
+    return _object_id_has_repeated_token(current_object_id, object_id)
+
+
+def _object_id_has_repeated_token(value: str, token: str) -> bool:
+    """Return whether an object ID contains adjacent generated token repeats."""
+    parts = value.split("_")
+    token_parts = token.split("_")
+    token_size = len(token_parts)
+    if token_size == 0 or len(parts) < token_size * 2:
+        return False
+    for index in range(0, len(parts) - token_size * 2 + 1):
+        if (
+            parts[index : index + token_size] == token_parts
+            and parts[index + token_size : index + token_size * 2] == token_parts
+        ):
+            return True
+    return False
 
 
 def _all_registry_entries(
