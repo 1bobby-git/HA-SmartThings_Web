@@ -73,6 +73,11 @@ describe("SafeCommandService", () => {
       true
     );
     expect(fixture.executeDeviceAction.mock.calls.every(([action]) => action.command === "off")).toBe(true);
+    expect(
+      fixture.executeDeviceAction.mock.calls.every(
+        ([action]) => action.requireLocationNative === true
+      )
+    ).toBe(true);
     expect(fixture.executeComponentTransaction).not.toHaveBeenCalled();
     expect(
       fixture.resync.mock.calls.map(([request]) => request?.deviceId).sort()

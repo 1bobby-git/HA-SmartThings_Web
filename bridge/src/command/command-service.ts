@@ -95,6 +95,7 @@ export interface DeviceActionExecutionInput {
     optionLabel?: string;
     optionCommand?: string;
     nativeCommand?: string;
+    requireLocationNative?: boolean;
 }
 
 export interface ComponentActionExecutionInput {
@@ -536,9 +537,17 @@ export class SafeCommandService {
     const completed: number[] = [];
     for (const [index, action] of input.actions.entries()) {
       try {
-        receipts.push(await execute(action));
+        const receipt = await execute(action);
+        if (
+          action.requireLocationNative === true &&
+          transportForExecution(receipt) !== "location_native"
+        ) {
+          throw new Error("command_control_not_found");
+        }
+        receipts.push(receipt);
         completed.push(index);
-      } catch {
+      } catch (error) {
+        if (completed.length === 0) throw error;
         let rollbackFailed = false;
         for (const completedIndex of completed.reverse()) {
           const rollback = input.rollbackActions[completedIndex];
@@ -1529,7 +1538,8 @@ function childWebAction(
     ...(roomName ? { roomName } : {}),
     controlId: control.id,
     controlLabel: control.label,
-    nativeCommand
+    nativeCommand,
+    requireLocationNative: true
   };
 }
 

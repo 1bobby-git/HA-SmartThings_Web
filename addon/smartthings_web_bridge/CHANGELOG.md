@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.152
+
+- composite child direct Advanced `/commands`도 404인 live 증거에 따라, 실제 child 실행은 관찰된 Location-native child control을 stable role 순서로 직렬 사용합니다.
+- 일부 child Web 실행 실패 시 완료된 child를 원래 값으로 역순 rollback하며, 전체 성공과 복구는 parent+모든 child Advanced status vector로만 확정합니다.
+- composite child는 `location_native` receipt만 허용하고 DOM fallback을 사용하지 않으며, 매핑 실패·부정확한 control은 parent fallback 없이 차단합니다.
+- 0.1.151 exact unique mapping, 0.1.150 diagnostics, 0.1.149 liveness와 0.1.148 deadline/rollback 경계를 유지합니다.
+
 ## 0.1.151
 
 - direct `/commands`가 404인 composite parent는 main을 명령하지 않고, secondary component와 child main state의 동일 값·900ms 이내 timestamp에 대한 전체 일대일 조합이 정확히 하나일 때만 실제 child device를 직렬 제어합니다.

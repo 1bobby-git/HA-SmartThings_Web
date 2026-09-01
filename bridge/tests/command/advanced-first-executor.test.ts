@@ -305,6 +305,36 @@ describe("AdvancedFirstCommandExecutor", () => {
     expect(fallback.executeDeviceAction).not.toHaveBeenCalled();
   });
 
+  test("keeps composite child actions on Location native without DOM fallback", async () => {
+    const fallback = {
+      executeDeviceAction: vi.fn(async () => {
+        throw new Error("combined path must not run");
+      }),
+      executeLocationNative: vi.fn(async () => {
+        throw new Error("command_native_unavailable");
+      }),
+      executeDomFallback: vi.fn(async () => undefined)
+    } as LegacyWebCommandExecutor;
+    const advancedTransport = advanced(async () => ({
+      state: "ACCEPTED",
+      transport: "advanced",
+      acceptedAtMs: 10
+    }));
+    const executor = new AdvancedFirstCommandExecutor(
+      advancedTransport,
+      fallback,
+      { canUseAdvanced: () => true }
+    );
+
+    await expect(
+      executor.executeDeviceAction({ ...action, requireLocationNative: true })
+    ).rejects.toThrow("command_control_not_found");
+    expect(advancedTransport.execute).not.toHaveBeenCalled();
+    expect(fallback.executeLocationNative).toHaveBeenCalledOnce();
+    expect(fallback.executeDomFallback).not.toHaveBeenCalled();
+    expect(fallback.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
   test("keeps scenes and location actions on the existing verified executor", async () => {
     const fallback = legacy();
     const executor = new AdvancedFirstCommandExecutor(

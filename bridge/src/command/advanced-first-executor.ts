@@ -74,7 +74,7 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
   async executeDeviceAction(
     input: DeviceActionExecutionInput
   ): Promise<CommandTransportReceipt> {
-    if (!this.#canUseAdvanced(input)) {
+    if (input.requireLocationNative === true || !this.#canUseAdvanced(input)) {
       return await this.#executeVerifiedWeb(input);
     }
     const routed = {
@@ -136,7 +136,8 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
   ): Promise<CommandTransportReceipt> {
     const executeLocationNative = this.legacy.executeLocationNative?.bind(this.legacy);
     const executeDomFallback = this.legacy.executeDomFallback?.bind(this.legacy);
-    if (executeLocationNative && executeDomFallback) {
+    const requireLocationNative = input.requireLocationNative === true;
+    if (executeLocationNative && (executeDomFallback || requireLocationNative)) {
       const sentAtMs = this.#now();
       this.#diagnostic({
         transport: "location_native",
@@ -167,7 +168,7 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
           throw error;
         }
       }
-      if (!this.#domFallbackEnabled) {
+      if (requireLocationNative || !this.#domFallbackEnabled || !executeDomFallback) {
         throw new Error("command_control_not_found");
       }
       this.#diagnostic({
@@ -197,6 +198,9 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
         });
         throw error;
       }
+    }
+    if (requireLocationNative) {
+      throw new Error("command_control_not_found");
     }
     this.#diagnostic({
       transport: "location_native",
