@@ -44,8 +44,9 @@ describe("SafeCommandService", () => {
   test("routes a composite parent aggregate through its matched child devices", async () => {
     const fixture = multiSwitchFixture(["main", "switch2", "switch3", "switch4"]);
     const mapped = configureChildMappedSwitch(fixture.store);
-    fixture.resync.mockImplementation(async () => {
-      mapped.setStates("off");
+    fixture.resync.mockImplementation(async (request) => {
+      if (request?.deviceId === "dev_001") mapped.setParentStates("off");
+      else if (request?.deviceId) mapped.setChildState(request.deviceId, "off");
       return deviceStatusEvidence();
     });
 
@@ -70,7 +71,27 @@ describe("SafeCommandService", () => {
     expect(fixture.executeDeviceAction).not.toHaveBeenCalled();
     expect(
       fixture.resync.mock.calls.map(([request]) => request?.deviceId).sort()
-    ).toEqual(["dev_116", "dev_117", "dev_145"]);
+    ).toEqual(["dev_001", "dev_116", "dev_117", "dev_145"]);
+  });
+
+  test.each([
+    ["ambiguous mapping", { ambiguous: true }],
+    ["multiple scored mappings", { scoredAmbiguous: true }],
+    ["offline child", { offlineChildId: "dev_116" }],
+    ["dangerous child", { dangerousChildId: "dev_116" }],
+    ["missing child capability version", { missingVersionChildId: "dev_116" }],
+    ["invalid parent timestamp", { invalidParentTimestamp: true }],
+    ["invalid child timestamp", { invalidChildTimestampId: "dev_116" }]
+  ])("fails closed without parent fallback for %s", async (_name, options) => {
+    const fixture = multiSwitchFixture(["main", "switch2", "switch3", "switch4"]);
+    configureChildMappedSwitch(fixture.store, options);
+
+    await expect(
+      fixture.service.execute(aggregateCommand("off", `request_${_name.replaceAll(" ", "_")}`))
+    ).rejects.toMatchObject({ code: "unsupported_command" });
+    expect(fixture.executeDeviceAction).not.toHaveBeenCalled();
+    expect(fixture.executeComponentTransaction).not.toHaveBeenCalled();
+    expect(fixture.resync).not.toHaveBeenCalled();
   });
 
   test("waits for a final Advanced status refresh before rollback", async () => {
@@ -2930,93 +2951,141 @@ function multiSwitchFixture(
   };
 }
 
-function configureChildMappedSwitch(store: DeviceStore) {
+function configureChildMappedSwitch(
+  store: DeviceStore,
+  options: {
+    ambiguous?: boolean;
+    dangerousChildId?: string;
+    invalidChildTimestampId?: string;
+    invalidParentTimestamp?: boolean;
+    missingVersionChildId?: string;
+    offlineChildId?: string;
+    scoredAmbiguous?: boolean;
+  } = {}
+) {
   const mappings = [
     { role: "switch2", childId: "dev_145", offsetMs: 2_000 },
-    { role: "switch3", childId: "dev_116", offsetMs: 3_000 },
-    { role: "switch4", childId: "dev_117", offsetMs: 4_000 }
+    { role: "switch3", childId: "dev_116", offsetMs: 4_000 },
+    { role: "switch4", childId: "dev_117", offsetMs: 6_000 }
   ] as const;
   let generation = 0;
+  const parentRow = (value: "on" | "off", base: number) => ({
+    deviceId: "dev_001",
+    locationId: "loc_001",
+    deviceTypeName: "switch",
+    childDevices: mappings.map(({ childId }) => ({ deviceId: childId })),
+    components: [
+      {
+        id: "identifier_main",
+        label: "Main",
+        capabilities: [
+          {
+            id: "identifier_switch",
+            version: 1,
+            status: {
+              switch: { value, timestamp: new Date(base + 6_500).toISOString() }
+            }
+          }
+        ]
+      },
+      ...mappings.map(({ role, offsetMs }) => ({
+        id: `identifier_${role}`,
+        label: role,
+        capabilities: [
+          {
+            id: "identifier_switch",
+            version: 1,
+            status: {
+              switch: {
+                value,
+                timestamp:
+                  options.invalidParentTimestamp && role === "switch2"
+                    ? "not-a-timestamp"
+                    : new Date(
+                        base + (options.ambiguous ? 3_000 : offsetMs)
+                      ).toISOString()
+              }
+            }
+          }
+        ]
+      }))
+    ]
+  });
+  const childRow = (
+    mapping: (typeof mappings)[number],
+    value: "on" | "off",
+    base: number
+  ) => ({
+    deviceId: mapping.childId,
+    locationId: "loc_001",
+    deviceTypeName:
+      options.dangerousChildId === mapping.childId ? "door lock" : "switch",
+    parentDeviceId: "dev_001",
+    ...(options.offlineChildId === mapping.childId
+      ? {
+          healthState: {
+            state: "OFFLINE",
+            lastUpdatedDate: new Date(base + 10_000).toISOString()
+          }
+        }
+      : {}),
+    components: [
+      {
+        id: "identifier_main",
+        label: "Main",
+        capabilities: [
+          {
+            id: "identifier_switch",
+            ...(options.missingVersionChildId === mapping.childId ? {} : { version: 1 }),
+            status: {
+              switch: {
+                value,
+                timestamp:
+                  options.invalidChildTimestampId === mapping.childId
+                    ? "not-a-timestamp"
+                    : new Date(
+                        base +
+                          (options.ambiguous
+                            ? 3_100
+                            : options.scoredAmbiguous && mapping.childId === "dev_116"
+                              ? 2_800
+                              : mapping.offsetMs + 100)
+                      ).toISOString()
+              }
+            }
+          }
+        ]
+      }
+    ]
+  });
+  const nextBase = () => {
+    generation += 1;
+    return Date.parse("2026-09-01T02:00:00.000Z") + generation * 60_000;
+  };
+  const observe = (items: unknown[], source: BridgeStateSource) =>
+    store.observeAdvancedDeviceSnapshot({ items }, { source });
   const setStates = (
     value: "on" | "off",
     source: BridgeStateSource = "COMMAND_STATUS_RECHECK"
   ) => {
-    generation += 1;
-    const base = Date.parse("2026-09-01T02:00:00.000Z") + generation * 60_000;
-    store.observeAdvancedDeviceSnapshot(
-      {
-        items: [
-          {
-            deviceId: "dev_001",
-            locationId: "loc_001",
-            deviceTypeName: "switch",
-            childDevices: mappings.map(({ childId }) => ({ deviceId: childId })),
-            components: [
-              {
-                id: "identifier_main",
-                label: "Main",
-                capabilities: [
-                  {
-                    id: "identifier_switch",
-                    version: 1,
-                    status: {
-                      switch: {
-                        value,
-                        timestamp: new Date(base + 4_500).toISOString()
-                      }
-                    }
-                  }
-                ]
-              },
-              ...mappings.map(({ role, offsetMs }) => ({
-                id: `identifier_${role}`,
-                label: role,
-                capabilities: [
-                  {
-                    id: "identifier_switch",
-                    version: 1,
-                    status: {
-                      switch: {
-                        value,
-                        timestamp: new Date(base + offsetMs).toISOString()
-                      }
-                    }
-                  }
-                ]
-              }))
-            ]
-          },
-          ...mappings.map(({ childId, offsetMs }) => ({
-            deviceId: childId,
-            locationId: "loc_001",
-            deviceTypeName: "switch",
-            parentDeviceId: "dev_001",
-            components: [
-              {
-                id: "identifier_main",
-                label: "Main",
-                capabilities: [
-                  {
-                    id: "identifier_switch",
-                    version: 1,
-                    status: {
-                      switch: {
-                        value,
-                        timestamp: new Date(base + offsetMs + 100).toISOString()
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          }))
-        ]
-      },
-      { source }
-    );
+    const base = nextBase();
+    observe([parentRow(value, base), ...mappings.map((item) => childRow(item, value, base))], source);
+  };
+  const setParentStates = (
+    value: "on" | "off",
+    source: BridgeStateSource = "COMMAND_STATUS_RECHECK"
+  ) => observe([parentRow(value, nextBase())], source);
+  const setChildState = (
+    childId: string,
+    value: "on" | "off",
+    source: BridgeStateSource = "COMMAND_STATUS_RECHECK"
+  ) => {
+    const mapping = mappings.find((item) => item.childId === childId);
+    if (!mapping) throw new Error("unknown_child_fixture");
+    observe([childRow(mapping, value, nextBase())], source);
   };
   setStates("on", "ADVANCED_SNAPSHOT");
-  return { setStates };
+  return { setStates, setParentStates, setChildState };
 }
 
 function readyDeviceStore(

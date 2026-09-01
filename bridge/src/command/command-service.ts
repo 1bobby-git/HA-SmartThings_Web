@@ -1221,7 +1221,7 @@ function buildComponentSwitchPlan(
       snapshot,
       entryFor
     );
-    if (!childEntries) return undefined;
+    if (!childEntries) throw new SafeCommandError("unsupported_command");
     safeEntries = childEntries;
     parentVerificationStates = states;
   } else {
@@ -1284,7 +1284,10 @@ function buildComponentSwitchPlan(
       attribute: state.attribute,
       value: state.value
     }))),
-    verificationDeviceIds: [...new Set(safeEntries.map((entry) => entry.deviceId))]
+    verificationDeviceIds: [
+      ...(childDeviceIds.length > 0 ? [device.id] : []),
+      ...new Set(safeEntries.map((entry) => entry.deviceId))
+    ]
   };
 }
 
@@ -1319,35 +1322,46 @@ function childMappedSwitchEntries(
     return { device, state, updatedAt: state.updatedAt };
   });
   if (candidates.some((candidate) => candidate === undefined)) return undefined;
-  const remaining = candidates.filter(
+  const safeCandidates = candidates.filter(
     (candidate): candidate is NonNullable<typeof candidate> => candidate !== undefined
   );
-  const entries: ComponentSwitchEntry[] = [];
-  for (const parentState of secondaryStates) {
+  const assignments: ComponentSwitchEntry[][] = [];
+  const visit = (
+    parentIndex: number,
+    remaining: typeof safeCandidates,
+    entries: ComponentSwitchEntry[]
+  ): void => {
+    if (parentIndex === secondaryStates.length) {
+      assignments.push(entries);
+      return;
+    }
+    const parentState = secondaryStates[parentIndex];
+    if (!parentState) return;
     const parentUpdatedAt = parentState.updatedAt;
-    if (!parentUpdatedAt) return undefined;
-    const matches = remaining
-      .map((candidate, index) => ({
-        ...candidate,
-        index,
-        deltaMs: Math.abs(
-          Date.parse(candidate.updatedAt) - Date.parse(parentUpdatedAt)
-        )
-      }))
-      .filter(
-        (candidate) =>
-          candidate.deltaMs <= 2_000 &&
-          stateValuesEqual(candidate.state.value, parentState.value)
-      )
-      .sort((left, right) => left.deltaMs - right.deltaMs);
-    const match = matches[0];
-    if (!match || (matches[1] && matches[1].deltaMs === match.deltaMs)) return undefined;
-    const entry = entryFor(match.device.id, match.state);
-    if (!entry) return undefined;
-    entries.push(entry);
-    remaining.splice(match.index, 1);
-  }
-  return remaining.length === 0 ? entries : undefined;
+    if (!parentUpdatedAt) return;
+    const parentUpdatedAtMs = Date.parse(parentUpdatedAt);
+    if (!Number.isFinite(parentUpdatedAtMs)) return;
+    for (const [candidateIndex, candidate] of remaining.entries()) {
+      const candidateUpdatedAtMs = Date.parse(candidate.updatedAt);
+      if (!Number.isFinite(candidateUpdatedAtMs)) continue;
+      const deltaMs = Math.abs(candidateUpdatedAtMs - parentUpdatedAtMs);
+      if (
+        deltaMs > 900 ||
+        !stateValuesEqual(candidate.state.value, parentState.value)
+      ) {
+        continue;
+      }
+      const entry = entryFor(candidate.device.id, candidate.state);
+      if (!entry) continue;
+      visit(
+        parentIndex + 1,
+        remaining.filter((_item, index) => index !== candidateIndex),
+        [...entries, entry]
+      );
+    }
+  };
+  visit(0, safeCandidates, []);
+  return assignments.length === 1 ? assignments[0] : undefined;
 }
 
 function switchCommandForValue(state: BridgeDeviceState): "on" | "off" | undefined {

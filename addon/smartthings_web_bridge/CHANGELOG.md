@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.151
+
+- direct `/commands`가 404인 composite parent는 main을 명령하지 않고, secondary component와 child main state의 동일 값·900ms 이내 timestamp에 대한 전체 일대일 조합이 정확히 하나일 때만 실제 child device를 직렬 제어합니다.
+- 모든 child와 parent의 Advanced status evidence 및 parent aggregate/secondary vector가 함께 일치해야 성공하며, rollback도 child 원래 값과 parent 원래 vector를 모두 확인합니다.
+- 매핑이 누락·모호하거나 child가 offline/위험 유형/정확한 capability version 부재이면 parent Web/Advanced fallback 없이 `unsupported_command`로 닫습니다.
+- 0.1.150 ordinal diagnostics, 0.1.149 persisted liveness, 0.1.148 deadline-bounded status·idempotent rollback 경계를 유지합니다.
+
 ## 0.1.150
 
 - Advanced component transaction 실패 시 raw device/component/capability ID 없이 dispatch/rollback phase, one-based ordinal, outcome과 fixed transport error code만 기록합니다.
