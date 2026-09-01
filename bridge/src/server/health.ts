@@ -76,6 +76,7 @@ export function createHealthReport(
   const browserUptimeMs = optionalAgeMs(nowMs, snapshot.lastBrowserStartAtMs);
 
   const live =
+    snapshot.state !== "BROWSER_FAILED" &&
     snapshot.dbAvailable &&
     !isFutureBeyondSkew(nowMs, snapshot.heartbeatAtMs) &&
     heartbeatAgeMs <= heartbeatFreshMs;

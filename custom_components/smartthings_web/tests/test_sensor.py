@@ -106,6 +106,9 @@ class SmartThingsWebEntity:
 
 entity_module.SmartThingsWebEntity = SmartThingsWebEntity  # type: ignore[attr-defined]
 entity_module.device_info_for = lambda *_args, **_kwargs: {}  # type: ignore[attr-defined]
+entity_module.device_icon_for = (  # type: ignore[attr-defined]
+    lambda device: "mdi:fridge" if device.device_type == "refrigerator" else None
+)
 entity_module.migrate_entity_original_name = lambda *_args, **_kwargs: None  # type: ignore[attr-defined]
 sys.modules["smartthings_web.entity"] = entity_module
 
@@ -117,6 +120,7 @@ from smartthings_web.models import (  # noqa: E402
 )
 from smartthings_web.sensor import (  # noqa: E402
     SENSOR_STATES,
+    SensorDescription,
     SmartThingsWebSensor,
     async_setup_entry,
 )
@@ -199,6 +203,64 @@ class SmartThingsWebSensorTests(unittest.TestCase):
 
         self.assertEqual(sensor._attr_name, "Temperature (Outdoor)")
         self.assertIsNone(sensor._attr_translation_key)
+
+    def test_generic_refrigerator_sensor_gets_device_icon(self) -> None:
+        state = BridgeState(
+            "main",
+            "custom",
+            "status",
+            "normal",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_fridge",
+            "loc_001",
+            None,
+            "냉장고",
+            "refrigerator",
+            True,
+            states={state.key: state},
+        )
+        inventory = BridgeInventory(
+            1, True, "0.1.154", "5:test", {}, {}, {device.device_id: device}
+        )
+        runtime = SmartThingsWebRuntime(object(), "loc_001", inventory)
+        sensor = SmartThingsWebSensor(
+            runtime,
+            device,
+            state,
+            SensorDescription("Status", state_class=None),
+        )
+
+        self.assertEqual(sensor._attr_icon, "mdi:fridge")
+
+    def test_temperature_sensor_keeps_functional_device_class_icon(self) -> None:
+        state = BridgeState(
+            "main",
+            "temperatureMeasurement",
+            "temperature",
+            3.0,
+            "C",
+            "2026-09-01T00:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_fridge",
+            "loc_001",
+            None,
+            "냉장고",
+            "refrigerator",
+            True,
+            states={state.key: state},
+        )
+        inventory = BridgeInventory(
+            1, True, "0.1.154", "5:test", {}, {}, {device.device_id: device}
+        )
+        runtime = SmartThingsWebRuntime(object(), "loc_001", inventory)
+        sensor = SmartThingsWebSensor(runtime, device, state, SENSOR_STATES["temperature"])
+
+        self.assertEqual(sensor.device_class, SensorDeviceClass.TEMPERATURE)
+        self.assertNotIn("_attr_icon", sensor.__dict__)
 
     def test_signal_metrics_dict_uses_web_display_value(self) -> None:
         state = BridgeState(

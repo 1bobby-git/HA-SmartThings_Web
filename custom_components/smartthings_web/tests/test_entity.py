@@ -676,6 +676,27 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("_attr_icon", state_entity.__dict__)
         self.assertNotIn("_attr_entity_picture", state_entity.__dict__)
 
+    def test_device_icon_for_exposes_refrigerator_type_icon(self) -> None:
+        state = BridgeState(
+            "main",
+            "custom",
+            "status",
+            "normal",
+            None,
+            "2026-09-01T00:00:00.000Z",
+        )
+        device = BridgeDevice(
+            "dev_fridge",
+            "loc_001",
+            None,
+            "냉장고",
+            "refrigerator",
+            True,
+            states={state.key: state},
+        )
+
+        self.assertEqual(entity_under_test.device_icon_for(device), "mdi:fridge")
+
     def test_offline_laundry_appliance_keeps_pushed_state_entities_available(self) -> None:
         state = BridgeState(
             "main",

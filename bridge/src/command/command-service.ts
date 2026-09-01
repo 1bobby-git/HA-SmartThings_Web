@@ -10,6 +10,8 @@ import type {
   CommandTransportName,
   CommandTransportReceipt
 } from "./command-router.js";
+import type { AdvancedCommandDescriptor } from "../advanced/command-catalog-types.js";
+import { safeAdvancedCommandReason } from "../advanced/safe-command-policy.js";
 import { createHealthReport } from "../server/health.js";
 import type { RuntimeStatusStore } from "../state/runtime-state.js";
 
@@ -26,6 +28,7 @@ export interface SafeCommandRequest {
   controlId?: string;
   controlLabel?: string;
   confirm?: boolean;
+  requireAdvanced?: boolean;
   timeout?: number;
 }
 
@@ -47,7 +50,7 @@ export interface SafeCommandResult {
     | "ACCEPTED_UNCONFIRMED";
 }
 
-type DeviceActionCommand =
+export type DeviceActionCommand =
   | "on"
   | "off"
   | "refresh"
@@ -78,24 +81,25 @@ type DeviceActionCommand =
 type LocationAction = "armAway" | "armStay" | "disarm";
 
 export interface DeviceActionExecutionInput {
-    action: string;
-    arguments: BridgeJsonValue[];
-    attribute: string;
-    capability: string;
-    capabilityVersion?: number;
-    command: DeviceActionCommand;
-    component: string;
-    deviceId: string;
-    deviceName: string;
-    locationId: string;
-    locationNames: Readonly<Record<string, string>>;
-    roomName?: string;
-    controlId?: string;
-    controlLabel?: string;
-    optionLabel?: string;
-    optionCommand?: string;
-    nativeCommand?: string;
-    requireLocationNative?: boolean;
+  action: string;
+  arguments: BridgeJsonValue[];
+  attribute: string;
+  capability: string;
+  capabilityVersion?: number;
+  command: string;
+  component: string;
+  deviceId: string;
+  deviceName: string;
+  locationId: string;
+  locationNames: Readonly<Record<string, string>>;
+  roomName?: string;
+  controlId?: string;
+  controlLabel?: string;
+  optionLabel?: string;
+  optionCommand?: string;
+  nativeCommand?: string;
+  requireAdvanced?: boolean;
+  requireLocationNative?: boolean;
 }
 
 export interface ComponentActionExecutionInput {
@@ -244,13 +248,39 @@ interface ComponentSwitchEntry {
 }
 
 type ResolvedDeviceRequest = SafeCommandRequest & {
+  advancedDescriptor?: AdvancedCommandDescriptor;
   optionLabel?: string;
   optionCommand?: string;
   nativeCommand?: string;
+  requireAdvanced?: boolean;
 };
 
-const oldRequestKeys = ["deviceId", "component", "capability", "command", "arguments", "clientRequestId", "confirm", "timeout"] as const;
-const newRequestKeys = ["targetType", "targetId", "component", "capability", "attribute", "command", "arguments", "clientRequestId", "controlId", "controlLabel", "confirm", "timeout"] as const;
+const oldRequestKeys = [
+  "deviceId",
+  "component",
+  "capability",
+  "command",
+  "arguments",
+  "clientRequestId",
+  "confirm",
+  "timeout",
+  "requireAdvanced"
+] as const;
+const newRequestKeys = [
+  "targetType",
+  "targetId",
+  "component",
+  "capability",
+  "attribute",
+  "command",
+  "arguments",
+  "clientRequestId",
+  "controlId",
+  "controlLabel",
+  "confirm",
+  "timeout",
+  "requireAdvanced"
+] as const;
 const tokenPattern = /^[A-Za-z0-9_.:-]{1,160}$/u;
 const devicePattern = /^dev_[0-9]{3,32}$/u;
 const targetPattern = /^(?:dev|loc|identifier)_[A-Za-z0-9_]{3,64}$/u;
@@ -310,7 +340,9 @@ export class SafeCommandService {
       throw new SafeCommandError("bridge_not_connected");
     }
     const snapshot = this.options.devices.snapshot();
-    const locationNames = Object.fromEntries(snapshot.locations.map((location) => [location.id, location.name]));
+    const locationNames = Object.fromEntries(
+      snapshot.locations.map((location) => [location.id, location.name])
+    );
     if (request.targetType === "scene") return await this.#executeScene(request, snapshot, locationNames);
     if (request.targetType === "location") return await this.#executeLocation(request, snapshot, locationNames);
     return await this.#executeDevice(request, snapshot, locationNames);
@@ -325,45 +357,71 @@ export class SafeCommandService {
     if (!device) throw new SafeCommandError("device_not_found");
     if (!device.online) throw new SafeCommandError("device_offline");
     const effective = resolveDeviceRequest(device, request);
-    if (!effective.component || !effective.capability) throw new SafeCommandError("capability_not_found");
-    const attribute = effective.attribute ?? "switch";
+    if (!effective.component || !effective.capability) {
+      throw new SafeCommandError("capability_not_found");
+    }
+    let attribute = effective.attribute;
+    if (attribute === undefined) {
+      attribute =
+        effective.advancedDescriptor?.confirmation === "accepted_receipt"
+          ? effective.command
+          : "switch";
+    }
     validateCommandAttribute(effective.command, attribute, effective.controlId);
     const state = findState(device, effective.component, effective.capability, attribute);
-    if (!state && !allowsMissingCurrentState(effective.command)) throw new SafeCommandError("capability_not_found");
+    if (!state && !allowsMissingCurrentState(effective.command, effective.advancedDescriptor)) {
+      throw new SafeCommandError(
+        effective.advancedDescriptor?.confirmation === "state"
+          ? "unsupported_command"
+          : "capability_not_found"
+      );
+    }
     const matchAny = confirmsAnyNewDeviceState(effective);
-    const desired = matchAny ? undefined : desiredValueFor(effective.command, effective.arguments, state);
-    if (!matchAny && desired === undefined) throw new SafeCommandError("invalid_arguments");
-    const componentPlan =
-      effective.confirm === false || !state
-        ? undefined
-        : buildComponentSwitchPlan(
-            device,
-            effective,
-            state,
-            this.options.devices,
-            snapshot,
-            locationNames
-          );
+    const desired = matchAny
+      ? undefined
+      : desiredValueFor(effective.command, effective.arguments, state);
+    if (!matchAny && desired === undefined) {
+      throw new SafeCommandError(
+        effective.advancedDescriptor?.confirmation === "state"
+          ? "unsupported_command"
+          : "invalid_arguments"
+      );
+    }
+    let componentPlan: ComponentSwitchPlan | undefined;
+    if (effective.confirm !== false && state) {
+      componentPlan = buildComponentSwitchPlan(
+        device,
+        effective,
+        state,
+        this.options.devices,
+        snapshot,
+        locationNames
+      );
+    }
     if (componentPlan) {
       if (componentVectorMatches(snapshot, componentPlan.desiredVector)) {
         return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
       }
       return await this.#executeComponentPlan(effective, componentPlan);
     }
-    if (state && desired !== undefined && stateValuesEqual(state.value, desired)) return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
+    if (state && desired !== undefined && stateValuesEqual(state.value, desired)) {
+      return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
+    }
     const roomName = device.roomId ? snapshot.rooms.find((room) => room.id === device.roomId)?.name : undefined;
     const capabilityVersion = this.options.devices.capabilityVersion(
       effective.targetId,
       effective.component,
       effective.capability
     );
+    const exactCapabilityVersion =
+      effective.advancedDescriptor?.capabilityVersion ?? capabilityVersion;
     const executionInput: DeviceActionExecutionInput = {
       action: effective.command,
       arguments: effective.arguments,
       attribute,
       capability: effective.capability,
-      ...(capabilityVersion === undefined ? {} : { capabilityVersion }),
-      command: effective.command as DeviceActionCommand,
+      ...(exactCapabilityVersion === undefined ? {} : { capabilityVersion: exactCapabilityVersion }),
+      command: effective.command,
       component: effective.component,
       deviceId: effective.targetId,
       deviceName: device.name,
@@ -374,9 +432,14 @@ export class SafeCommandService {
       ...(effective.controlLabel ? { controlLabel: effective.controlLabel } : {}),
       ...(effective.optionLabel ? { optionLabel: effective.optionLabel } : {}),
       ...(effective.optionCommand ? { optionCommand: effective.optionCommand } : {}),
-      ...(effective.nativeCommand ? { nativeCommand: effective.nativeCommand } : {})
+      ...(effective.nativeCommand ? { nativeCommand: effective.nativeCommand } : {}),
+      ...(effective.requireAdvanced ? { requireAdvanced: true } : {})
     };
-    if (isStatelessCommand(effective.command) || effective.confirm === false) {
+    if (
+      effective.advancedDescriptor?.confirmation === "accepted_receipt" ||
+      isStatelessCommand(effective.command) ||
+      effective.confirm === false
+    ) {
       try {
         if (!this.options.executor.executeDeviceAction) {
           throw new SafeCommandError("command_execution_failed");
@@ -393,33 +456,39 @@ export class SafeCommandService {
     }
     let receiptCommandId: string | undefined;
     let advancedSentAtMs: number | undefined;
-    const wait = effective.command === "refresh"
-      ? waitForRefreshCommand({
-          devices: this.options.devices,
-          deviceId: effective.targetId,
-          afterSequence: snapshot.sequence,
-          resync: () => this.options.resync({ deviceId: effective.targetId })
-        })
-      : matchAny
-        ? waitForAnyDeviceEvent({
-            devices: this.options.devices,
-            deviceId: effective.targetId,
-            afterSequence: snapshot.sequence,
-            resync: () => this.options.resync({ deviceId: effective.targetId })
-          })
-      : waitForState({
-          devices: this.options.devices,
-          request: effective,
-          attribute,
-          desired,
-          afterSequence: snapshot.sequence,
-          stabilityMs: this.options.confirmationStabilityMs ?? 0,
-          resync: () => this.options.resync({ deviceId: effective.targetId }),
-          minimumEventTimeMs: () =>
-            advancedSentAtMs ??
-            (state?.updatedAt ? Date.parse(state.updatedAt) : undefined),
-          expectedCommandId: () => receiptCommandId
-        });
+    let wait:
+      | ReturnType<typeof waitForRefreshCommand>
+      | ReturnType<typeof waitForAnyDeviceEvent>
+      | ReturnType<typeof waitForState>;
+    if (effective.command === "refresh") {
+      wait = waitForRefreshCommand({
+        devices: this.options.devices,
+        deviceId: effective.targetId,
+        afterSequence: snapshot.sequence,
+        resync: () => this.options.resync({ deviceId: effective.targetId })
+      });
+    } else if (matchAny) {
+      wait = waitForAnyDeviceEvent({
+        devices: this.options.devices,
+        deviceId: effective.targetId,
+        afterSequence: snapshot.sequence,
+        resync: () => this.options.resync({ deviceId: effective.targetId })
+      });
+    } else {
+      wait = waitForState({
+        devices: this.options.devices,
+        request: effective,
+        attribute,
+        desired,
+        afterSequence: snapshot.sequence,
+        stabilityMs: this.options.confirmationStabilityMs ?? 0,
+        resync: () => this.options.resync({ deviceId: effective.targetId }),
+        minimumEventTimeMs: () =>
+          advancedSentAtMs ??
+          (state?.updatedAt ? Date.parse(state.updatedAt) : undefined),
+        expectedCommandId: () => receiptCommandId
+      });
+    }
     let executionResult: void | CommandTransportReceipt | "location_native" | "dom";
     try {
       if (!this.options.executor.executeDeviceAction) throw new SafeCommandError("command_execution_failed");
@@ -726,6 +795,9 @@ function normalizeRequest(targetType: SafeCommandRequest["targetType"], targetId
   if (input.confirm !== undefined && typeof input.confirm !== "boolean") {
     throw new SafeCommandError("invalid_arguments");
   }
+  if (input.requireAdvanced !== undefined && typeof input.requireAdvanced !== "boolean") {
+    throw new SafeCommandError("invalid_arguments");
+  }
   if (
     input.timeout !== undefined &&
     (typeof input.timeout !== "number" ||
@@ -746,6 +818,7 @@ function normalizeRequest(targetType: SafeCommandRequest["targetType"], targetId
     ...(typeof input.controlLabel === "string" ? { controlLabel: input.controlLabel } : {}),
     ...(typeof input.confirm === "boolean" ? { confirm: input.confirm } : {}),
     ...(typeof input.timeout === "number" ? { timeout: input.timeout } : {}),
+    ...(input.requireAdvanced === true ? { requireAdvanced: true } : {}),
     command: input.command,
     arguments: input.arguments.map((value) => jsonValue(value) as BridgeJsonValue),
     clientRequestId: input.clientRequestId
@@ -1187,8 +1260,11 @@ function confirmsAnyNewDeviceState(request: SafeCommandRequest): boolean {
   return ["press", "refresh", "nextTrack", "previousTrack", "playTrackAndResume"].includes(command);
 }
 
-function allowsMissingCurrentState(command: string): boolean {
-  return isControlBoundCommand(command) || command === "refresh";
+function allowsMissingCurrentState(
+  command: string,
+  descriptor?: AdvancedCommandDescriptor
+): boolean {
+  return descriptor?.confirmation === "accepted_receipt" || isControlBoundCommand(command) || command === "refresh";
 }
 
 function desiredValueFor(command: string, args: BridgeJsonValue[], state: BridgeDeviceState | undefined): BridgeJsonValue | undefined {
@@ -1660,6 +1736,11 @@ function shuffleDesiredValue(
 }
 
 function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest): ResolvedDeviceRequest {
+  if (request.requireAdvanced === true) {
+    const descriptor = resolveAdvancedDescriptor(device, request);
+    if (descriptor) return descriptor;
+    throw new SafeCommandError("unsupported_command");
+  }
   if (request.command === "refresh") {
     const matching = (device.controls ?? []).filter(
       (control) =>
@@ -1730,9 +1811,12 @@ function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest)
         attribute,
         controlId: control.id,
         controlLabel: control.label,
-        ...(nativeCommand ? { nativeCommand } : {})
+        ...(nativeCommand ? { nativeCommand } : {}),
+        ...(control.transport === "advanced" ? { requireAdvanced: true } : {})
       };
     }
+    const descriptor = resolveAdvancedDescriptor(device, request);
+    if (descriptor) return descriptor;
     throw new SafeCommandError("invalid_control_id");
   }
   if (request.attribute) {
@@ -1748,7 +1832,10 @@ function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest)
   const observedControlCommand = isControlBoundCommand(request.command);
   if (!observedControlCommand && !observedFanMode) {
     if (requiresObservedControl(request.command)) throw new SafeCommandError("invalid_control_id");
-    return request;
+    const descriptor = resolveAdvancedDescriptor(device, request);
+    if (descriptor) return descriptor;
+    if (isSupportedDeviceCommand(request.command)) return request;
+    throw new SafeCommandError("unsupported_command");
   }
   if (!request.controlId) throw new SafeCommandError("invalid_control_id");
   const control = device.controls?.find((candidate) => candidate.id === request.controlId);
@@ -1767,8 +1854,93 @@ function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest)
     controlLabel: control.label,
     ...(nativeCommand ? { nativeCommand } : {}),
     ...(option?.label ? { optionLabel: option.label } : {}),
-    ...(option?.command ? { optionCommand: option.command } : {})
+    ...(option?.command ? { optionCommand: option.command } : {}),
+    ...(control.transport === "advanced" ? { requireAdvanced: true } : {})
   };
+}
+
+function resolveAdvancedDescriptor(
+  device: BridgeDevice,
+  request: SafeCommandRequest
+): ResolvedDeviceRequest | undefined {
+  if (!request.component || !request.capability) return undefined;
+  const omitted = (device.commandOmissions ?? []).some(
+    (omission) =>
+      omission.component === request.component &&
+      omission.capability === request.capability &&
+      (omission.command === undefined || omission.command === request.command)
+  );
+  if (omitted) throw new SafeCommandError("unsupported_command");
+  const matching = (device.advancedCommands ?? []).filter(
+    (descriptor) =>
+      descriptor.component === request.component &&
+      descriptor.capability === request.capability &&
+      descriptor.command === request.command
+  );
+  if (matching.length > 1) throw new SafeCommandError("command_control_ambiguous");
+  const descriptor = matching[0];
+  if (!descriptor) return undefined;
+  if (safeAdvancedCommandReason(descriptor)) throw new SafeCommandError("unsupported_command");
+  validateAdvancedDescriptorArguments(descriptor, request.arguments);
+  return {
+    ...request,
+    component: descriptor.component,
+    capability: descriptor.capability,
+    advancedDescriptor: descriptor,
+    requireAdvanced: true
+  };
+}
+
+function validateAdvancedDescriptorArguments(
+  descriptor: AdvancedCommandDescriptor,
+  values: readonly BridgeJsonValue[]
+): void {
+  if (values.length > descriptor.arguments.length) throw new SafeCommandError("invalid_arguments");
+  const lastRequiredIndex = descriptor.arguments.findLastIndex((argument) => argument.required);
+  if (lastRequiredIndex >= values.length) throw new SafeCommandError("invalid_arguments");
+  for (const [index, value] of values.entries()) {
+    const argument = descriptor.arguments[index];
+    if (!argument) throw new SafeCommandError("invalid_arguments");
+    validateAdvancedDescriptorValue(argument.schema, value);
+  }
+}
+
+function validateAdvancedDescriptorValue(
+  schema: AdvancedCommandDescriptor["arguments"][number]["schema"],
+  value: BridgeJsonValue
+): void {
+  if (schema.type === "integer" && (typeof value !== "number" || !Number.isSafeInteger(value))) {
+    throw new SafeCommandError("invalid_arguments");
+  }
+  if (schema.type === "number" && (typeof value !== "number" || !Number.isFinite(value))) {
+    throw new SafeCommandError("invalid_arguments");
+  }
+  if (schema.type === "string") {
+    if (
+      typeof value !== "string" ||
+      value.length < 1 ||
+      value.length > 2048 ||
+      /[\u0000-\u001f\u007f]/u.test(value)
+    ) {
+      throw new SafeCommandError("invalid_arguments");
+    }
+  }
+  if (schema.type === "boolean" && typeof value !== "boolean") {
+    throw new SafeCommandError("invalid_arguments");
+  }
+  if (schema.type === "array" && !Array.isArray(value)) {
+    throw new SafeCommandError("invalid_arguments");
+  }
+  if (schema.type === "object" && !isRecord(value)) {
+    throw new SafeCommandError("invalid_arguments");
+  }
+  if (schema.enum && !schema.enum.some((candidate) => jsonValue(candidate) !== undefined && JSON.stringify(candidate) === JSON.stringify(value))) {
+    throw new SafeCommandError("invalid_arguments");
+  }
+  if (typeof value === "number") {
+    if (schema.minimum !== undefined && value < schema.minimum) throw new SafeCommandError("invalid_arguments");
+    if (schema.maximum !== undefined && value > schema.maximum) throw new SafeCommandError("invalid_arguments");
+  }
 }
 
 function nativeCommandFor(
@@ -1929,11 +2101,11 @@ function validateObservedControlCommand(
     if (typeof option !== "string" || !(control.options ?? []).includes(option)) {
       throw new SafeCommandError("invalid_arguments");
     }
-    if (
-      command === "setOption"
-        ? !safeOptionAttribute(control.attribute)
-        : control.attribute !== "fanMode" && control.attribute !== "airPurifierMode"
-    ) {
+    if (command === "setOption") {
+      if (!safeOptionAttribute(control.attribute)) {
+        throw new SafeCommandError("unsupported_command");
+      }
+    } else if (control.attribute !== "fanMode" && control.attribute !== "airPurifierMode") {
       throw new SafeCommandError("unsupported_command");
     }
     return {
@@ -1970,11 +2142,11 @@ function validateObservedControlCommand(
     command === "setShuffle"
   ) {
     const value = args[0];
-    if (
-      command === "setShuffle"
-        ? typeof value !== "boolean"
-        : typeof value !== "string" || !safeControlLabel(value)
-    ) {
+    if (command === "setShuffle") {
+      if (typeof value !== "boolean") {
+        throw new SafeCommandError("invalid_arguments");
+      }
+    } else if (typeof value !== "string" || !safeControlLabel(value)) {
       throw new SafeCommandError("invalid_arguments");
     }
     if (
@@ -2047,16 +2219,23 @@ function validateObservedControlCommand(
     if (typeof position !== "number" || !Number.isFinite(position)) {
       throw new SafeCommandError("invalid_arguments");
     }
-    if ((control.min !== undefined && position < control.min) || (control.max !== undefined && position > control.max)) {
+    if (
+      (control.min !== undefined && position < control.min) ||
+      (control.max !== undefined && position > control.max)
+    ) {
       throw new SafeCommandError("invalid_arguments");
     }
-    if (!controlSupportsCommand(control, command, false)) throw new SafeCommandError("unsupported_command");
+    if (!controlSupportsCommand(control, command, false)) {
+      throw new SafeCommandError("unsupported_command");
+    }
     return undefined;
   }
   if (isCoverButtonCommand(command)) {
     if (control.kind !== "button") throw new SafeCommandError("capability_not_found");
     if (!COVER_ATTRIBUTES.has(control.attribute)) throw new SafeCommandError("unsupported_command");
-    if (!controlSupportsCommand(control, command, true)) throw new SafeCommandError("unsupported_command");
+    if (!controlSupportsCommand(control, command, true)) {
+      throw new SafeCommandError("unsupported_command");
+    }
     return undefined;
   }
   throw new SafeCommandError("unsupported_command");
@@ -2094,8 +2273,12 @@ function observedCommandFor(
     ...Object.values(control.optionCommands ?? {})
   ].filter((value): value is string => typeof value === "string");
   const exact = normalizeCommandToken(requested);
-  return explicit.find((value) => normalizeCommandToken(value) === exact) ??
-    explicit.find((value) => nativeCommandAliases(requested).includes(normalizeCommandToken(value)));
+  return (
+    explicit.find((value) => normalizeCommandToken(value) === exact) ??
+    explicit.find((value) =>
+      nativeCommandAliases(requested).includes(normalizeCommandToken(value))
+    )
+  );
 }
 
 function nativeCommandAliases(command: string): string[] {

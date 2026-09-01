@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from ipaddress import ip_address
 import json
+from math import isfinite
 import re
 from typing import Any
 from uuid import uuid4
@@ -15,6 +17,9 @@ from yarl import URL
 from .device_identity import canonicalize_duplicate_devices
 from .models import (
     BridgeAdvancedDeviceMetadata,
+    BridgeCommandArgument,
+    BridgeCommandDescriptor,
+    BridgeCommandOmission,
     BridgeCommandResult,
     BridgeDevice,
     BridgeInventory,
@@ -29,6 +34,44 @@ from .models import (
 
 _LOCAL_DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _LOCAL_DNS_SUFFIXES = (".local", ".home.arpa")
+_DEVICE_ALIAS = re.compile(r"^dev_[A-Za-z0-9]{3,64}$")
+_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
+_RAW_OR_SECRET = re.compile(
+    r"(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|raw|uuid|secret|token)",
+    re.IGNORECASE,
+)
+_MAX_COMMANDS = 256
+_MAX_ARGUMENTS = 16
+_MAX_ENUM_VALUES = 128
+_MAX_OMISSION_COUNT = 512
+_MAX_SCHEMA_DEPTH = 32
+_MAX_SCHEMA_NODES = 512
+_MAX_SCHEMA_BYTES = 8192
+_MAX_ENUM_STRING_LENGTH = 1024
+_CATALOG_KEYS = {"schemaVersion", "deviceId", "commands", "omissions"}
+_COMMAND_DESCRIPTOR_KEYS = {
+    "component",
+    "componentRole",
+    "capability",
+    "capabilityRole",
+    "capabilityVersion",
+    "command",
+    "arguments",
+    "transport",
+    "confirmation",
+    "label",
+    "labelSource",
+}
+_COMMAND_ARGUMENT_KEYS = {"name", "required", "sensitive", "unit", "schema"}
+_COMMAND_OMISSION_KEYS = {"component", "capability", "command", "reason"}
+_COMMAND_SCHEMA_KEYS = {"type", "enum", "minimum", "maximum"}
+_COMMAND_OMISSION_REASONS = {
+    "definition_unavailable",
+    "dangerous_command",
+    "sensitive_argument",
+    "schema_invalid",
+}
+_SAFE_COMMAND_CAPABILITY_ROLES = {"speechsynthesis"}
 _SAFE_BRIDGE_ERROR_CODES = {
     "bridge_api_unavailable",
     "bridge_auth_failed",
@@ -94,6 +137,15 @@ class BridgeReadOnlyError(BridgeClientError):
     """Write command blocked by the HA integration control mode."""
 
 
+@dataclass(frozen=True)
+class BridgeCommandCatalog:
+    """Validated safe command catalog for one Bridge device alias."""
+
+    device_id: str
+    commands: tuple[BridgeCommandDescriptor, ...]
+    omissions: dict[str, int]
+
+
 def bridge_error_message(action: str, error: BridgeClientError) -> str:
     """Return an actionable command error without exposing arbitrary details."""
     raw_code = str(error)
@@ -141,6 +193,17 @@ class SmartThingsWebBridgeClient:
         """Fetch the current full inventory."""
         return parse_inventory(await self._request_json("GET", "/api/v1/inventory", auth=True))
 
+    async def async_list_commands(self, device_id: str) -> BridgeCommandCatalog:
+        """Fetch the safe Advanced command catalog for one device alias."""
+        if not _DEVICE_ALIAS.fullmatch(device_id):
+            raise BridgeClientError("invalid_device_id")
+        return parse_command_catalog(
+            await self._request_json(
+                "GET", f"/api/v1/commands/catalog?deviceId={device_id}", auth=True
+            ),
+            device_id,
+        )
+
     async def async_get_health(self) -> dict[str, Any]:
         """Fetch non-secret Bridge health metadata for repairs/diagnostics."""
         return await self._request_json("GET", "/health/details")
@@ -187,6 +250,7 @@ class SmartThingsWebBridgeClient:
         control_id: str | None = None,
         control_label: str | None = None,
         arguments: list[Any] | None = None,
+        require_advanced: bool | None = None,
         confirm: bool | None = None,
         timeout: int | None = None,
     ) -> BridgeCommandResult:
@@ -209,6 +273,8 @@ class SmartThingsWebBridgeClient:
             body["controlId"] = control_id
         if control_label is not None:
             body["controlLabel"] = control_label
+        if require_advanced is not None:
+            body["requireAdvanced"] = require_advanced
         if confirm is not None:
             body["confirm"] = confirm
         if timeout is not None:
@@ -353,6 +419,10 @@ class ReadOnlyBridgeClient:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._client, name)
 
+    async def async_list_commands(self, device_id: str) -> BridgeCommandCatalog:
+        """Allow read-only config entries to inspect the safe command catalog."""
+        return await self._client.async_list_commands(device_id)
+
     async def async_execute_switch(
         self,
         device_id: str,
@@ -375,6 +445,7 @@ class ReadOnlyBridgeClient:
         control_id: str | None = None,
         control_label: str | None = None,
         arguments: list[Any] | None = None,
+        require_advanced: bool | None = None,
         confirm: bool | None = None,
         timeout: int | None = None,
     ) -> BridgeCommandResult:
@@ -422,6 +493,10 @@ def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:
         presentation = parse_device_presentation(item.get("presentation"))
         advanced = _parse_advanced_metadata(item.get("advanced"))
         health_updated_at = item.get("healthUpdatedAt")
+        commands = _parse_command_descriptors(item.get("advancedCommands"), strict=False)
+        command_omissions = _parse_command_omission_records(
+            item.get("commandOmissions"), strict=False
+        )
         devices[device_id] = BridgeDevice(
             device_id=device_id,
             location_id=location_id,
@@ -432,6 +507,8 @@ def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:
             presentation=presentation,
             states=states,
             controls=controls,
+            commands=commands,
+            command_omissions=command_omissions,
             advanced=advanced,
             health_updated_at=(
                 health_updated_at
@@ -460,6 +537,419 @@ def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:
         scenes=scenes,
         device_aliases=canonical.aliases,
     )
+
+
+def parse_command_catalog(raw: dict[str, Any], device_id: str) -> BridgeCommandCatalog:
+    """Validate a bounded safe command catalog response for one alias device."""
+    if not _DEVICE_ALIAS.fullmatch(device_id):
+        raise BridgeClientError("invalid_device_id")
+    if (
+        set(raw) != _CATALOG_KEYS
+        or raw.get("schemaVersion") != 1
+        or raw.get("deviceId") != device_id
+        or not isinstance(raw.get("commands"), list)
+        or len(raw["commands"]) > _MAX_COMMANDS
+    ):
+        raise BridgeClientError("bridge_response_invalid")
+    omissions = _parse_command_omissions(raw.get("omissions"), strict=True)
+    if omissions is None:
+        raise BridgeClientError("bridge_response_invalid")
+    return BridgeCommandCatalog(
+        device_id=device_id,
+        commands=_parse_command_descriptors(raw["commands"], strict=True),
+        omissions=omissions,
+    )
+
+
+def _parse_command_descriptors(
+    raw: Any, *, strict: bool
+) -> tuple[BridgeCommandDescriptor, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or len(raw) > _MAX_COMMANDS:
+        if strict:
+            raise BridgeClientError("bridge_response_invalid")
+        return ()
+    descriptors: list[BridgeCommandDescriptor] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for item in raw:
+        descriptor = _parse_command_descriptor(item)
+        if descriptor is None:
+            if strict:
+                raise BridgeClientError("bridge_response_invalid")
+            continue
+        key = (
+            descriptor.component,
+            descriptor.capability,
+            descriptor.command,
+            json.dumps(
+                [argument.schema for argument in descriptor.arguments],
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
+        if key in seen:
+            if strict:
+                raise BridgeClientError("bridge_response_invalid")
+            continue
+        seen.add(key)
+        descriptors.append(descriptor)
+    return tuple(
+        sorted(
+            descriptors,
+            key=lambda item: (item.component, item.capability, item.command, item.label),
+        )
+    )
+
+
+def _parse_command_descriptor(raw: Any) -> BridgeCommandDescriptor | None:
+    if not isinstance(raw, dict):
+        return None
+    if not set(raw).issubset(_COMMAND_DESCRIPTOR_KEYS):
+        return None
+    component = _safe_command_token(raw.get("component"), allow_public=True)
+    component_role = _safe_command_role(raw.get("componentRole"))
+    capability = _safe_command_token(raw.get("capability"), allow_public=True)
+    capability_role = _safe_command_capability_role(raw.get("capabilityRole"))
+    capability_version = raw.get("capabilityVersion")
+    command = _safe_command_token(raw.get("command"), allow_public=True)
+    label = _safe_display(raw.get("label"))
+    label_source = raw.get("labelSource")
+    if (
+        component is None
+        or (raw.get("componentRole") is not None and component_role is None)
+        or capability is None
+        or (raw.get("capabilityRole") is not None and capability_role is None)
+        or command is None
+        or isinstance(capability_version, bool)
+        or not isinstance(capability_version, int)
+        or capability_version < 0
+        or capability_version > 10_000
+        or raw.get("transport") != "advanced"
+        or raw.get("confirmation") not in {"accepted_receipt", "state"}
+        or label is None
+        or label_source not in {"visible_web", "capability", "role", "fallback"}
+    ):
+        return None
+    arguments = _parse_command_arguments(raw.get("arguments"))
+    if arguments is None:
+        return None
+    return BridgeCommandDescriptor(
+        component=component,
+        component_role=component_role,
+        capability=capability,
+        capability_role=capability_role,
+        capability_version=capability_version,
+        command=command,
+        arguments=arguments,
+        transport="advanced",
+        confirmation=raw["confirmation"],
+        label=label,
+        label_source=label_source,
+    )
+
+
+def _parse_command_arguments(raw: Any) -> tuple[BridgeCommandArgument, ...] | None:
+    if not isinstance(raw, list) or len(raw) > _MAX_ARGUMENTS:
+        return None
+    arguments: list[BridgeCommandArgument] = []
+    names: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            return None
+        if not set(item).issubset(_COMMAND_ARGUMENT_KEYS):
+            return None
+        name = _safe_command_token(item.get("name"), allow_public=True)
+        schema = _safe_command_schema(item.get("schema"))
+        unit = item.get("unit")
+        if (
+            name is None
+            or name in names
+            or not isinstance(item.get("required"), bool)
+            or not isinstance(item.get("sensitive"), bool)
+            or item["sensitive"] is True
+            or schema is None
+            or (unit is not None and (not isinstance(unit, str) or len(unit) > 64))
+        ):
+            return None
+        names.add(name)
+        arguments.append(
+            BridgeCommandArgument(
+                name=name,
+                required=item["required"],
+                sensitive=False,
+                unit=unit if isinstance(unit, str) and unit else None,
+                schema=schema,
+            )
+        )
+    return tuple(arguments)
+
+
+def _safe_command_schema(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        if len(json.dumps(raw, sort_keys=True, separators=(",", ":"))) > _MAX_SCHEMA_BYTES:
+            return None
+    except (TypeError, ValueError):
+        return None
+    schema = _clone_schema(raw, depth=0, nodes=[0])
+    if schema is None:
+        return None
+    schema_type = schema.get("type")
+    if schema_type is not None and schema_type not in {
+        "array",
+        "boolean",
+        "integer",
+        "number",
+        "object",
+        "string",
+    }:
+        return None
+    minimum = schema.get("minimum")
+    maximum = schema.get("maximum")
+    if (
+        (minimum is not None and (not isinstance(minimum, (int, float)) or isinstance(minimum, bool)))
+        or (maximum is not None and (not isinstance(maximum, (int, float)) or isinstance(maximum, bool)))
+        or (
+            isinstance(minimum, (int, float))
+            and not isinstance(minimum, bool)
+            and isinstance(maximum, (int, float))
+            and not isinstance(maximum, bool)
+            and minimum > maximum
+        )
+    ):
+        return None
+    if "enum" in schema:
+        enum_values = _safe_enum_values(schema.get("enum"))
+        if enum_values is None:
+            return None
+        schema["enum"] = enum_values
+    return schema
+
+
+def _safe_enum_values(raw: Any) -> list[Any] | None:
+    if not isinstance(raw, list) or len(raw) > _MAX_ENUM_VALUES:
+        return None
+    values: list[Any] = []
+    for item in raw:
+        if item is None or isinstance(item, bool):
+            values.append(item)
+        elif isinstance(item, (int, float)) and not isinstance(item, bool) and isfinite(item):
+            values.append(item)
+        elif (
+            isinstance(item, str)
+            and len(item) <= _MAX_ENUM_STRING_LENGTH
+            and not re.search(r"[\u0000-\u001f\u007f]", item)
+        ):
+            values.append(item)
+        else:
+            return None
+    return values
+
+
+def _parse_command_omissions(raw: Any, *, strict: bool) -> dict[str, int] | None:
+    if raw is None:
+        return {}
+    if strict and not isinstance(raw, dict):
+        return None
+    if isinstance(raw, dict):
+        counts: dict[str, int] = {}
+        for reason, count in raw.items():
+            if (
+                reason not in _COMMAND_OMISSION_REASONS
+                or isinstance(count, bool)
+                or not isinstance(count, int)
+                or count < 0
+                or count > _MAX_OMISSION_COUNT
+            ):
+                return None
+            if count:
+                counts[reason] = count
+        return counts
+    if not isinstance(raw, list) or len(raw) > _MAX_OMISSION_COUNT:
+        return None if strict else {}
+    counts: dict[str, int] = {}
+    seen: set[tuple[str, str, str | None, str]] = set()
+    for item in raw:
+        parsed = _parse_command_omission(item)
+        if parsed is None:
+            if strict:
+                return None
+            continue
+        key = (
+            parsed["component"],
+            parsed["capability"],
+            parsed.get("command"),
+            parsed["reason"],
+        )
+        if key in seen:
+            if strict:
+                return None
+            continue
+        seen.add(key)
+        reason = parsed["reason"]
+        counts[reason] = counts.get(reason, 0) + 1
+        if counts[reason] > _MAX_OMISSION_COUNT:
+            return None
+    return counts
+
+
+def _parse_command_omission_records(
+    raw: Any, *, strict: bool
+) -> tuple[BridgeCommandOmission, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or len(raw) > _MAX_OMISSION_COUNT:
+        return ()
+    omissions: list[BridgeCommandOmission] = []
+    seen: set[tuple[str, str, str | None, str]] = set()
+    for item in raw:
+        parsed = _parse_command_omission(item)
+        if parsed is None:
+            if strict:
+                return ()
+            continue
+        key = (
+            parsed["component"],
+            parsed["capability"],
+            parsed.get("command"),
+            parsed["reason"],
+        )
+        if key in seen:
+            if strict:
+                return ()
+            continue
+        seen.add(key)
+        omissions.append(
+            BridgeCommandOmission(
+                component=parsed["component"],
+                capability=parsed["capability"],
+                command=parsed.get("command"),
+                reason=parsed["reason"],
+            )
+        )
+    return tuple(
+        sorted(
+            omissions,
+            key=lambda item: (
+                item.component,
+                item.capability,
+                item.command or "",
+                item.reason,
+            ),
+        )
+    )
+
+
+def _parse_command_omission(raw: Any) -> dict[str, str] | None:
+    if not isinstance(raw, dict):
+        return None
+    if not set(raw).issubset(_COMMAND_OMISSION_KEYS):
+        return None
+    component = _safe_command_token(raw.get("component"), allow_public=True)
+    capability = _safe_command_token(raw.get("capability"), allow_public=True)
+    command = (
+        _safe_command_token(raw.get("command"), allow_public=True)
+        if raw.get("command") is not None
+        else None
+    )
+    reason = raw.get("reason")
+    if (
+        component is None
+        or capability is None
+        or (raw.get("command") is not None and command is None)
+        or reason not in _COMMAND_OMISSION_REASONS
+    ):
+        return None
+    return {
+        "component": component,
+        "capability": capability,
+        **({"command": command} if command is not None else {}),
+        "reason": reason,
+    }
+
+
+def _safe_command_token(raw: Any, *, allow_public: bool) -> str | None:
+    if not isinstance(raw, str) or not _TOKEN.fullmatch(raw) or _RAW_OR_SECRET.search(raw):
+        return None
+    if raw.startswith("identifier_") or allow_public:
+        return raw
+    return None
+
+
+def _safe_command_role(raw: Any) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    if (
+        not text
+        or len(text) > 80
+        or text.startswith("identifier_")
+        or _RAW_OR_SECRET.search(text)
+        or not re.fullmatch(r"[A-Za-z0-9가-힣 ._-]+", text)
+    ):
+        return None
+    return text
+
+
+def _safe_command_capability_role(raw: Any) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip().lower()
+    return text if text in _SAFE_COMMAND_CAPABILITY_ROLES else None
+
+
+def _safe_display(raw: Any) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    if (
+        not text
+        or len(text) > 255
+        or "[REDACTED]" in text
+        or re.search(r"[\u0000-\u001f\u007f]", text)
+        or re.search(r"\b(?:https?|wss?)://", text, re.IGNORECASE)
+    ):
+        return None
+    return text
+
+
+def _clone_schema(raw: Any, *, depth: int, nodes: list[int]) -> Any:
+    nodes[0] += 1
+    if depth > _MAX_SCHEMA_DEPTH or nodes[0] > _MAX_SCHEMA_NODES:
+        return None
+    if raw is None or isinstance(raw, str):
+        return raw
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return raw if not isinstance(raw, bool) and isfinite(raw) else None
+    if isinstance(raw, list):
+        if len(raw) > _MAX_ENUM_VALUES:
+            return None
+        items = []
+        for item in raw:
+            cloned = _clone_schema(item, depth=depth + 1, nodes=nodes)
+            if cloned is None and item is not None:
+                return None
+            items.append(cloned)
+        return items
+    if isinstance(raw, dict):
+        if not set(raw).issubset(_COMMAND_SCHEMA_KEYS):
+            return None
+        result: dict[str, Any] = {}
+        for key, value in raw.items():
+            cloned = _clone_schema(value, depth=depth + 1, nodes=nodes)
+            if cloned is None and value is not None:
+                return None
+            result[key] = cloned
+        return result
+    return None
 
 
 def _parse_advanced_metadata(raw: Any) -> BridgeAdvancedDeviceMetadata | None:

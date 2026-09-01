@@ -504,6 +504,121 @@ describe("createBridgeHttpServer", () => {
     expect(timedOutBody).not.toMatch(/token|deviceId|component|capability/i);
   });
 
+  test("serves authenticated bounded command catalog for one alias device", async () => {
+    const token = "e".repeat(32);
+    const devices = new DeviceStore();
+    devices.observeAdvancedInventorySnapshot({
+      locations: [{ locationId: "loc_001", name: "Home" }],
+      devices: [
+        {
+          deviceId: "dev_001",
+          locationId: "loc_001",
+          label: "Lamp",
+          healthState: "ONLINE",
+          components: [{ id: "main", label: "Main", capabilities: [{ id: "switch", version: 1 }] }]
+        }
+      ]
+    });
+    devices.observeAdvancedCommandCatalog(
+      "dev_001",
+      [
+        {
+          component: "main",
+          capability: "speechSynthesis",
+          capabilityRole: "speechsynthesis",
+          capabilityVersion: 1,
+          command: "on",
+          arguments: [],
+          transport: "advanced",
+          confirmation: "state",
+          label: "Power",
+          labelSource: "capability"
+        }
+      ],
+      [
+        {
+          component: "main",
+          capability: "speechSynthesis",
+          command: "setToken",
+          reason: "sensitive_argument"
+        }
+      ]
+    );
+    const server = await createBridgeHttpServer({
+      store: createStore(),
+      host: "127.0.0.1",
+      port: 0,
+      auth: new BridgeAuth(token),
+      devices
+    });
+    servers.push(server);
+    const response = await fetch(
+      `http://127.0.0.1:${server.port}/api/v1/commands/catalog?deviceId=dev_001`,
+      { headers: { authorization: `Bearer ${token}` } }
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({
+      schemaVersion: 1,
+      deviceId: "dev_001",
+      commands: [
+        {
+          component: "main",
+          capability: "speechSynthesis",
+          capabilityRole: "speechsynthesis",
+          capabilityVersion: 1,
+          command: "on",
+          arguments: [],
+          transport: "advanced",
+          confirmation: "state",
+          label: "Power",
+          labelSource: "capability"
+        }
+      ],
+      omissions: { sensitive_argument: 1 }
+    });
+    body.commands[0].arguments.push({ name: "mutated" });
+    expect(devices.snapshot().devices[0]?.advancedCommands?.[0]?.arguments).toEqual([]);
+    expect(JSON.stringify(body)).not.toMatch(/raw|uuid|token|secret|identifier_/i);
+  });
+
+  test("validates command catalog auth query and method without leaking request values", async () => {
+    const token = "f".repeat(32);
+    const devices = new DeviceStore();
+    devices.observeAdvancedInventorySnapshot({
+      locations: [{ locationId: "loc_001", name: "Home" }],
+      devices: [{ deviceId: "dev_001", locationId: "loc_001", label: "Lamp" }]
+    });
+    const server = await createBridgeHttpServer({
+      store: createStore(),
+      host: "127.0.0.1",
+      port: 0,
+      auth: new BridgeAuth(token),
+      devices
+    });
+    servers.push(server);
+    const baseUrl = `http://127.0.0.1:${server.port}/api/v1/commands/catalog`;
+    const authed = { authorization: `Bearer ${token}` };
+
+    const cases = [
+      [await fetch(`${baseUrl}?deviceId=dev_001`), 401, "unauthorized"],
+      [await fetch(`${baseUrl}`, { headers: authed }), 400, "missing_device_id"],
+      [await fetch(`${baseUrl}?deviceId=dev_001&deviceId=dev_002`, { headers: authed }), 400, "duplicate_query_param"],
+      [await fetch(`${baseUrl}?deviceId=dev_001&rawDeviceId=uuid-secret`, { headers: authed }), 400, "unknown_query_param"],
+      [await fetch(`${baseUrl}?deviceId=uuid-secret`, { headers: authed }), 400, "invalid_device_id"],
+      [await fetch(`${baseUrl}?deviceId=dev_999`, { headers: authed }), 404, "device_not_found"],
+      [await fetch(`${baseUrl}?deviceId=dev_001`, { method: "POST", headers: authed }), 405, "method_not_allowed"]
+    ] as const;
+
+    for (const [response, status, error] of cases) {
+      expect(response.status).toBe(status);
+      const text = await response.text();
+      expect(text).toBe(JSON.stringify({ error }));
+      expect(text).not.toMatch(/uuid-secret|Bearer|token|identifier_/i);
+    }
+  });
+
   test.each([
     "component_command_partial_failure",
     "component_command_rollback_failed"

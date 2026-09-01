@@ -287,6 +287,7 @@ def migrate_entity_original_name(
 entity_module.SmartThingsWebEntity = SmartThingsWebEntity  # type: ignore[attr-defined]
 entity_module.SmartThingsWebDeviceEntity = SmartThingsWebDeviceEntity  # type: ignore[attr-defined]
 entity_module.device_info_for = lambda *_args, **_kwargs: {}  # type: ignore[attr-defined]
+entity_module.device_icon_for = lambda *_args, **_kwargs: None  # type: ignore[attr-defined]
 entity_module.suggested_entity_object_id = (  # type: ignore[attr-defined]
     lambda _runtime, _device, entity_name=None: f"device_{entity_name or 'primary'}"
 )

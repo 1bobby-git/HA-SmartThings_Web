@@ -316,6 +316,83 @@ class SmartThingsWebSwitchTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_setup_names_same_component_power_and_status_from_web_labels(self) -> None:
+        power = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        status = BridgeState(
+            "main",
+            "yjswitchstatus",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_outlet",
+            "loc_001",
+            None,
+            "멀티탭",
+            "outlet_1",
+            True,
+            states={power.key: power, status.key: status},
+            controls={
+                "power": BridgeControl(
+                    "power",
+                    "toggle",
+                    "Power",
+                    component=power.component,
+                    capability=power.capability,
+                    attribute=power.attribute,
+                    commands=("on", "off"),
+                ),
+                "status": BridgeControl(
+                    "status",
+                    "toggle",
+                    "yjswitchstatus",
+                    component=status.component,
+                    capability=status.capability,
+                    attribute=status.attribute,
+                    commands=("on", "off"),
+                ),
+            },
+        )
+        runtime = _runtime(device, object())
+        entry = SimpleNamespace(
+            runtime_data=runtime,
+            async_on_unload=lambda _callback: None,
+        )
+        added: list[SmartThingsWebSwitch] = []
+
+        await async_setup_entry(object(), entry, added.extend)
+
+        self.assertEqual(
+            {entity.state_key: getattr(entity, "_attr_name", None) for entity in added},
+            {
+                power.key: "전원",
+                status.key: "장치 상태",
+            },
+        )
+
+    async def test_single_main_switch_stays_device_level_primary(self) -> None:
+        device, _state = _device(with_control=True)
+        runtime = _runtime(device, object())
+        entry = SimpleNamespace(
+            runtime_data=runtime,
+            async_on_unload=lambda _callback: None,
+        )
+        added: list[SmartThingsWebSwitch] = []
+
+        await async_setup_entry(object(), entry, added.extend)
+
+        self.assertEqual(len(added), 1)
+        self.assertNotIn("_attr_name", added[0].__dict__)
+
     async def test_state_backed_switch_rejects_unobserved_commands(self) -> None:
         device, state = _device(with_control=False)
         client = SimpleNamespace(async_execute_command=AsyncMock())
@@ -415,6 +492,25 @@ class SmartThingsWebSwitchTests(unittest.IsolatedAsyncioTestCase):
         await entity.async_turn_off()
 
         client.async_execute_command.assert_not_awaited()
+
+    async def test_switch_becomes_unavailable_when_reversible_control_is_lost(self) -> None:
+        device, state = _device(with_control=True)
+        control_id = "toggle:identifier_cd4f3cfbf2aa:identifier_74292182f118:switch"
+        client = SimpleNamespace(async_execute_command=AsyncMock())
+        entity = SmartThingsWebSwitch(_runtime(device, client), device, state)
+        self.assertTrue(entity.available)
+
+        device.controls[control_id] = BridgeControl(
+            control_id,
+            "toggle",
+            "Power",
+            component=state.component,
+            capability=state.capability,
+            attribute=state.attribute,
+            commands=("on",),
+        )
+
+        self.assertFalse(entity.available)
 
 
 if __name__ == "__main__":

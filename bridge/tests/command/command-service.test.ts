@@ -519,25 +519,69 @@ describe("SafeCommandService", () => {
     ).resolves.toMatchObject({ status: "confirmed" });
   });
 
-  test("passes a token-safe schema-driven command through without a hardcoded allowlist", async () => {
+  test("dispatches a descriptor-backed accepted-receipt TTS command through Advanced only", async () => {
     const store = readyDeviceStore();
-    const executor: SafeCommandExecutor = {
-      executeDeviceAction: vi.fn(async () => {
-        store.observe(
-          received(
-            deviceEventFrame(
-              42,
-              "2026-08-25T00:00:01Z",
-              "detectionFrequency",
-              "dev_001",
-              "identifier_switch"
-            )
-          )
-        );
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_speechSynthesis", "speak", {
+        confirmation: "accepted_receipt",
+        arguments: [
+          {
+            name: "phrase",
+            required: true,
+            sensitive: false,
+            schema: { type: "string" }
+          }
+        ]
       })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => ({
+        state: "ACCEPTED" as const,
+        transport: "advanced" as const,
+        acceptedAtMs: Date.now()
+      }))
     };
     const service = new SafeCommandService({
       devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        targetType: "device",
+        targetId: "dev_001",
+        component: "main",
+        capability: "identifier_speechSynthesis",
+        command: "speak",
+        arguments: ["hello from catalog"],
+        requireAdvanced: true,
+        clientRequestId: "request_tts_catalog"
+      })
+    ).resolves.toMatchObject({
+      status: "accepted_unconfirmed",
+      confirmation: "accepted_receipt",
+      lifecycle: "ACCEPTED_UNCONFIRMED",
+      transport: "advanced"
+    });
+    expect(executor.executeDeviceAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requireAdvanced: true,
+        capabilityVersion: 1,
+        command: "speak",
+        arguments: ["hello from catalog"]
+      })
+    );
+  });
+
+  test("rejects token-safe arbitrary commands without an exact persisted descriptor", async () => {
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => undefined)
+    };
+    const service = new SafeCommandService({
+      devices: readyDeviceStore(),
       status: connectedStatus(),
       executor,
       timeoutMs: 20,
@@ -553,15 +597,504 @@ describe("SafeCommandService", () => {
         attribute: "detectionFrequency",
         command: "setDetectionFrequency",
         arguments: [42],
-        clientRequestId: "request_dynamic_schema"
+        clientRequestId: "request_dynamic_schema_closed"
       })
-    ).resolves.toMatchObject({ status: "confirmed" });
+    ).rejects.toMatchObject({ code: "unsupported_command" });
+    expect(executor.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["missing required phrase", [], "invalid_arguments"],
+    ["wrong phrase type", [42], "invalid_arguments"],
+    ["control characters", ["bad\nphrase"], "invalid_arguments"],
+    ["oversize phrase", ["x".repeat(2049)], "invalid_arguments"]
+  ] as const)("rejects descriptor TTS arguments with %s", async (_name, args, code) => {
+    const store = readyDeviceStore();
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_speechSynthesis", "speak", {
+        confirmation: "accepted_receipt",
+        arguments: [
+          {
+            name: "phrase",
+            required: true,
+            sensitive: false,
+            schema: { type: "string" }
+          }
+        ]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => undefined)
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        targetType: "device",
+        targetId: "dev_001",
+        component: "main",
+        capability: "identifier_speechSynthesis",
+        command: "speak",
+        arguments: args,
+        clientRequestId: `request_tts_${_name.replaceAll(" ", "_")}`
+      })
+    ).rejects.toMatchObject({ code });
+    expect(executor.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test("rejects a missing positional required descriptor argument after an optional argument", async () => {
+    const store = readyDeviceStore();
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_speechSynthesis", "speak", {
+        confirmation: "accepted_receipt",
+        arguments: [
+          {
+            name: "mode",
+            required: false,
+            sensitive: false,
+            schema: { type: "string" }
+          },
+          {
+            name: "phrase",
+            required: true,
+            sensitive: false,
+            schema: { type: "string" }
+          }
+        ]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => undefined)
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        targetType: "device",
+        targetId: "dev_001",
+        component: "main",
+        capability: "identifier_speechSynthesis",
+        command: "speak",
+        arguments: ["auto"],
+        clientRequestId: "request_positional_required"
+      })
+    ).rejects.toMatchObject({ code: "invalid_arguments" });
+    expect(executor.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["boolean", { type: "boolean" }, [true]],
+    ["array", { type: "array" }, [["eco", "sleep"]]],
+    ["object", { type: "object" }, [{ mode: "eco" }]]
+  ] as const)("accepts descriptor %s arguments", async (_name, schema, args) => {
+    const store = readyDeviceStore();
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_customCapability", "setCustomValue", {
+        confirmation: "accepted_receipt",
+        arguments: [
+          {
+            name: "value",
+            required: true,
+            sensitive: false,
+            schema
+          }
+        ]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => ({
+        state: "ACCEPTED" as const,
+        transport: "advanced" as const,
+        acceptedAtMs: Date.now()
+      }))
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        targetType: "device",
+        targetId: "dev_001",
+        component: "main",
+        capability: "identifier_customCapability",
+        command: "setCustomValue",
+        arguments: args,
+        clientRequestId: `request_descriptor_accepts_${_name}`
+      })
+    ).resolves.toMatchObject({ status: "accepted_unconfirmed", transport: "advanced" });
     expect(executor.executeDeviceAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "setDetectionFrequency",
-        arguments: [42]
-      })
+      expect.objectContaining({ requireAdvanced: true, arguments: args })
     );
+  });
+
+  test.each([
+    ["boolean rejects string", { type: "boolean" }, ["true"]],
+    ["array rejects object", { type: "array" }, [{ value: "eco" }]],
+    ["object rejects array", { type: "object" }, [["eco"]]],
+    ["extra argument", { type: "boolean" }, [true, false]]
+  ] as const)("rejects descriptor %s", async (_name, schema, args) => {
+    const store = readyDeviceStore();
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_customCapability", "setCustomValue", {
+        confirmation: "accepted_receipt",
+        arguments: [
+          {
+            name: "value",
+            required: true,
+            sensitive: false,
+            schema
+          }
+        ]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => undefined)
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        targetType: "device",
+        targetId: "dev_001",
+        component: "main",
+        capability: "identifier_customCapability",
+        command: "setCustomValue",
+        arguments: args,
+        clientRequestId: `request_descriptor_rejects_${_name.replaceAll(" ", "_")}`
+      })
+    ).rejects.toMatchObject({ code: "invalid_arguments" });
+    expect(executor.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test("rejects cyclic descriptor arguments before dispatch", async () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const store = readyDeviceStore();
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_customCapability", "setCustomValue", {
+        confirmation: "accepted_receipt",
+        arguments: [
+          {
+            name: "value",
+            required: true,
+            sensitive: false,
+            schema: { type: "object" }
+          }
+        ]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => undefined)
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        targetType: "device",
+        targetId: "dev_001",
+        component: "main",
+        capability: "identifier_customCapability",
+        command: "setCustomValue",
+        arguments: [cyclic],
+        clientRequestId: "request_descriptor_cyclic"
+      })
+    ).rejects.toMatchObject({ code: "invalid_arguments" });
+    expect(executor.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test("rejects descriptor argument payloads over the JSON byte bound before dispatch", async () => {
+    const store = readyDeviceStore();
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_customCapability", "setCustomValue", {
+        confirmation: "accepted_receipt",
+        arguments: [
+          {
+            name: "value",
+            required: true,
+            sensitive: false,
+            schema: { type: "array" }
+          }
+        ]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => undefined)
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        targetType: "device",
+        targetId: "dev_001",
+        component: "main",
+        capability: "identifier_customCapability",
+        command: "setCustomValue",
+        arguments: [[("x").repeat(16_385)]],
+        clientRequestId: "request_descriptor_oversize_payload"
+      })
+    ).rejects.toMatchObject({ code: "invalid_arguments" });
+    expect(executor.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["enum mismatch", "setMode", ["away"], { type: "string", enum: ["eco", "auto"] }],
+    ["number below minimum", "setLevel", [-1], { type: "number", minimum: 0, maximum: 100 }],
+    ["integer above maximum", "setLevel", [101], { type: "integer", minimum: 0, maximum: 100 }]
+  ])("rejects descriptor arguments with %s", async (_name, commandName, args, schema) => {
+    const store = readyDeviceStore();
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_switchLevel", commandName, {
+        arguments: [
+          {
+            name: "value",
+            required: true,
+            sensitive: false,
+            schema: schema as Parameters<DeviceStore["observeAdvancedCommandCatalog"]>[1][number]["arguments"][number]["schema"]
+          }
+        ]
+      })
+    ]);
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor: { executeDeviceAction: vi.fn(async () => undefined) },
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        targetType: "device",
+        targetId: "dev_001",
+        component: "main",
+        capability: "identifier_switchLevel",
+        attribute: "level",
+        command: commandName,
+        arguments: args,
+        clientRequestId: `request_descriptor_${_name.replaceAll(" ", "_")}`
+      })
+    ).rejects.toMatchObject({ code: "invalid_arguments" });
+  });
+
+  test("rejects ambiguous descriptor matches before dispatch", async () => {
+    const store = readyDeviceStore();
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_speechSynthesis", "speak", {
+        label: "Speak phrase",
+        confirmation: "accepted_receipt",
+        arguments: [
+          { name: "phrase", required: true, sensitive: false, schema: { type: "string" } }
+        ]
+      }),
+      advancedCommand("identifier_speechSynthesis", "speak", {
+        label: "Speak mode",
+        confirmation: "accepted_receipt",
+        arguments: [
+          { name: "mode", required: true, sensitive: false, schema: { type: "string" } }
+        ]
+      })
+    ]);
+    const executor: SafeCommandExecutor = { executeDeviceAction: vi.fn(async () => undefined) };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        targetType: "device",
+        targetId: "dev_001",
+        component: "main",
+        capability: "identifier_speechSynthesis",
+        command: "speak",
+        arguments: ["hello"],
+        clientRequestId: "request_ambiguous_advanced"
+      })
+    ).rejects.toMatchObject({ code: "command_control_ambiguous" });
+    expect(executor.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test("rejects a state descriptor when no existing state can verify the desired value", async () => {
+    const store = readyDeviceStore();
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_audioNotification", "playTrackAndRestore")
+    ]);
+    const executor: SafeCommandExecutor = { executeDeviceAction: vi.fn(async () => undefined) };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        targetType: "device",
+        targetId: "dev_001",
+        component: "main",
+        capability: "identifier_audioNotification",
+        command: "playTrackAndRestore",
+        arguments: [],
+        clientRequestId: "request_state_without_state"
+      })
+    ).rejects.toMatchObject({ code: "unsupported_command" });
+    expect(executor.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test("confirms descriptor-backed Advanced toggle commands with existing state", async () => {
+    const store = readyDeviceStore(false);
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_switch", "on"),
+      advancedCommand("identifier_switch", "off")
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async (input) => {
+        store.observe(received(deviceEventFrame(
+          input.command,
+          input.command === "on" ? "2026-08-25T00:00:01Z" : "2026-08-25T00:00:02Z"
+        )));
+        return {
+          state: "ACCEPTED" as const,
+          transport: "advanced" as const,
+          acceptedAtMs: Date.now()
+        };
+      })
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 1_000,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(service.execute(command("on", "request_advanced_toggle_on"))).resolves.toMatchObject({
+      status: "confirmed",
+      confirmation: "device_event",
+      transport: "advanced"
+    });
+    expect(executor.executeDeviceAction).toHaveBeenCalledWith(
+      expect.objectContaining({ requireAdvanced: true, command: "on" })
+    );
+
+    await expect(service.execute(command("off", "request_advanced_toggle_off"))).resolves.toMatchObject({
+      status: "confirmed",
+      confirmation: "device_event",
+      transport: "advanced"
+    });
+  });
+
+  test("requireAdvanced rejects on/off toggles without an exact Advanced descriptor", async () => {
+    const store = readyDeviceStore(true);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => ({
+        state: "ACCEPTED" as const,
+        transport: "advanced" as const,
+        acceptedAtMs: Date.now()
+      }))
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        ...command("on", "request_require_advanced_toggle_no_descriptor"),
+        requireAdvanced: true
+      })
+    ).rejects.toMatchObject({ code: "unsupported_command" });
+    expect(executor.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test("requireAdvanced on/off uses the exact descriptor before observed toggles", async () => {
+    const store = readyDeviceStore(true);
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_switch", "on", { capabilityVersion: 7 }),
+      advancedCommand("identifier_switch", "off")
+    ]);
+    const executeDeviceAction = vi.fn(async (input: DeviceActionExecutionInput) => {
+      store.observe(received(deviceEventFrame(
+        input.command,
+        "2026-08-25T00:00:01Z"
+      )));
+      return {
+        state: "ACCEPTED" as const,
+        transport: "advanced" as const,
+        acceptedAtMs: Date.now()
+      };
+    });
+    const executor: SafeCommandExecutor = { executeDeviceAction };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 1_000,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        ...command("on", "request_require_advanced_toggle_descriptor"),
+        requireAdvanced: true
+      })
+    ).resolves.toMatchObject({
+      status: "confirmed",
+      confirmation: "device_event",
+      transport: "advanced"
+    });
+    const action = executeDeviceAction.mock.calls[0]?.[0];
+    expect(action).toMatchObject({
+      capability: "identifier_switch",
+      capabilityVersion: 7,
+      command: "on",
+      requireAdvanced: true
+    });
+    expect(action).not.toHaveProperty("controlId");
+    expect(action).not.toHaveProperty("controlLabel");
+    expect(action).not.toHaveProperty("nativeCommand");
   });
 
   test("does not confirm a transient state that reverses before browser interaction completes", async () => {
@@ -2890,6 +3423,32 @@ function deviceCommand(
     ...(overrides.controlId ? { controlId: overrides.controlId } : {}),
     ...(overrides.controlLabel ? { controlLabel: overrides.controlLabel } : {}),
     clientRequestId
+  };
+}
+
+function observeAdvancedCatalog(
+  store: DeviceStore,
+  commands: Parameters<DeviceStore["observeAdvancedCommandCatalog"]>[1]
+): void {
+  store.observeAdvancedCommandCatalog("dev_001", commands, []);
+}
+
+function advancedCommand(
+  capability: string,
+  commandName: string,
+  overrides: Partial<Parameters<DeviceStore["observeAdvancedCommandCatalog"]>[1][number]> = {}
+): Parameters<DeviceStore["observeAdvancedCommandCatalog"]>[1][number] {
+  return {
+    component: "main",
+    capability,
+    capabilityVersion: 1,
+    command: commandName,
+    arguments: [],
+    transport: "advanced",
+    confirmation: "state",
+    label: commandName,
+    labelSource: "capability",
+    ...overrides
   };
 }
 

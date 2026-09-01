@@ -41,7 +41,7 @@ const createMinimalRepo = async () => {
   await writeFixture(
     repoRoot,
     "package.json",
-    "{\"name\":\"fixture\",\"scripts\":{\"soak:haos:addon\":\"node dist/tools/haos-soak.js --local-bridge\"}}\n"
+    "{\"name\":\"fixture\",\"scripts\":{\"soak:haos:addon\":\"node dist/tools/haos-soak.js --local-bridge\",\"audit:web-parity\":\"tsx tools/smartthings-web-parity-audit.ts\"}}\n"
   );
   await writeFixture(repoRoot, "package-lock.json", "{\"lockfileVersion\":3}\n");
   await writeFixture(repoRoot, "tsconfig.json", "{}\n");
@@ -55,6 +55,8 @@ const createMinimalRepo = async () => {
   await writeFixture(repoRoot, "tools/haos-soak-resume-core.ts", "export const soakResume = 1;\n");
   await writeFixture(repoRoot, "tools/haos-soak-resume-core.ts", "export const resume = 1;\n");
   await writeFixture(repoRoot, "tools/haos-soak-deployment-gate-core.ts", "export const gate = 1;\n");
+  await writeFixture(repoRoot, "tools/smartthings-web-parity-audit.ts", "export const parityCli = 1;\n");
+  await writeFixture(repoRoot, "tools/smartthings-web-parity-audit-core.ts", "export const parityCore = 1;\n");
   await writeFixture(repoRoot, "tools/haos-live-control-benchmark.ts", "must not copy");
   await writeFixture(repoRoot, "tools/fixtures/secret.json", "must not copy");
   await writeFixture(repoRoot, "bridge/tests/main.test.ts", "must not copy");
@@ -145,6 +147,8 @@ describe("packageAddon", { timeout: 30_000 }, () => {
     expect(paths).toContain("tools/haos-soak-resume-core.ts");
     expect(paths).toContain("tools/haos-soak-resume-core.ts");
     expect(paths).toContain("tools/haos-soak-deployment-gate-core.ts");
+    expect(paths).toContain("tools/smartthings-web-parity-audit.ts");
+    expect(paths).toContain("tools/smartthings-web-parity-audit-core.ts");
     expect(paths).not.toContain("tools/haos-live-control-benchmark.ts");
     expect(paths).not.toContain("tools/fixtures/secret.json");
     expect(paths).toContain("bridge/src/secret/kept.ts");
@@ -192,6 +196,11 @@ describe("packageAddon", { timeout: 30_000 }, () => {
     expect(packagedPackage.scripts?.["soak:haos:addon"]).toBe(
       "node dist/tools/haos-soak.js --local-bridge"
     );
+    expect(packagedPackage.scripts?.["audit:web-parity"]).toBe(
+      "tsx tools/smartthings-web-parity-audit.ts"
+    );
+    await expectPathExists(join(second.packageDir, "tools/smartthings-web-parity-audit.ts"));
+    await expectPathExists(join(second.packageDir, "tools/smartthings-web-parity-audit-core.ts"));
   });
 
   test("produces the same LF package manifest from LF and CRLF checkouts", async () => {

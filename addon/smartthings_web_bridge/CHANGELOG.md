@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.155
+
+- 전체 Advanced capability catalog를 안전 정책으로 필터링해 `list_commands`, `execute_command`, `speak` Home Assistant 서비스로 노출합니다.
+- 안전하고 되돌릴 수 있는 Advanced `on`/`off` 조합을 native switch/light 엔티티로 투영해 Web에 있는 전원 기능이 누락되지 않도록 합니다.
+- Web 표시명과 component/capability 역할을 모든 기기에 같은 규칙으로 적용하고, 사용자 지정 이름과 기존 entity ID는 보존합니다.
+- device class가 없는 범용 센서에 장치 유형 아이콘을 적용하되, 온도 등 기능형 센서 아이콘은 Home Assistant device class를 유지합니다.
+- 패키지 안에서도 `npm run audit:web-parity`가 동작하도록 parity audit CLI/core를 포함하고, 위험 명령·중복 ID·중복 생성명·설명 없는 누락을 fail-closed로 검사합니다.
+
+## 0.1.154
+
+- Home Assistant Core 내부 API 경로에서 페어링 코드 발급을 차단하고, 인증된 Ingress 경로에서만 발급되도록 신뢰 경계를 분리합니다.
+- Chromium 시작 재시도를 모두 소진한 `BROWSER_FAILED` 상태는 liveness 실패로 처리해 애드온 watchdog이 자동 복구하도록 합니다.
+- 실행 중 브리지 토큰이 거부되면 무한 재시도 대신 Home Assistant 재인증 흐름을 시작합니다.
+- SSE 재연결 backoff를 1초에서 최대 60초까지 확장해 장시간 애드온 중단 시 불필요한 연결 부하를 줄입니다.
+
 ## 0.1.153
 
 - targeted Advanced `/status` 응답이 parent의 `childDeviceIds` 관계 메타데이터를 지우던 문제를 수정합니다.

@@ -1,5 +1,6 @@
 import type {
   ComponentTransactionExecutionInput,
+  DeviceActionCommand,
   DeviceActionExecutionInput,
   SafeCommandExecutor
 } from "./command-service.js";
@@ -13,17 +14,49 @@ import {
   type CommandTransport,
   type CommandTransportReceipt
 } from "./command-router.js";
-import {
-  DomFallbackAdapter,
-  LocationNativeCommandAdapter
-} from "./fallback-adapters.js";
+
+type LegacyDeviceActionExecutionInput = Omit<
+  DeviceActionExecutionInput,
+  "command" | "requireAdvanced"
+> & {
+  command: DeviceActionCommand;
+};
+
+const legacyDeviceActionCommands = new Set<string>([
+  "on",
+  "off",
+  "refresh",
+  "press",
+  "setNumber",
+  "setVolume",
+  "play",
+  "pause",
+  "stop",
+  "nextTrack",
+  "previousTrack",
+  "fastForward",
+  "rewind",
+  "mute",
+  "unmute",
+  "playTrackAndResume",
+  "setInputSource",
+  "setRepeat",
+  "setShuffle",
+  "setFanMode",
+  "setOption",
+  "open",
+  "close",
+  "openShade",
+  "closeShade",
+  "setPosition"
+]);
 
 export interface LegacyWebCommandExecutor {
   executeDeviceAction(
-    input: DeviceActionExecutionInput
+    input: LegacyDeviceActionExecutionInput
   ): Promise<"location_native" | "dom" | void>;
-  executeLocationNative?(input: DeviceActionExecutionInput): Promise<void>;
-  executeDomFallback?(input: DeviceActionExecutionInput): Promise<void>;
+  executeLocationNative?(input: LegacyDeviceActionExecutionInput): Promise<void>;
+  executeDomFallback?(input: LegacyDeviceActionExecutionInput): Promise<void>;
   executeScene?: SafeCommandExecutor["executeScene"];
   executeLocationAction?: SafeCommandExecutor["executeLocationAction"];
 }
@@ -74,9 +107,18 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
   async executeDeviceAction(
     input: DeviceActionExecutionInput
   ): Promise<CommandTransportReceipt> {
-    if (input.requireLocationNative === true || !this.#canUseAdvanced(input)) {
+    if (input.requireLocationNative === true) {
       return await this.#executeVerifiedWeb(input);
     }
+    if (input.requireAdvanced === true || this.#canUseAdvanced(input)) {
+      return await this.#executeAdvanced(input);
+    }
+    return await this.#executeVerifiedWeb(input);
+  }
+
+  async #executeAdvanced(
+    input: DeviceActionExecutionInput
+  ): Promise<CommandTransportReceipt> {
     const routed = {
       deviceId: input.deviceId,
       component: input.component,
@@ -87,39 +129,9 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
       command: input.nativeCommand ?? input.optionCommand ?? input.command,
       arguments: input.arguments
     };
-    const explicitFallbacks =
-      this.legacy.executeLocationNative && this.legacy.executeDomFallback
-        ? {
-            locationNative: new LocationNativeCommandAdapter(
-              async () => await this.legacy.executeLocationNative?.(input),
-              this.#now
-            ),
-            dom: new DomFallbackAdapter(
-              async () => await this.legacy.executeDomFallback?.(input),
-              this.#now
-            )
-          }
-        : undefined;
-    const legacyTransport: CommandTransport = explicitFallbacks?.locationNative ?? {
-      name: "location_native",
-      execute: async () => {
-        const sentAtMs = this.#now();
-        const transport = (await this.legacy.executeDeviceAction(input)) ?? "location_native";
-        return {
-          state: "ACCEPTED",
-          transport,
-          sentAtMs,
-          acceptedAtMs: this.#now()
-        };
-      }
-    };
     try {
       return await new OrderedCommandRouter({
-        advanced: this.advanced,
-        locationNative: legacyTransport,
-        ...(explicitFallbacks?.dom
-          ? { dom: explicitFallbacks.dom, domFallbackEnabled: this.#domFallbackEnabled }
-          : {})
+        advanced: this.advanced
       }).execute(routed);
     } catch (error) {
       if (error instanceof CommandTransportError) {
@@ -134,6 +146,10 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
   async #executeVerifiedWeb(
     input: DeviceActionExecutionInput
   ): Promise<CommandTransportReceipt> {
+    if (!legacyDeviceActionCommands.has(input.command)) {
+      throw new Error("command_control_not_found");
+    }
+    const legacyInput = input as LegacyDeviceActionExecutionInput;
     const executeLocationNative = this.legacy.executeLocationNative?.bind(this.legacy);
     const executeDomFallback = this.legacy.executeDomFallback?.bind(this.legacy);
     const requireLocationNative = input.requireLocationNative === true;
@@ -145,7 +161,7 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
         outcome: "attempt"
       });
       try {
-        await executeLocationNative(input);
+        await executeLocationNative(legacyInput);
         this.#diagnostic({
           transport: "location_native",
           stage: "receipt",
@@ -177,7 +193,7 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
         outcome: "attempt"
       });
       try {
-        await executeDomFallback(input);
+        await executeDomFallback(legacyInput);
         this.#diagnostic({
           transport: "dom",
           stage: "receipt",
@@ -209,7 +225,7 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
     });
     const sentAtMs = this.#now();
     try {
-      const transport = (await this.legacy.executeDeviceAction(input)) ?? "location_native";
+      const transport = (await this.legacy.executeDeviceAction(legacyInput)) ?? "location_native";
       this.#diagnostic({
         transport,
         stage: "receipt",

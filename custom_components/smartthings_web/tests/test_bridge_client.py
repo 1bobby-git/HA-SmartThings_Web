@@ -21,6 +21,7 @@ from smartthings_web.bridge_client import (  # noqa: E402
     ReadOnlyBridgeClient,
     SmartThingsWebBridgeClient,
     bridge_error_message,
+    parse_command_catalog,
     parse_inventory,
 )
 
@@ -115,6 +116,26 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
 
         self.assertTrue(inventory.ready)
         request.assert_awaited_once()
+
+    async def test_read_only_client_allows_command_catalog_reads(self) -> None:
+        client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
+        request = AsyncMock(
+            return_value={
+                "schemaVersion": 1,
+                "deviceId": "dev_001",
+                "commands": [],
+                "omissions": {},
+            }
+        )
+        client._request_json = request  # type: ignore[method-assign]
+        readonly = ReadOnlyBridgeClient(client)
+
+        catalog = await readonly.async_list_commands("dev_001")
+
+        self.assertEqual(catalog.device_id, "dev_001")
+        request.assert_awaited_once_with(
+            "GET", "/api/v1/commands/catalog?deviceId=dev_001", auth=True
+        )
 
     async def test_switch_command_uses_extended_request_timeout(self) -> None:
         client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
@@ -217,11 +238,13 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
             capability="switch",
             command="on",
             arguments=[],
+            require_advanced=True,
             confirm=False,
             timeout=25,
         )
 
         body = request.await_args.kwargs["json_body"]
+        self.assertEqual(body["requireAdvanced"], True)
         self.assertEqual(body["confirm"], False)
         self.assertEqual(body["timeout"], 25)
         self.assertEqual(request.await_args.kwargs["timeout_seconds"], 35)
@@ -243,6 +266,292 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
             ],
         )
         self.assertTrue(all(call.kwargs["auth"] for call in request.await_args_list))
+
+    async def test_list_commands_uses_exact_authenticated_catalog_route(self) -> None:
+        client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
+        request = AsyncMock(
+            return_value={
+                "schemaVersion": 1,
+                "deviceId": "dev_001",
+                "commands": [
+                    {
+                        "component": "main",
+                        "componentRole": "main",
+                        "capability": "switch",
+                        "capabilityVersion": 1,
+                        "command": "on",
+                        "arguments": [],
+                        "transport": "advanced",
+                        "confirmation": "state",
+                        "label": "Power",
+                        "labelSource": "capability",
+                    }
+                ],
+                "omissions": {"sensitive_argument": 1},
+            }
+        )
+        client._request_json = request  # type: ignore[method-assign]
+
+        catalog = await client.async_list_commands("dev_001")
+
+        self.assertEqual(catalog.commands[0].component_role, "main")
+        self.assertEqual(catalog.omissions, {"sensitive_argument": 1})
+        request.assert_awaited_once_with(
+            "GET", "/api/v1/commands/catalog?deviceId=dev_001", auth=True
+        )
+
+    async def test_list_commands_returns_fresh_deep_copied_catalogs(self) -> None:
+        client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
+        payload = {
+            "schemaVersion": 1,
+            "deviceId": "dev_001",
+            "commands": [
+                {
+                    "component": "main",
+                    "capability": "speechSynthesis",
+                    "capabilityVersion": 1,
+                    "command": "speak",
+                    "arguments": [
+                        {
+                            "name": "phrase",
+                            "required": True,
+                            "sensitive": False,
+                            "schema": {"type": "string", "enum": ["Hello"]},
+                        }
+                    ],
+                    "transport": "advanced",
+                    "confirmation": "accepted_receipt",
+                    "label": "Speak",
+                    "labelSource": "capability",
+                }
+            ],
+            "omissions": {},
+        }
+        request = AsyncMock(return_value=payload)
+        client._request_json = request  # type: ignore[method-assign]
+
+        first = await client.async_list_commands("dev_001")
+        first.commands[0].arguments[0].schema["enum"].append("mutated")
+        second = await client.async_list_commands("dev_001")
+
+        self.assertIsNot(first, second)
+        self.assertEqual(second.commands[0].arguments[0].schema["enum"], ["Hello"])
+
+    async def test_list_commands_rejects_raw_device_ids_before_url_construction(self) -> None:
+        client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
+        request = AsyncMock()
+        client._request_json = request  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(BridgeClientError, "invalid_device_id"):
+            await client.async_list_commands("550e8400-e29b-41d4-a716-446655440000")
+
+        request.assert_not_called()
+
+    def test_parse_command_catalog_rejects_top_level_mismatch_and_bounds(self) -> None:
+        valid = {
+            "schemaVersion": 1,
+            "deviceId": "dev_001",
+            "commands": [],
+            "omissions": {"schema_invalid": 1},
+        }
+        self.assertEqual(parse_command_catalog(valid, "dev_001").device_id, "dev_001")
+        for raw in (
+            {**valid, "schemaVersion": 2},
+            {**valid, "deviceId": "dev_002"},
+            {**valid, "commands": [{} for _ in range(257)]},
+            {**valid, "omissions": {"schema_invalid": 513}},
+            {
+                **valid,
+                "omissions": [
+                    {
+                        "component": "main",
+                        "capability": "switch",
+                        "command": "on",
+                        "reason": "schema_invalid",
+                    }
+                ],
+            },
+            {**valid, "token": "secret-token"},
+            {**valid, "rawDeviceId": "550e8400-e29b-41d4-a716-446655440000"},
+        ):
+            with self.subTest(raw=raw):
+                with self.assertRaisesRegex(BridgeClientError, "bridge_response_invalid"):
+                    parse_command_catalog(raw, "dev_001")
+
+    def test_parse_command_catalog_rejects_unknown_descriptor_and_argument_fields(self) -> None:
+        descriptor = {
+            "component": "main",
+            "capability": "speechSynthesis",
+            "capabilityVersion": 1,
+            "command": "speak",
+            "arguments": [
+                {
+                    "name": "phrase",
+                    "required": True,
+                    "sensitive": False,
+                    "schema": {"type": "string"},
+                }
+            ],
+            "transport": "advanced",
+            "confirmation": "accepted_receipt",
+            "label": "Speak",
+            "labelSource": "visible_web",
+        }
+        valid = {
+            "schemaVersion": 1,
+            "deviceId": "dev_001",
+            "commands": [descriptor],
+            "omissions": {},
+        }
+        self.assertEqual(parse_command_catalog(valid, "dev_001").commands[0].command, "speak")
+        role_catalog = parse_command_catalog(
+            {
+                **valid,
+                "commands": [
+                    {
+                        **descriptor,
+                        "capability": "identifier_74292182f118",
+                        "capabilityRole": "speechsynthesis",
+                    }
+                ],
+            },
+            "dev_001",
+        )
+        self.assertEqual(role_catalog.commands[0].capability_role, "speechsynthesis")
+        for command in (
+            {**descriptor, "rawCapability": "550e8400-e29b-41d4-a716-446655440000"},
+            {**descriptor, "token": "secret-token"},
+            {**descriptor, "capabilityRole": "identifier_74292182f118"},
+            {**descriptor, "capabilityRole": "smartthings.speechSynthesis"},
+            {
+                **descriptor,
+                "arguments": [
+                    {
+                        "name": "phrase",
+                        "required": True,
+                        "sensitive": False,
+                        "schema": {"type": "string"},
+                        "raw": "secret",
+                    }
+                ],
+            },
+        ):
+            with self.subTest(command=command):
+                with self.assertRaisesRegex(BridgeClientError, "bridge_response_invalid"):
+                    parse_command_catalog({**valid, "commands": [command]}, "dev_001")
+
+    def test_parse_command_catalog_enforces_schema_key_and_nested_bounds(self) -> None:
+        schema: dict[str, object] = {"type": "string", "enum": ["Hello", "Goodnight"]}
+        descriptor = {
+            "component": "main",
+            "capability": "speechSynthesis",
+            "capabilityVersion": 1,
+            "command": "speak",
+            "arguments": [
+                {
+                    "name": "phrase",
+                    "required": True,
+                    "sensitive": False,
+                    "schema": schema,
+                }
+            ],
+            "transport": "advanced",
+            "confirmation": "accepted_receipt",
+            "label": "Speak",
+            "labelSource": "visible_web",
+        }
+        valid = {
+            "schemaVersion": 1,
+            "deviceId": "dev_001",
+            "commands": [descriptor],
+            "omissions": {},
+        }
+        catalog = parse_command_catalog(valid, "dev_001")
+        self.assertEqual(catalog.commands[0].arguments[0].schema["enum"], ["Hello", "Goodnight"])
+        schema["enum"].append("mutated")  # type: ignore[union-attr]
+        self.assertEqual(catalog.commands[0].arguments[0].schema["enum"], ["Hello", "Goodnight"])
+
+        deep: dict[str, object] = {"type": "object"}
+        cursor = deep
+        for _ in range(80):
+            nested: dict[str, object] = {"type": "object"}
+            cursor["enum"] = [nested]
+            cursor = nested
+        oversize_nested_enum = {"type": "array", "enum": [{"type": "string"} for _ in range(129)]}
+        raw_object_enum = {
+            "type": "string",
+            "enum": [{"rawDeviceId": "550e8400-e29b-41d4-a716-446655440000"}],
+        }
+        nested_object_enum = {"type": "string", "enum": [{"items": {"type": "string"}}]}
+        array_enum = {"type": "string", "enum": [["nested"]]}
+        control_string_enum = {"type": "string", "enum": ["safe", "bad\u0001value"]}
+        long_string_enum = {"type": "string", "enum": ["x" * 1025]}
+        for bad_schema in (
+            {"type": "string", "pattern": ".*"},
+            deep,
+            oversize_nested_enum,
+            raw_object_enum,
+            nested_object_enum,
+            array_enum,
+            control_string_enum,
+            long_string_enum,
+        ):
+            with self.subTest(schema=bad_schema):
+                bad_descriptor = {
+                    **descriptor,
+                    "arguments": [
+                        {
+                            "name": "phrase",
+                            "required": True,
+                            "sensitive": False,
+                            "schema": bad_schema,
+                        }
+                    ],
+                }
+                with self.assertRaisesRegex(BridgeClientError, "bridge_response_invalid"):
+                    parse_command_catalog({**valid, "commands": [bad_descriptor]}, "dev_001")
+
+    def test_parse_command_catalog_accepts_device_store_shaped_public_schema(self) -> None:
+        enum_values = ["Hello", 12, 3.5, True, False, None]
+        catalog = parse_command_catalog(
+            {
+                "schemaVersion": 1,
+                "deviceId": "dev_001",
+                "commands": [
+                    {
+                        "component": "main",
+                        "capability": "speechSynthesis",
+                        "capabilityVersion": 1,
+                        "command": "speak",
+                        "arguments": [
+                            {
+                                "name": "phrase",
+                                "required": True,
+                                "sensitive": False,
+                                "schema": {
+                                    "type": "string",
+                                    "enum": enum_values,
+                                    "minimum": 1,
+                                    "maximum": 32,
+                                },
+                            }
+                        ],
+                        "transport": "advanced",
+                        "confirmation": "accepted_receipt",
+                        "label": "Speak",
+                        "labelSource": "capability",
+                    }
+                ],
+                "omissions": {"schema_invalid": 1},
+            },
+            "dev_001",
+        )
+
+        self.assertEqual(catalog.commands[0].arguments[0].schema["type"], "string")
+        self.assertEqual(catalog.commands[0].arguments[0].schema["enum"], enum_values)
+        enum_values.append("mutated")
+        self.assertEqual(catalog.commands[0].arguments[0].schema["enum"], ["Hello", 12, 3.5, True, False, None])
+        self.assertEqual(catalog.omissions, {"schema_invalid": 1})
 
     async def test_event_stream_yields_data_events_and_ignores_keepalives(self) -> None:
         session = _FakeEventSession(
@@ -357,6 +666,305 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
             parsed.devices["dev_001"].presentation.animation_url,
             "https://app-asset.samsungiotcloud.com/assets/icons/published/ai_speaker_lux_one/ai_speaker_lux_one.json",
         )
+
+    def test_inventory_parses_safe_command_descriptors_and_control_transport(self) -> None:
+        enum_schema = {"type": "string", "enum": ["Hello", "Goodnight"]}
+        parsed = parse_inventory(
+            {
+                "schemaVersion": 1,
+                "sequence": 7,
+                "ready": True,
+                "bridgeVersion": "0.1.154",
+                "protocolVersion": "4:test",
+                "locations": [],
+                "rooms": [],
+                "devices": [
+                    {
+                        "id": "dev_001",
+                        "locationId": "loc_001",
+                        "name": "Speaker",
+                        "online": True,
+                        "controls": [
+                            {
+                                "id": "advanced:main:speechSynthesis:speak",
+                                "kind": "button",
+                                "label": "Speak",
+                                "component": "main",
+                                "capability": "speechSynthesis",
+                                "attribute": "phrase",
+                                "commands": ["speak"],
+                                "transport": "advanced",
+                            }
+                        ],
+                        "advancedCommands": [
+                            {
+                                "component": "main",
+                                "componentRole": "main",
+                                "capability": "speechSynthesis",
+                                "capabilityVersion": 1,
+                                "command": "speak",
+                                "arguments": [
+                                    {
+                                        "name": "phrase",
+                                        "required": True,
+                                        "sensitive": False,
+                                        "unit": "text",
+                                        "schema": enum_schema,
+                                    }
+                                ],
+                                "transport": "advanced",
+                                "confirmation": "accepted_receipt",
+                                "label": "Speak",
+                                "labelSource": "visible_web",
+                            }
+                        ],
+                        "commandOmissions": [
+                            {
+                                "component": "main",
+                                "capability": "lock",
+                                "command": "unlock",
+                                "reason": "dangerous_command",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+        device = parsed.devices["dev_001"]
+        descriptor = device.commands[0]
+        self.assertEqual(device.controls["advanced:main:speechSynthesis:speak"].transport, "advanced")
+        self.assertEqual(descriptor.component_role, "main")
+        self.assertEqual(descriptor.arguments[0].name, "phrase")
+        self.assertEqual(descriptor.arguments[0].schema, enum_schema)
+        self.assertEqual(len(device.command_omissions), 1)
+        self.assertEqual(device.command_omissions[0].component, "main")
+        self.assertEqual(device.command_omissions[0].capability, "lock")
+        self.assertEqual(device.command_omissions[0].command, "unlock")
+        self.assertEqual(device.command_omissions[0].reason, "dangerous_command")
+        enum_schema["enum"].append("mutated")
+        self.assertEqual(descriptor.arguments[0].schema["enum"], ["Hello", "Goodnight"])
+        descriptor.arguments[0].schema["enum"].append("local")
+        reparsed = parse_inventory(
+            {
+                "schemaVersion": 1,
+                "devices": [
+                    {
+                        "id": "dev_001",
+                        "locationId": "loc_001",
+                        "name": "Speaker",
+                        "advancedCommands": [
+                            {
+                                "component": "main",
+                                "capability": "speechSynthesis",
+                                "capabilityVersion": 1,
+                                "command": "speak",
+                                "arguments": [
+                                    {
+                                        "name": "phrase",
+                                        "required": True,
+                                        "sensitive": False,
+                                        "schema": {"type": "string", "enum": ["Hello"]},
+                                    }
+                                ],
+                                "transport": "advanced",
+                                "confirmation": "accepted_receipt",
+                                "label": "Speak",
+                                "labelSource": "visible_web",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        self.assertEqual(reparsed.devices["dev_001"].commands[0].arguments[0].schema["enum"], ["Hello"])
+
+    def test_inventory_drops_malformed_sensitive_and_oversize_command_descriptors(self) -> None:
+        valid = {
+            "component": "main",
+            "capability": "switch",
+            "capabilityVersion": 1,
+            "command": "on",
+            "arguments": [],
+            "transport": "advanced",
+            "confirmation": "state",
+            "label": "Power",
+            "labelSource": "capability",
+        }
+        raw_devices = [
+            {
+                "id": "dev_001",
+                "locationId": "loc_001",
+                "name": "Lamp",
+                "advancedCommands": [
+                    valid,
+                    {**valid, "command": "off", "capability": "550e8400-e29b-41d4-a716-446655440000"},
+                    {**valid, "command": "setPin", "arguments": [{"name": "pin", "required": True, "sensitive": True, "schema": {"type": "string"}}]},
+                    {**valid, "command": "setMode", "arguments": [{"name": "mode", "required": True, "sensitive": False, "schema": {"type": "string", "enum": [str(i) for i in range(129)]}}]},
+                ],
+                "commandOmissions": [
+                    {"component": "main", "capability": "switch", "reason": "schema_invalid"},
+                    {"component": "main", "capability": "raw-capability-uuid", "reason": "schema_invalid"},
+                ],
+            }
+        ]
+
+        parsed = parse_inventory({"schemaVersion": 1, "devices": raw_devices})
+
+        device = parsed.devices["dev_001"]
+        self.assertEqual([descriptor.command for descriptor in device.commands], ["on"])
+        self.assertEqual(
+            [(omission.capability, omission.reason) for omission in device.command_omissions],
+            [("switch", "schema_invalid")],
+        )
+
+    def test_inventory_drops_descriptors_with_unknown_fields_but_retains_device_state(self) -> None:
+        valid = {
+            "component": "main",
+            "capability": "switch",
+            "capabilityVersion": 1,
+            "command": "on",
+            "arguments": [],
+            "transport": "advanced",
+            "confirmation": "state",
+            "label": "Power",
+            "labelSource": "capability",
+        }
+        parsed = parse_inventory(
+            {
+                "schemaVersion": 1,
+                "devices": [
+                    {
+                        "id": "dev_001",
+                        "locationId": "loc_001",
+                        "name": "Lamp",
+                        "states": [
+                            {
+                                "component": "main",
+                                "capability": "switch",
+                                "attribute": "switch",
+                                "value": "on",
+                            }
+                        ],
+                        "advancedCommands": [
+                            valid,
+                            {**valid, "command": "off", "rawCapability": "secret-token"},
+                            {
+                                **valid,
+                                "command": "setLevel",
+                                "arguments": [
+                                    {
+                                        "name": "level",
+                                        "required": True,
+                                        "sensitive": False,
+                                        "schema": {"type": "integer"},
+                                        "raw": "secret",
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                ],
+            }
+        )
+
+        device = parsed.devices["dev_001"]
+        self.assertEqual([descriptor.command for descriptor in device.commands], ["on"])
+        self.assertEqual(device.states[("main", "switch", "switch")].value, "on")
+
+    def test_inventory_drops_descriptors_with_structured_enum_members(self) -> None:
+        valid = {
+            "component": "main",
+            "capability": "speechSynthesis",
+            "capabilityVersion": 1,
+            "command": "speak",
+            "arguments": [
+                {
+                    "name": "phrase",
+                    "required": True,
+                    "sensitive": False,
+                    "schema": {"type": "string", "enum": ["Hello", 1, True, None]},
+                }
+            ],
+            "transport": "advanced",
+            "confirmation": "accepted_receipt",
+            "label": "Speak",
+            "labelSource": "capability",
+        }
+        parsed = parse_inventory(
+            {
+                "schemaVersion": 1,
+                "devices": [
+                    {
+                        "id": "dev_001",
+                        "locationId": "loc_001",
+                        "name": "Speaker",
+                        "advancedCommands": [
+                            valid,
+                            {
+                                **valid,
+                                "command": "speakRaw",
+                                "arguments": [
+                                    {
+                                        "name": "phrase",
+                                        "required": True,
+                                        "sensitive": False,
+                                        "schema": {
+                                            "type": "string",
+                                            "enum": [
+                                                {
+                                                    "rawDeviceId": "550e8400-e29b-41d4-a716-446655440000"
+                                                }
+                                            ],
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                **valid,
+                                "command": "speakNested",
+                                "arguments": [
+                                    {
+                                        "name": "phrase",
+                                        "required": True,
+                                        "sensitive": False,
+                                        "schema": {"type": "string", "enum": [["nested"]]},
+                                    }
+                                ],
+                            },
+                            {
+                                **valid,
+                                "command": "speakControl",
+                                "arguments": [
+                                    {
+                                        "name": "phrase",
+                                        "required": True,
+                                        "sensitive": False,
+                                        "schema": {"type": "string", "enum": ["safe", "bad\u0001value"]},
+                                    }
+                                ],
+                            },
+                            {
+                                **valid,
+                                "command": "speakLong",
+                                "arguments": [
+                                    {
+                                        "name": "phrase",
+                                        "required": True,
+                                        "sensitive": False,
+                                        "schema": {"type": "string", "enum": ["x" * 1025]},
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                ],
+            }
+        )
+
+        device = parsed.devices["dev_001"]
+        self.assertEqual([descriptor.command for descriptor in device.commands], ["speak"])
+        self.assertNotIn("550e8400-e29b-41d4-a716-446655440000", str(device.commands))
 
     def test_inventory_keeps_device_names_pristine_for_room_free_display(self) -> None:
         parsed = parse_inventory(

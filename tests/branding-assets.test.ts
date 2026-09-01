@@ -27,16 +27,36 @@ const readPngMetadata = async (path: string): Promise<PngMetadata> => {
   };
 };
 
+const hasPngChunk = (bytes: Buffer, expectedType: string): boolean => {
+  let offset = PNG_SIGNATURE.length;
+
+  while (offset + 12 <= bytes.length) {
+    const length = bytes.readUInt32BE(offset);
+    const type = bytes.subarray(offset + 4, offset + 8).toString("ascii");
+
+    if (type === expectedType) {
+      return true;
+    }
+
+    offset += length + 12;
+  }
+
+  return false;
+};
+
 const expectTransparentSquarePng = async (path: string, size: number) => {
   const bytes = await readFile(path);
   const metadata = await readPngMetadata(path);
 
-  expect(metadata).toEqual({
-    width: size,
-    height: size,
-    bitDepth: 8,
-    colorType: 6,
-  });
+  expect(metadata.width).toBe(size);
+  expect(metadata.height).toBe(size);
+  expect(metadata.bitDepth).toBe(8);
+  expect([3, 6]).toContain(metadata.colorType);
+
+  if (metadata.colorType === 3) {
+    expect(hasPngChunk(bytes, "tRNS")).toBe(true);
+  }
+
   expect(bytes.length).toBeGreaterThan(1_000);
 };
 

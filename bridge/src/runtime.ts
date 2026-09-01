@@ -16,6 +16,11 @@ import { AuthenticatedSmartThingsSession } from "./advanced/authenticated-sessio
 import { AdvancedInventoryAdapter } from "./advanced/inventory-adapter.js";
 import { AdvancedCommandAdapter } from "./advanced/command-adapter.js";
 import {
+  AdvancedCommandCatalog,
+  type AdvancedCommandCatalogResult,
+  type CapabilityBinding as AdvancedCommandCatalogBinding
+} from "./advanced/command-catalog.js";
+import {
   CapabilityDefinitionCache,
   parseCapabilityDefinition
 } from "./advanced/capability-cache.js";
@@ -93,7 +98,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-  const bridgeVersion = "0.1.153";
+const bridgeVersion = "0.1.155";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
@@ -179,11 +184,73 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     }
   });
   const advancedInventory = new AdvancedInventoryAdapter(authenticatedSession);
-  const capabilityCache = new CapabilityDefinitionCache(async (capabilityId, version) =>
+  const loadCapabilityDefinition = async (capabilityId: string, version: number) =>
     parseCapabilityDefinition(
       await advancedInventory.getCapabilityDefinition(capabilityId, version)
-    )
-  );
+    );
+  const capabilityCache = new CapabilityDefinitionCache(loadCapabilityDefinition);
+  const advancedCommandCatalog = new AdvancedCommandCatalog(loadCapabilityDefinition);
+  let advancedCommandCatalogGeneration = 0;
+  const buildAdvancedCommandCatalog = async (
+    authoritativeDeviceIds: ReadonlySet<string>
+  ): Promise<void> => {
+    const generation = ++advancedCommandCatalogGeneration;
+    const { bindings, unresolvedDeviceIds } = advancedCommandCatalogBindings(
+      devices,
+      volatileIdentifiers,
+      authoritativeDeviceIds
+    );
+    try {
+      const catalog: AdvancedCommandCatalogResult = bindings.length > 0
+        ? await advancedCommandCatalog.build(bindings)
+        : {
+            commandsByDevice: new Map(),
+            omissionsByDevice: new Map(),
+            omissions: []
+          };
+      if (generation !== advancedCommandCatalogGeneration) return;
+      const currentDevices = new Map(devices.snapshot().devices.map((device) => [device.id, device]));
+      let preservedFailure = false;
+      for (const deviceId of [...authoritativeDeviceIds].sort()) {
+        if (unresolvedDeviceIds.has(deviceId)) {
+          preservedFailure = true;
+          continue;
+        }
+        const nextCommands = catalog.commandsByDevice.get(deviceId) ?? [];
+        const nextOmissions = catalog.omissionsByDevice.get(deviceId) ?? [];
+        const currentDevice = currentDevices.get(deviceId);
+        if (
+          nextCommands.length === 0 &&
+          nextOmissions.some((omission) =>
+            omission.reason === "definition_unavailable" || omission.reason === "schema_invalid"
+          ) &&
+          (currentDevice?.advancedCommands?.length ?? 0) > 0
+        ) {
+          preservedFailure = true;
+          continue;
+        }
+        devices.observeAdvancedCommandCatalog(
+          deviceId,
+          nextCommands,
+          nextOmissions
+        );
+      }
+      if (preservedFailure) {
+        const current = status.getSnapshot();
+        status.update({
+          advancedCommandCatalogFailureCount: current.advancedCommandCatalogFailureCount + 1
+        });
+        log.warn("advanced_command_catalog_sync_failed");
+      }
+      cameraImages.observeInventory(devices.snapshot());
+    } catch {
+      const current = status.getSnapshot();
+      status.update({
+        advancedCommandCatalogFailureCount: current.advancedCommandCatalogFailureCount + 1
+      });
+      log.warn("advanced_command_catalog_sync_failed");
+    }
+  };
   const reconciliation = new StateReconciliationCoordinator({
     load: () => advancedInventory.getInventory(),
     apply: (snapshot) => {
@@ -203,6 +270,12 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         authoritativeWholeSnapshot: true
       });
       cameraImages.observeInventory(devices.snapshot());
+      void buildAdvancedCommandCatalog(
+        authoritativeDeviceIdsFromSanitizedSnapshot(
+          sanitized.devices,
+          (deviceId) => aliases.alias("device", deviceId)
+        )
+      );
       status.update({
         advancedInventoryLastSyncAtMs: Date.now(),
         advancedInventoryDeviceCount: snapshot.devices.length,
@@ -1062,6 +1135,98 @@ function compareSearchParam(
   return left[0] === right[0]
     ? left[1].localeCompare(right[1])
     : left[0].localeCompare(right[0]);
+}
+
+function advancedCommandCatalogBindings(
+  devices: DeviceStore,
+  volatileIdentifiers: VolatileIdentifierMap,
+  authoritativeDeviceIds: ReadonlySet<string>
+): {
+  bindings: AdvancedCommandCatalogBinding[];
+  unresolvedDeviceIds: Set<string>;
+} {
+  const bindings: AdvancedCommandCatalogBinding[] = [];
+  const unresolvedDeviceIds = new Set<string>();
+  for (const device of devices.snapshot().devices) {
+    if (!authoritativeDeviceIds.has(device.id)) continue;
+    const capabilityBindings = devices.capabilityBindings(device.id);
+    if (capabilityBindings.length === 0) continue;
+    const rawDeviceId = volatileIdentifiers.rawDeviceId(device.id);
+    if (!rawDeviceId) {
+      unresolvedDeviceIds.add(device.id);
+      continue;
+    }
+    const deviceBindings: AdvancedCommandCatalogBinding[] = [];
+    for (const binding of capabilityBindings) {
+      const rawComponent = volatileIdentifiers.rawIdentifier(binding.component);
+      const rawCapability = volatileIdentifiers.rawIdentifier(binding.capability);
+      const capabilityRole = volatileIdentifiers.semanticIdentifierRole(binding.capability);
+      if (!rawComponent || !rawCapability) {
+        unresolvedDeviceIds.add(device.id);
+        deviceBindings.length = 0;
+        break;
+      }
+      deviceBindings.push({
+        deviceId: device.id,
+        component: binding.component,
+        ...(binding.componentRole ? { componentRole: binding.componentRole } : {}),
+        capability: binding.capability,
+        ...(capabilityRole === "speechsynthesis" ? { capabilityRole } : {}),
+        rawCapability,
+        version: binding.version
+      });
+    }
+    bindings.push(...deviceBindings);
+  }
+  return {
+    bindings: bindings.sort((left, right) =>
+      [
+        left.deviceId.localeCompare(right.deviceId),
+        left.component.localeCompare(right.component),
+        left.capability.localeCompare(right.capability),
+        left.version - right.version
+      ].find((result) => result !== 0) ?? 0
+    ),
+    unresolvedDeviceIds
+  };
+}
+
+function authoritativeDeviceIdsFromSanitizedSnapshot(
+  value: unknown,
+  normalizeDeviceId: (deviceId: string) => string
+): Set<string> {
+  const root = runtimeRecord(value);
+  const rows = Array.isArray(value)
+    ? value
+    : Array.isArray(root?.items)
+      ? root.items
+      : Array.isArray(root?.devices)
+        ? root.devices
+        : Array.isArray(root?.data)
+          ? root.data
+          : [];
+  const result = new Set<string>();
+  for (const rowValue of rows) {
+    const row = runtimeRecord(rowValue);
+    const id = typeof row?.deviceId === "string"
+      ? row.deviceId
+      : typeof row?.device_id === "string"
+        ? row.device_id
+        : typeof row?.id === "string"
+          ? row.id
+          : undefined;
+    if (id && /^dev_[A-Za-z0-9]{3,64}$/u.test(id)) {
+      const normalized = normalizeDeviceId(id);
+      if (/^dev_[A-Za-z0-9]{3,64}$/u.test(normalized)) result.add(normalized);
+    }
+  }
+  return result;
+}
+
+function runtimeRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 function createStatusCapturePipeline(

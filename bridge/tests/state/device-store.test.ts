@@ -5,6 +5,10 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type { SanitizedCaptureRecord } from "../../src/state/capture-store.js";
+import type {
+  AdvancedCommandDescriptor,
+  AdvancedCommandOmission
+} from "../../src/advanced/command-catalog-types.js";
 import { DeviceStore } from "../../src/state/device-store.js";
 
 describe("DeviceStore", () => {
@@ -2923,6 +2927,325 @@ describe("DeviceStore", () => {
       }
     }
   });
+
+  test("projects reversible argument-free Advanced switch commands and preserves native controls", () => {
+    const store = new DeviceStore();
+    const listener = vi.fn();
+    store.subscribe(listener);
+    observeSnapshotState(store, {
+      componentId: "main",
+      capabilityId: "switch",
+      attributeName: "switch",
+      value: "off",
+      timestamp: "2026-09-01T00:00:00.000Z"
+    });
+    observeDeviceDetails(store, [
+      detailSwatch("BUTTON", "button", {
+        swatchId: "identifier_refresh",
+        capabilityId: "refresh",
+        attributeName: "refresh",
+        label: "Refresh",
+        command: "refresh"
+      })
+    ]);
+    const before = store.currentSequence();
+
+    store.observeAdvancedCommandCatalog("dev_001", [
+      advancedDescriptor("main", "switch", "on", "Power"),
+      advancedDescriptor("main", "switch", "off", "Power")
+    ], []);
+
+    const device = store.snapshot().devices[0];
+    expect(device?.advancedCommands).toEqual([
+      advancedDescriptor("main", "switch", "off", "Power"),
+      advancedDescriptor("main", "switch", "on", "Power")
+    ]);
+    expect(device?.controls).toEqual([
+      expect.objectContaining({ id: "advanced:main:switch:switch", transport: "advanced" }),
+      expect.objectContaining({ id: "identifier_refresh" })
+    ]);
+    expect(device?.controls?.find((control) => control.id === "identifier_refresh")).not.toHaveProperty(
+      "transport"
+    );
+    expect(store.currentSequence()).toBe(before + 1);
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: "inventory", sequence: before + 1 })
+    );
+  });
+
+  test("does not project one-sided or argumentful Advanced commands and removes stale catalog controls", () => {
+    const store = new DeviceStore();
+    observeSnapshotState(store, {
+      componentId: "main",
+      capabilityId: "switch",
+      attributeName: "switch",
+      value: "off",
+      timestamp: "2026-09-01T00:00:00.000Z"
+    });
+    store.observeAdvancedCommandCatalog("dev_001", [
+      advancedDescriptor("main", "switch", "on"),
+      advancedDescriptor("main", "switch", "off")
+    ], []);
+    expect(store.snapshot().devices[0]?.controls?.map((control) => control.id)).toContain(
+      "advanced:main:switch:switch"
+    );
+
+    store.observeAdvancedCommandCatalog("dev_001", [
+      advancedDescriptor("main", "switch", "on"),
+      advancedDescriptor("main", "switch", "off", "setSwitch", [{
+        name: "value",
+        required: true,
+        sensitive: false,
+        schema: { type: "string", enum: ["on", "off"] }
+      }])
+    ], [{ component: "main", capability: "switch", command: "off", reason: "schema_invalid" }]);
+
+    const device = store.snapshot().devices[0];
+    expect((device?.controls ?? []).some((control) => control.id.startsWith("advanced:"))).toBe(false);
+    expect(device?.advancedCommands?.map((command) => command.command)).toEqual(["off", "on"]);
+    expect(device?.commandOmissions).toEqual([
+      { component: "main", capability: "switch", command: "off", reason: "schema_invalid" }
+    ]);
+  });
+
+  test("drops Advanced command descriptors with schema keys outside the public contract", () => {
+    const store = new DeviceStore();
+    observeSnapshotState(store, {
+      componentId: "main",
+      capabilityId: "speechSynthesis",
+      attributeName: "phrase",
+      value: "",
+      timestamp: "2026-09-01T00:00:00.000Z"
+    });
+
+    store.observeAdvancedCommandCatalog("dev_001", [
+      advancedDescriptor("main", "speechSynthesis", "speak", "Speak", [], {
+        type: "string",
+        enum: ["Hello", "Goodnight"]
+      }),
+      advancedDescriptor("main", "speechSynthesis", "speakRaw", "Speak raw", [], {
+        type: "array",
+        items: { type: "string" }
+      } as never),
+      advancedDescriptor("main", "speechSynthesis", "speakUuid", "Speak uuid", [], {
+        type: "string",
+        enum: [{ rawDeviceId: "550e8400-e29b-41d4-a716-446655440000" }]
+      } as never),
+      advancedDescriptor("main", "speechSynthesis", "speakNested", "Speak nested", [], {
+        type: "string",
+        enum: [{ items: { type: "string" } }]
+      } as never),
+      advancedDescriptor("main", "speechSynthesis", "speakControl", "Speak control", [], {
+        type: "string",
+        enum: ["safe", "bad\u0001value"]
+      }),
+      advancedDescriptor("main", "speechSynthesis", "speakLong", "Speak long", [], {
+        type: "string",
+        enum: ["x".repeat(1025)]
+      } as never)
+    ], []);
+
+    const device = store.snapshot().devices[0];
+    expect(device?.advancedCommands?.map((command) => command.command)).toEqual(["speak"]);
+    expect(device?.advancedCommands?.[0]?.arguments[0]?.schema).toEqual({
+      type: "string",
+      enum: ["Hello", "Goodnight"]
+    });
+    expect(JSON.stringify(device)).not.toContain("items");
+    expect(JSON.stringify(device)).not.toContain("550e8400-e29b-41d4-a716-446655440000");
+  });
+
+  test("does not publish or persist unchanged Advanced command catalog observations", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-catalog-noop-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const store = new DeviceStore({ sqlitePath });
+      observeSnapshotState(store, {
+        componentId: "main",
+        capabilityId: "switch",
+        attributeName: "switch",
+        value: "off",
+        timestamp: "2026-09-01T00:00:00.000Z"
+      });
+      store.observeAdvancedCommandCatalog("dev_001", [
+        advancedDescriptor("main", "switch", "on"),
+        advancedDescriptor("main", "switch", "off")
+      ], []);
+      store.close();
+      const db = new DatabaseSync(sqlitePath);
+      const persistedBefore = readPersistedSequence(db);
+      db.close();
+
+      const restored = new DeviceStore({ sqlitePath });
+      const listener = vi.fn();
+      restored.subscribe(listener);
+      restored.observeAdvancedCommandCatalog("dev_001", [
+        advancedDescriptor("main", "switch", "off"),
+        advancedDescriptor("main", "switch", "on")
+      ], []);
+
+      expect(restored.currentSequence()).toBe(persistedBefore);
+      expect(listener).not.toHaveBeenCalled();
+      restored.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
+  test("persists Advanced command catalogs as deep-copied normalized inventory", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-catalog-persist-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const first = new DeviceStore({ sqlitePath });
+      observeSnapshotState(first, {
+        componentId: "main",
+        capabilityId: "switch",
+        attributeName: "switch",
+        value: "off",
+        timestamp: "2026-09-01T00:00:00.000Z"
+      });
+      first.observeAdvancedCommandCatalog("dev_001", [
+        advancedDescriptor("main", "switch", "on", "Power", [], {
+          type: "string",
+          enum: ["on", "off"]
+        }),
+        advancedDescriptor("main", "switch", "off", "Power")
+      ], []);
+      const beforeRestart = first.snapshot();
+      beforeRestart.devices[0]?.advancedCommands?.[0]?.arguments.push({
+        name: "mutated",
+        required: true,
+        sensitive: false,
+        schema: { type: "string" }
+      });
+      first.close();
+
+      const restored = new DeviceStore({ sqlitePath });
+      const afterRestart = restored.snapshot();
+      expect(afterRestart.devices[0]?.advancedCommands?.[0]?.arguments).toEqual([]);
+      afterRestart.devices[0]?.advancedCommands?.[1]?.arguments[0]?.schema.enum?.push("mutated");
+      expect(restored.snapshot().devices[0]?.advancedCommands?.[1]?.arguments[0]?.schema.enum).toEqual([
+        "on",
+        "off"
+      ]);
+      expect(JSON.stringify(restored.snapshot())).not.toContain("raw-command-device");
+      restored.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
+  test("persists safe Advanced command capability roles across restart", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-catalog-role-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const first = new DeviceStore({ sqlitePath });
+      observeSnapshotState(first, {
+        componentId: "identifier_component_main",
+        capabilityId: "identifier_74292182f118",
+        attributeName: "phrase",
+        value: "",
+        timestamp: "2026-09-01T00:00:00.000Z"
+      });
+      first.observeAdvancedCommandCatalog("dev_001", [
+        {
+          ...advancedDescriptor(
+            "identifier_component_main",
+            "identifier_74292182f118",
+            "speak",
+            "Speak",
+            [phraseArgument()]
+          ),
+          capabilityRole: "speechsynthesis"
+        }
+      ], []);
+      first.close();
+
+      const restored = new DeviceStore({ sqlitePath });
+
+      expect(restored.snapshot().devices[0]?.advancedCommands).toEqual([
+        expect.objectContaining({
+          capability: "identifier_74292182f118",
+          capabilityRole: "speechsynthesis",
+          command: "speak"
+        })
+      ]);
+      restored.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
+  test("rejects malformed persisted Advanced catalog data without losing old inventories", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-catalog-bad-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const seeded = new DeviceStore({ sqlitePath });
+      seeded.close();
+      const db = new DatabaseSync(sqlitePath);
+      db.prepare(
+        "INSERT INTO normalized_inventory (schema_version, inventory_json, persisted_at) VALUES (1, ?, ?)"
+      ).run(
+        JSON.stringify({
+          schemaVersion: 1,
+          sequence: 7,
+          locations: [],
+          rooms: [],
+          scenes: [],
+          devices: [
+            {
+              id: "dev_001",
+              locationId: "loc_001",
+              roomId: null,
+              name: "Bad catalog",
+              type: null,
+              online: true,
+              states: [],
+              advancedCommands: [
+                {
+                  component: "main",
+                  capability: "switch",
+                  capabilityRole: "smartthings.speechSynthesis",
+                  capabilityVersion: 1,
+                  command: "on",
+                  arguments: [{ name: "value", required: true, sensitive: false, schema: { type: "bad" } }],
+                  transport: "advanced",
+                  confirmation: "state",
+                  label: "Power",
+                  labelSource: "capability"
+                }
+              ]
+            }
+          ]
+        }),
+        "2026-09-01T00:00:00.000Z"
+      );
+      db.close();
+
+      const restored = new DeviceStore({ sqlitePath });
+
+      expect(restored.snapshot().devices).toEqual([]);
+      restored.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
 });
 
 function persistedState(
@@ -2939,6 +3262,38 @@ function persistedState(
     value,
     unit,
     updatedAt
+  };
+}
+
+function advancedDescriptor(
+  component: string,
+  capability: string,
+  command: string,
+  label = command,
+  args: AdvancedCommandDescriptor["arguments"] = [],
+  schema?: AdvancedCommandDescriptor["arguments"][number]["schema"]
+): AdvancedCommandDescriptor {
+  return {
+    component,
+    capability,
+    capabilityVersion: 1,
+    command,
+    arguments: schema
+      ? [{ name: "value", required: true, sensitive: false, schema }]
+      : args,
+    transport: "advanced",
+    confirmation: "state",
+    label,
+    labelSource: "capability"
+  };
+}
+
+function phraseArgument(): AdvancedCommandDescriptor["arguments"][number] {
+  return {
+    name: "phrase",
+    required: true,
+    sensitive: false,
+    schema: { type: "string" }
   };
 }
 

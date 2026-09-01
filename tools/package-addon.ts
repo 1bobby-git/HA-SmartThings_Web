@@ -54,6 +54,8 @@ const ROOT_TOOL_FILES = [
   "tools/haos-soak-deployment-gate-core.ts",
   "tools/haos-live-control-event-benchmark.ts",
   "tools/haos-live-control-event-benchmark-core.ts",
+  "tools/smartthings-web-parity-audit.ts",
+  "tools/smartthings-web-parity-audit-core.ts",
 ];
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 const EXCLUDED_SEGMENTS = new Set([

@@ -21,7 +21,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SmartThingsWebConfigEntry
-from .entity import SmartThingsWebEntity, migrate_entity_original_name
+from .entity import SmartThingsWebEntity, device_icon_for, migrate_entity_original_name
 from .models import (
     BridgeDevice,
     BridgeState,
@@ -297,6 +297,8 @@ class SmartThingsWebSensor(SmartThingsWebEntity, SensorEntity):
         )
         self._attr_entity_category = description.entity_category
         self._attr_entity_registry_enabled_default = description.enabled_default
+        if description.device_class is None and (icon := device_icon_for(device)) is not None:
+            self._attr_icon = icon
 
     @property
     def device_class(self) -> SensorDeviceClass | None:

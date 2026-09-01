@@ -1,0 +1,202 @@
+import { describe, expect, test } from "vitest";
+
+import { safeAdvancedCommandReason } from "../../src/advanced/safe-command-policy.js";
+import type { AdvancedCommandDescriptor } from "../../src/advanced/command-catalog-types.js";
+
+function descriptor(
+  overrides: Partial<AdvancedCommandDescriptor> = {}
+): AdvancedCommandDescriptor {
+  return {
+    component: "main",
+    capability: "switch",
+    capabilityVersion: 1,
+    command: "on",
+    arguments: [],
+    transport: "advanced",
+    confirmation: "accepted_receipt",
+    label: "Power",
+    labelSource: "capability",
+    ...overrides
+  };
+}
+
+describe("safeAdvancedCommandReason", () => {
+  test("allows ordinary argument-free switch on and off commands", () => {
+    expect(safeAdvancedCommandReason(descriptor({ command: "on" }))).toBeUndefined();
+    expect(safeAdvancedCommandReason(descriptor({ command: "off" }))).toBeUndefined();
+  });
+
+  test("allows speech synthesis speak commands", () => {
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({
+          capability: "speechSynthesis",
+          command: "speak",
+          arguments: [
+            {
+              name: "phrase",
+              required: true,
+              sensitive: false,
+              schema: { type: "string" }
+            }
+          ],
+          label: "Speak"
+        })
+      )
+    ).toBeUndefined();
+  });
+
+  test("allows safe Korean messaging and speech labels that contain mun text", () => {
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "speechSynthesis", command: "speak", label: "문구 말하기" })
+      )
+    ).toBeUndefined();
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "messageBoard", command: "post", label: "문자 보내기" })
+      )
+    ).toBeUndefined();
+  });
+
+  test("omits commands with sensitive arguments before other dangerous classification", () => {
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({
+          capability: "doorControl",
+          command: "open",
+          arguments: [
+            {
+              name: "pin",
+              required: true,
+              sensitive: true,
+              schema: { type: "string" }
+            }
+          ],
+          label: "Open door"
+        })
+      )
+    ).toBe("sensitive_argument");
+  });
+
+  test("omits physical security, access, valve, and Korean compound commands as dangerous", () => {
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ componentRole: "lock", capability: "lock", command: "unlock", label: "Unlock" })
+      )
+    ).toBe("dangerous_command");
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "garageDoorControl", command: "open", label: "Garage door" })
+      )
+    ).toBe("dangerous_command");
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "valve", command: "open", label: "Open water valve" })
+      )
+    ).toBe("dangerous_command");
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "securitySystem", command: "disarm", label: "Security disarm" })
+      )
+    ).toBe("dangerous_command");
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "custom.lock", command: "unlock", label: "현관문 잠금해제" })
+      )
+    ).toBe("dangerous_command");
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "doorControl", command: "open", label: "문 열기" })
+      )
+    ).toBe("dangerous_command");
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "custom.garage", command: "close", label: "차고문 닫기" })
+      )
+    ).toBe("dangerous_command");
+  });
+
+  test("omits security, alarm, and siren command families as dangerous", () => {
+    for (const command of ["armAway", "armStay", "panic", "disarm"]) {
+      expect(
+        safeAdvancedCommandReason(
+          descriptor({ capability: "securitySystem", command, label: "Security mode" })
+        )
+      ).toBe("dangerous_command");
+    }
+
+    expect(
+      safeAdvancedCommandReason(descriptor({ capability: "siren", command: "on", label: "Siren" }))
+    ).toBe("dangerous_command");
+    expect(
+      safeAdvancedCommandReason(descriptor({ capability: "alarm", command: "on", label: "Alarm" }))
+    ).toBe("dangerous_command");
+  });
+
+  test("omits every alarm and siren capability command while preserving ordinary mute controls", () => {
+    for (const capability of ["alarm", "siren"]) {
+      for (const command of ["both", "off", "siren", "strobe"]) {
+        expect(
+          safeAdvancedCommandReason(descriptor({ capability, command, label: "Alert output" }))
+        ).toBe("dangerous_command");
+      }
+    }
+
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "audioMute", command: "mute", label: "Audio mute" })
+      )
+    ).toBeUndefined();
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "musicPlayback", command: "mute", label: "Music mute" })
+      )
+    ).toBeUndefined();
+  });
+
+  test("omits low-level OCF post and network audio topology commands as dangerous", () => {
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "ocf", command: "post", label: "Execute" })
+      )
+    ).toBe("dangerous_command");
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "messageBoard", command: "post", label: "Post message" })
+      )
+    ).toBeUndefined();
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "ocf", command: "postCommand", label: "OCF post command" })
+      )
+    ).toBe("dangerous_command");
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({
+          componentRole: "speaker",
+          capability: "audioGroup",
+          command: "setGroupMaster",
+          label: "Set network audio group master"
+        })
+      )
+    ).toBe("dangerous_command");
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({
+          capability: "mediaInputSource",
+          command: "setInputSource",
+          arguments: [
+            {
+              name: "networkChannelRole",
+              required: true,
+              sensitive: false,
+              schema: { type: "string" }
+            }
+          ],
+          label: "Network channel role"
+        })
+      )
+    ).toBe("dangerous_command");
+  });
+});

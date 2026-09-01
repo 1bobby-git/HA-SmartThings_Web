@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 import sys
 import unittest
@@ -14,6 +15,9 @@ import models as models_module  # noqa: E402
 
 from models import (  # noqa: E402
     BridgeAdvancedDeviceMetadata,
+    BridgeCommandArgument,
+    BridgeCommandDescriptor,
+    BridgeCommandOmission,
     BridgeControl,
     BridgeDevice,
     BridgeDevicePresentation,
@@ -44,6 +48,7 @@ from models import (  # noqa: E402
     number_controls,
     numeric_range_for,
     option_values,
+    parse_control,
     parse_command_result,
     primary_state_attributes,
     safe_generic_toggle_control,
@@ -586,6 +591,84 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertEqual(merged.advanced, latest_device.advanced)
         self.assertEqual(merged.health_updated_at, "2026-08-24T21:11:00Z")
 
+    def test_inventory_merge_preserves_command_catalog_and_omissions(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        latest = inventory(11, 21, "2026-08-24T21:11:00Z")
+        argument = BridgeCommandArgument(
+            name="phrase",
+            required=True,
+            sensitive=False,
+            unit="text",
+            schema={"type": "string", "enum": ["Hello"]},
+        )
+        latest.devices["dev_001"].commands = (
+            BridgeCommandDescriptor(
+                component="main",
+                component_role="main",
+                capability="speechSynthesis",
+                capability_version=1,
+                command="speak",
+                arguments=(argument,),
+                transport="advanced",
+                confirmation="accepted_receipt",
+                label="Speak",
+                label_source="visible_web",
+            ),
+        )
+        latest.devices["dev_001"].command_omissions = (
+            BridgeCommandOmission(
+                component="main",
+                capability="speechSynthesis",
+                command="speak",
+                reason="sensitive_argument",
+            ),
+        )
+        runtime = SmartThingsWebRuntime(FakeClient(), "loc_001", current)
+
+        runtime.apply_inventory(latest)
+
+        merged = runtime.inventory.devices["dev_001"]
+        self.assertEqual(merged.commands[0].arguments[0].schema["enum"], ["Hello"])
+        self.assertEqual(
+            merged.command_omissions,
+            (
+                BridgeCommandOmission(
+                    component="main",
+                    capability="speechSynthesis",
+                    command="speak",
+                    reason="sensitive_argument",
+                ),
+            ),
+        )
+        latest.devices["dev_001"].commands[0].arguments[0].schema["enum"].append("mutated")
+        self.assertEqual(merged.commands[0].arguments[0].schema["enum"], ["Hello"])
+
+    def test_command_catalog_models_are_frozen(self) -> None:
+        argument = BridgeCommandArgument(
+            name="phrase",
+            required=True,
+            sensitive=False,
+            unit=None,
+            schema={"type": "string"},
+        )
+        descriptor = BridgeCommandDescriptor(
+            component="main",
+            component_role="main",
+            capability="speechSynthesis",
+            capability_version=1,
+            command="speak",
+            arguments=(argument,),
+            transport="advanced",
+            confirmation="accepted_receipt",
+            label="Speak",
+            label_source="capability",
+        )
+
+        with self.assertRaises(FrozenInstanceError):
+            argument.name = "other"  # type: ignore[misc]
+        with self.assertRaises(FrozenInstanceError):
+            descriptor.command = "other"  # type: ignore[misc]
+
     def test_control_kind_keeps_plain_switches_out_of_binary_sensor_and_light(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")
         device = current.devices["dev_001"]
@@ -701,6 +784,319 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         }
 
         self.assertEqual(control_kind(device, switch), "light")
+
+    def test_control_kind_accepts_advanced_reversible_switch_catalog_control(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        switch = BridgeState(
+            component="main",
+            capability="switch",
+            attribute="switch",
+            value="off",
+            unit=None,
+            updated_at="2026-08-24T21:10:00Z",
+        )
+        device.states = {switch.key: switch}
+        device.controls = {
+            "advanced:main:switch:switch": BridgeControl(
+                "advanced:main:switch:switch",
+                "toggle",
+                "Power",
+                component=switch.component,
+                capability=switch.capability,
+                attribute=switch.attribute,
+                commands=("on", "off"),
+                transport="advanced",
+            )
+        }
+
+        self.assertEqual(control_kind(device, switch), "switch")
+
+    def test_control_kind_accepts_advanced_reversible_light_only_with_light_evidence(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        device = current.devices["dev_001"]
+        switch = BridgeState(
+            component="main",
+            capability="switch",
+            attribute="switch",
+            value="off",
+            unit=None,
+            updated_at="2026-08-24T21:10:00Z",
+        )
+        level = BridgeState(
+            component="main",
+            capability="switchLevel",
+            attribute="level",
+            value=20,
+            unit="%",
+            updated_at="2026-08-24T21:10:00Z",
+        )
+        device.states = {switch.key: switch, level.key: level}
+        device.controls = {
+            "advanced:main:switch:switch": BridgeControl(
+                "advanced:main:switch:switch",
+                "toggle",
+                "Power",
+                component=switch.component,
+                capability=switch.capability,
+                attribute=switch.attribute,
+                commands=("on", "off"),
+                transport="advanced",
+            ),
+            "advanced:main:switchLevel:level": BridgeControl(
+                "advanced:main:switchLevel:level",
+                "slider",
+                "Level",
+                component=level.component,
+                capability=level.capability,
+                attribute=level.attribute,
+                commands=("setLevel",),
+                transport="advanced",
+            ),
+        }
+
+        self.assertEqual(control_kind(device, switch), "light")
+
+    def test_same_component_switches_use_distinct_web_labels(self) -> None:
+        current = inventory(10, 20, "2026-09-01T00:00:00Z")
+        device = current.devices["dev_001"]
+        power = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        status = BridgeState(
+            "main",
+            "yjswitchstatus",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        device.name = "멀티탭"
+        device.device_type = "outlet_1"
+        device.states = {power.key: power, status.key: status}
+        device.controls = {
+            "power": BridgeControl(
+                "power",
+                "toggle",
+                "Power",
+                component=power.component,
+                capability=power.capability,
+                attribute=power.attribute,
+                commands=("on", "off"),
+            ),
+            "status": BridgeControl(
+                "status",
+                "toggle",
+                "yjswitchstatus",
+                component=status.component,
+                capability=status.capability,
+                attribute=status.attribute,
+                commands=("on", "off"),
+            ),
+        }
+
+        self.assertEqual(
+            models_module.switch_name_overrides(device),
+            {
+                power.key: "전원",
+                status.key: "장치 상태",
+            },
+        )
+
+    def test_main_switch_capability_supplies_power_label_when_control_label_blank(self) -> None:
+        current = inventory(10, 20, "2026-09-01T00:00:00Z")
+        device = current.devices["dev_001"]
+        power = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        status = BridgeState(
+            "main",
+            "yjswitchstatus",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        device.states = {power.key: power, status.key: status}
+        device.controls = {
+            "power": BridgeControl(
+                "power",
+                "toggle",
+                "",
+                component=power.component,
+                capability=power.capability,
+                attribute=power.attribute,
+                commands=("on", "off"),
+            ),
+            "status": BridgeControl(
+                "status",
+                "toggle",
+                "yjswitchstatus",
+                component=status.component,
+                capability=status.capability,
+                attribute=status.attribute,
+                commands=("on", "off"),
+            ),
+        }
+
+        self.assertEqual(
+            models_module.switch_name_overrides(device),
+            {
+                power.key: "전원",
+                status.key: "장치 상태",
+            },
+        )
+
+    def test_switch_name_overrides_keep_safe_unknown_web_label(self) -> None:
+        current = inventory(10, 20, "2026-09-01T00:00:00Z")
+        device = current.devices["dev_001"]
+        heater = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        device.states = {heater.key: heater}
+        device.controls = {
+            "heater": BridgeControl(
+                "heater",
+                "toggle",
+                "Coffee Heater",
+                component=heater.component,
+                capability=heater.capability,
+                attribute=heater.attribute,
+                commands=("on", "off"),
+            )
+        }
+
+        self.assertEqual(
+            models_module.switch_name_overrides(device),
+            {heater.key: "Coffee Heater"},
+        )
+
+    def test_switch_name_overrides_reject_unsafe_web_label_and_fallback(self) -> None:
+        current = inventory(10, 20, "2026-09-01T00:00:00Z")
+        device = current.devices["dev_001"]
+        state = BridgeState(
+            "heater",
+            "customAux",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        device.states = {state.key: state}
+        device.controls = {
+            "unsafe": BridgeControl(
+                "unsafe",
+                "toggle",
+                "Coffee\nHeater",
+                component=state.component,
+                capability=state.capability,
+                attribute=state.attribute,
+                commands=("on", "off"),
+            )
+        }
+
+        self.assertEqual(
+            models_module.switch_name_overrides(device),
+            {state.key: "Heater"},
+        )
+
+    def test_switch_name_overrides_disambiguate_duplicate_generated_labels(self) -> None:
+        current = inventory(10, 20, "2026-09-01T00:00:00Z")
+        device = current.devices["dev_001"]
+        left = BridgeState(
+            "outlet",
+            "custom.leftSwitch",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        right = BridgeState(
+            "outlet",
+            "custom.rightSwitch",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        device.states = {left.key: left, right.key: right}
+        device.controls = {
+            "left": BridgeControl(
+                "left",
+                "toggle",
+                "",
+                component=left.component,
+                capability=left.capability,
+                attribute=left.attribute,
+                commands=("on", "off"),
+            ),
+            "right": BridgeControl(
+                "right",
+                "toggle",
+                "",
+                component=right.component,
+                capability=right.capability,
+                attribute=right.attribute,
+                commands=("on", "off"),
+            ),
+        }
+
+        self.assertEqual(
+            models_module.switch_name_overrides(device),
+            {
+                left.key: "Outlet (Custom.Left Switch)",
+                right.key: "Outlet (Custom.Right Switch)",
+            },
+        )
+
+    def test_parse_control_rejects_unsupported_transport_value(self) -> None:
+        self.assertIsNone(
+            parse_control(
+                {
+                    "id": "advanced:main:switch:switch",
+                    "kind": "toggle",
+                    "label": "Power",
+                    "component": "main",
+                    "capability": "switch",
+                    "attribute": "switch",
+                    "commands": ["on", "off"],
+                    "transport": "browser_dom",
+                }
+            )
+        )
+
+    def test_parse_control_rejects_non_string_transport_value(self) -> None:
+        for transport in (["advanced"], {"name": "advanced"}, 123, True):
+            with self.subTest(transport=transport):
+                self.assertIsNone(
+                    parse_control(
+                        {
+                            "id": "advanced:main:switch:switch",
+                            "kind": "toggle",
+                            "label": "Power",
+                            "component": "main",
+                            "capability": "switch",
+                            "attribute": "switch",
+                            "commands": ["on", "off"],
+                            "transport": transport,
+                        }
+                    )
+                )
 
     def test_unique_id_contains_attribute_once(self) -> None:
         state = next(iter(inventory(10, 20, "2026-08-24T21:10:00Z").devices["dev_001"].states.values()))

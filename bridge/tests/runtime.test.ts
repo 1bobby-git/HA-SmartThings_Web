@@ -97,6 +97,9 @@ class FakePage extends FakeEmitter {
       if (typeof request.path === "string" && request.path.endsWith("/status")) {
         return { ok: true, status: 200, value: this.advancedStatusResponse };
       }
+      if (typeof request.path === "string" && this.advancedResponses.has(request.path)) {
+        return { ok: true, status: 200, value: await this.advancedResponses.get(request.path) };
+      }
       return {
         ok: true,
         status: 200,
@@ -128,6 +131,7 @@ class FakePage extends FakeEmitter {
   });
   readonly evaluateCalls: unknown[][] = [];
   readonly advancedRequestCalls: unknown[] = [];
+  readonly advancedResponses = new Map<string, unknown>();
   advancedSnapshots: unknown[] = [];
   advancedCommandResponse: unknown = { results: [{ status: "UNSUPPORTED" }] };
   advancedStatusResponse: unknown = { components: {} };
@@ -544,6 +548,274 @@ describe("createBridgeRuntime", () => {
     expect(keeper.evaluate).toHaveBeenCalled();
   });
 
+  test("applies Advanced command catalog from fresh authoritative inventory and emits discovery update", async () => {
+    const root = createTempRoot();
+    const keeper = new FakePage("https://my.smartthings.com/location/raw-location-001");
+    keeper.advancedSnapshots = [advancedSwitchInventory("raw-command-device-001", "raw-location-001")];
+    keeper.advancedResponses.set(
+      "/advanced/cupcake-api/api/capabilities/switch/1",
+      capabilityDefinition("switch", {
+        on: { name: "on", arguments: [] },
+        off: { name: "off", arguments: [] }
+      })
+    );
+    const context = new FakeContext([keeper]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, { chromium: { launchPersistentContext: vi.fn(async () => context) } })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    const baseUrl = `http://127.0.0.1:${runtime.port}`;
+    const token = await exchangeBridgeToken(baseUrl);
+    const headers = { authorization: `Bearer ${token}` };
+
+    type CatalogInventory = {
+      sequence: number;
+      devices: Array<{
+        id: string;
+        advancedCommands?: Array<{ command: string; transport: string }>;
+        commandOmissions?: unknown[];
+        controls?: Array<{ id: string; transport?: string; commands?: string[] }>;
+      }>;
+    };
+    await waitFor(async () => {
+      const latest = await fetch(`${baseUrl}/api/v1/inventory`, { headers }).then(
+        async (response) => await response.json() as CatalogInventory
+      );
+      return latest.devices.some((candidate) =>
+        candidate.controls?.some((control) => control.id.startsWith("advanced:"))
+      );
+    });
+    const updatedInventory = await fetch(`${baseUrl}/api/v1/inventory`, { headers }).then(
+      async (response) => await response.json() as CatalogInventory
+    );
+
+    const device = updatedInventory.devices.find((candidate) =>
+      candidate.controls?.some((control) => control.id.startsWith("advanced:"))
+    );
+    expect(device).toBeDefined();
+    expect(device?.advancedCommands?.map((command) => command.command)).toEqual(["off", "on"]);
+    expect(device?.commandOmissions).toEqual([]);
+    expect(device?.controls).toEqual([
+      expect.objectContaining({
+        id: expect.stringMatching(/^advanced:/),
+        transport: "advanced",
+        commands: ["on", "off"]
+      })
+    ]);
+    expect(updatedInventory.sequence).toBeGreaterThan(1);
+  });
+
+  test("does not build an Advanced command catalog from restored-only capability bindings", async () => {
+    const root = createTempRoot();
+    const persisted = new DeviceStore({ sqlitePath: join(root, "bridge.sqlite") });
+    persisted.observeAdvancedInventorySnapshot({
+      devices: [advancedSwitchInventory("dev_001", "loc_001").items[0]]
+    }, { authoritativeWholeSnapshot: true });
+    persisted.close();
+    const keeper = new FakePage("https://account.samsung.com/accounts/v1/ST/signInGate");
+    keeper.advancedResponses.set(
+      "/advanced/cupcake-api/api/capabilities/switch/1",
+      capabilityDefinition("switch", { on: { name: "on", arguments: [] }, off: { name: "off", arguments: [] } })
+    );
+    const context = new FakeContext([keeper]);
+
+    const runtime = await createBridgeRuntime(
+      createDeps(root, { chromium: { launchPersistentContext: vi.fn(async () => context) } })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+
+    expect(keeper.advancedRequestCalls.some((request) =>
+      typeof (request as { path?: unknown }).path === "string" &&
+      (request as { path: string }).path.includes("/capabilities/")
+    )).toBe(false);
+  });
+
+  test("keeps the newer Advanced command catalog when an older build resolves later", async () => {
+    const root = createTempRoot();
+    const keeper = new FakePage("https://my.smartthings.com/location/raw-location-001");
+    keeper.advancedSnapshots = [advancedSwitchInventory("raw-command-device-001", "raw-location-001")];
+    let releaseOld!: () => void;
+    keeper.advancedResponses.set(
+      "/advanced/cupcake-api/api/capabilities/switch/1",
+      new Promise((resolve) => {
+        releaseOld = () => resolve(capabilityDefinition("switch", {
+          on: { name: "on", arguments: [] },
+          off: { name: "off", arguments: [] }
+        }));
+      })
+    );
+    const context = new FakeContext([keeper]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, { chromium: { launchPersistentContext: vi.fn(async () => context) } })
+    );
+    runtimes.push(runtime);
+    const startup = runtime.browserStartup;
+    await waitFor(() => keeper.advancedRequestCalls.some((request) =>
+      typeof (request as { path?: unknown }).path === "string" &&
+      (request as { path: string }).path.includes("/capabilities/")
+    ));
+    keeper.advancedSnapshots = [advancedRefreshInventory("raw-command-device-001", "raw-location-001")];
+    keeper.advancedResponses.set(
+      "/advanced/cupcake-api/api/capabilities/refresh/1",
+      capabilityDefinition("refresh", { refresh: { name: "refresh", arguments: [] } })
+    );
+    const baseUrl = `http://127.0.0.1:${runtime.port}`;
+    const token = await exchangeBridgeToken(baseUrl);
+    await fetch(`${baseUrl}/api/v1/maintenance/reload-inventory`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` }
+    });
+    releaseOld();
+    await startup;
+
+    await waitFor(async () => {
+      const latest = await fetch(`${baseUrl}/api/v1/inventory`, {
+        headers: { authorization: `Bearer ${token}` }
+      }).then((response) => response.json() as Promise<{
+        devices: Array<{ advancedCommands?: Array<{ command: string }> }>;
+      }>);
+      return latest.devices[0]?.advancedCommands?.some((command) => command.command === "refresh") === true;
+    });
+    const inventory = await fetch(`${baseUrl}/api/v1/inventory`, {
+      headers: { authorization: `Bearer ${token}` }
+    }).then((response) => response.json() as Promise<{
+      devices: Array<{ advancedCommands?: Array<{ command: string }> }>;
+    }>);
+
+    expect(inventory.devices[0]?.advancedCommands?.map((command) => command.command)).toEqual([
+      "refresh"
+    ]);
+  });
+
+  test("preserves persisted Advanced catalog when a fresh catalog build fails", async () => {
+    const root = createTempRoot();
+    const firstKeeper = new FakePage("https://my.smartthings.com/location/raw-location-001");
+    firstKeeper.advancedSnapshots = [advancedSwitchInventory("raw-command-device-001", "raw-location-001")];
+    firstKeeper.advancedResponses.set(
+      "/advanced/cupcake-api/api/capabilities/switch/1",
+      capabilityDefinition("switch", {
+        on: { name: "on", arguments: [] },
+        off: { name: "off", arguments: [] }
+      })
+    );
+    const firstRuntime = await createBridgeRuntime(
+      createDeps(root, { chromium: { launchPersistentContext: vi.fn(async () => new FakeContext([firstKeeper])) } })
+    );
+    runtimes.push(firstRuntime);
+    await firstRuntime.browserStartup;
+    const firstBaseUrl = `http://127.0.0.1:${firstRuntime.port}`;
+    const firstToken = await exchangeBridgeToken(firstBaseUrl);
+    await waitFor(async () => {
+      const inventory = await fetch(`${firstBaseUrl}/api/v1/inventory`, {
+        headers: { authorization: `Bearer ${firstToken}` }
+      }).then((response) => response.json() as Promise<{
+        devices: Array<{ advancedCommands?: Array<{ command: string }> }>;
+      }>);
+      return inventory.devices[0]?.advancedCommands?.length === 2;
+    });
+    await firstRuntime.stop();
+    runtimes.splice(runtimes.indexOf(firstRuntime), 1);
+
+    const keeper = new FakePage("https://my.smartthings.com/location/raw-location-001");
+    keeper.advancedSnapshots = [advancedSwitchInventory("raw-command-device-001", "raw-location-001")];
+    keeper.advancedResponses.set(
+      "/advanced/cupcake-api/api/capabilities/switch/1",
+      { malformed: true }
+    );
+    const context = new FakeContext([keeper]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, { chromium: { launchPersistentContext: vi.fn(async () => context) } })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+
+    const baseUrl = `http://127.0.0.1:${runtime.port}`;
+    const token = await exchangeBridgeToken(baseUrl);
+    const inventory = await fetch(`${baseUrl}/api/v1/inventory`, {
+      headers: { authorization: `Bearer ${token}` }
+    }).then((response) => response.json() as Promise<{
+      devices: Array<{ advancedCommands?: Array<{ command: string }> }>;
+    }>);
+
+    expect(inventory.devices[0]?.advancedCommands?.map((command) => command.command)).toEqual([
+      "off",
+      "on"
+    ]);
+    await waitFor(() => runtime.status.getSnapshot().advancedCommandCatalogFailureCount === 1);
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      advancedCommandCatalogFailureCount: 1
+    });
+  });
+
+  test("clears stale Advanced catalog when an authoritative device loses all components", async () => {
+    const root = createTempRoot();
+    const keeper = new FakePage("https://my.smartthings.com/location/raw-location-001");
+    keeper.advancedSnapshots = [advancedSwitchInventory("raw-command-device-001", "raw-location-001")];
+    keeper.advancedResponses.set(
+      "/advanced/cupcake-api/api/capabilities/switch/1",
+      capabilityDefinition("switch", {
+        on: { name: "on", arguments: [] },
+        off: { name: "off", arguments: [] }
+      })
+    );
+    const context = new FakeContext([keeper]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, { chromium: { launchPersistentContext: vi.fn(async () => context) } })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    const baseUrl = `http://127.0.0.1:${runtime.port}`;
+    const token = await exchangeBridgeToken(baseUrl);
+    const headers = { authorization: `Bearer ${token}` };
+    await waitFor(async () => {
+      const inventory = await fetch(`${baseUrl}/api/v1/inventory`, { headers }).then(
+        (response) => response.json() as Promise<{
+          devices: Array<{
+            advancedCommands?: unknown[];
+            controls?: Array<{ id: string }>;
+          }>;
+        }>
+      );
+      return inventory.devices[0]?.advancedCommands?.length === 2 &&
+        inventory.devices[0]?.controls?.some((control) => control.id.startsWith("advanced:")) === true;
+    });
+
+    keeper.advancedSnapshots = [
+      {
+        items: [
+          {
+            deviceId: "raw-command-device-001",
+            locationId: "raw-location-001",
+            label: "Safe plug",
+            components: []
+          }
+        ]
+      }
+    ];
+    await fetch(`${baseUrl}/api/v1/maintenance/reload-inventory`, {
+      method: "POST",
+      headers
+    });
+
+    await waitFor(async () => {
+      const inventory = await fetch(`${baseUrl}/api/v1/inventory`, { headers }).then(
+        (response) => response.json() as Promise<{
+          devices: Array<{
+            advancedCommands?: unknown[];
+            commandOmissions?: unknown[];
+            controls?: Array<{ id: string }>;
+          }>;
+        }>
+      );
+      const device = inventory.devices[0];
+      return device?.advancedCommands === undefined &&
+        device?.commandOmissions === undefined &&
+        device?.controls?.some((control) => control.id.startsWith("advanced:")) !== true;
+    });
+  });
+
   test("emits path-free startup stage markers in order", async () => {
     const root = createTempRoot();
     const log = {
@@ -665,7 +937,7 @@ describe("createBridgeRuntime", () => {
     expect(JSON.stringify(log.error.mock.calls)).not.toMatch(/raw keeper|secret|token/i);
   });
 
-  test("starts HTTP before browser launch and remains live through failed browser/login state", async () => {
+  test("starts HTTP before browser launch and fails liveness after terminal browser failure", async () => {
     const root = createTempRoot();
       const launchPersistentContext = vi.fn(async () => {
         throw new Error("raw token=secret browser failure");
@@ -684,7 +956,7 @@ describe("createBridgeRuntime", () => {
       );
 
       expect(launchPersistentContext).toHaveBeenCalledTimes(3);
-      expect(live.status).toBe(200);
+      expect(live.status).toBe(503);
       expect(ready.status).toBe(503);
       expect(details.details.state).toBe("BROWSER_FAILED");
       expect(JSON.stringify(details)).not.toMatch(/secret|raw token|browser failure/i);
@@ -2470,6 +2742,14 @@ async function expectFixedProbeError(response: Response, code: string): Promise<
   expect(await response.text()).toBe(JSON.stringify({ error: code }));
 }
 
+async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<void> {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("condition_not_met");
+}
+
 function buildDeviceEventFrame(options: {
   eventId: string;
   deviceId: string;
@@ -2552,4 +2832,74 @@ async function emitSceneShapeMismatch(socket: FakeEmitter, ackId: number): Promi
   await socket.emit("framereceived", {
     payload: `43${ackId}${JSON.stringify([null, [{ roomId: null, locationId: null }]])}`
   });
+}
+
+function advancedSwitchInventory(deviceId: string, locationId: string): { items: Record<string, unknown>[] } {
+  return {
+    items: [
+      {
+        deviceId,
+        locationId,
+        label: "Safe plug",
+        components: [
+          {
+            id: "main",
+            capabilities: [
+              {
+                id: "switch",
+                version: 1,
+                status: {
+                  switch: {
+                    value: "off",
+                    timestamp: "2026-09-01T00:00:00.000Z"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  };
+}
+
+function advancedRefreshInventory(deviceId: string, locationId: string): { items: Record<string, unknown>[] } {
+  return {
+    items: [
+      {
+        deviceId,
+        locationId,
+        label: "Safe plug",
+        components: [
+          {
+            id: "main",
+            capabilities: [
+              {
+                id: "refresh",
+                version: 1,
+                status: {
+                  refresh: {
+                    value: "ready",
+                    timestamp: "2026-09-01T00:00:01.000Z"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  };
+}
+
+function capabilityDefinition(
+  id: string,
+  commands: Record<string, { name: string; arguments: unknown[] }>
+): Record<string, unknown> {
+  return {
+    id,
+    version: 1,
+    attributes: {},
+    commands
+  };
 }

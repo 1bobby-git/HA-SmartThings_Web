@@ -155,6 +155,19 @@ async function handleBridgeApiRequest(
       if (!body.ok) return writeError(response, body.status, body.error);
       return writeJson(response, 200, await options.commands.execute(body.value));
     }
+    if (path === "/api/v1/commands/catalog") {
+      if (method !== "GET") return writeError(response, 405, "method_not_allowed");
+      const query = validateCatalogQuery(request.url);
+      if (!query.ok) return writeError(response, 400, query.error);
+      const device = options.devices.snapshot().devices.find((item) => item.id === query.deviceId);
+      if (!device) return writeError(response, 404, "device_not_found");
+      return writeJson(response, 200, {
+        schemaVersion: 1,
+        deviceId: device.id,
+        commands: (device.advancedCommands ?? []).map(cloneCatalogCommand),
+        omissions: summarizeCatalogOmissions(device.commandOmissions ?? [])
+      });
+    }
     if (path === "/api/v1/inventory") {
       if (method !== "GET") return writeError(response, 405, "method_not_allowed");
       const report = createHealthReport(options.store.getSnapshot());
@@ -181,6 +194,45 @@ async function handleBridgeApiRequest(
 function imageDeviceIdFromPath(path: string): string | undefined {
   const match = path.match(/^\/api\/v1\/images\/(dev_[0-9]{3,32})$/u);
   return match?.[1];
+}
+
+type CatalogQueryResult =
+  | { ok: true; deviceId: string }
+  | { ok: false; error: "missing_device_id" | "duplicate_query_param" | "unknown_query_param" | "invalid_device_id" };
+
+function validateCatalogQuery(rawUrl: string | undefined): CatalogQueryResult {
+  if (!rawUrl) return { ok: false, error: "missing_device_id" };
+  const url = new URL(rawUrl, "http://bridge.local");
+  for (const key of url.searchParams.keys()) {
+    if (key !== "deviceId") return { ok: false, error: "unknown_query_param" };
+  }
+  const values = url.searchParams.getAll("deviceId");
+  if (values.length === 0) return { ok: false, error: "missing_device_id" };
+  if (values.length > 1) return { ok: false, error: "duplicate_query_param" };
+  const deviceId = values[0];
+  return typeof deviceId === "string" && /^dev_[A-Za-z0-9]{3,64}$/u.test(deviceId)
+    ? { ok: true, deviceId }
+    : { ok: false, error: "invalid_device_id" };
+}
+
+function cloneCatalogCommand(command: NonNullable<ReturnType<DeviceStore["snapshot"]>["devices"][number]["advancedCommands"]>[number]): unknown {
+  return {
+    ...command,
+    arguments: command.arguments.map((argument) => ({
+      ...argument,
+      schema: JSON.parse(JSON.stringify(argument.schema)) as unknown
+    }))
+  };
+}
+
+function summarizeCatalogOmissions(
+  omissions: NonNullable<ReturnType<DeviceStore["snapshot"]>["devices"][number]["commandOmissions"]>
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const omission of omissions) {
+    counts[omission.reason] = (counts[omission.reason] ?? 0) + 1;
+  }
+  return counts;
 }
 
 function commandErrorStatus(code: SafeCommandError["code"]): number {
