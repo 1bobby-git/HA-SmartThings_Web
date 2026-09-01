@@ -23,7 +23,7 @@ export function safeAdvancedCommandReason(
   }
 
   const normalized = normalizeDescriptor(descriptor);
-  const capabilityRole = [descriptor.componentRole, descriptor.capability]
+  const capabilityRole = [descriptor.componentRole, descriptor.capabilityRole, descriptor.capability]
     .filter((value): value is string => typeof value === "string")
     .map(normalizeTerm)
     .join(" ");
@@ -48,6 +48,7 @@ function normalizeDescriptor(descriptor: AdvancedCommandDescriptor): string {
     descriptor.component,
     descriptor.componentRole,
     descriptor.capability,
+    descriptor.capabilityRole,
     descriptor.command,
     descriptor.label,
     ...descriptor.arguments.map((argument) => argument.name)

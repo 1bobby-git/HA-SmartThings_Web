@@ -26,6 +26,7 @@ const SEMANTIC_IDENTIFIER_ROLES = new Set([
   "setup",
   "smartthings-findnode",
   "smartthings-hub",
+  "speechsynthesis",
   "switch2",
   "switch3",
   "switch4",

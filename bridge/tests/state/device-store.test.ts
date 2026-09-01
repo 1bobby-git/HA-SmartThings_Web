@@ -3143,6 +3143,51 @@ describe("DeviceStore", () => {
     }
   });
 
+  test("persists safe Advanced command capability roles across restart", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-catalog-role-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const first = new DeviceStore({ sqlitePath });
+      observeSnapshotState(first, {
+        componentId: "identifier_component_main",
+        capabilityId: "identifier_74292182f118",
+        attributeName: "phrase",
+        value: "",
+        timestamp: "2026-09-01T00:00:00.000Z"
+      });
+      first.observeAdvancedCommandCatalog("dev_001", [
+        {
+          ...advancedDescriptor(
+            "identifier_component_main",
+            "identifier_74292182f118",
+            "speak",
+            "Speak",
+            [phraseArgument()]
+          ),
+          capabilityRole: "speechsynthesis"
+        }
+      ], []);
+      first.close();
+
+      const restored = new DeviceStore({ sqlitePath });
+
+      expect(restored.snapshot().devices[0]?.advancedCommands).toEqual([
+        expect.objectContaining({
+          capability: "identifier_74292182f118",
+          capabilityRole: "speechsynthesis",
+          command: "speak"
+        })
+      ]);
+      restored.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
   test("rejects malformed persisted Advanced catalog data without losing old inventories", () => {
     const root = mkdtempSync(join(tmpdir(), "stw-device-store-catalog-bad-"));
     try {
@@ -3172,6 +3217,7 @@ describe("DeviceStore", () => {
                 {
                   component: "main",
                   capability: "switch",
+                  capabilityRole: "smartthings.speechSynthesis",
                   capabilityVersion: 1,
                   command: "on",
                   arguments: [{ name: "value", required: true, sensitive: false, schema: { type: "bad" } }],
@@ -3239,6 +3285,15 @@ function advancedDescriptor(
     confirmation: "state",
     label,
     labelSource: "capability"
+  };
+}
+
+function phraseArgument(): AdvancedCommandDescriptor["arguments"][number] {
+  return {
+    name: "phrase",
+    required: true,
+    sensitive: false,
+    schema: { type: "string" }
   };
 }
 

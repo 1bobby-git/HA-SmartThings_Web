@@ -60,6 +60,7 @@ def _descriptor(
     *,
     component: str = "main",
     capability: str = "switch",
+    capability_role: str | None = None,
     command: str = "on",
     arguments: tuple[BridgeCommandArgument, ...] = (),
 ) -> BridgeCommandDescriptor:
@@ -67,6 +68,7 @@ def _descriptor(
         component=component,
         component_role="main",
         capability=capability,
+        capability_role=capability_role,
         capability_version=1,
         command=command,
         arguments=arguments,
@@ -562,6 +564,45 @@ class SmartThingsWebServiceTests(unittest.IsolatedAsyncioTestCase):
             capability="speechSynthesis",
             command="speak",
             arguments=["안녕하세요"],
+            require_advanced=True,
+            confirm=False,
+            timeout=30,
+        )
+
+    async def test_speak_routes_aliased_speech_synthesis_descriptor_by_safe_role(self) -> None:
+        speech = _descriptor(
+            component="identifier_component_main",
+            capability="identifier_74292182f118",
+            capability_role="speechsynthesis",
+            command="speak",
+            arguments=(_phrase_argument(),),
+        )
+        client = SimpleNamespace(
+            async_list_commands=AsyncMock(return_value=_catalog(speech)),
+            async_execute_command=AsyncMock(),
+        )
+        runtime = SimpleNamespace(
+            client=client,
+            inventory=SimpleNamespace(devices={"dev_001": object()}),
+        )
+        hass = SimpleNamespace(
+            config_entries=SimpleNamespace(
+                async_entries=lambda _domain: [SimpleNamespace(runtime_data=runtime)]
+            )
+        )
+
+        await async_handle_speak(
+            hass,
+            SimpleNamespace(data=SPEAK_SCHEMA({"device_id": "dev_001", "phrase": "hello"})),
+        )
+
+        client.async_execute_command.assert_awaited_once_with(
+            target_type="device",
+            target_id="dev_001",
+            component="identifier_component_main",
+            capability="identifier_74292182f118",
+            command="speak",
+            arguments=["hello"],
             require_advanced=True,
             confirm=False,
             timeout=30,

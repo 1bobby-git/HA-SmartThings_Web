@@ -1160,6 +1160,7 @@ function advancedCommandCatalogBindings(
     for (const binding of capabilityBindings) {
       const rawComponent = volatileIdentifiers.rawIdentifier(binding.component);
       const rawCapability = volatileIdentifiers.rawIdentifier(binding.capability);
+      const capabilityRole = volatileIdentifiers.semanticIdentifierRole(binding.capability);
       if (!rawComponent || !rawCapability) {
         unresolvedDeviceIds.add(device.id);
         deviceBindings.length = 0;
@@ -1170,6 +1171,7 @@ function advancedCommandCatalogBindings(
         component: binding.component,
         ...(binding.componentRole ? { componentRole: binding.componentRole } : {}),
         capability: binding.capability,
+        ...(capabilityRole === "speechsynthesis" ? { capabilityRole } : {}),
         rawCapability,
         version: binding.version
       });

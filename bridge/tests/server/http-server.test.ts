@@ -524,7 +524,8 @@ describe("createBridgeHttpServer", () => {
       [
         {
           component: "main",
-          capability: "switch",
+          capability: "speechSynthesis",
+          capabilityRole: "speechsynthesis",
           capabilityVersion: 1,
           command: "on",
           arguments: [],
@@ -537,7 +538,7 @@ describe("createBridgeHttpServer", () => {
       [
         {
           component: "main",
-          capability: "switch",
+          capability: "speechSynthesis",
           command: "setToken",
           reason: "sensitive_argument"
         }
@@ -564,7 +565,8 @@ describe("createBridgeHttpServer", () => {
       commands: [
         {
           component: "main",
-          capability: "switch",
+          capability: "speechSynthesis",
+          capabilityRole: "speechsynthesis",
           capabilityVersion: 1,
           command: "on",
           arguments: [],

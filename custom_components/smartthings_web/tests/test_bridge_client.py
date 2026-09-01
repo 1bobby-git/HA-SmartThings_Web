@@ -404,9 +404,25 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
             "omissions": {},
         }
         self.assertEqual(parse_command_catalog(valid, "dev_001").commands[0].command, "speak")
+        role_catalog = parse_command_catalog(
+            {
+                **valid,
+                "commands": [
+                    {
+                        **descriptor,
+                        "capability": "identifier_74292182f118",
+                        "capabilityRole": "speechsynthesis",
+                    }
+                ],
+            },
+            "dev_001",
+        )
+        self.assertEqual(role_catalog.commands[0].capability_role, "speechsynthesis")
         for command in (
             {**descriptor, "rawCapability": "550e8400-e29b-41d4-a716-446655440000"},
             {**descriptor, "token": "secret-token"},
+            {**descriptor, "capabilityRole": "identifier_74292182f118"},
+            {**descriptor, "capabilityRole": "smartthings.speechSynthesis"},
             {
                 **descriptor,
                 "arguments": [

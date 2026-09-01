@@ -79,6 +79,7 @@ class BridgeCommandDescriptor:
     label: str
     label_source: str
     component_role: str | None = None
+    capability_role: str | None = None
 
 
 @dataclass(frozen=True)

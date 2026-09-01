@@ -23,24 +23,29 @@ Scope: local release preparation only. GitHub release publication, HAOS deployme
 - RED: `npx vitest run tests/addon-package.test.ts -t "copies only addon package sources"` failed before implementation because `tools/smartthings-web-parity-audit.ts` was not included in the generated add-on package.
 - GREEN: package source allowlist now includes `tools/smartthings-web-parity-audit.ts` and `tools/smartthings-web-parity-audit-core.ts`.
 - GREEN: generated package root resolves `npm run audit:web-parity` with explicit fixture files and returns a zero-failure report.
+- RED: `npx vitest run bridge/tests/security/volatile-identifier-map.test.ts bridge/tests/advanced/command-catalog.test.ts bridge/tests/state/device-store.test.ts tests/smartthings-web-parity-audit.test.ts` failed before implementation because aliased `speechSynthesis` descriptors had no safe capability role, DeviceStore dropped that role, the audit rejected the new field, and the role allowlist did not include `speechsynthesis`.
+- RED: `python custom_components/smartthings_web/tests/test_bridge_client.py; python custom_components/smartthings_web/tests/test_services.py` failed before implementation because `BridgeCommandDescriptor` did not accept `capability_role`, and `speak` could only match literal `speechSynthesis`.
+- GREEN: command descriptors now carry optional allowlisted `capabilityRole: speechsynthesis` from the observed volatile identifier role, persist it across DeviceStore restart, expose it through HTTP/catalog and HA models, and route `smartthings_web.speak` through the exact aliased component/capability descriptor.
 
 ## Local Verification
 
-- Targeted JS: `npx vitest run tests/addon-package.test.ts tests/addon-config.test.ts tests/protocol-version-contract.test.ts tests/smartthings-web-parity-audit.test.ts tests/runtime-hardening.test.ts bridge/tests/inspector/protocol-analyzer.test.ts --pool=threads --maxWorkers=1 --no-file-parallelism` -> 6 files, 72 tests passed.
-- Full JS: `npm test` -> 72 files, 989 tests passed.
-- Full Python: `python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'` -> 277 tests passed.
+- Targeted JS: `npx vitest run bridge/tests/security/volatile-identifier-map.test.ts bridge/tests/advanced/command-catalog.test.ts bridge/tests/state/device-store.test.ts bridge/tests/server/http-server.test.ts tests/smartthings-web-parity-audit.test.ts` -> 5 files, 158 tests passed.
+- Targeted Python: `python custom_components/smartthings_web/tests/test_bridge_client.py; python custom_components/smartthings_web/tests/test_services.py` -> 15 tests passed.
+- Full JS: `npx vitest run --maxWorkers=1` -> 72 files, 993 tests passed.
+- Full Python: `python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'` -> 278 tests passed.
 - TypeScript: `npm run typecheck` -> passed.
 - Build: `npm run build` -> passed.
 - Secret audit: `npm run audit:secrets` -> passed.
 - API-free audit: `npm run audit:api-free` -> passed.
 - Fixture audit: `npm run audit:fixtures` -> passed.
+- Web parity CLI: `npm run audit:web-parity -- --inventory <sanitized temp inventory> --projection <sanitized temp projection>` -> zero-failure report.
 - Add-on package: `npm run package:addon` -> passed.
 - Diff check: `git diff --check` -> passed.
 
 ## Package Output
 
 - Package directory: `dist-addon/smartthings_web_bridge`
-- Package manifest SHA-256: `0f5ce7a18ea24eb2cad29365fdba37771907024ca3b946fd71910190c6d6a9cf`
+- Package manifest SHA-256: `2d62117e5427cdd22ad69ef3829b0297bd68b60342a0f27b0d7e8cc9d1ac98c3`
 - Package manifest includes both parity audit files:
   - `tools/smartthings-web-parity-audit.ts`
   - `tools/smartthings-web-parity-audit-core.ts`

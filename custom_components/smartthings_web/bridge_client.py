@@ -53,6 +53,7 @@ _COMMAND_DESCRIPTOR_KEYS = {
     "component",
     "componentRole",
     "capability",
+    "capabilityRole",
     "capabilityVersion",
     "command",
     "arguments",
@@ -70,6 +71,7 @@ _COMMAND_OMISSION_REASONS = {
     "sensitive_argument",
     "schema_invalid",
 }
+_SAFE_COMMAND_CAPABILITY_ROLES = {"speechsynthesis"}
 _SAFE_BRIDGE_ERROR_CODES = {
     "bridge_api_unavailable",
     "bridge_auth_failed",
@@ -608,6 +610,7 @@ def _parse_command_descriptor(raw: Any) -> BridgeCommandDescriptor | None:
     component = _safe_command_token(raw.get("component"), allow_public=True)
     component_role = _safe_command_role(raw.get("componentRole"))
     capability = _safe_command_token(raw.get("capability"), allow_public=True)
+    capability_role = _safe_command_capability_role(raw.get("capabilityRole"))
     capability_version = raw.get("capabilityVersion")
     command = _safe_command_token(raw.get("command"), allow_public=True)
     label = _safe_display(raw.get("label"))
@@ -616,6 +619,7 @@ def _parse_command_descriptor(raw: Any) -> BridgeCommandDescriptor | None:
         component is None
         or (raw.get("componentRole") is not None and component_role is None)
         or capability is None
+        or (raw.get("capabilityRole") is not None and capability_role is None)
         or command is None
         or isinstance(capability_version, bool)
         or not isinstance(capability_version, int)
@@ -634,6 +638,7 @@ def _parse_command_descriptor(raw: Any) -> BridgeCommandDescriptor | None:
         component=component,
         component_role=component_role,
         capability=capability,
+        capability_role=capability_role,
         capability_version=capability_version,
         command=command,
         arguments=arguments,
@@ -888,6 +893,15 @@ def _safe_command_role(raw: Any) -> str | None:
     ):
         return None
     return text
+
+
+def _safe_command_capability_role(raw: Any) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip().lower()
+    return text if text in _SAFE_COMMAND_CAPABILITY_ROLES else None
 
 
 def _safe_display(raw: Any) -> str | None:

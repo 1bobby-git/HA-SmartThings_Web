@@ -1,5 +1,9 @@
 import { safeAdvancedCommandReason } from "../bridge/src/advanced/safe-command-policy.js";
-import type { AdvancedCommandDescriptor, AdvancedCommandOmission } from "../bridge/src/advanced/command-catalog-types.js";
+import type {
+  AdvancedCommandCapabilityRole,
+  AdvancedCommandDescriptor,
+  AdvancedCommandOmission
+} from "../bridge/src/advanced/command-catalog-types.js";
 
 const MAX_DEVICES = 5_000;
 const MAX_COMMANDS_PER_DEVICE = 500;
@@ -23,6 +27,7 @@ const NON_FAILING_OMISSION_REASONS = new Set<AdvancedCommandOmission["reason"]>(
   "sensitive_argument",
   "schema_invalid"
 ]);
+const SAFE_COMMAND_CAPABILITY_ROLES = new Set(["speechsynthesis"]);
 
 export interface WebParityInventory {
   devices: WebParityDevice[];
@@ -282,6 +287,7 @@ function parseAdvancedCommands(value: unknown): AdvancedCommandDescriptor[] {
       "component",
       "componentRole",
       "capability",
+      "capabilityRole",
       "capabilityVersion",
       "command",
       "arguments",
@@ -315,6 +321,7 @@ function parseAdvancedCommands(value: unknown): AdvancedCommandDescriptor[] {
       component: parseSafeString(item.component),
       ...(item.componentRole !== undefined ? { componentRole: parseSafeString(item.componentRole) } : {}),
       capability: parseSafeString(item.capability),
+      ...(item.capabilityRole !== undefined ? { capabilityRole: parseCommandCapabilityRole(item.capabilityRole) } : {}),
       capabilityVersion,
       command: parseSafeString(item.command),
       arguments: item.arguments.map(parseArgument),
@@ -324,6 +331,12 @@ function parseAdvancedCommands(value: unknown): AdvancedCommandDescriptor[] {
       labelSource: item.labelSource
     };
   });
+}
+
+function parseCommandCapabilityRole(value: unknown): AdvancedCommandCapabilityRole {
+  const role = parseSafeString(value).trim().toLowerCase();
+  if (!SAFE_COMMAND_CAPABILITY_ROLES.has(role)) invalid();
+  return role as AdvancedCommandCapabilityRole;
 }
 
 function parseArgument(value: unknown): AdvancedCommandDescriptor["arguments"][number] {

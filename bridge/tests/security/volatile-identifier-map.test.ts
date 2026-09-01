@@ -96,6 +96,30 @@ describe("VolatileIdentifierMap", () => {
     expect(identifiers.semanticIdentifierRole("identifier_private-token-value")).toBeUndefined();
   });
 
+  test("maps speech synthesis semantics from an aliased observed capability", () => {
+    const identifiers = new VolatileIdentifierMap((kind, raw) =>
+      kind === "device" ? `dev_${raw}` : `identifier_${raw.replace(/[.]/gu, "_")}`
+    );
+
+    identifiers.observeRawAdvancedDeviceSnapshot({
+      items: [
+        {
+          deviceId: "speaker-device",
+          components: [
+            {
+              id: "main",
+              capabilities: [{ id: "speechSynthesis", status: {} }]
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(identifiers.semanticIdentifierRole("identifier_speechSynthesis")).toBe(
+      "speechsynthesis"
+    );
+  });
+
   test("maps refresh semantics from the raw Advanced component inventory", () => {
     const identifiers = new VolatileIdentifierMap((kind, raw) =>
       kind === "device" ? `dev_${raw}` : `identifier_${raw.replace(".", "_")}`

@@ -203,6 +203,52 @@ describe("SmartThings Web parity audit", () => {
     expect(json).not.toContain("phrase");
   });
 
+  test("accepts safe command capability roles but rejects raw-shaped roles", () => {
+    const descriptor = {
+      component: "main",
+      capability: "identifier_74292182f118",
+      capabilityVersion: 1,
+      command: "speak",
+      arguments: [],
+      transport: "advanced",
+      confirmation: "accepted_receipt",
+      label: "Speak",
+      labelSource: "capability"
+    };
+
+    expect(
+      evaluateWebParity(
+        {
+          devices: [
+            {
+              id: "dev_001",
+              controls: [],
+              advancedCommands: [{ ...descriptor, capabilityRole: "speechsynthesis" }],
+              commandOmissions: []
+            }
+          ]
+        },
+        []
+      ).summary.safeCommands
+    ).toBe(1);
+
+    expect(() =>
+      evaluateWebParity(
+        {
+          devices: [
+            {
+              id: "dev_001",
+              controls: [],
+              advancedCommands: [{ ...descriptor, capabilityRole: "identifier_74292182f118" }],
+              commandOmissions: []
+            }
+          ]
+        },
+        []
+      )
+    ).toThrow("web_parity_audit_input_invalid");
+  });
+
   test("accepts the full bridge inventory envelope and scans every control command", () => {
     const report = evaluateWebParity(
       {

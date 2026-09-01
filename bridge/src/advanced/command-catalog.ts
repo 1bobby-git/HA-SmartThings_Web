@@ -3,7 +3,11 @@ import {
   CapabilityValidationError,
   type CapabilityDefinitionLoader
 } from "./capability-cache.js";
-import type { AdvancedCommandDescriptor, AdvancedCommandOmission } from "./command-catalog-types.js";
+import type {
+  AdvancedCommandCapabilityRole,
+  AdvancedCommandDescriptor,
+  AdvancedCommandOmission
+} from "./command-catalog-types.js";
 import type {
   AdvancedCapabilityCommandDefinition,
   AdvancedCapabilityDefinition,
@@ -16,6 +20,7 @@ export interface CapabilityBinding {
   component: string;
   componentRole?: string;
   capability: string;
+  capabilityRole?: AdvancedCommandCapabilityRole;
   rawCapability: string;
   version: number;
 }
@@ -254,6 +259,7 @@ function descriptorFor(
     component: binding.component,
     ...(binding.componentRole ? { componentRole: binding.componentRole } : {}),
     capability: binding.capability,
+    ...(binding.capabilityRole ? { capabilityRole: binding.capabilityRole } : {}),
     capabilityVersion: binding.version,
     command: command.name,
     arguments: command.arguments.map((argument) => ({

@@ -4,6 +4,9 @@ import {
   AdvancedCommandCatalog,
   type CapabilityBinding
 } from "../../src/advanced/command-catalog.js";
+import type {
+  AdvancedCommandCapabilityRole
+} from "../../src/advanced/command-catalog-types.js";
 import type { AdvancedCapabilityDefinition } from "../../src/advanced/types.js";
 
 function definition(
@@ -69,6 +72,30 @@ describe("AdvancedCommandCatalog", () => {
         })
       ]);
     }
+  });
+
+  test("carries the allowlisted capability role for aliased speech synthesis descriptors", async () => {
+    const catalog = new AdvancedCommandCatalog(async () => speakDefinition);
+
+    const result = await catalog.build([
+      binding(
+        "dev_speaker",
+        "identifier_component_main",
+        "identifier_74292182f118",
+        "smartthings.speechSynthesis",
+        "main",
+        "speechsynthesis"
+      )
+    ]);
+
+    expect(result.commandsByDevice.get("dev_speaker")).toEqual([
+      expect.objectContaining({
+        component: "identifier_component_main",
+        capability: "identifier_74292182f118",
+        capabilityRole: "speechsynthesis",
+        command: "speak"
+      })
+    ]);
   });
 
   test("omits dangerous and sensitive commands without exposing raw identifiers", async () => {
@@ -383,12 +410,14 @@ function binding(
   component: string,
   capability: string,
   rawCapability: string,
-  componentRole?: string
+  componentRole?: string,
+  capabilityRole?: AdvancedCommandCapabilityRole
 ): CapabilityBinding {
   return {
     deviceId,
     component,
     ...(componentRole ? { componentRole } : {}),
+    ...(capabilityRole ? { capabilityRole } : {}),
     capability,
     rawCapability,
     version: 1

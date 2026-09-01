@@ -5,6 +5,7 @@ import {
   extractDeviceEventIdentity
 } from "../inspector/event-deduplicator.js";
 import type {
+  AdvancedCommandCapabilityRole,
   AdvancedCommandDescriptor,
   AdvancedCommandOmission
 } from "../advanced/command-catalog-types.js";
@@ -143,6 +144,7 @@ export type BridgeDeviceStoreEvent =
 type Listener = (event: BridgeDeviceStoreEvent) => void;
 type StateTokenNormalizer = (value: string) => string;
 type IdentifierRoleResolver = (alias: string) => string | undefined;
+const SAFE_ADVANCED_COMMAND_CAPABILITY_ROLES = new Set(["speechsynthesis"]);
 type AdvancedAliasKind = "device" | "location" | "identifier";
 type AdvancedAliasNormalizer = (kind: AdvancedAliasKind, value: string) => string;
 type AdvancedDeviceSnapshotOptions = {
@@ -2087,6 +2089,7 @@ function parseAdvancedCommandDescriptors(
     const item = asRecord(raw);
     const component = readString(item?.component);
     const componentRole = safeRole(item?.componentRole);
+    const capabilityRole = safeAdvancedCommandCapabilityRole(item?.capabilityRole);
     const capability = readString(item?.capability);
     const capabilityVersion = item?.capabilityVersion;
     const command = readString(item?.command);
@@ -2097,6 +2100,7 @@ function parseAdvancedCommandDescriptors(
     if (
       !safeToken(component) ||
       (item?.componentRole !== undefined && !componentRole) ||
+      (item?.capabilityRole !== undefined && !capabilityRole) ||
       !safeToken(capability) ||
       !Number.isSafeInteger(capabilityVersion) ||
       Number(capabilityVersion) < 0 ||
@@ -2119,6 +2123,7 @@ function parseAdvancedCommandDescriptors(
       component,
       ...(componentRole ? { componentRole } : {}),
       capability,
+      ...(capabilityRole ? { capabilityRole } : {}),
       capabilityVersion: Number(capabilityVersion),
       command,
       arguments: args,
@@ -2127,7 +2132,7 @@ function parseAdvancedCommandDescriptors(
       label,
       labelSource: labelSource as AdvancedCommandDescriptor["labelSource"]
     };
-    const key = `${component}\u0000${capability}\u0000${command}\u0000${JSON.stringify(args)}`;
+    const key = `${component}\u0000${capability}\u0000${capabilityRole ?? ""}\u0000${command}\u0000${JSON.stringify(args)}`;
     if (seen.has(key)) {
       if (options.dropInvalid) continue;
       return undefined;
@@ -2579,6 +2584,13 @@ function safeRole(value: unknown): string | undefined {
   const text = readString(value)?.trim();
   if (!text || text.length > 80 || text.startsWith("identifier_")) return undefined;
   return /^[A-Za-z0-9가-힣 ._-]+$/u.test(text) ? text : undefined;
+}
+
+function safeAdvancedCommandCapabilityRole(value: unknown): AdvancedCommandCapabilityRole | undefined {
+  const text = readString(value)?.trim().toLowerCase();
+  return text && SAFE_ADVANCED_COMMAND_CAPABILITY_ROLES.has(text)
+    ? text as AdvancedCommandCapabilityRole
+    : undefined;
 }
 
 function safeToken(value: string | null): value is string {

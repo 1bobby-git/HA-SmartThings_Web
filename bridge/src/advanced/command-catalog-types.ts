@@ -1,9 +1,12 @@
 import type { AdvancedCapabilityArgumentDefinition } from "./types.js";
 
+export type AdvancedCommandCapabilityRole = "speechsynthesis";
+
 export interface AdvancedCommandDescriptor {
   component: string;
   componentRole?: string;
   capability: string;
+  capabilityRole?: AdvancedCommandCapabilityRole;
   capabilityVersion: number;
   command: string;
   arguments: AdvancedCapabilityArgumentDefinition[];

@@ -239,7 +239,13 @@ async def async_handle_speak(hass: HomeAssistant, call: ServiceCall) -> None:
     matches = [
         command
         for command in catalog.commands
-        if command.capability == "speechSynthesis" and command.command == "speak"
+        if (
+            command.command == "speak"
+            and (
+                getattr(command, "capability_role", None) == "speechsynthesis"
+                or command.capability == "speechSynthesis"
+            )
+        )
     ]
     if not matches:
         _raise_service_error("command_control_not_found")
@@ -361,6 +367,7 @@ def _command_descriptor_response(command: Any) -> dict[str, Any]:
         "component": command.component,
         "component_role": command.component_role,
         "capability": command.capability,
+        "capability_role": getattr(command, "capability_role", None),
         "capability_version": command.capability_version,
         "command": command.command,
         "arguments": [
