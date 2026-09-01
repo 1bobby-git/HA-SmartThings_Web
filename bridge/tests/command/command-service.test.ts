@@ -647,6 +647,229 @@ describe("SafeCommandService", () => {
     expect(executor.executeDeviceAction).not.toHaveBeenCalled();
   });
 
+  test("rejects a missing positional required descriptor argument after an optional argument", async () => {
+    const store = readyDeviceStore();
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_speechSynthesis", "speak", {
+        confirmation: "accepted_receipt",
+        arguments: [
+          {
+            name: "mode",
+            required: false,
+            sensitive: false,
+            schema: { type: "string" }
+          },
+          {
+            name: "phrase",
+            required: true,
+            sensitive: false,
+            schema: { type: "string" }
+          }
+        ]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => undefined)
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        targetType: "device",
+        targetId: "dev_001",
+        component: "main",
+        capability: "identifier_speechSynthesis",
+        command: "speak",
+        arguments: ["auto"],
+        clientRequestId: "request_positional_required"
+      })
+    ).rejects.toMatchObject({ code: "invalid_arguments" });
+    expect(executor.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["boolean", { type: "boolean" }, [true]],
+    ["array", { type: "array" }, [["eco", "sleep"]]],
+    ["object", { type: "object" }, [{ mode: "eco" }]]
+  ] as const)("accepts descriptor %s arguments", async (_name, schema, args) => {
+    const store = readyDeviceStore();
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_customCapability", "setCustomValue", {
+        confirmation: "accepted_receipt",
+        arguments: [
+          {
+            name: "value",
+            required: true,
+            sensitive: false,
+            schema
+          }
+        ]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => ({
+        state: "ACCEPTED" as const,
+        transport: "advanced" as const,
+        acceptedAtMs: Date.now()
+      }))
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        targetType: "device",
+        targetId: "dev_001",
+        component: "main",
+        capability: "identifier_customCapability",
+        command: "setCustomValue",
+        arguments: args,
+        clientRequestId: `request_descriptor_accepts_${_name}`
+      })
+    ).resolves.toMatchObject({ status: "accepted_unconfirmed", transport: "advanced" });
+    expect(executor.executeDeviceAction).toHaveBeenCalledWith(
+      expect.objectContaining({ requireAdvanced: true, arguments: args })
+    );
+  });
+
+  test.each([
+    ["boolean rejects string", { type: "boolean" }, ["true"]],
+    ["array rejects object", { type: "array" }, [{ value: "eco" }]],
+    ["object rejects array", { type: "object" }, [["eco"]]],
+    ["extra argument", { type: "boolean" }, [true, false]]
+  ] as const)("rejects descriptor %s", async (_name, schema, args) => {
+    const store = readyDeviceStore();
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_customCapability", "setCustomValue", {
+        confirmation: "accepted_receipt",
+        arguments: [
+          {
+            name: "value",
+            required: true,
+            sensitive: false,
+            schema
+          }
+        ]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => undefined)
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        targetType: "device",
+        targetId: "dev_001",
+        component: "main",
+        capability: "identifier_customCapability",
+        command: "setCustomValue",
+        arguments: args,
+        clientRequestId: `request_descriptor_rejects_${_name.replaceAll(" ", "_")}`
+      })
+    ).rejects.toMatchObject({ code: "invalid_arguments" });
+    expect(executor.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test("rejects cyclic descriptor arguments before dispatch", async () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const store = readyDeviceStore();
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_customCapability", "setCustomValue", {
+        confirmation: "accepted_receipt",
+        arguments: [
+          {
+            name: "value",
+            required: true,
+            sensitive: false,
+            schema: { type: "object" }
+          }
+        ]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => undefined)
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        targetType: "device",
+        targetId: "dev_001",
+        component: "main",
+        capability: "identifier_customCapability",
+        command: "setCustomValue",
+        arguments: [cyclic],
+        clientRequestId: "request_descriptor_cyclic"
+      })
+    ).rejects.toMatchObject({ code: "invalid_arguments" });
+    expect(executor.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test("rejects descriptor argument payloads over the JSON byte bound before dispatch", async () => {
+    const store = readyDeviceStore();
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_customCapability", "setCustomValue", {
+        confirmation: "accepted_receipt",
+        arguments: [
+          {
+            name: "value",
+            required: true,
+            sensitive: false,
+            schema: { type: "array" }
+          }
+        ]
+      })
+    ]);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => undefined)
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        targetType: "device",
+        targetId: "dev_001",
+        component: "main",
+        capability: "identifier_customCapability",
+        command: "setCustomValue",
+        arguments: [[("x").repeat(16_385)]],
+        clientRequestId: "request_descriptor_oversize_payload"
+      })
+    ).rejects.toMatchObject({ code: "invalid_arguments" });
+    expect(executor.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
   test.each([
     ["enum mismatch", "setMode", ["away"], { type: "string", enum: ["eco", "auto"] }],
     ["number below minimum", "setLevel", [-1], { type: "number", minimum: 0, maximum: 100 }],

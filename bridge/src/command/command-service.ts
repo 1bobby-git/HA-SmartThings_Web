@@ -1842,8 +1842,8 @@ function validateAdvancedDescriptorArguments(
   values: readonly BridgeJsonValue[]
 ): void {
   if (values.length > descriptor.arguments.length) throw new SafeCommandError("invalid_arguments");
-  const requiredCount = descriptor.arguments.filter((argument) => argument.required).length;
-  if (values.length < requiredCount) throw new SafeCommandError("invalid_arguments");
+  const lastRequiredIndex = descriptor.arguments.findLastIndex((argument) => argument.required);
+  if (lastRequiredIndex >= values.length) throw new SafeCommandError("invalid_arguments");
   for (const [index, value] of values.entries()) {
     const argument = descriptor.arguments[index];
     if (!argument) throw new SafeCommandError("invalid_arguments");
