@@ -97,6 +97,16 @@ describe("safeAdvancedCommandReason", () => {
   test("omits low-level OCF post and network audio topology commands as dangerous", () => {
     expect(
       safeAdvancedCommandReason(
+        descriptor({ capability: "ocf", command: "post", label: "Execute" })
+      )
+    ).toBe("dangerous_command");
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "messageBoard", command: "post", label: "Post message" })
+      )
+    ).toBeUndefined();
+    expect(
+      safeAdvancedCommandReason(
         descriptor({ capability: "ocf", command: "postCommand", label: "OCF post command" })
       )
     ).toBe("dangerous_command");
