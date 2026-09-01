@@ -1,0 +1,299 @@
+import {
+  CapabilityDefinitionCache,
+  CapabilityValidationError,
+  type CapabilityDefinitionLoader
+} from "./capability-cache.js";
+import type { AdvancedCommandDescriptor, AdvancedCommandOmission } from "./command-catalog-types.js";
+import type {
+  AdvancedCapabilityCommandDefinition,
+  AdvancedCapabilityDefinition,
+  AdvancedCapabilitySchema
+} from "./types.js";
+import { safeAdvancedCommandReason } from "./safe-command-policy.js";
+
+export interface CapabilityBinding {
+  deviceId: string;
+  component: string;
+  componentRole?: string;
+  capability: string;
+  rawCapability: string;
+  version: number;
+}
+
+export interface AdvancedCommandCatalogResult {
+  commandsByDevice: Map<string, AdvancedCommandDescriptor[]>;
+  omissions: AdvancedCommandOmission[];
+}
+
+export interface AdvancedCommandCatalogOptions {
+  concurrency?: number;
+}
+
+interface DefinitionResult {
+  key: string;
+  commands?: AdvancedCapabilityCommandDefinition[];
+  invalidCommands?: string[];
+  reason?: AdvancedCommandOmission["reason"];
+}
+
+const DEFAULT_CONCURRENCY = 4;
+const STATELESS_COMMAND_PATTERN =
+  /^(?:speak|refresh|press|push|momentary|ping|beep|identify|refresh[A-Z].*)$/u;
+
+export class AdvancedCommandCatalog {
+  readonly #cache: CapabilityDefinitionCache;
+  readonly #concurrency: number;
+
+  constructor(loader: CapabilityDefinitionLoader, options: AdvancedCommandCatalogOptions = {}) {
+    this.#cache = new CapabilityDefinitionCache(loader);
+    this.#concurrency = normalizeConcurrency(options.concurrency);
+  }
+
+  async build(bindings: readonly CapabilityBinding[]): Promise<AdvancedCommandCatalogResult> {
+    const definitions = await this.#loadDefinitions(bindings);
+    const commandsByDevice = new Map<string, AdvancedCommandDescriptor[]>();
+    const omissions: AdvancedCommandOmission[] = [];
+
+    for (const binding of sortedBindings(bindings)) {
+      const result = definitions.get(bindingKey(binding));
+      if (!result || result.reason) {
+        omissions.push(omission(binding, result?.reason ?? "definition_unavailable"));
+        continue;
+      }
+      for (const command of result.invalidCommands ?? []) {
+        omissions.push(omission(binding, "schema_invalid", command));
+      }
+      for (const command of result.commands ?? []) {
+        const descriptor = descriptorFor(binding, command);
+        const blocked = safeAdvancedCommandReason(descriptor);
+        if (blocked) {
+          omissions.push(omission(binding, blocked, command.name));
+          continue;
+        }
+        const deviceCommands = commandsByDevice.get(binding.deviceId) ?? [];
+        deviceCommands.push(descriptor);
+        commandsByDevice.set(binding.deviceId, deviceCommands);
+      }
+    }
+
+    return {
+      commandsByDevice: sortCommandMap(commandsByDevice),
+      omissions: omissions.sort(compareOmissions)
+    };
+  }
+
+  async #loadDefinitions(
+    bindings: readonly CapabilityBinding[]
+  ): Promise<Map<string, DefinitionResult>> {
+    const keys = [
+      ...new Map(
+        bindings.map((binding) => [
+          bindingKey(binding),
+          { rawCapability: binding.rawCapability, version: binding.version }
+        ])
+      ).entries()
+    ].sort(([left], [right]) => left.localeCompare(right));
+    const results = new Map<string, DefinitionResult>();
+    let next = 0;
+
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const entry = keys[next];
+        next += 1;
+        if (!entry) return;
+        const [key, value] = entry;
+        try {
+          const definition = await this.#cache.get(value.rawCapability, value.version);
+          const commands = commandDefinitions(definition);
+          results.set(key, {
+            key,
+            commands: commands.valid,
+            invalidCommands: commands.invalid
+          });
+        } catch (error) {
+          results.set(key, {
+            key,
+            reason: error instanceof CapabilityValidationError
+              ? "schema_invalid"
+              : "definition_unavailable"
+          });
+        }
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: Math.min(this.#concurrency, Math.max(keys.length, 1)) }, () => worker())
+    );
+    return results;
+  }
+}
+
+function commandDefinitions(definition: AdvancedCapabilityDefinition): {
+  valid: AdvancedCapabilityCommandDefinition[];
+  invalid: string[];
+} {
+  if (!isRecord(definition.commands)) {
+    throw new CapabilityValidationError("capability_definition_invalid");
+  }
+  const valid: AdvancedCapabilityCommandDefinition[] = [];
+  const invalid: string[] = [];
+  for (const [name, rawCommand] of Object.entries(definition.commands).sort(([left], [right]) =>
+    left.localeCompare(right)
+  )) {
+    const command = isRecord(rawCommand) ? rawCommand : undefined;
+    const rawArguments = command?.arguments;
+    if (!safeToken(name) || !command || !Array.isArray(rawArguments)) {
+      invalid.push(name);
+      continue;
+    }
+    const parsedArguments = parseArguments(rawArguments);
+    if (!parsedArguments) {
+      invalid.push(name);
+      continue;
+    }
+    valid.push({ name, arguments: parsedArguments });
+  }
+  return { valid, invalid };
+}
+
+function parseArguments(values: unknown[]): AdvancedCapabilityCommandDefinition["arguments"] | undefined {
+  const parsed: AdvancedCapabilityCommandDefinition["arguments"] = [];
+  for (const value of values) {
+    if (!isRecord(value)) return undefined;
+    const name = typeof value.name === "string" ? value.name : undefined;
+    const schema = isRecord(value.schema) ? parseSchema(value.schema) : undefined;
+    if (!name || !safeToken(name) || !schema) return undefined;
+    parsed.push({
+      name,
+      required: value.required !== false,
+      sensitive: value.sensitive === true,
+      schema,
+      ...(typeof value.unit === "string" && value.unit.length <= 64
+        ? { unit: value.unit }
+        : {})
+    });
+  }
+  return parsed;
+}
+
+function parseSchema(value: Record<string, unknown>): AdvancedCapabilitySchema | undefined {
+  const type = value.type;
+  if (
+    type !== undefined &&
+    !["array", "boolean", "integer", "number", "object", "string"].includes(String(type))
+  ) {
+    return undefined;
+  }
+  const minimum = typeof value.minimum === "number" && Number.isFinite(value.minimum)
+    ? value.minimum
+    : undefined;
+  const maximum = typeof value.maximum === "number" && Number.isFinite(value.maximum)
+    ? value.maximum
+    : undefined;
+  if (minimum !== undefined && maximum !== undefined && minimum > maximum) return undefined;
+  return {
+    ...value,
+    ...(type !== undefined ? { type: type as NonNullable<AdvancedCapabilitySchema["type"]> } : {}),
+    ...(Array.isArray(value.enum) ? { enum: [...value.enum] } : {}),
+    ...(minimum !== undefined ? { minimum } : {}),
+    ...(maximum !== undefined ? { maximum } : {})
+  };
+}
+
+function safeToken(value: string): boolean {
+  return value.length >= 1 && value.length <= 256 && /^[A-Za-z0-9_.:-]+$/u.test(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function descriptorFor(
+  binding: CapabilityBinding,
+  command: AdvancedCapabilityCommandDefinition
+): AdvancedCommandDescriptor {
+  return {
+    component: binding.component,
+    ...(binding.componentRole ? { componentRole: binding.componentRole } : {}),
+    capability: binding.capability,
+    capabilityVersion: binding.version,
+    command: command.name,
+    arguments: command.arguments.map((argument) => ({
+      ...argument,
+      schema: cloneSchema(argument.schema)
+    })),
+    transport: "advanced",
+    confirmation: STATELESS_COMMAND_PATTERN.test(command.name) ? "accepted_receipt" : "state",
+    label: command.name || binding.capability,
+    labelSource: "capability"
+  };
+}
+
+function cloneSchema(
+  schema: AdvancedCapabilityCommandDefinition["arguments"][number]["schema"]
+): AdvancedCapabilityCommandDefinition["arguments"][number]["schema"] {
+  return {
+    ...schema,
+    ...(schema.enum ? { enum: [...schema.enum] } : {})
+  };
+}
+
+function omission(
+  binding: CapabilityBinding,
+  reason: AdvancedCommandOmission["reason"],
+  command?: string
+): AdvancedCommandOmission {
+  return {
+    component: binding.component,
+    capability: binding.capability,
+    ...(command ? { command } : {}),
+    reason
+  };
+}
+
+function bindingKey(binding: CapabilityBinding): string {
+  return `${binding.rawCapability}\u0000${binding.version}`;
+}
+
+function sortedBindings(bindings: readonly CapabilityBinding[]): CapabilityBinding[] {
+  return [...bindings].sort((left, right) =>
+    [
+      left.deviceId.localeCompare(right.deviceId),
+      left.component.localeCompare(right.component),
+      left.capability.localeCompare(right.capability),
+      left.rawCapability.localeCompare(right.rawCapability),
+      left.version - right.version
+    ].find((result) => result !== 0) ?? 0
+  );
+}
+
+function sortCommandMap(
+  commandsByDevice: Map<string, AdvancedCommandDescriptor[]>
+): Map<string, AdvancedCommandDescriptor[]> {
+  const sorted = new Map<string, AdvancedCommandDescriptor[]>();
+  for (const [deviceId, commands] of [...commandsByDevice.entries()].sort(([left], [right]) =>
+    left.localeCompare(right)
+  )) {
+    sorted.set(
+      deviceId,
+      commands.sort((left, right) =>
+        `${left.component}:${left.capability}:${left.command}`.localeCompare(
+          `${right.component}:${right.capability}:${right.command}`
+        )
+      )
+    );
+  }
+  return sorted;
+}
+
+function compareOmissions(left: AdvancedCommandOmission, right: AdvancedCommandOmission): number {
+  return `${left.component}:${left.capability}:${left.command ?? ""}:${left.reason}`.localeCompare(
+    `${right.component}:${right.capability}:${right.command ?? ""}:${right.reason}`
+  );
+}
+
+function normalizeConcurrency(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_CONCURRENCY;
+  if (!Number.isSafeInteger(value) || value < 1) return DEFAULT_CONCURRENCY;
+  return Math.min(value, 32);
+}

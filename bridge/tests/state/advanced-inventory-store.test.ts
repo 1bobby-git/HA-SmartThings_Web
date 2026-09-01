@@ -175,6 +175,57 @@ describe("DeviceStore Advanced primary inventory", () => {
     expect(store.snapshot().devices[0]?.id).toBe("dev_001");
   });
 
+  test("returns sorted alias-only capability bindings including command-only component roles", () => {
+    const store = new DeviceStore({
+      normalizeAdvancedAlias: (kind, value) => {
+        if (kind === "identifier") return value.replace(/^raw_/, "identifier_");
+        return value;
+      }
+    });
+    store.observeAdvancedInventorySnapshot({
+      locations: [{ locationId: "loc_001", name: "Home" }],
+      rooms: [],
+      devices: [
+        {
+          deviceId: "dev_001",
+          locationId: "loc_001",
+          components: [
+            {
+              id: "raw_speaker",
+              componentRole: "main",
+              capabilities: [{ id: "raw_speechSynthesis", version: 1 }]
+            },
+            {
+              id: "raw_aux",
+              componentRole: "speaker",
+              capabilities: [{ id: "raw_audioNotification", version: 2 }]
+            }
+          ],
+          status: { components: {} }
+        }
+      ]
+    });
+
+    const bindings = store.capabilityBindings("dev_001");
+
+    expect(bindings).toEqual([
+      {
+        component: "identifier_aux",
+        componentRole: "speaker",
+        capability: "identifier_audioNotification",
+        version: 2
+      },
+      {
+        component: "identifier_speaker",
+        componentRole: "main",
+        capability: "identifier_speechSynthesis",
+        version: 1
+      }
+    ]);
+    bindings[0]!.component = "mutated";
+    expect(store.capabilityBindings("dev_001")[0]?.component).toBe("identifier_aux");
+  });
+
   test("retains redacted Advanced relationship and classification metadata", () => {
     const store = new DeviceStore();
     store.observeAdvancedInventorySnapshot({

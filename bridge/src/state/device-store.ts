@@ -172,7 +172,15 @@ interface MutableDevice {
   states: Map<string, BridgeDeviceState>;
   controls: Map<string, BridgeDeviceControl>;
   capabilityVersions: Map<string, number>;
+  componentRoles: Map<string, string>;
   advanced?: BridgeAdvancedDeviceMetadata;
+}
+
+export interface BridgeCapabilityBinding {
+  component: string;
+  componentRole?: string;
+  capability: string;
+  version: number;
 }
 
 interface ComponentChildMapping {
@@ -372,6 +380,32 @@ export class DeviceStore {
     return this.#devices
       .get(deviceId)
       ?.capabilityVersions.get(`${component}\u0000${capability}`);
+  }
+
+  capabilityBindings(deviceId: string): BridgeCapabilityBinding[] {
+    const device = this.#devices.get(deviceId);
+    if (!device) return [];
+    return [...device.capabilityVersions.entries()]
+      .map(([key, version]) => {
+        const [component, capability] = key.split("\u0000");
+        if (!component || !capability) return undefined;
+        const componentRole = device.componentRoles.get(component);
+        return {
+          component,
+          ...(componentRole ? { componentRole } : {}),
+          capability,
+          version
+        };
+      })
+      .filter((binding): binding is BridgeCapabilityBinding => binding !== undefined)
+      .sort((left, right) =>
+        [
+          left.component.localeCompare(right.component),
+          left.capability.localeCompare(right.capability),
+          left.version - right.version
+        ].find((result) => result !== 0) ?? 0
+      )
+      .map((binding) => ({ ...binding }));
   }
 
   componentChildMappings(parentDeviceId: string): ReadonlyMap<string, string> | undefined {
@@ -694,6 +728,12 @@ export class DeviceStore {
       )) {
         device.capabilityVersions.set(key, version);
       }
+      for (const [component, role] of advancedComponentRoles(
+        row.components,
+        this.#normalizeAdvancedAlias
+      )) {
+        device.componentRoles.set(component, role);
+      }
       const nextName = safeName(
         row.label ?? row.name ?? row.deviceLabel ?? row.deviceName
       ) ?? device.name;
@@ -914,7 +954,8 @@ export class DeviceStore {
       healthUpdatedAt: null,
       states: new Map(),
       controls: new Map(),
-      capabilityVersions: new Map()
+      capabilityVersions: new Map(),
+      componentRoles: new Map()
     };
     this.#devices.set(id, created);
     return created;
@@ -1079,6 +1120,7 @@ export class DeviceStore {
         states: new Map(device.states.map((state) => [stateKey(state), cloneState(state)])),
         controls: new Map((device.controls ?? []).map((control) => [control.id, cloneControl(control)])),
         capabilityVersions: new Map(),
+        componentRoles: new Map(),
         ...(device.advanced ? { advanced: cloneAdvancedMetadata(device.advanced) } : {})
       };
       const positiveEvidenceAt = latestPersistedPositiveEvidenceAt(restored.states.values());
@@ -1649,7 +1691,9 @@ function cloneAdvancedMetadata(
 }
 
 function advancedComponentRole(component: Record<string, unknown>): string | undefined {
-  const label = safeRole(component.label ?? component.name);
+  const label = safeRole(
+    component.componentRole ?? component.role ?? component.label ?? component.name
+  );
   if (label?.toLowerCase() !== "main") return label;
   if (!Array.isArray(component.categories)) return label;
   const refrigerator = component.categories.some((value) => {
