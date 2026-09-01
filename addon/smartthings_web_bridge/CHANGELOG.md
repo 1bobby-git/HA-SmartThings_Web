@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.150
+
+- Advanced component transaction 실패 시 raw device/component/capability ID 없이 dispatch/rollback phase, one-based ordinal, outcome과 fixed transport error code만 기록합니다.
+- 진단 callback 실패가 component 실행이나 original-vector rollback 결과를 바꾸지 않도록 격리합니다.
+- 0.1.149 persisted liveness 복구와 0.1.148 bounded Advanced status·idempotent rollback 경계를 유지합니다.
+
 ## 0.1.149
 
 - Bridge restart 시 offline으로 저장된 장치의 persisted Location/status evidence를 health timestamp와 다시 비교해 더 최신의 정상 상태가 있으면 online으로 복구합니다.
