@@ -55,6 +55,33 @@ class BridgeAdvancedDeviceMetadata:
 
 
 @dataclass
+class BridgeCommandArgument:
+    """One safe Advanced command argument definition."""
+
+    name: str
+    required: bool
+    sensitive: bool
+    schema: dict[str, Any]
+    unit: str | None = None
+
+
+@dataclass
+class BridgeCommandDescriptor:
+    """One safe Advanced command descriptor exposed by the Bridge."""
+
+    component: str
+    capability: str
+    capability_version: int
+    command: str
+    arguments: tuple[BridgeCommandArgument, ...]
+    transport: str
+    confirmation: str
+    label: str
+    label_source: str
+    component_role: str | None = None
+
+
+@dataclass
 class BridgeDevice:
     """One Bridge device."""
 
@@ -67,6 +94,8 @@ class BridgeDevice:
     presentation: BridgeDevicePresentation | None = None
     states: dict[tuple[str, str, str], BridgeState] = field(default_factory=dict)
     controls: dict[str, "BridgeControl"] = field(default_factory=dict)
+    commands: tuple[BridgeCommandDescriptor, ...] = ()
+    command_omissions: dict[str, int] = field(default_factory=dict)
     advanced: BridgeAdvancedDeviceMetadata | None = None
     health_updated_at: str | None = None
 
@@ -88,6 +117,7 @@ class BridgeControl:
     minimum: float | None = None
     maximum: float | None = None
     step: float | None = None
+    transport: str | None = None
 
 
 @dataclass(frozen=True)
@@ -293,6 +323,8 @@ class SmartThingsWebRuntime:
                     if authoritative
                     else {**existing.controls, **latest_device.controls}
                 ),
+                commands=deepcopy(latest_device.commands),
+                command_omissions=deepcopy(latest_device.command_omissions),
                 advanced=deepcopy(
                     latest_device.advanced
                     if latest_device.advanced is not None
@@ -1836,6 +1868,9 @@ def parse_control(raw: Any) -> BridgeControl | None:
         else None,
         step=float(step)
         if isinstance(step, (int, float)) and not isinstance(step, bool)
+        else None,
+        transport=raw.get("transport")
+        if raw.get("transport") in {"advanced", "location_native"}
         else None,
     )
 

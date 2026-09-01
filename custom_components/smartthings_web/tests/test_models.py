@@ -14,6 +14,8 @@ import models as models_module  # noqa: E402
 
 from models import (  # noqa: E402
     BridgeAdvancedDeviceMetadata,
+    BridgeCommandArgument,
+    BridgeCommandDescriptor,
     BridgeControl,
     BridgeDevice,
     BridgeDevicePresentation,
@@ -585,6 +587,41 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         merged = runtime.inventory.devices["dev_001"]
         self.assertEqual(merged.advanced, latest_device.advanced)
         self.assertEqual(merged.health_updated_at, "2026-08-24T21:11:00Z")
+
+    def test_inventory_merge_preserves_command_catalog_and_omissions(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        latest = inventory(11, 21, "2026-08-24T21:11:00Z")
+        argument = BridgeCommandArgument(
+            name="phrase",
+            required=True,
+            sensitive=False,
+            unit="text",
+            schema={"type": "string", "enum": ["Hello"]},
+        )
+        latest.devices["dev_001"].commands = (
+            BridgeCommandDescriptor(
+                component="main",
+                component_role="main",
+                capability="speechSynthesis",
+                capability_version=1,
+                command="speak",
+                arguments=(argument,),
+                transport="advanced",
+                confirmation="accepted_receipt",
+                label="Speak",
+                label_source="visible_web",
+            ),
+        )
+        latest.devices["dev_001"].command_omissions = {"sensitive_argument": 1}
+        runtime = SmartThingsWebRuntime(FakeClient(), "loc_001", current)
+
+        runtime.apply_inventory(latest)
+
+        merged = runtime.inventory.devices["dev_001"]
+        self.assertEqual(merged.commands[0].arguments[0].schema["enum"], ["Hello"])
+        self.assertEqual(merged.command_omissions, {"sensitive_argument": 1})
+        latest.devices["dev_001"].commands[0].arguments[0].schema["enum"].append("mutated")
+        self.assertEqual(merged.commands[0].arguments[0].schema["enum"], ["Hello"])
 
     def test_control_kind_keeps_plain_switches_out_of_binary_sensor_and_light(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")
