@@ -28,6 +28,7 @@ export interface SafeCommandRequest {
   controlId?: string;
   controlLabel?: string;
   confirm?: boolean;
+  requireAdvanced?: boolean;
   timeout?: number;
 }
 
@@ -254,7 +255,7 @@ type ResolvedDeviceRequest = SafeCommandRequest & {
   requireAdvanced?: boolean;
 };
 
-const oldRequestKeys = ["deviceId", "component", "capability", "command", "arguments", "clientRequestId", "confirm", "timeout"] as const;
+const oldRequestKeys = ["deviceId", "component", "capability", "command", "arguments", "clientRequestId", "confirm", "timeout", "requireAdvanced"] as const;
 const newRequestKeys = ["targetType", "targetId", "component", "capability", "attribute", "command", "arguments", "clientRequestId", "controlId", "controlLabel", "confirm", "timeout", "requireAdvanced"] as const;
 const tokenPattern = /^[A-Za-z0-9_.:-]{1,160}$/u;
 const devicePattern = /^dev_[0-9]{3,32}$/u;
@@ -1691,6 +1692,11 @@ function shuffleDesiredValue(
 }
 
 function resolveDeviceRequest(device: BridgeDevice, request: SafeCommandRequest): ResolvedDeviceRequest {
+  if (request.requireAdvanced === true) {
+    const descriptor = resolveAdvancedDescriptor(device, request);
+    if (descriptor) return descriptor;
+    throw new SafeCommandError("unsupported_command");
+  }
   if (request.command === "refresh") {
     const matching = (device.controls ?? []).filter(
       (control) =>

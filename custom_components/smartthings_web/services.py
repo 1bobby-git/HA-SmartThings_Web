@@ -107,7 +107,12 @@ REFRESH_DEVICE_SCHEMA = vol.Schema(
     {vol.Required("device_id"): _DEVICE_TARGET}, extra=vol.PREVENT_EXTRA
 )
 LIST_COMMANDS_SCHEMA = vol.Schema(
-    {vol.Required("device_id"): _DEVICE_TARGET}, extra=vol.PREVENT_EXTRA
+    {
+        vol.Required("device_id"): _DEVICE_TARGET,
+        vol.Optional("component"): _TOKEN,
+        vol.Optional("capability"): _TOKEN,
+    },
+    extra=vol.PREVENT_EXTRA,
 )
 SPEAK_SCHEMA = vol.Schema(
     {
@@ -208,9 +213,17 @@ async def async_handle_list_commands(
     if runtime is None:
         _raise_device_not_found()
     catalog = await runtime.client.async_list_commands(device_id)
+    commands = [
+        command
+        for command in catalog.commands
+        if (
+            ("component" not in call.data or command.component == call.data["component"])
+            and ("capability" not in call.data or command.capability == call.data["capability"])
+        )
+    ]
     return {
         "device_id": catalog.device_id,
-        "commands": [_command_descriptor_response(command) for command in catalog.commands],
+        "commands": [_command_descriptor_response(command) for command in commands],
         "omissions": dict(catalog.omissions),
     }
 

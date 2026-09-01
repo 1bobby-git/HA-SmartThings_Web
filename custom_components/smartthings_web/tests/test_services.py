@@ -312,6 +312,8 @@ class SmartThingsWebServiceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(vol.Invalid):
             LIST_COMMANDS_SCHEMA({"device_id": "dev_001", "extra": True})
         with self.assertRaises(vol.Invalid):
+            LIST_COMMANDS_SCHEMA({"device_id": "dev_001", "component": "../raw"})
+        with self.assertRaises(vol.Invalid):
             SPEAK_SCHEMA({"device_id": "dev_001", "phrase": "bad\u0000text"})
         with self.assertRaises(vol.Invalid):
             SPEAK_SCHEMA({"device_id": "dev_001", "phrase": ""})
@@ -411,6 +413,119 @@ class SmartThingsWebServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["device_id"], "dev_001")
         self.assertEqual(result["omissions"], {"schema_invalid": 1})
         self.assertEqual(result["commands"][0]["arguments"][0]["name"], "phrase")
+        client.async_list_commands.assert_awaited_once_with("dev_001")
+
+    async def test_list_commands_filters_descriptors_and_keeps_aggregate_omissions(self) -> None:
+        switch = _descriptor(component="main", capability="switch", command="on")
+        audio = _descriptor(
+            component="main",
+            capability="speechSynthesis",
+            command="speak",
+            arguments=(_phrase_argument(),),
+        )
+        secondary = _descriptor(
+            component="switch2",
+            capability="switch",
+            command="off",
+        )
+        client = SimpleNamespace(
+            async_list_commands=AsyncMock(
+                return_value=_catalog(
+                    switch,
+                    audio,
+                    secondary,
+                    omissions={"dangerous_command": 2},
+                )
+            )
+        )
+        runtime = SimpleNamespace(
+            client=client,
+            inventory=SimpleNamespace(devices={"dev_001": object()}),
+        )
+        hass = SimpleNamespace(
+            config_entries=SimpleNamespace(
+                async_entries=lambda _domain: [SimpleNamespace(runtime_data=runtime)]
+            )
+        )
+
+        result = await async_handle_list_commands(
+            hass,
+            SimpleNamespace(
+                data=LIST_COMMANDS_SCHEMA(
+                    {"device_id": "dev_001", "component": "main", "capability": "switch"}
+                )
+            ),
+        )
+
+        self.assertEqual(
+            [(item["component"], item["capability"], item["command"]) for item in result["commands"]],
+            [("main", "switch", "on")],
+        )
+        self.assertEqual(result["omissions"], {"dangerous_command": 2})
+
+    async def test_list_commands_filter_returns_empty_commands_for_no_matches(self) -> None:
+        client = SimpleNamespace(
+            async_list_commands=AsyncMock(
+                return_value=_catalog(
+                    _descriptor(component="main", capability="switch", command="on"),
+                    omissions={"schema_invalid": 1},
+                )
+            )
+        )
+        runtime = SimpleNamespace(
+            client=client,
+            inventory=SimpleNamespace(devices={"dev_001": object()}),
+        )
+        hass = SimpleNamespace(
+            config_entries=SimpleNamespace(
+                async_entries=lambda _domain: [SimpleNamespace(runtime_data=runtime)]
+            )
+        )
+
+        result = await async_handle_list_commands(
+            hass,
+            SimpleNamespace(
+                data=LIST_COMMANDS_SCHEMA(
+                    {"device_id": "dev_001", "capability": "speechSynthesis"}
+                )
+            ),
+        )
+
+        self.assertEqual(result["commands"], [])
+        self.assertEqual(result["omissions"], {"schema_invalid": 1})
+
+    async def test_list_commands_resolves_ha_registry_device_id(self) -> None:
+        client = SimpleNamespace(
+            async_list_commands=AsyncMock(
+                return_value=_catalog(_descriptor(component="main", capability="switch"))
+            )
+        )
+        runtime = SimpleNamespace(
+            client=client,
+            inventory=SimpleNamespace(devices={"dev_001": object()}),
+        )
+        hass = SimpleNamespace(
+            config_entries=SimpleNamespace(
+                async_entries=lambda _domain: [SimpleNamespace(runtime_data=runtime)]
+            )
+        )
+        _set_device_registry(
+            _FakeDeviceRegistry(
+                SimpleNamespace(
+                    id="registry-device-id",
+                    identifiers={("smartthings_web", "dev_001")},
+                )
+            )
+        )
+
+        result = await async_handle_list_commands(
+            hass,
+            SimpleNamespace(
+                data=LIST_COMMANDS_SCHEMA({"device_id": "registry-device-id"})
+            ),
+        )
+
+        self.assertEqual(result["device_id"], "dev_001")
         client.async_list_commands.assert_awaited_once_with("dev_001")
 
     async def test_speak_routes_unique_speech_synthesis_descriptor_without_confirmation(self) -> None:

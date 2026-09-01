@@ -1023,6 +1023,80 @@ describe("SafeCommandService", () => {
     });
   });
 
+  test("requireAdvanced rejects on/off toggles without an exact Advanced descriptor", async () => {
+    const store = readyDeviceStore(true);
+    const executor: SafeCommandExecutor = {
+      executeDeviceAction: vi.fn(async () => ({
+        state: "ACCEPTED" as const,
+        transport: "advanced" as const,
+        acceptedAtMs: Date.now()
+      }))
+    };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 20,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        ...command("on", "request_require_advanced_toggle_no_descriptor"),
+        requireAdvanced: true
+      })
+    ).rejects.toMatchObject({ code: "unsupported_command" });
+    expect(executor.executeDeviceAction).not.toHaveBeenCalled();
+  });
+
+  test("requireAdvanced on/off uses the exact descriptor before observed toggles", async () => {
+    const store = readyDeviceStore(true);
+    observeAdvancedCatalog(store, [
+      advancedCommand("identifier_switch", "on", { capabilityVersion: 7 }),
+      advancedCommand("identifier_switch", "off")
+    ]);
+    const executeDeviceAction = vi.fn(async (input: DeviceActionExecutionInput) => {
+      store.observe(received(deviceEventFrame(
+        input.command,
+        "2026-08-25T00:00:01Z"
+      )));
+      return {
+        state: "ACCEPTED" as const,
+        transport: "advanced" as const,
+        acceptedAtMs: Date.now()
+      };
+    });
+    const executor: SafeCommandExecutor = { executeDeviceAction };
+    const service = new SafeCommandService({
+      devices: store,
+      status: connectedStatus(),
+      executor,
+      timeoutMs: 1_000,
+      resync: vi.fn(async () => undefined)
+    });
+
+    await expect(
+      service.execute({
+        ...command("on", "request_require_advanced_toggle_descriptor"),
+        requireAdvanced: true
+      })
+    ).resolves.toMatchObject({
+      status: "confirmed",
+      confirmation: "device_event",
+      transport: "advanced"
+    });
+    const action = executeDeviceAction.mock.calls[0]?.[0];
+    expect(action).toMatchObject({
+      capability: "identifier_switch",
+      capabilityVersion: 7,
+      command: "on",
+      requireAdvanced: true
+    });
+    expect(action).not.toHaveProperty("controlId");
+    expect(action).not.toHaveProperty("controlLabel");
+    expect(action).not.toHaveProperty("nativeCommand");
+  });
+
   test("does not confirm a transient state that reverses before browser interaction completes", async () => {
     const store = readyDeviceStore();
     const resync = vi.fn(async () => undefined);
