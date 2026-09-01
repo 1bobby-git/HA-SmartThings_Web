@@ -21,6 +21,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
       - name: Apply bounded security and recovery changes
         shell: python
         run: |
@@ -37,13 +43,12 @@ jobs:
               text = target.read_text(encoding="utf-8")
               if old not in text:
                   raise SystemExit(f"expected text not found in {path}: {old[:80]!r}")
-              updated = text.replace(old, new, count)
-              target.write_text(updated, encoding="utf-8")
+              target.write_text(text.replace(old, new, count), encoding="utf-8")
 
           replace(
               "addon/smartthings_web_bridge/rootfs/etc/nginx/nginx.conf",
-              "    deny all;\n\n    location / {\n      proxy_pass http://127.0.0.1:8098;",
-              "    deny all;\n\n    location = /api/v1/pairing-code {\n      return 403;\n    }\n\n    location / {\n      proxy_pass http://127.0.0.1:8098;",
+              "  server {\n    listen 8100;\n    allow 172.30.32.1;\n    deny all;\n\n    location / {",
+              "  server {\n    listen 8100;\n    allow 172.30.32.1;\n    deny all;\n\n    location = /api/v1/pairing-code {\n      return 403;\n    }\n\n    location / {",
               count=1,
           )
 
@@ -53,7 +58,6 @@ jobs:
               "  const live =\n    snapshot.state !== \"BROWSER_FAILED\" &&\n    snapshot.dbAvailable &&",
               count=1,
           )
-
           replace(
               "bridge/tests/server/health.test.ts",
               'test("keeps liveness independent from login, browser, and push status", () => {',
@@ -64,6 +68,18 @@ jobs:
               "bridge/tests/server/health.test.ts",
               "    expect(report.live).toBe(true);",
               "    expect(report.live).toBe(false);",
+              count=1,
+          )
+          replace(
+              "bridge/tests/runtime.test.ts",
+              'test("starts HTTP before browser launch and remains live through failed browser/login state", async () => {',
+              'test("starts HTTP before browser launch and fails liveness after terminal browser failure", async () => {',
+              count=1,
+          )
+          replace(
+              "bridge/tests/runtime.test.ts",
+              "      expect(live.status).toBe(200);\n      expect(ready.status).toBe(503);\n      expect(details.details.state).toBe(\"BROWSER_FAILED\");",
+              "      expect(live.status).toBe(503);\n      expect(ready.status).toBe(503);\n      expect(details.details.state).toBe(\"BROWSER_FAILED\");",
               count=1,
           )
 
@@ -182,34 +198,36 @@ jobs:
               f'test("packages hardened bridge recovery as version {VERSION_NEW}", () => {{',
               count=1,
           )
-          replace(
-              "tests/addon-config.test.ts",
-              f'expect(config.version).toBe("{VERSION_OLD}");',
-              f'expect(config.version).toBe("{VERSION_NEW}");',
-              count=1,
-          )
-          replace(
-              "tests/addon-config.test.ts",
-              f'expect(packageMetadata.version).toBe("{VERSION_OLD}");',
-              f'expect(packageMetadata.version).toBe("{VERSION_NEW}");',
-              count=1,
-          )
-          replace(
-              "tests/addon-config.test.ts",
-              f'expect(protocolMetadata.bridge_version).toBe("{VERSION_OLD}");',
-              f'expect(protocolMetadata.bridge_version).toBe("{VERSION_NEW}");',
-              count=1,
-          )
-          replace(
-              "tests/addon-config.test.ts",
-              f'expect(runtime).toContain(\'const bridgeVersion = "{VERSION_OLD}";\');',
-              f'expect(runtime).toContain(\'const bridgeVersion = "{VERSION_NEW}";\');',
-              count=1,
-          )
+          for old, new in (
+              (
+                  f'expect(config.version).toBe("{VERSION_OLD}");',
+                  f'expect(config.version).toBe("{VERSION_NEW}");',
+              ),
+              (
+                  f'expect(packageMetadata.version).toBe("{VERSION_OLD}");',
+                  f'expect(packageMetadata.version).toBe("{VERSION_NEW}");',
+              ),
+              (
+                  f'expect(protocolMetadata.bridge_version).toBe("{VERSION_OLD}");',
+                  f'expect(protocolMetadata.bridge_version).toBe("{VERSION_NEW}");',
+              ),
+              (
+                  f'expect(runtime).toContain(\'const bridgeVersion = "{VERSION_OLD}";\');',
+                  f'expect(runtime).toContain(\'const bridgeVersion = "{VERSION_NEW}";\');',
+              ),
+          ):
+              replace("tests/addon-config.test.ts", old, new, count=1)
           replace(
               "tests/addon-config.test.ts",
               f'expect(changelog).toContain("## {VERSION_OLD}");',
               f'expect(changelog).toContain("## {VERSION_NEW}");\n    expect(changelog).toContain("## {VERSION_OLD}");',
+              count=1,
+          )
+
+          replace(
+              "tests/protocol-version-contract.test.ts",
+              f'test("keeps every Bridge and integration release surface on the packaged {VERSION_OLD} candidate", () => {{\n    const expectedBridgeVersion = "{VERSION_OLD}";',
+              f'test("keeps every Bridge and integration release surface on the packaged {VERSION_NEW} candidate", () => {{\n    const expectedBridgeVersion = "{VERSION_NEW}";',
               count=1,
           )
 
