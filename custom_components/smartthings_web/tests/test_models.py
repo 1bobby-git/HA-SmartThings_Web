@@ -873,6 +873,24 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             )
         )
 
+    def test_parse_control_rejects_non_string_transport_value(self) -> None:
+        for transport in (["advanced"], {"name": "advanced"}, 123, True):
+            with self.subTest(transport=transport):
+                self.assertIsNone(
+                    parse_control(
+                        {
+                            "id": "advanced:main:switch:switch",
+                            "kind": "toggle",
+                            "label": "Power",
+                            "component": "main",
+                            "capability": "switch",
+                            "attribute": "switch",
+                            "commands": ["on", "off"],
+                            "transport": transport,
+                        }
+                    )
+                )
+
     def test_unique_id_contains_attribute_once(self) -> None:
         state = next(iter(inventory(10, 20, "2026-08-24T21:10:00Z").devices["dev_001"].states.values()))
 

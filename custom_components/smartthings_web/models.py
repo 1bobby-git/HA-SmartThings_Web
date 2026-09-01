@@ -1852,7 +1852,10 @@ def parse_control(raw: Any) -> BridgeControl | None:
     capability = raw.get("capability")
     attribute = raw.get("attribute")
     transport = raw.get("transport")
-    if transport is not None and transport not in {"advanced", "location_native"}:
+    if transport is not None and (
+        not isinstance(transport, str)
+        or transport not in {"advanced", "location_native"}
+    ):
         return None
     minimum = raw.get("min")
     maximum = raw.get("max")
