@@ -366,6 +366,19 @@ export class DeviceStore {
     return () => this.#listeners.delete(listener);
   }
 
+  observeOnlineEvidence(deviceId: string, observedAtMs: number): void {
+    const device = this.#devices.get(deviceId);
+    if (!device || !Number.isFinite(observedAtMs)) return;
+    const updatedAt = new Date(observedAtMs).toISOString();
+    const wasOnline = device.online;
+    if (!this.#setDeviceHealth(device, true, updatedAt)) return;
+    if (!wasOnline) {
+      const sequence = this.#nextSequence();
+      this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
+    }
+    this.#schedulePersist();
+  }
+
   reset(): void {
     this.#pending.clear();
     this.resetSnapshotSession();
@@ -574,7 +587,15 @@ export class DeviceStore {
       changed = this.#setDeviceHealth(
         device,
         online,
-        validTimestamp(row.updatedAt ?? row.updated_at ?? row.timestamp ?? row.eventTime ?? row.event_time)
+        validTimestamp(
+          row.updatedAt ??
+            row.updated_at ??
+            row.lastUpdatedDate ??
+            row.last_updated_date ??
+            row.timestamp ??
+            row.eventTime ??
+            row.event_time
+        )
       ) || changed;
     }
     return changed;
@@ -648,9 +669,9 @@ export class DeviceStore {
         changed = true;
       }
       const online = advancedOnlineState(row);
-      if (online !== undefined && device.online !== online) {
-        device.online = online;
-        changed = true;
+      const healthUpdatedAt = advancedHealthUpdatedAt(row);
+      if (online !== undefined && (online || healthUpdatedAt !== null)) {
+        changed = this.#setDeviceHealth(device, online, healthUpdatedAt) || changed;
       }
       for (const state of advancedDeviceStates(
         row,
@@ -732,8 +753,15 @@ export class DeviceStore {
     if (!state) {
       return;
     }
-    if (!this.#setState(device, state)) {
+    const stateChanged = this.#setState(device, state);
+    if (!stateChanged) {
       return;
+    }
+    const wasOnline = device.online;
+    this.#setDeviceHealth(device, true, state.updatedAt);
+    if (!wasOnline) {
+      const sequence = this.#nextSequence();
+      this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
     }
     const sequence = this.#nextSequence();
     const eventId = safeEventMetadata(event.event_id ?? event.eventId ?? data.event_id ?? data.eventId);
@@ -839,10 +867,10 @@ export class DeviceStore {
     if (isOlderOrUndated(updatedAt, device.healthUpdatedAt)) {
       return false;
     }
-    device.healthUpdatedAt = updatedAt;
-    if (device.online === online) {
+    if (device.online === online && device.healthUpdatedAt === updatedAt) {
       return false;
     }
+    device.healthUpdatedAt = updatedAt;
     device.online = online;
     return true;
   }
@@ -2022,6 +2050,21 @@ function advancedOnlineState(source: Record<string, unknown>): boolean | undefin
   const state = readString(source.state ?? source.status ?? source.healthState);
   const nestedState = readString(health?.state ?? health?.status);
   return healthOnlineState(nestedState ?? state);
+}
+
+function advancedHealthUpdatedAt(source: Record<string, unknown>): string | null {
+  const health = asRecord(source.healthState ?? source.health);
+  return validTimestamp(
+    source.healthUpdatedAt ??
+      source.health_updated_at ??
+      source.lastUpdatedDate ??
+      source.last_updated_date ??
+      health?.updatedAt ??
+      health?.updated_at ??
+      health?.lastUpdatedDate ??
+      health?.last_updated_date ??
+      health?.eventTime
+  );
 }
 
 function healthOnlineState(value: unknown): boolean | undefined {

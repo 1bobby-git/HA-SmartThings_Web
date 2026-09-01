@@ -43,7 +43,7 @@ DeviceStore는 장치별 `lastPositiveEvidenceAt`과 `healthUpdatedAt`을 비교
 - timestamp가 있는 Location `DEVICE_HEALTH_EVENT=OFFLINE`
 - timestamp가 있고 마지막 positive evidence보다 새로운 Advanced health `OFFLINE`
 
-시간이 없는 Advanced `OFFLINE`은 availability를 바꾸지 않는다. 더 새로운 상태 이벤트가 오면 즉시 online으로 복구한다. entity 상태와 마지막 값은 유지한다.
+Advanced health의 실제 `lastUpdatedDate`를 포함해 유효 timestamp가 없는 `OFFLINE`은 availability를 바꾸지 않는다. 더 새로운 상태 이벤트가 오면 즉시 online으로 복구한다. entity 상태와 마지막 값은 유지한다.
 
 ## Component 명령 계획
 
@@ -53,8 +53,8 @@ DeviceStore는 장치별 `lastPositiveEvidenceAt`과 `healthUpdatedAt`을 비교
 2. capability definition에서 해당 component의 `switch.on/off` 지원을 확인한다.
 3. main을 포함한 실행 가능한 switch component를 안정된 component 순서로 직렬 실행한다.
 4. 각 POST의 `ACCEPTED`는 접수로만 기록한다.
-5. 모든 POST 후 Advanced `/status`를 한 번 읽는다.
-6. 각 component의 `switch` 값이 요청 값과 일치해야 성공한다.
+5. 모든 POST 후 bounded confirmation window에서 Advanced `/status`를 조기 조회하고, 아직 수렴하지 않았거나 조기 조회가 멈췄으면 독립된 최종 조회를 timeout 전에 수행한다.
+6. `advanced_device_status` source가 명시된 성공한 Advanced status 조회에서 각 component의 `switch` 값이 요청 값과 일치해야 성공한다. Location event나 전체 inventory evidence만으로는 component transaction을 확정하지 않는다.
 7. Location event가 도착하면 같은 component 상태를 먼저 적용하며 Advanced status와 모순되면 더 최신 timestamp가 이긴다.
 
 `off`는 대상 component 전체를 `off`로 만든다. `on`도 대표 switch 의미에 맞춰 대상 component 전체를 `on`으로 만든다.
@@ -62,7 +62,7 @@ DeviceStore는 장치별 `lastPositiveEvidenceAt`과 `healthUpdatedAt`을 비교
 ## 부분 실패와 rollback
 
 - component 명령은 장치별 mutex 안에서 실행한다.
-- 일부 component만 성공하면 성공한 component를 명령 전 상태 벡터로 되돌린다.
+- 일부 component만 성공하면 성공한 component를 명령 전 상태 벡터로 되돌린다. 복구 명령 자체가 일부 실패해도 이미 복구한 component의 보상 명령은 원래 값과 동일하게 유지한다.
 - rollback도 Advanced status로 검증한다.
 - rollback 검증에 실패하면 `component_command_partial_failure`를 반환하고 실제 component 결과를 diagnostics 집계에 남긴다.
 - 불확실한 timeout 뒤에는 Web/DOM/Advanced 다른 transport로 같은 명령을 다시 보내지 않는다.

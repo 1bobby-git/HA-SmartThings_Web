@@ -504,6 +504,35 @@ describe("createBridgeHttpServer", () => {
     expect(timedOutBody).not.toMatch(/token|deviceId|component|capability/i);
   });
 
+  test.each([
+    "component_command_partial_failure",
+    "component_command_rollback_failed"
+  ] as const)("maps %s to a fixed safe 502 response", async (code) => {
+    const token = "d".repeat(32);
+    const server = await createBridgeHttpServer({
+      store: createStore(),
+      host: "127.0.0.1",
+      port: 0,
+      auth: new BridgeAuth(token),
+      devices: new DeviceStore(),
+      commands: {
+        execute: vi.fn(async () => {
+          throw new SafeCommandError(code);
+        })
+      }
+    });
+    servers.push(server);
+
+    const response = await fetch(`http://127.0.0.1:${server.port}/api/v1/commands`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: "{}"
+    });
+
+    expect(response.status).toBe(502);
+    expect(await response.text()).toBe(JSON.stringify({ error: code }));
+  });
+
   test("serves only authenticated cached camera bytes without exposing their source URL", async () => {
     const token = "c".repeat(32);
     const get = vi.fn((deviceId: string) =>

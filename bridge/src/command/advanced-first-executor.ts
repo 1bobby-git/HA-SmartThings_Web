@@ -1,7 +1,9 @@
 import type {
+  ComponentTransactionExecutionInput,
   DeviceActionExecutionInput,
   SafeCommandExecutor
 } from "./command-service.js";
+import { ComponentCommandExecutor } from "./component-command-executor.js";
 import {
   CommandTransportError,
   OrderedCommandRouter,
@@ -38,6 +40,7 @@ export interface AdvancedFirstCommandExecutorOptions {
 }
 
 export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
+  readonly #componentExecutor: ComponentCommandExecutor;
   readonly #now: () => number;
   readonly #domFallbackEnabled: boolean;
   readonly #canUseAdvanced: (input: DeviceActionExecutionInput) => boolean;
@@ -48,10 +51,17 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
     private readonly legacy: LegacyWebCommandExecutor,
     options: AdvancedFirstCommandExecutorOptions = {}
   ) {
+    this.#componentExecutor = new ComponentCommandExecutor(advanced);
     this.#now = options.now ?? Date.now;
     this.#domFallbackEnabled = options.domFallbackEnabled ?? true;
     this.#canUseAdvanced = options.canUseAdvanced ?? (() => false);
     this.#onDiagnostic = options.onDiagnostic;
+  }
+
+  async executeComponentTransaction(
+    input: ComponentTransactionExecutionInput
+  ): Promise<CommandTransportReceipt[]> {
+    return await this.#componentExecutor.execute(input);
   }
 
   async executeDeviceAction(

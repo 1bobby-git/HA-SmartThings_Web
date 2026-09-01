@@ -376,6 +376,115 @@ describe("DeviceStore", () => {
     expect(listener).toHaveBeenCalledWith(expect.objectContaining({ type: "inventory", sequence: 2 }));
   });
 
+  test("reads lastUpdatedDate from the observed device health snapshot", () => {
+    const store = new DeviceStore();
+
+    observeHealthSnapshot(store, {
+      deviceId: "dev_001",
+      locationId: "loc_001",
+      state: "OFFLINE",
+      lastUpdatedDate: "2026-09-01T00:02:00.000Z"
+    });
+
+    expect(store.snapshot().devices[0]).toMatchObject({
+      online: false,
+      healthUpdatedAt: "2026-09-01T00:02:00.000Z"
+    });
+  });
+
+  test("a newer Location state event restores online availability", () => {
+    const store = new DeviceStore();
+    observeSnapshotState(store, {
+      componentId: "main",
+      capabilityId: "switch",
+      attributeName: "switch",
+      value: "off",
+      timestamp: "2026-09-01T00:00:00.000Z"
+    });
+    store.observe(
+      liveHealthEvent({
+        status: "OFFLINE",
+        eventTime: "2026-09-01T00:01:00.000Z"
+      })
+    );
+    expect(store.snapshot().devices[0]?.online).toBe(false);
+
+    store.observe(
+      liveStateEvent({
+        component: "main",
+        capability: "switch",
+        attribute: "switch",
+        value: "on",
+        event_time: Date.parse("2026-09-01T00:02:00.000Z")
+      })
+    );
+
+    expect(store.snapshot().devices[0]).toMatchObject({
+      online: true,
+      healthUpdatedAt: "2026-09-01T00:02:00.000Z"
+    });
+  });
+
+  test("a newer dated health OFFLINE remains authoritative", () => {
+    const store = new DeviceStore();
+    observeSnapshotState(store, {
+      componentId: "main",
+      capabilityId: "switch",
+      attributeName: "switch",
+      value: "off",
+      timestamp: "2026-09-01T00:00:00.000Z"
+    });
+    store.observe(
+      liveStateEvent({
+        component: "main",
+        capability: "switch",
+        attribute: "switch",
+        value: "on",
+        event_time: Date.parse("2026-09-01T00:01:00.000Z")
+      })
+    );
+    store.observe(
+      liveHealthEvent({
+        status: "OFFLINE",
+        eventTime: "2026-09-01T00:02:00.000Z"
+      })
+    );
+
+    expect(store.snapshot().devices[0]).toMatchObject({
+      online: false,
+      healthUpdatedAt: "2026-09-01T00:02:00.000Z"
+    });
+  });
+
+  test("successful status evidence restores online with its observation time", () => {
+    const store = new DeviceStore();
+    observeSnapshotState(store, {
+      componentId: "main",
+      capabilityId: "switch",
+      attributeName: "switch",
+      value: "off",
+      timestamp: "2026-09-01T00:00:00.000Z"
+    });
+    store.observe(
+      liveHealthEvent({
+        status: "OFFLINE",
+        eventTime: "2026-09-01T00:01:00.000Z"
+      })
+    );
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    expect(() =>
+      store.observeOnlineEvidence("dev_001", Date.parse("2026-09-01T00:02:00.000Z"))
+    ).not.toThrow();
+
+    expect(store.snapshot().devices[0]).toMatchObject({
+      online: true,
+      healthUpdatedAt: "2026-09-01T00:02:00.000Z"
+    });
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ type: "inventory" }));
+  });
+
   test("restores the normalized inventory and sequence after a Bridge restart", () => {
     const root = mkdtempSync(join(tmpdir(), "stw-device-store-"));
     try {

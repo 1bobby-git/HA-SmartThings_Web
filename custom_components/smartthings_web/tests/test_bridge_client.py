@@ -70,6 +70,15 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
             bridge_error_message("switch command", BridgeClientError("private raw detail")),
             "SmartThings Web switch command failed: bridge_request_failed",
         )
+        for code in (
+            "component_command_partial_failure",
+            "component_command_rollback_failed",
+        ):
+            with self.subTest(code=code):
+                self.assertEqual(
+                    bridge_error_message("switch command", BridgeClientError(code)),
+                    f"SmartThings Web switch command failed: {code}",
+                )
 
     async def test_read_only_client_blocks_write_commands(self) -> None:
         client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
@@ -133,6 +142,22 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(BridgeClientError, "command_confirmation_timeout"):
             await client._request_json("POST", "/api/v1/commands", auth=True)  # type: ignore[attr-defined]
+
+    async def test_request_json_preserves_component_transaction_error_codes(self) -> None:
+        for code in (
+            "component_command_partial_failure",
+            "component_command_rollback_failed",
+        ):
+            with self.subTest(code=code):
+                client = SmartThingsWebBridgeClient(
+                    _FakeSession(502, {"error": code}),
+                    "http://bridge.local",
+                    "x" * 32,
+                )  # type: ignore[arg-type]
+                with self.assertRaisesRegex(BridgeClientError, code):
+                    await client._request_json(  # type: ignore[attr-defined]
+                        "POST", "/api/v1/commands", auth=True
+                    )
 
     async def test_generic_command_sends_target_and_control_metadata(self) -> None:
         client = SmartThingsWebBridgeClient(object(), "http://bridge.local", "x" * 32)  # type: ignore[arg-type]

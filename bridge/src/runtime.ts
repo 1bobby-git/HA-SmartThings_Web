@@ -93,7 +93,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-  const bridgeVersion = "0.1.147";
+  const bridgeVersion = "0.1.148";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
@@ -232,6 +232,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           throw new Error("advanced_status_identifier_unavailable");
         }
         const statusPayload = await advancedInventory.getDeviceStatus(rawDeviceId);
+        devices.observeOnlineEvidence(request.deviceId, Date.now());
         const rawSnapshot = {
           items: [
             {
@@ -247,13 +248,21 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         });
         cameraImages.observeInventory(devices.snapshot());
         log.info("command_diag:advanced_status_refreshed");
-        return { authoritativeSnapshot: false, startedAtMs };
+        return {
+          source: "advanced_device_status",
+          authoritativeSnapshot: false,
+          startedAtMs
+        };
       }
       await reconciliation.request("command_status");
       const reconciliationStatus = reconciliation.snapshot();
       if (reconciliationStatus.deviceCount === 0) throw new Error("advanced_snapshot_unavailable");
       log.info(`command_diag:advanced_snapshot_refreshed:${reconciliationStatus.pageCount}`);
-      return { authoritativeSnapshot: true, startedAtMs };
+      return {
+        source: "advanced_inventory",
+        authoritativeSnapshot: true,
+        startedAtMs
+      };
     })();
   };
   const legacyCommandExecutor = new SmartThingsWebUiCommandExecutor(
