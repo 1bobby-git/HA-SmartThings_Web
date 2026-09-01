@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.154
+
+- Home Assistant Core 내부 API 경로에서 페어링 코드 발급을 차단하고, 인증된 Ingress 경로에서만 발급되도록 신뢰 경계를 분리합니다.
+- Chromium 시작 재시도를 모두 소진한 `BROWSER_FAILED` 상태는 liveness 실패로 처리해 애드온 watchdog이 자동 복구하도록 합니다.
+- 실행 중 브리지 토큰이 거부되면 무한 재시도 대신 Home Assistant 재인증 흐름을 시작합니다.
+- SSE 재연결 backoff를 1초에서 최대 60초까지 확장해 장시간 애드온 중단 시 불필요한 연결 부하를 줄입니다.
+
 ## 0.1.153
 
 - targeted Advanced `/status` 응답이 parent의 `childDeviceIds` 관계 메타데이터를 지우던 문제를 수정합니다.
