@@ -194,8 +194,7 @@ function parseInventory(value: unknown): WebParityInventory {
     "protocolVersion",
     "locations",
     "rooms",
-    "scenes",
-    "deviceAliases"
+    "scenes"
   ]);
   if (Object.keys(value).some((key) => !allowed.has(key))) {
     invalid();

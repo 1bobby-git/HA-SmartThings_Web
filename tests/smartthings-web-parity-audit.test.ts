@@ -260,7 +260,6 @@ describe("SmartThings Web parity audit", () => {
         locations: [],
         rooms: [],
         scenes: [],
-        deviceAliases: { "44f66c7d-885d-47a1-242a-695aa571782b": "dev_204" },
         devices: [
           {
             id: "dev_001",
@@ -295,6 +294,26 @@ describe("SmartThings Web parity audit", () => {
     expect(report.summary.devices).toBe(1);
     expect(report.summary.dangerousCommandsExposed).toBe(1);
     expect(JSON.stringify(report.failures)).not.toContain("unlock");
+  });
+
+  test("rejects non-emitted device alias maps before dropping them", () => {
+    expect(() =>
+      evaluateWebParity(
+        {
+          schemaVersion: 5,
+          sequence: 12,
+          ready: true,
+          bridgeVersion: "0.1.155",
+          protocolVersion: 5,
+          locations: [],
+          rooms: [],
+          scenes: [],
+          deviceAliases: { "synthetic-placeholder": "dev_204" },
+          devices: []
+        },
+        []
+      )
+    ).toThrow("web_parity_audit_input_invalid");
   });
 
   test("counts distinct dangerous commands from one control without echoing command names", () => {

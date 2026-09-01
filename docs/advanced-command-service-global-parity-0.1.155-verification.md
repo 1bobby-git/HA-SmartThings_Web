@@ -26,12 +26,15 @@ Scope: local release preparation only. GitHub release publication, HAOS deployme
 - RED: `npx vitest run bridge/tests/security/volatile-identifier-map.test.ts bridge/tests/advanced/command-catalog.test.ts bridge/tests/state/device-store.test.ts tests/smartthings-web-parity-audit.test.ts` failed before implementation because aliased `speechSynthesis` descriptors had no safe capability role, DeviceStore dropped that role, the audit rejected the new field, and the role allowlist did not include `speechsynthesis`.
 - RED: `python custom_components/smartthings_web/tests/test_bridge_client.py; python custom_components/smartthings_web/tests/test_services.py` failed before implementation because `BridgeCommandDescriptor` did not accept `capability_role`, and `speak` could only match literal `speechSynthesis`.
 - GREEN: command descriptors now carry optional allowlisted `capabilityRole: speechsynthesis` from the observed volatile identifier role, persist it across DeviceStore restart, expose it through HTTP/catalog and HA models, and route `smartthings_web.speak` through the exact aliased component/capability descriptor.
+- RED: `npx vitest run tests/smartthings-web-parity-audit.test.ts` failed before implementation because the audit accepted a non-emitted top-level `deviceAliases` map.
+- GREEN: `deviceAliases` is no longer accepted in the audit input envelope, and the full-envelope fixture uses only fields emitted by `/api/v1/inventory`.
 
 ## Local Verification
 
 - Targeted JS: `npx vitest run bridge/tests/security/volatile-identifier-map.test.ts bridge/tests/advanced/command-catalog.test.ts bridge/tests/state/device-store.test.ts bridge/tests/server/http-server.test.ts tests/smartthings-web-parity-audit.test.ts` -> 5 files, 158 tests passed.
+- Targeted parity audit: `npx vitest run tests/smartthings-web-parity-audit.test.ts` -> 1 file, 30 tests passed.
 - Targeted Python: `python custom_components/smartthings_web/tests/test_bridge_client.py; python custom_components/smartthings_web/tests/test_services.py` -> 15 tests passed.
-- Full JS: `npx vitest run --maxWorkers=1` -> 72 files, 993 tests passed.
+- Full JS: `npx vitest run --maxWorkers=1` -> 72 files, 994 tests passed.
 - Full Python: `python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'` -> 278 tests passed.
 - TypeScript: `npm run typecheck` -> passed.
 - Build: `npm run build` -> passed.
