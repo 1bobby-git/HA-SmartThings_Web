@@ -3306,6 +3306,74 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             "binary_sensor.hwajangsil_doeosenseo_contact",
         )
 
+    def test_repeated_device_slug_state_id_repairs_once_and_stays_stable(self) -> None:
+        """Collapse generated IDs that fed a prior canonical object ID back in."""
+        state = BridgeState(
+            "main",
+            "temperatureMeasurement",
+            "temperature",
+            3,
+            "C",
+            "2026-09-01T00:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_fridge",
+            "loc_001",
+            None,
+            "Fridge",
+            "refrigerator",
+            True,
+            states={state.key: state},
+        )
+        registry_entry = SimpleNamespace(
+            entity_id="sensor.fridge_fridge_temperature",
+            domain="sensor",
+            platform=DOMAIN,
+            unique_id="dev_fridge_main_temperatureMeasurement_temperature",
+            device_id="uuid_fridge",
+            name=None,
+            disabled_by=None,
+            original_name="fridge_fridge_temperature",
+            object_id_base="fridge_fridge_temperature",
+            suggested_object_id="fridge_fridge_temperature",
+        )
+        registry = FakeRegistry([registry_entry])
+        self.patch_registry(registry)
+
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.157",
+            protocol_version="5",
+            locations={"loc_001": "Home"},
+            rooms={},
+            devices={device.device_id: device},
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_001"},
+        )
+
+        _migrate_entity_registry(object(), entry, inventory)
+        _migrate_entity_registry(object(), entry, inventory)
+        _migrate_entity_registry(object(), entry, inventory)
+
+        self.assertEqual(
+            registry.renamed,
+            [
+                (
+                    "sensor.fridge_fridge_temperature",
+                    "sensor.fridge_temperature",
+                )
+            ],
+        )
+        self.assertEqual(registry_entry.entity_id, "sensor.fridge_temperature")
+        self.assertEqual(registry_entry.object_id_base, "temperature")
+        self.assertEqual(
+            registry_entry.suggested_object_id,
+            "fridge_temperature",
+        )
+
     def test_preserves_user_named_numbered_id_and_restore_suggestion(self) -> None:
         """Never reinterpret a user-named registry row as generated cleanup."""
         state = BridgeState(

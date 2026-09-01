@@ -117,6 +117,17 @@ async function executePageRequest(
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), input.timeoutMs);
         try {
+          const headers: Record<string, string> = {};
+          if (input.body !== undefined) {
+            headers["content-type"] = "application/json";
+          }
+          if (input.method === "POST") {
+            const csrfToken = smartThingsCsrfToken();
+            if (!csrfToken) {
+              return { ok: false, status: 0, error: "csrf_token_unavailable" };
+            }
+            headers["x-csrf-token"] = csrfToken;
+          }
           // api-free-audit: authenticated-page-same-origin-advanced-request
           const response = await fetch(input.path, {
             cache: "no-store",
@@ -124,11 +135,11 @@ async function executePageRequest(
             method: input.method,
             redirect: "manual",
             signal: controller.signal,
+            ...(Object.keys(headers).length === 0 ? {} : { headers }),
             ...(input.body === undefined
               ? {}
               : {
-                  body: JSON.stringify(input.body),
-                  headers: { "content-type": "application/json" }
+                  body: JSON.stringify(input.body)
                 })
           });
           if (response.type === "opaqueredirect") {
@@ -151,6 +162,23 @@ async function executePageRequest(
           };
         } finally {
           clearTimeout(timer);
+        }
+
+        function smartThingsCsrfToken(): string | undefined {
+          const app = (
+            ((globalThis as { window?: { _app?: { csrfToken?: unknown } } }).window ??
+              globalThis) as { _app?: { csrfToken?: unknown } }
+          )._app;
+          const token = app?.csrfToken;
+          if (
+            typeof token !== "string" ||
+            token.length < 1 ||
+            token.length > 4096 ||
+            /[\u0000-\u001f\u007f]/u.test(token)
+          ) {
+            return undefined;
+          }
+          return token;
         }
       },
       request

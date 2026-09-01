@@ -1506,8 +1506,20 @@ def _canonical_generated_state_entity_id(
         if domain == Platform.SWITCH and getattr(state, "attribute", None) == "switch"
         else None
     )
+    current_object_id = str(getattr(entity_entry, "entity_id", "")).partition(".")[2]
+    device_object_id = canonical_entity_object_id(inventory, device)
     if role is not None:
         entity_name = role
+    elif (
+        device_object_id is not None
+        and current_object_id.startswith(f"{device_object_id}_{device_object_id}_")
+    ):
+        entity_name = _generated_registry_state_name(
+            entity_entry,
+            device,
+            state,
+            inventory,
+        )
     elif _numbered_generated_state_row(entity_entry, device, state, inventory):
         entity_name = _generated_registry_state_name(
             entity_entry,
@@ -1711,8 +1723,9 @@ def _generated_registry_state_name(
     )
     if base is None:
         base = _readable_registry_state_attribute(state)
+    base = _strip_generated_device_slug_prefix(base.strip(), device, inventory)
     base = _normalized_registry_state_name_base(
-        base.strip(),
+        base,
         state,
         len(siblings),
         additional_qualifiers=(
@@ -1733,6 +1746,24 @@ def _generated_registry_state_name(
     if name.startswith(prefix) and name.endswith(")"):
         return f"{base} {name[len(prefix):-1]}"
     return name
+
+
+def _strip_generated_device_slug_prefix(
+    base: str,
+    device: object,
+    inventory: BridgeInventory,
+) -> str:
+    """Convert stored full object IDs back to entity-local state names."""
+    device_object_id = canonical_entity_object_id(inventory, device)
+    if not device_object_id:
+        return base
+    object_id = slugify(base) or ""
+    prefix = f"{device_object_id}_"
+    if not object_id.startswith(prefix):
+        return base
+    while object_id.startswith(prefix):
+        object_id = object_id[len(prefix) :]
+    return object_id or base
 
 
 def _normalized_registry_state_name_base(

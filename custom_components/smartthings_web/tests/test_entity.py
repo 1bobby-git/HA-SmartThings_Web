@@ -539,6 +539,43 @@ class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
             "hwajangsil_doeosenseo_contact",
         )
 
+    def test_repeated_device_slug_in_generated_object_id_collapses_once(self) -> None:
+        state = BridgeState(
+            "main",
+            "temperatureMeasurement",
+            "temperature",
+            3,
+            "C",
+            "2026-09-01T00:00:00.000Z",
+        )
+        device = BridgeDevice(
+            "dev_fridge",
+            "loc_001",
+            None,
+            "Fridge",
+            "refrigerator",
+            True,
+            states={state.key: state},
+        )
+        inventory = BridgeInventory(
+            1,
+            True,
+            "0.1.157",
+            "5",
+            {},
+            {},
+            {device.device_id: device},
+        )
+
+        self.assertEqual(
+            entity_under_test.canonical_entity_object_id(
+                inventory,
+                device,
+                "fridge_fridge_temperature",
+            ),
+            "fridge_temperature",
+        )
+
     def test_device_entity_suggests_refresh_object_id_without_room_prefix_duplication(self) -> None:
         state = BridgeState(
             "main",

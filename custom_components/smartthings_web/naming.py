@@ -19,6 +19,7 @@ def canonical_entity_object_id(
     suffix = slugify(entity_name) if entity_name else ""
     if not suffix or base == suffix:
         return base
+    suffix = _collapse_repeated_slug_prefix(suffix, base)
     if suffix.startswith(f"{base}_"):
         return suffix
     if base.endswith(f"_{suffix}"):
@@ -84,3 +85,11 @@ def _canonical_device_slug(
     if device_slug.startswith(duplicate_prefix):
         return f"{room_slug}_{device_slug[len(duplicate_prefix):]}"
     return device_slug or None
+
+
+def _collapse_repeated_slug_prefix(value: str, prefix: str) -> str:
+    """Collapse generated ``device_device_suffix`` feedback loops."""
+    duplicate_prefix = f"{prefix}_{prefix}_"
+    while value.startswith(duplicate_prefix):
+        value = value[len(prefix) + 1 :]
+    return value

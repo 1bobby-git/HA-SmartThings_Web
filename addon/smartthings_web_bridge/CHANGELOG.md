@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.157
+
+- SmartThings Advanced command POST를 실행할 때 로그인된 페이지 context 안에서 CSRF 토큰을 읽어 `x-csrf-token` 헤더로만 전달합니다.
+- GET에는 CSRF 헤더나 body를 붙이지 않고, 토큰이 없거나 안전하지 않으면 raw 값을 노출하지 않은 채 Advanced 요청을 실패 처리합니다.
+- generated entity ID가 `device_device_state`처럼 기존 canonical slug를 다시 입력으로 삼아 재시작마다 길어지는 경우를 한 번의 canonical ID로 복구합니다.
+- 0.1.156의 service wrapper, command catalog, global entity parity, icon/name migration, parity audit 동작은 그대로 유지합니다.
+
 ## 0.1.156
 
 - Home Assistant 2026.8.3에서 `smartthings_web.list_commands` response service가 coroutine 객체를 반환해 500이 나던 문제를 수정합니다.
