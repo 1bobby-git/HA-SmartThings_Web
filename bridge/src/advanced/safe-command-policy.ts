@@ -1,11 +1,14 @@
 import type { AdvancedCommandDescriptor, AdvancedCommandOmission } from "./command-catalog-types.js";
 
-type AdvancedCommandOmissionReason = AdvancedCommandOmission["reason"];
+type SafeAdvancedCommandReason = Extract<
+  AdvancedCommandOmission["reason"],
+  "dangerous_command" | "sensitive_argument"
+>;
 
 const LOCK_ACCESS_PATTERN = /(?:\b(?:un)?lock(?:ed|ing)?\b|\baccess\s*control\b|잠금|잠금해제|출입|현관문)/u;
-const ENTRY_DEVICE_PATTERN = /(?:\bdoor\b|\bgarage\b|\bvalve\b|차고|밸브|문\s*(?:열기|닫기)?)/u;
-const SECURITY_PATTERN = /(?:\bsecurity\b|보안|경비)/u;
-const DISARM_PATTERN = /(?:\bdisarm\b|무장\s*해제|경비\s*해제)/u;
+const ENTRY_DEVICE_PATTERN = /(?:\bdoor\b|\bgarage\b|\bvalve\b|현관문|차고문|밸브|문\s*(?:열기|닫기|잠금|잠금해제))/u;
+const SECURITY_FAMILY_PATTERN = /(?:\bsecurity\b|\balarm\b|\bsiren\b|보안|경비|알람|사이렌)/u;
+const SECURITY_COMMAND_PATTERN = /(?:\barm\s*(?:away|stay)?\b|\bdisarm\b|\bpanic\b|\bon\b|무장|해제|비상)/u;
 const OCF_POST_PATTERN = /(?:\bocf\b.*\bpost(?:\s*command)?\b|\bpost(?:\s*command)?\b.*\bocf\b|\bpostcommand\b.*\bocf\b|\bocf\b.*\bpostcommand\b)/u;
 const NETWORK_AUDIO_PATTERN = /(?:\bnetwork\b.*\baudio\b|\baudio\b.*\bnetwork\b|\bnetwork\b.*\bspeaker\b|\bspeaker\b.*\bnetwork\b)/u;
 const TOPOLOGY_PATTERN = /(?:\bgroup\b|\bmaster\b|\bchannel\b|\brole\b|\btopology\b)/u;
@@ -13,7 +16,7 @@ const AUDIO_GROUP_PATTERN = /(?:\baudio\s*group\b|\bset\s*group\s*master\b|\bgro
 
 export function safeAdvancedCommandReason(
   descriptor: AdvancedCommandDescriptor
-): AdvancedCommandOmissionReason | undefined {
+): SafeAdvancedCommandReason | undefined {
   if (descriptor.arguments.some((argument) => argument.sensitive)) {
     return "sensitive_argument";
   }
@@ -23,7 +26,7 @@ export function safeAdvancedCommandReason(
   if (
     LOCK_ACCESS_PATTERN.test(normalized) ||
     ENTRY_DEVICE_PATTERN.test(normalized) ||
-    (SECURITY_PATTERN.test(normalized) && DISARM_PATTERN.test(normalized)) ||
+    (SECURITY_FAMILY_PATTERN.test(normalized) && SECURITY_COMMAND_PATTERN.test(normalized)) ||
     OCF_POST_PATTERN.test(normalized) ||
     ((NETWORK_AUDIO_PATTERN.test(normalized) || AUDIO_GROUP_PATTERN.test(normalized)) &&
       TOPOLOGY_PATTERN.test(normalized))

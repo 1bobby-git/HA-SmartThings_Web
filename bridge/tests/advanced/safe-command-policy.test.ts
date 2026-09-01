@@ -46,6 +46,19 @@ describe("safeAdvancedCommandReason", () => {
     ).toBeUndefined();
   });
 
+  test("allows safe Korean messaging and speech labels that contain mun text", () => {
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "speechSynthesis", command: "speak", label: "문구 말하기" })
+      )
+    ).toBeUndefined();
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "messageBoard", command: "post", label: "문자 보내기" })
+      )
+    ).toBeUndefined();
+  });
+
   test("omits commands with sensitive arguments before other dangerous classification", () => {
     expect(
       safeAdvancedCommandReason(
@@ -91,6 +104,33 @@ describe("safeAdvancedCommandReason", () => {
       safeAdvancedCommandReason(
         descriptor({ capability: "custom.lock", command: "unlock", label: "현관문 잠금해제" })
       )
+    ).toBe("dangerous_command");
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "doorControl", command: "open", label: "문 열기" })
+      )
+    ).toBe("dangerous_command");
+    expect(
+      safeAdvancedCommandReason(
+        descriptor({ capability: "custom.garage", command: "close", label: "차고문 닫기" })
+      )
+    ).toBe("dangerous_command");
+  });
+
+  test("omits security, alarm, and siren command families as dangerous", () => {
+    for (const command of ["armAway", "armStay", "panic", "disarm"]) {
+      expect(
+        safeAdvancedCommandReason(
+          descriptor({ capability: "securitySystem", command, label: "Security mode" })
+        )
+      ).toBe("dangerous_command");
+    }
+
+    expect(
+      safeAdvancedCommandReason(descriptor({ capability: "siren", command: "on", label: "Siren" }))
+    ).toBe("dangerous_command");
+    expect(
+      safeAdvancedCommandReason(descriptor({ capability: "alarm", command: "on", label: "Alarm" }))
     ).toBe("dangerous_command");
   });
 
