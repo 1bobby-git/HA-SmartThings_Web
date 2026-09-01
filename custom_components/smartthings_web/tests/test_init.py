@@ -3581,25 +3581,34 @@ class EntityRegistryMigrationTests(unittest.TestCase):
 
     def test_primary_switch_collision_preserves_arbitrary_custom_entity_id(self) -> None:
         """Do not rewrite a user-chosen ID just because the row has no name."""
-        registry, devices = self._primary_switch_collision_registry(
-            home_entity_id="switch.my_custom_multitap",
-        )
-        home_entry = registry.async_get("switch.my_custom_multitap")
-        spark_entry = registry.async_get("switch.meoltitaeb")
-        assert home_entry is not None
-        assert spark_entry is not None
-        self.patch_registry(registry, config_entries=[home_entry])
+        for custom_entity_id in (
+            "switch.my_custom_multitap",
+            "switch.my_meoltitaeb_meoltitaeb_custom",
+            "switch.meoltitaeb_meoltitaeb_custom",
+        ):
+            registry, devices = self._primary_switch_collision_registry(
+                home_entity_id=custom_entity_id,
+            )
+            home_entry = registry.async_get(custom_entity_id)
+            spark_entry = registry.async_get("switch.meoltitaeb")
+            assert home_entry is not None
+            assert spark_entry is not None
+            self.patch_registry(registry, config_entries=[home_entry])
 
-        _migrate_entity_registry(
-            object(),
-            SimpleNamespace(entry_id="entry_home", data={CONF_LOCATION_ID: "loc_home"}),
-            self._primary_switch_collision_inventory(devices),
-        )
+            _migrate_entity_registry(
+                object(),
+                SimpleNamespace(
+                    entry_id="entry_home",
+                    data={CONF_LOCATION_ID: "loc_home"},
+                ),
+                self._primary_switch_collision_inventory(devices),
+            )
 
-        self.assertEqual(registry.renamed, [])
-        self.assertEqual(home_entry.entity_id, "switch.my_custom_multitap")
-        self.assertEqual(home_entry.suggested_object_id, "my_custom_multitap")
-        self.assertEqual(spark_entry.entity_id, "switch.meoltitaeb")
+            custom_object_id = custom_entity_id.partition(".")[2]
+            self.assertEqual(registry.renamed, [], custom_entity_id)
+            self.assertEqual(home_entry.entity_id, custom_entity_id)
+            self.assertEqual(home_entry.suggested_object_id, custom_object_id)
+            self.assertEqual(spark_entry.entity_id, "switch.meoltitaeb")
 
     def test_preserves_user_named_numbered_id_and_restore_suggestion(self) -> None:
         """Never reinterpret a user-named registry row as generated cleanup."""

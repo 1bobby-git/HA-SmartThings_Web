@@ -1216,23 +1216,36 @@ def _generated_primary_switch_entity_id(entity_entry: object, object_id: str) ->
             suffix = current_object_id[len(numbered_prefix) :]
             if suffix.isdigit() and int(suffix) >= 2:
                 return True
-    return _object_id_has_repeated_token(current_object_id, object_id)
+    return _generated_primary_switch_feedback_object_id(current_object_id, object_id)
 
 
-def _object_id_has_repeated_token(value: str, token: str) -> bool:
-    """Return whether an object ID contains adjacent generated token repeats."""
+def _generated_primary_switch_feedback_object_id(value: str, token: str) -> bool:
+    """Return whether an object ID is an anchored generated feedback form."""
     parts = value.split("_")
     token_parts = token.split("_")
     token_size = len(token_parts)
     if token_size == 0 or len(parts) < token_size * 2:
         return False
-    for index in range(0, len(parts) - token_size * 2 + 1):
-        if (
-            parts[index : index + token_size] == token_parts
-            and parts[index + token_size : index + token_size * 2] == token_parts
-        ):
-            return True
-    return False
+    consumed = 0
+    while parts[consumed : consumed + token_size] == token_parts:
+        consumed += token_size
+        if consumed + token_size > len(parts):
+            break
+    if consumed < token_size * 2:
+        return False
+    remainder = parts[consumed:]
+    if not remainder:
+        return True
+    if remainder == ["switch"]:
+        return True
+    if len(remainder) == 1 and remainder[0].isdigit() and int(remainder[0]) >= 2:
+        return True
+    return (
+        len(remainder) == 2
+        and remainder[0] == "switch"
+        and remainder[1].isdigit()
+        and int(remainder[1]) >= 2
+    )
 
 
 def _all_registry_entries(
@@ -1639,6 +1652,8 @@ def _deduplicated_generated_entity_id(
     entity_id = getattr(entity_entry, "entity_id", "")
     domain, separator, object_id = entity_id.partition(".")
     if not separator:
+        return None
+    if domain == Platform.SWITCH:
         return None
     parts = object_id.split("_")
     if len(parts) < 3 or parts[0] != parts[1]:
