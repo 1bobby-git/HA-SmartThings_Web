@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.149
+
+- Bridge restart 시 offline으로 저장된 장치의 persisted Location/status evidence를 health timestamp와 다시 비교해 더 최신의 정상 상태가 있으면 online으로 복구합니다.
+- `DeviceWatch-DeviceStatus`, `healthStatus` 등 값 자체가 explicit offline/unavailable/disconnected인 persisted state는 positive liveness evidence에서 제외해 실제 장애를 숨기지 않습니다.
+- 0.1.148의 bounded Advanced component transaction, original-vector rollback, `lastUpdatedDate` precedence와 단일 Web control 경계를 그대로 유지합니다.
+
 ## 0.1.148
 
 - 대표 HA switch 뒤에 둘 이상의 검증 가능한 switch component가 있으면 Advanced component transaction을 안정된 순서로 실행하고 bounded confirmation window의 독립된 조기·최종 `/status` 조회에서 `advanced_device_status` 증거와 전체 벡터가 일치할 때만 성공으로 확인합니다. 조기 조회가 멈춰도 전체 timeout과 장치별 queue는 bounded 상태를 유지합니다.
