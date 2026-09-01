@@ -21,7 +21,7 @@
 - Python unittest discovery: 235 tests passed
 - TypeScript typecheck, production build, add-on package build passed
 - secret/API-free/fixture audits passed
-- package manifest SHA-256: `cbd110bcd3d1cbd761916e3619d9f03bfb03c8421a594cbaefe57fec75417114`
+- package manifest SHA-256: `cd4298870cbb7da89c178bb1a8406d1079f5cd765c13108ad83c70bffd029b84`
 - independent architecture review: `CLEAR`
 - independent code review: `APPROVE`
 
