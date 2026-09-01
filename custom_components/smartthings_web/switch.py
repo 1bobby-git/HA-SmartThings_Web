@@ -93,9 +93,7 @@ class SmartThingsWebSwitch(SmartThingsWebEntity, SwitchEntity):
         self.control = control
         is_primary_control = primary_switch_state(device, state)
         name = (
-            None
-            if is_primary_control
-            else name_override
+            name_override
             if name_override is not None
             else control.label
             if control is not None and state.attribute != "switch"

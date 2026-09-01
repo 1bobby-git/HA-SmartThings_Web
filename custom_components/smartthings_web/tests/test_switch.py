@@ -279,7 +279,7 @@ class SmartThingsWebSwitchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             names_by_component,
             {
-                "main": None,
+                "main": "전원",
                 "switch2": "스위치 2",
             },
         )
@@ -477,7 +477,7 @@ class SmartThingsWebSwitchTests(unittest.IsolatedAsyncioTestCase):
         await async_setup_entry(object(), entry, added.extend)
 
         self.assertEqual(len(added), 1)
-        self.assertNotIn("_attr_name", added[0].__dict__)
+        self.assertEqual(getattr(added[0], "_attr_name", None), "전원")
 
     async def test_state_backed_switch_rejects_unobserved_commands(self) -> None:
         device, state = _device(with_control=False)

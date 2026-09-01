@@ -814,7 +814,7 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
 
         self.assertEqual(control_kind(device, switch), "switch")
 
-    def test_single_switch_role_state_is_primary_not_secondary_named(self) -> None:
+    def test_single_switch_role_state_is_primary_with_web_power_name(self) -> None:
         current = inventory(10, 20, "2026-09-01T00:00:00Z")
         device = current.devices["dev_001"]
         state = BridgeState(
@@ -842,7 +842,10 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
 
         self.assertEqual(control_kind(device, state), "switch")
         self.assertTrue(primary_switch_state(device, state))
-        self.assertEqual(models_module.switch_name_overrides(device), {})
+        self.assertEqual(
+            models_module.switch_name_overrides(device),
+            {state.key: "전원"},
+        )
         self.assertEqual(models_module.secondary_switch_name_overrides(device), {})
 
     def test_control_kind_accepts_advanced_reversible_light_only_with_light_evidence(self) -> None:

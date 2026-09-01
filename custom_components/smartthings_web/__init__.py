@@ -50,6 +50,7 @@ from .models import (
     location_name,
     number_controls,
     noncanonical_refresh_controls,
+    primary_switch_state,
     room_free_display_name,
     secondary_switch_name_overrides,
     sensor_state_allowed,
@@ -643,6 +644,11 @@ def _migrate_entity_registry(
     # Home Assistant replaces immutable RegistryEntry objects on update. Read
     # the rows again so metadata repair uses the renamed entity ID immediately.
     registry_entries = list(er.async_entries_for_config_entry(registry, entry.entry_id))
+    primary_switch_collision_targets = _primary_switch_collision_targets(
+        registry,
+        registry_entries,
+        inventory,
+    )
 
     for entity_entry in registry_entries:
         if entity_entry.platform != DOMAIN:
@@ -792,6 +798,11 @@ def _migrate_entity_registry(
         )
         if canonical_state_entity_id is not None:
             new_entity_id = canonical_state_entity_id
+        primary_switch_collision_entity_id = primary_switch_collision_targets.get(
+            getattr(entity_entry, "unique_id", "")
+        )
+        if primary_switch_collision_entity_id is not None:
+            new_entity_id = primary_switch_collision_entity_id
         numbered_entity_id = _canonical_numbered_generated_entity_id(
             entity_entry,
             owner_device,
@@ -1096,6 +1107,166 @@ def _relocate_primary_name_collisions(
             break
 
 
+def _primary_switch_collision_targets(
+    registry: object,
+    current_registry_entries: Sequence[object],
+    inventory: BridgeInventory,
+) -> dict[str, str]:
+    """Return room-qualified IDs for generated primary switches sharing a base."""
+    rows: list[tuple[object, object, str, str]] = []
+    for entity_entry in _all_registry_entries(registry, current_registry_entries):
+        domain = getattr(entity_entry, "domain", "")
+        domain_value = getattr(domain, "value", domain)
+        if (
+            getattr(entity_entry, "platform", None) != DOMAIN
+            or domain_value != "switch"
+            or getattr(entity_entry, "name", None) is not None
+        ):
+            continue
+        device, state = _registry_primary_switch_state(entity_entry, inventory)
+        if device is None or state is None:
+            continue
+        object_id = canonical_primary_control_object_id(inventory, device)
+        if not object_id:
+            continue
+        rows.append(
+            (
+                entity_entry,
+                device,
+                str(getattr(entity_entry, "unique_id", "")),
+                object_id,
+            )
+        )
+
+    grouped: dict[str, list[tuple[object, object, str, str]]] = {}
+    for row in rows:
+        grouped.setdefault(f"switch.{row[3]}", []).append(row)
+
+    targets: dict[str, str] = {}
+    current_unique_ids = {
+        str(getattr(entity_entry, "unique_id", ""))
+        for entity_entry in current_registry_entries
+        if getattr(entity_entry, "platform", None) == DOMAIN
+    }
+    assigned: set[str] = set()
+    for exact_entity_id, group in grouped.items():
+        owner = registry.async_get(exact_entity_id)
+        owner_unique_id = (
+            str(getattr(owner, "unique_id", "")) if owner is not None else ""
+        )
+        owner_platform = getattr(owner, "platform", None) if owner is not None else None
+        collides = len(group) > 1 or (
+            owner_platform == DOMAIN
+            and owner_unique_id not in {row[2] for row in group}
+        )
+        if not collides:
+            continue
+        for _entity_entry, device, unique_id, object_id in sorted(
+            group,
+            key=lambda row: (
+                _primary_switch_location_room_key(inventory, row[1]),
+                row[2],
+            ),
+        ):
+            if unique_id not in current_unique_ids:
+                continue
+            candidate = (
+                "switch."
+                f"{_qualified_primary_switch_object_id(inventory, device, object_id)}"
+            )
+            if candidate in assigned:
+                device_suffix = (
+                    slugify(str(getattr(device, "device_id", ""))) or unique_id
+                )
+                candidate = f"{candidate}_{device_suffix}"
+            if candidate == exact_entity_id:
+                continue
+            targets[unique_id] = candidate
+            assigned.add(candidate)
+    return targets
+
+
+def _all_registry_entries(
+    registry: object,
+    fallback_entries: Sequence[object],
+) -> list[object]:
+    """Return every visible registry row, falling back to the current entry list."""
+    raw_entries = getattr(registry, "entities", None)
+    if raw_entries is None:
+        raw_entries = getattr(registry, "entries", None)
+    if raw_entries is None:
+        return list(fallback_entries)
+    from collections.abc import Mapping as _Mapping
+
+    if isinstance(raw_entries, _Mapping):
+        return list(raw_entries.values())
+    return list(raw_entries)
+
+
+def _registry_primary_switch_state(
+    entity_entry: object,
+    inventory: BridgeInventory,
+) -> tuple[object | None, object | None]:
+    unique_id = str(getattr(entity_entry, "unique_id", ""))
+    for device in inventory.devices.values():
+        device_id = str(getattr(device, "device_id", ""))
+        state = next(
+            (
+                item
+                for item in getattr(device, "states", {}).values()
+                if entity_unique_id(device_id, item) == unique_id
+            ),
+            None,
+        )
+        if state is not None and _registry_state_is_primary_control(
+            Platform.SWITCH,
+            device,
+            state,
+        ):
+            return device, state
+    return None, None
+
+
+def _primary_switch_location_room_key(
+    inventory: BridgeInventory,
+    device: object,
+) -> str:
+    return "_".join(_primary_switch_qualifier_slugs(inventory, device))
+
+
+def _qualified_primary_switch_object_id(
+    inventory: BridgeInventory,
+    device: object,
+    object_id: str,
+) -> str:
+    qualifiers = _primary_switch_qualifier_slugs(inventory, device)
+    if qualifiers:
+        return "_".join((*qualifiers, object_id))
+    device_id = slugify(str(getattr(device, "device_id", ""))) or "device"
+    return f"{device_id}_{object_id}"
+
+
+def _primary_switch_qualifier_slugs(
+    inventory: BridgeInventory,
+    device: object,
+) -> tuple[str, ...]:
+    values: list[str] = []
+    location_id = str(getattr(device, "location_id", ""))
+    if location_id:
+        values.append(location_name(inventory, location_id))
+    room_id = getattr(device, "room_id", None)
+    if room_id:
+        room = inventory.rooms.get(room_id)
+        if room is not None and room[0] == location_id:
+            values.append(room[1])
+    slugs: list[str] = []
+    for value in values:
+        slug = slugify(value) or None
+        if slug and slug not in slugs:
+            slugs.append(slug)
+    return tuple(slugs)
+
+
 def _canonical_registry_suggested_object_id(
     inventory: BridgeInventory,
     device: object | None,
@@ -1265,13 +1436,7 @@ def _canonical_registry_object_id_base(
     )
     if state is not None:
         if _registry_state_is_primary_control(domain_value, device, state):
-            primary_object_id = canonical_primary_control_object_id(inventory, device)
-            legacy_object_id = canonical_entity_object_id(inventory, device, "switch")
-            current_object_id = str(
-                getattr(entity_entry, "entity_id", "")
-            ).partition(".")[2]
-            if current_object_id in {primary_object_id, legacy_object_id}:
-                return None
+            return None
         switch_role = secondary_switch_name_overrides(device).get(state.key)
         if (
             getattr(entity_entry, "domain", "") == Platform.SWITCH
@@ -1489,6 +1654,7 @@ def _canonical_generated_state_entity_id(
     )
     if state is None:
         return None
+    domain_value = getattr(domain, "value", domain)
     if _registry_state_is_primary_control(domain, device, state):
         object_id = canonical_primary_control_object_id(inventory, device)
         if not object_id:
@@ -1503,17 +1669,19 @@ def _canonical_generated_state_entity_id(
         return target if target != getattr(entity_entry, "entity_id", "") else None
     role = (
         secondary_switch_name_overrides(device).get(state.key)
-        if domain == Platform.SWITCH and getattr(state, "attribute", None) == "switch"
+        if domain_value == "switch" and getattr(state, "attribute", None) == "switch"
         else None
     )
-    current_object_id = str(getattr(entity_entry, "entity_id", "")).partition(".")[2]
-    device_object_id = canonical_entity_object_id(inventory, device)
+    if (
+        role is None
+        and domain_value == "switch"
+        and getattr(state, "attribute", None) == "switch"
+        and switch_name_overrides(device).get(getattr(state, "key", ())) is not None
+    ):
+        return None
     if role is not None:
         entity_name = role
-    elif (
-        device_object_id is not None
-        and current_object_id.startswith(f"{device_object_id}_{device_object_id}_")
-    ):
+    elif _generated_device_slug_feedback_row(entity_entry, device, inventory):
         entity_name = _generated_registry_state_name(
             entity_entry,
             device,
@@ -1534,6 +1702,32 @@ def _canonical_generated_state_entity_id(
         return None
     target = f"{domain}.{object_id}"
     return target if target != getattr(entity_entry, "entity_id", "") else None
+
+
+def _generated_device_slug_feedback_row(
+    entity_entry: object,
+    device: object,
+    inventory: BridgeInventory,
+) -> bool:
+    """Return whether generated metadata contains repeated device slug feedback."""
+    device_object_id = canonical_entity_object_id(inventory, device)
+    if not device_object_id:
+        return False
+    values = (
+        str(getattr(entity_entry, "entity_id", "")).partition(".")[2],
+        getattr(entity_entry, "object_id_base", None),
+        getattr(entity_entry, "suggested_object_id", None),
+    )
+    repeated_prefix = f"{device_object_id}_{device_object_id}_"
+    repeated_suffix = f"_{device_object_id}_{device_object_id}"
+    return any(
+        isinstance(value, str)
+        and (
+            (slugify(value) or "").startswith(repeated_prefix)
+            or (slugify(value) or "").endswith(repeated_suffix)
+        )
+        for value in values
+    )
 
 
 def _canonical_generated_primary_entity_id(
@@ -1569,6 +1763,10 @@ def _registry_state_is_primary_control(
         return False
     if getattr(state, "attribute", None) != "switch":
         return False
+    if domain_value == "switch":
+        return primary_switch_state(device, state)
+    if primary_switch_state(device, state):
+        return True
     if secondary_switch_name_overrides(device).get(getattr(state, "key", ())) is not None:
         return False
     role = str(
@@ -1759,11 +1957,18 @@ def _strip_generated_device_slug_prefix(
         return base
     object_id = slugify(base) or ""
     prefix = f"{device_object_id}_"
-    if not object_id.startswith(prefix):
-        return base
     while object_id.startswith(prefix):
         object_id = object_id[len(prefix) :]
+    object_id = _collapse_repeated_slug_suffix(object_id, device_object_id)
     return object_id or base
+
+
+def _collapse_repeated_slug_suffix(value: str, suffix: str) -> str:
+    """Collapse generated ``attr_device_device`` feedback loops."""
+    duplicate_suffix = f"_{suffix}_{suffix}"
+    while value.endswith(duplicate_suffix):
+        value = value[: -(len(suffix) + 1)]
+    return value
 
 
 def _normalized_registry_state_name_base(

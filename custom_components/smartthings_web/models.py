@@ -745,9 +745,12 @@ def switch_name_overrides(
         label = _web_control_label_for_switch_state(device, state)
         if label is None:
             label = _web_control_label(control.label if control else None)
-        if label == "전원" and not _main_power_switch_state(device, state):
+        is_primary = primary_switch_state(device, state)
+        if label == "전원" and not (
+            is_primary or _main_power_switch_state(device, state)
+        ):
             label = None
-        if label is None and _main_power_switch_state(device, state):
+        if label is None and is_primary:
             label = "전원"
         if label is None and not primary_switch_state(device, state):
             label = _readable_state_token(state.component_role or state.component, "component")
@@ -861,9 +864,12 @@ def primary_switch_state(device: BridgeDevice, state: BridgeState) -> bool:
         for item in device.states.values()
         if item.attribute == "switch" and control_kind(device, item) == "switch"
     ]
-    if len(safe_switch_states) != 1 or safe_switch_states[0].key != state.key:
-        return False
-    return _main_power_switch_state(device, state, allow_identifier_component=True)
+    main_power_states = [
+        item
+        for item in safe_switch_states
+        if _main_power_switch_state(device, item, allow_identifier_component=True)
+    ]
+    return len(main_power_states) == 1 and main_power_states[0].key == state.key
 
 
 def _main_power_switch_state(

@@ -3374,6 +3374,211 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             "fridge_temperature",
         )
 
+    def test_heavily_corrupted_generated_state_id_repairs_in_one_pass(self) -> None:
+        """Bound a many-pass generated metadata feedback loop immediately."""
+        state = BridgeState(
+            "main",
+            "temperatureMeasurement",
+            "temperature",
+            3,
+            "C",
+            "2026-09-01T00:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_fridge",
+            "loc_001",
+            None,
+            "Fridge",
+            "refrigerator",
+            True,
+            states={state.key: state},
+        )
+        corrupted_object_id = "_".join(("fridge",) * 10000 + ("temperature",))
+        registry_entry = SimpleNamespace(
+            entity_id=f"sensor.{corrupted_object_id}",
+            domain="sensor",
+            platform=DOMAIN,
+            unique_id="dev_fridge_main_temperatureMeasurement_temperature",
+            device_id="uuid_fridge",
+            name=None,
+            disabled_by=None,
+            original_name=corrupted_object_id,
+            object_id_base=corrupted_object_id,
+            suggested_object_id=corrupted_object_id,
+        )
+        registry = FakeRegistry([registry_entry])
+        self.patch_registry(registry)
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}),
+            BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.157",
+                protocol_version="5",
+                locations={"loc_001": "Home"},
+                rooms={},
+                devices={device.device_id: device},
+            ),
+        )
+
+        self.assertEqual(registry_entry.entity_id, "sensor.fridge_temperature")
+        self.assertEqual(registry_entry.object_id_base, "temperature")
+        self.assertEqual(registry_entry.suggested_object_id, "fridge_temperature")
+        self.assertLess(len(registry_entry.entity_id), 80)
+
+    def test_tail_repeated_device_slug_state_id_repairs_once_and_stays_stable(self) -> None:
+        """Collapse live-shaped ``attr_device_device`` metadata feedback loops."""
+        state = BridgeState(
+            "main",
+            "fridgeMode",
+            "supportedFullFridgeModes",
+            ["rapidCool", "powerCool"],
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        device = BridgeDevice(
+            "dev_fridge",
+            "loc_001",
+            None,
+            "Naengjanggo",
+            "refrigerator",
+            True,
+            states={state.key: state},
+        )
+        corrupted_object_id = "_".join(
+            ("naengjanggo", "supported", "full", "fridge", "modes")
+            + ("naengjanggo",) * 700
+        )
+        registry_entry = SimpleNamespace(
+            entity_id=f"sensor.{corrupted_object_id}",
+            domain="sensor",
+            platform=DOMAIN,
+            unique_id="dev_fridge_main_fridgeMode_supportedFullFridgeModes",
+            device_id="uuid_fridge",
+            name=None,
+            disabled_by=None,
+            original_name=corrupted_object_id,
+            object_id_base=corrupted_object_id,
+            suggested_object_id=corrupted_object_id,
+        )
+        registry = FakeRegistry([registry_entry])
+        self.patch_registry(registry)
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.157",
+            protocol_version="5",
+            locations={"loc_001": "Home"},
+            rooms={},
+            devices={device.device_id: device},
+        )
+        entry = SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"})
+
+        _migrate_entity_registry(object(), entry, inventory)
+        _migrate_entity_registry(object(), entry, inventory)
+        _migrate_entity_registry(object(), entry, inventory)
+
+        self.assertEqual(
+            registry.renamed,
+            [
+                (
+                    f"sensor.{corrupted_object_id}",
+                    "sensor.naengjanggo_supported_full_fridge_modes_naengjanggo",
+                )
+            ],
+        )
+        self.assertEqual(
+            registry_entry.entity_id,
+            "sensor.naengjanggo_supported_full_fridge_modes_naengjanggo",
+        )
+        self.assertEqual(
+            registry_entry.object_id_base,
+            "supported_full_fridge_modes_naengjanggo",
+        )
+        self.assertEqual(
+            registry_entry.suggested_object_id,
+            "naengjanggo_supported_full_fridge_modes_naengjanggo",
+        )
+        self.assertLess(len(registry_entry.entity_id), 80)
+
+    def test_primary_switch_name_collision_uses_location_room_qualified_ids(self) -> None:
+        """Do not steal an exact primary switch ID across config entries."""
+        registry, devices = self._primary_switch_collision_registry()
+        home_entry = registry.async_get("switch.meoltitaeb_switch")
+        spark_entry = registry.async_get("switch.meoltitaeb")
+        assert home_entry is not None
+        assert spark_entry is not None
+
+        self.patch_registry(registry, config_entries=[home_entry])
+        integration.dr.async_get = lambda _hass: SimpleNamespace(
+            devices=[
+                SimpleNamespace(
+                    id="uuid_home_multitap",
+                    identifiers={(DOMAIN, "dev_191")},
+                    area_id="anbang",
+                    config_entries={"entry_home"},
+                ),
+                SimpleNamespace(
+                    id="uuid_spark_multitap",
+                    identifiers={(DOMAIN, "dev_567")},
+                    area_id="samuseol",
+                    config_entries={"entry_spark"},
+                ),
+            ]
+        )
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(entry_id="entry_home", data={CONF_LOCATION_ID: "loc_home"}),
+            self._primary_switch_collision_inventory(devices),
+        )
+
+        self.assertEqual(home_entry.entity_id, "switch.home_anbang_meoltitaeb")
+        self.assertEqual(home_entry.object_id_base, None)
+        self.assertEqual(home_entry.suggested_object_id, "home_anbang_meoltitaeb")
+        self.assertEqual(spark_entry.entity_id, "switch.meoltitaeb")
+
+    def test_primary_switch_name_collision_converges_independent_of_entry_order(self) -> None:
+        """Both load orders end with stable meaningful IDs, not _2 or _switch."""
+        results: list[set[str]] = []
+        for first_location, second_location in (
+            ("loc_home", "loc_spark"),
+            ("loc_spark", "loc_home"),
+        ):
+            registry, devices = self._primary_switch_collision_registry()
+            entries_by_location = {
+                "loc_home": registry.async_get("switch.meoltitaeb_switch"),
+                "loc_spark": registry.async_get("switch.meoltitaeb"),
+            }
+            assert entries_by_location["loc_home"] is not None
+            assert entries_by_location["loc_spark"] is not None
+            inventory = self._primary_switch_collision_inventory(devices)
+            integration.dr.async_get = lambda _hass: SimpleNamespace(devices=[])
+
+            for location_id in (first_location, second_location):
+                self.patch_registry(
+                    registry,
+                    config_entries=[entries_by_location[location_id]],
+                )
+                _migrate_entity_registry(
+                    object(),
+                    SimpleNamespace(
+                        entry_id=f"entry_{location_id}",
+                        data={CONF_LOCATION_ID: location_id},
+                    ),
+                    inventory,
+                )
+
+            results.append({entry.entity_id for entry in registry.entries})
+
+        expected = {
+            "switch.home_anbang_meoltitaeb",
+            "switch.sparkplus_samuseol_meoltitaeb",
+        }
+        self.assertEqual(results, [expected, expected])
+
     def test_preserves_user_named_numbered_id_and_restore_suggestion(self) -> None:
         """Never reinterpret a user-named registry row as generated cleanup."""
         state = BridgeState(
@@ -4135,6 +4340,122 @@ class EntityRegistryMigrationTests(unittest.TestCase):
                     commands=("on", "off"),
                 )
             },
+        )
+
+    @staticmethod
+    def _primary_switch_collision_device(
+        device_id: str,
+        location_id: str,
+        room_id: str,
+    ) -> BridgeDevice:
+        power = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        status = BridgeState(
+            "main",
+            "yjswitchstatus",
+            "switch",
+            "off",
+            None,
+            "2026-09-01T00:00:00Z",
+        )
+        return BridgeDevice(
+            device_id=device_id,
+            location_id=location_id,
+            room_id=room_id,
+            name="Meoltitaeb",
+            device_type="outlet",
+            online=True,
+            states={power.key: power, status.key: status},
+            controls={
+                f"{device_id}:power": BridgeControl(
+                    f"{device_id}:power",
+                    "toggle",
+                    "Power",
+                    component=power.component,
+                    capability=power.capability,
+                    attribute=power.attribute,
+                    commands=("on", "off"),
+                ),
+                f"{device_id}:status": BridgeControl(
+                    f"{device_id}:status",
+                    "toggle",
+                    "yjswitchstatus",
+                    component=status.component,
+                    capability=status.capability,
+                    attribute=status.attribute,
+                    commands=("on", "off"),
+                ),
+            },
+        )
+
+    @classmethod
+    def _primary_switch_collision_registry(
+        cls,
+    ) -> tuple[FakeRegistry, dict[str, BridgeDevice]]:
+        devices = {
+            "dev_191": cls._primary_switch_collision_device(
+                "dev_191",
+                "loc_home",
+                "room_anbang",
+            ),
+            "dev_567": cls._primary_switch_collision_device(
+                "dev_567",
+                "loc_spark",
+                "room_samuseol",
+            ),
+        }
+        entries = [
+            SimpleNamespace(
+                entity_id="switch.meoltitaeb_switch",
+                domain="switch",
+                platform=DOMAIN,
+                unique_id="dev_191_main_switch_switch",
+                device_id="uuid_home_multitap",
+                name=None,
+                disabled_by=None,
+                original_name="전원",
+                object_id_base=None,
+                suggested_object_id="meoltitaeb_switch",
+            ),
+            SimpleNamespace(
+                entity_id="switch.meoltitaeb",
+                domain="switch",
+                platform=DOMAIN,
+                unique_id="dev_567_main_switch_switch",
+                device_id="uuid_spark_multitap",
+                name=None,
+                disabled_by=None,
+                original_name="전원",
+                object_id_base=None,
+                suggested_object_id="meoltitaeb",
+            ),
+        ]
+        return FakeRegistry(entries), devices
+
+    @staticmethod
+    def _primary_switch_collision_inventory(
+        devices: dict[str, BridgeDevice],
+    ) -> BridgeInventory:
+        return BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.157",
+            protocol_version="5",
+            locations={
+                "loc_home": "Home",
+                "loc_spark": "Sparkplus",
+            },
+            rooms={
+                "room_anbang": ("loc_home", "Anbang"),
+                "room_samuseol": ("loc_spark", "Samuseol"),
+            },
+            devices=devices,
         )
 
     def patch_registry(
