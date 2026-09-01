@@ -937,7 +937,7 @@ describe("createBridgeRuntime", () => {
     expect(JSON.stringify(log.error.mock.calls)).not.toMatch(/raw keeper|secret|token/i);
   });
 
-  test("starts HTTP before browser launch and remains live through failed browser/login state", async () => {
+  test("starts HTTP before browser launch and fails liveness after terminal browser failure", async () => {
     const root = createTempRoot();
       const launchPersistentContext = vi.fn(async () => {
         throw new Error("raw token=secret browser failure");
@@ -956,7 +956,7 @@ describe("createBridgeRuntime", () => {
       );
 
       expect(launchPersistentContext).toHaveBeenCalledTimes(3);
-      expect(live.status).toBe(200);
+      expect(live.status).toBe(503);
       expect(ready.status).toBe(503);
       expect(details.details.state).toBe("BROWSER_FAILED");
       expect(JSON.stringify(details)).not.toMatch(/secret|raw token|browser failure/i);

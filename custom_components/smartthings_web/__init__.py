@@ -65,8 +65,8 @@ from .naming import (
 
 _LOGGER = logging.getLogger(__name__)
 
-_EVENT_RECONNECT_MIN_DELAY = 0.05
-_EVENT_RECONNECT_MAX_DELAY = 1.0
+_EVENT_RECONNECT_MIN_DELAY = 1.0
+_EVENT_RECONNECT_MAX_DELAY = 60.0
 
 PLATFORMS = [
     Platform.ALARM_CONTROL_PANEL,
@@ -146,7 +146,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(_subscribe_entity_registry_migration(hass, entry))
-    entry.async_create_background_task(hass, _event_loop(entry), "smartthings_web_events")
+    entry.async_create_background_task(hass, _event_loop(entry, hass), "smartthings_web_events")
     entry.async_create_background_task(
         hass,
         _repair_loop(hass, entry, client),
@@ -298,7 +298,10 @@ def _entity_registry_topology_fingerprint(
     return (inventory.ready, rooms, tuple(devices))
 
 
-async def _event_loop(entry: SmartThingsWebConfigEntry) -> None:
+async def _event_loop(
+    entry: SmartThingsWebConfigEntry,
+    hass: HomeAssistant | None = None,
+) -> None:
     """Maintain the Bridge push stream."""
     runtime = entry.runtime_data
     reconnect_delay = _EVENT_RECONNECT_MIN_DELAY
@@ -309,7 +312,11 @@ async def _event_loop(entry: SmartThingsWebConfigEntry) -> None:
                 await runtime.handle_event(event)
                 reconnect_delay = _EVENT_RECONNECT_MIN_DELAY
         except BridgeAuthError:
-            await asyncio.sleep(5)
+            if hass is None:
+                await asyncio.sleep(5)
+                continue
+            entry.async_start_reauth(hass)
+            return
         except BridgeClientError:
             await asyncio.sleep(reconnect_delay)
             reconnect_delay = min(reconnect_delay * 2, _EVENT_RECONNECT_MAX_DELAY)

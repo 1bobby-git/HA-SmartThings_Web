@@ -4161,7 +4161,7 @@ class ControlPlaneTests(unittest.IsolatedAsyncioTestCase):
         finally:
             integration.asyncio.sleep = original_sleep
 
-        self.assertEqual(delays, [0.05, 0.1, 0.2])
+        self.assertEqual(delays, [1.0, 2.0, 4.0])
         self.assertEqual(runtime.client.inventory_calls, 4)
 
 

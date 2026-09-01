@@ -4,7 +4,7 @@ import { RuntimeStatusStore } from "../../src/state/runtime-state.js";
 import { createHealthReport } from "../../src/server/health.js";
 
 describe("createHealthReport", () => {
-  test("keeps liveness independent from login, browser, and push status", () => {
+  test("fails liveness after a terminal browser startup failure", () => {
     const store = new RuntimeStatusStore({ now: () => 1_000 });
     const snapshot = store.update({
       state: "BROWSER_FAILED",
@@ -17,7 +17,7 @@ describe("createHealthReport", () => {
 
     const report = createHealthReport(snapshot, { nowMs: 1_200 });
 
-    expect(report.live).toBe(true);
+    expect(report.live).toBe(false);
     expect(report.ready).toBe(false);
     expect(report.details).toMatchObject({
       state: "BROWSER_FAILED",
