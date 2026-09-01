@@ -58,6 +58,7 @@ export interface RuntimeStatusSnapshot {
   advancedInventoryDeviceCount: number;
   advancedInventoryLocationCount: number;
   advancedInventoryPageCount: number;
+  advancedCommandCatalogFailureCount: number;
   adapterFailureCount: number;
   pendingCommandCount: number;
   domFallbackCount: number;
@@ -119,6 +120,7 @@ const snapshotKeys = new Set<keyof RuntimeStatusSnapshot>([
   "advancedInventoryDeviceCount",
   "advancedInventoryLocationCount",
   "advancedInventoryPageCount",
+  "advancedCommandCatalogFailureCount",
   "adapterFailureCount",
   "pendingCommandCount",
   "domFallbackCount",
@@ -156,6 +158,7 @@ const counterKeys = new Set<keyof RuntimeStatusSnapshot>([
   ,"advancedInventoryDeviceCount"
   ,"advancedInventoryLocationCount"
   ,"advancedInventoryPageCount"
+  ,"advancedCommandCatalogFailureCount"
   ,"adapterFailureCount"
   ,"pendingCommandCount"
   ,"domFallbackCount"
@@ -246,6 +249,7 @@ export class RuntimeStatusStore {
       advancedInventoryDeviceCount: 0,
       advancedInventoryLocationCount: 0,
       advancedInventoryPageCount: 0,
+      advancedCommandCatalogFailureCount: 0,
       adapterFailureCount: 0,
       pendingCommandCount: 0,
       domFallbackCount: 0,

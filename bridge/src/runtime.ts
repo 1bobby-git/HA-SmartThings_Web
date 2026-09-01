@@ -16,6 +16,10 @@ import { AuthenticatedSmartThingsSession } from "./advanced/authenticated-sessio
 import { AdvancedInventoryAdapter } from "./advanced/inventory-adapter.js";
 import { AdvancedCommandAdapter } from "./advanced/command-adapter.js";
 import {
+  AdvancedCommandCatalog,
+  type CapabilityBinding as AdvancedCommandCatalogBinding
+} from "./advanced/command-catalog.js";
+import {
   CapabilityDefinitionCache,
   parseCapabilityDefinition
 } from "./advanced/capability-cache.js";
@@ -179,11 +183,59 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     }
   });
   const advancedInventory = new AdvancedInventoryAdapter(authenticatedSession);
-  const capabilityCache = new CapabilityDefinitionCache(async (capabilityId, version) =>
+  const loadCapabilityDefinition = async (capabilityId: string, version: number) =>
     parseCapabilityDefinition(
       await advancedInventory.getCapabilityDefinition(capabilityId, version)
-    )
-  );
+    );
+  const capabilityCache = new CapabilityDefinitionCache(loadCapabilityDefinition);
+  const advancedCommandCatalog = new AdvancedCommandCatalog(loadCapabilityDefinition);
+  let advancedCommandCatalogGeneration = 0;
+  const buildAdvancedCommandCatalog = async (): Promise<void> => {
+    const generation = ++advancedCommandCatalogGeneration;
+    const bindings = advancedCommandCatalogBindings(devices, volatileIdentifiers);
+    if (bindings.length === 0) return;
+    try {
+      const catalog = await advancedCommandCatalog.build(bindings);
+      if (generation !== advancedCommandCatalogGeneration) return;
+      const currentDevices = new Map(devices.snapshot().devices.map((device) => [device.id, device]));
+      const deviceIds = new Set(bindings.map((binding) => binding.deviceId));
+      let preservedFailure = false;
+      for (const deviceId of [...deviceIds].sort()) {
+        const nextCommands = catalog.commandsByDevice.get(deviceId) ?? [];
+        const nextOmissions = catalog.omissionsByDevice.get(deviceId) ?? [];
+        const currentDevice = currentDevices.get(deviceId);
+        if (
+          nextCommands.length === 0 &&
+          nextOmissions.some((omission) =>
+            omission.reason === "definition_unavailable" || omission.reason === "schema_invalid"
+          ) &&
+          (currentDevice?.advancedCommands?.length ?? 0) > 0
+        ) {
+          preservedFailure = true;
+          continue;
+        }
+        devices.observeAdvancedCommandCatalog(
+          deviceId,
+          nextCommands,
+          nextOmissions
+        );
+      }
+      if (preservedFailure) {
+        const current = status.getSnapshot();
+        status.update({
+          advancedCommandCatalogFailureCount: current.advancedCommandCatalogFailureCount + 1
+        });
+        log.warn("advanced_command_catalog_sync_failed");
+      }
+      cameraImages.observeInventory(devices.snapshot());
+    } catch {
+      const current = status.getSnapshot();
+      status.update({
+        advancedCommandCatalogFailureCount: current.advancedCommandCatalogFailureCount + 1
+      });
+      log.warn("advanced_command_catalog_sync_failed");
+    }
+  };
   const reconciliation = new StateReconciliationCoordinator({
     load: () => advancedInventory.getInventory(),
     apply: (snapshot) => {
@@ -203,6 +255,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         authoritativeWholeSnapshot: true
       });
       cameraImages.observeInventory(devices.snapshot());
+      void buildAdvancedCommandCatalog();
       status.update({
         advancedInventoryLastSyncAtMs: Date.now(),
         advancedInventoryDeviceCount: snapshot.devices.length,
@@ -1062,6 +1115,38 @@ function compareSearchParam(
   return left[0] === right[0]
     ? left[1].localeCompare(right[1])
     : left[0].localeCompare(right[0]);
+}
+
+function advancedCommandCatalogBindings(
+  devices: DeviceStore,
+  volatileIdentifiers: VolatileIdentifierMap
+): AdvancedCommandCatalogBinding[] {
+  const bindings: AdvancedCommandCatalogBinding[] = [];
+  for (const device of devices.snapshot().devices) {
+    const rawDeviceId = volatileIdentifiers.rawDeviceId(device.id);
+    if (!rawDeviceId) continue;
+    for (const binding of devices.capabilityBindings(device.id)) {
+      const rawComponent = volatileIdentifiers.rawIdentifier(binding.component);
+      const rawCapability = volatileIdentifiers.rawIdentifier(binding.capability);
+      if (!rawComponent || !rawCapability) continue;
+      bindings.push({
+        deviceId: device.id,
+        component: binding.component,
+        ...(binding.componentRole ? { componentRole: binding.componentRole } : {}),
+        capability: binding.capability,
+        rawCapability,
+        version: binding.version
+      });
+    }
+  }
+  return bindings.sort((left, right) =>
+    [
+      left.deviceId.localeCompare(right.deviceId),
+      left.component.localeCompare(right.component),
+      left.capability.localeCompare(right.capability),
+      left.version - right.version
+    ].find((result) => result !== 0) ?? 0
+  );
 }
 
 function createStatusCapturePipeline(

@@ -22,6 +22,7 @@ export interface CapabilityBinding {
 
 export interface AdvancedCommandCatalogResult {
   commandsByDevice: Map<string, AdvancedCommandDescriptor[]>;
+  omissionsByDevice: Map<string, AdvancedCommandOmission[]>;
   omissions: AdvancedCommandOmission[];
 }
 
@@ -52,22 +53,29 @@ export class AdvancedCommandCatalog {
   async build(bindings: readonly CapabilityBinding[]): Promise<AdvancedCommandCatalogResult> {
     const definitions = await this.#loadDefinitions(bindings);
     const commandsByDevice = new Map<string, AdvancedCommandDescriptor[]>();
+    const omissionsByDevice = new Map<string, AdvancedCommandOmission[]>();
     const omissions: AdvancedCommandOmission[] = [];
+    const pushOmission = (binding: CapabilityBinding, value: AdvancedCommandOmission): void => {
+      omissions.push(value);
+      const deviceOmissions = omissionsByDevice.get(binding.deviceId) ?? [];
+      deviceOmissions.push(value);
+      omissionsByDevice.set(binding.deviceId, deviceOmissions);
+    };
 
     for (const binding of sortedBindings(bindings)) {
       const result = definitions.get(bindingKey(binding));
       if (!result || result.reason) {
-        omissions.push(omission(binding, result?.reason ?? "definition_unavailable"));
+        pushOmission(binding, omission(binding, result?.reason ?? "definition_unavailable"));
         continue;
       }
       for (const command of result.invalidCommands ?? []) {
-        omissions.push(omission(binding, "schema_invalid", command));
+        pushOmission(binding, omission(binding, "schema_invalid", command));
       }
       for (const command of result.commands ?? []) {
         const descriptor = descriptorFor(binding, command);
         const blocked = safeAdvancedCommandReason(descriptor);
         if (blocked) {
-          omissions.push(omission(binding, blocked, command.name));
+          pushOmission(binding, omission(binding, blocked, command.name));
           continue;
         }
         const deviceCommands = commandsByDevice.get(binding.deviceId) ?? [];
@@ -78,6 +86,7 @@ export class AdvancedCommandCatalog {
 
     return {
       commandsByDevice: sortCommandMap(commandsByDevice),
+      omissionsByDevice: sortOmissionMap(omissionsByDevice),
       omissions: omissions.sort(compareOmissions)
     };
   }
@@ -282,6 +291,18 @@ function sortCommandMap(
         )
       )
     );
+  }
+  return sorted;
+}
+
+function sortOmissionMap(
+  omissionsByDevice: Map<string, AdvancedCommandOmission[]>
+): Map<string, AdvancedCommandOmission[]> {
+  const sorted = new Map<string, AdvancedCommandOmission[]>();
+  for (const [deviceId, omissions] of [...omissionsByDevice.entries()].sort(([left], [right]) =>
+    left.localeCompare(right)
+  )) {
+    sorted.set(deviceId, omissions.sort(compareOmissions));
   }
   return sorted;
 }

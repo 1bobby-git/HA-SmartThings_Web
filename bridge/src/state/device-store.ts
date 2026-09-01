@@ -4,6 +4,10 @@ import {
   EventDeduplicator,
   extractDeviceEventIdentity
 } from "../inspector/event-deduplicator.js";
+import type {
+  AdvancedCommandDescriptor,
+  AdvancedCommandOmission
+} from "../advanced/command-catalog-types.js";
 import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -58,6 +62,7 @@ export interface BridgeDeviceControl {
   min?: number;
   max?: number;
   step?: number;
+  transport?: "location_native" | "advanced";
 }
 
 export interface BridgeDevicePresentation {
@@ -92,6 +97,8 @@ export interface BridgeDevice {
   presentation?: BridgeDevicePresentation;
   states: BridgeDeviceState[];
   controls?: BridgeDeviceControl[];
+  advancedCommands?: AdvancedCommandDescriptor[];
+  commandOmissions?: AdvancedCommandOmission[];
   advanced?: BridgeAdvancedDeviceMetadata;
 }
 
@@ -171,6 +178,8 @@ interface MutableDevice {
   presentation?: BridgeDevicePresentation;
   states: Map<string, BridgeDeviceState>;
   controls: Map<string, BridgeDeviceControl>;
+  advancedCommands: AdvancedCommandDescriptor[];
+  commandOmissions: AdvancedCommandOmission[];
   capabilityVersions: Map<string, number>;
   componentRoles: Map<string, string>;
   advanced?: BridgeAdvancedDeviceMetadata;
@@ -362,6 +371,12 @@ export class DeviceStore {
         states: snapshotDeviceStates(device).sort(byState).map(cloneState),
         ...(device.controls.size > 0
           ? { controls: [...device.controls.values()].sort(byId).map(cloneControl) }
+          : {}),
+        ...(device.advancedCommands.length > 0
+          ? { advancedCommands: device.advancedCommands.map(cloneAdvancedCommandDescriptor) }
+          : {}),
+        ...(device.advancedCommands.length > 0 || device.commandOmissions.length > 0
+          ? { commandOmissions: device.commandOmissions.map(cloneAdvancedCommandOmission) }
           : {})
       })),
       scenes: [...this.#scenes.values()].sort(byId).map(cloneScene)
@@ -515,6 +530,36 @@ export class DeviceStore {
       this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
       this.#schedulePersist();
     }
+  }
+
+  observeAdvancedCommandCatalog(
+    deviceId: string,
+    commands: readonly AdvancedCommandDescriptor[],
+    omissions: readonly AdvancedCommandOmission[]
+  ): void {
+    const device = this.#devices.get(deviceId);
+    if (!device) return;
+    const parsedCommands = parseAdvancedCommandDescriptors(commands);
+    const parsedOmissions = parseAdvancedCommandOmissions(omissions);
+    if (!parsedCommands || !parsedOmissions) return;
+    const nextControls = new Map(
+      [...device.controls.entries()].filter(([id]) => !id.startsWith("advanced:"))
+    );
+    const projected = projectedAdvancedSwitchControls(device, parsedCommands);
+    for (const control of projected) nextControls.set(control.id, control);
+    if (
+      JSON.stringify(device.advancedCommands) === JSON.stringify(parsedCommands) &&
+      JSON.stringify(device.commandOmissions) === JSON.stringify(parsedOmissions) &&
+      JSON.stringify([...device.controls.entries()]) === JSON.stringify([...nextControls.entries()])
+    ) {
+      return;
+    }
+    device.advancedCommands = parsedCommands.map(cloneAdvancedCommandDescriptor);
+    device.commandOmissions = parsedOmissions.map(cloneAdvancedCommandOmission);
+    device.controls = nextControls;
+    const sequence = this.#nextSequence();
+    this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
+    this.#schedulePersist();
   }
 
   close(): void {
@@ -968,6 +1013,8 @@ export class DeviceStore {
       healthUpdatedAt: null,
       states: new Map(),
       controls: new Map(),
+      advancedCommands: [],
+      commandOmissions: [],
       capabilityVersions: new Map(),
       componentRoles: new Map()
     };
@@ -1133,6 +1180,8 @@ export class DeviceStore {
         ...(device.presentation ? { presentation: { ...device.presentation } } : {}),
         states: new Map(device.states.map((state) => [stateKey(state), cloneState(state)])),
         controls: new Map((device.controls ?? []).map((control) => [control.id, cloneControl(control)])),
+        advancedCommands: (device.advancedCommands ?? []).map(cloneAdvancedCommandDescriptor),
+        commandOmissions: (device.commandOmissions ?? []).map(cloneAdvancedCommandOmission),
         capabilityVersions: new Map(),
         componentRoles: new Map(),
         ...(device.advanced ? { advanced: cloneAdvancedMetadata(device.advanced) } : {})
@@ -1305,6 +1354,9 @@ function parsePersistedInventory(value: unknown): BridgeInventory | undefined {
         controls.push(control);
       }
     }
+    const advancedCommands = parseAdvancedCommandDescriptors(item.advancedCommands ?? []);
+    const commandOmissions = parseAdvancedCommandOmissions(item.commandOmissions ?? []);
+    if (!advancedCommands || !commandOmissions) return undefined;
     devices.push({
       id,
       locationId,
@@ -1318,7 +1370,11 @@ function parsePersistedInventory(value: unknown): BridgeInventory | undefined {
       ...(presentation ? { presentation } : {}),
       ...(advanced ? { advanced } : {}),
       states,
-      ...(controls.length > 0 ? { controls } : {})
+      ...(controls.length > 0 ? { controls } : {}),
+      ...(advancedCommands.length > 0 ? { advancedCommands } : {}),
+      ...(advancedCommands.length > 0 || commandOmissions.length > 0
+        ? { commandOmissions }
+        : {})
     });
   }
   const scenes: BridgeScene[] = [];
@@ -2009,8 +2065,211 @@ function controlFromParts(input: Record<string, unknown> | undefined): BridgeDev
     ...(optionCommands ? { optionCommands } : {}),
     ...(min !== undefined ? { min } : {}),
     ...(max !== undefined ? { max } : {}),
-    ...(step !== undefined ? { step } : {})
+    ...(step !== undefined ? { step } : {}),
+    ...(input.transport === "advanced" || input.transport === "location_native"
+      ? { transport: input.transport }
+      : {})
   };
+}
+
+function parseAdvancedCommandDescriptors(value: unknown): AdvancedCommandDescriptor[] | undefined {
+  if (!Array.isArray(value) || value.length > 256) return undefined;
+  const result: AdvancedCommandDescriptor[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    const item = asRecord(raw);
+    const component = readString(item?.component);
+    const componentRole = safeRole(item?.componentRole);
+    const capability = readString(item?.capability);
+    const capabilityVersion = item?.capabilityVersion;
+    const command = readString(item?.command);
+    const transport = item?.transport;
+    const confirmation = item?.confirmation;
+    const label = safeName(item?.label);
+    const labelSource = item?.labelSource;
+    if (
+      !safeToken(component) ||
+      (item?.componentRole !== undefined && !componentRole) ||
+      !safeToken(capability) ||
+      !Number.isSafeInteger(capabilityVersion) ||
+      Number(capabilityVersion) < 0 ||
+      Number(capabilityVersion) > 10_000 ||
+      !safeToken(command) ||
+      transport !== "advanced" ||
+      (confirmation !== "accepted_receipt" && confirmation !== "state") ||
+      !label ||
+      !["visible_web", "capability", "role", "fallback"].includes(String(labelSource))
+    ) {
+      return undefined;
+    }
+    const args = parseAdvancedArguments(item?.arguments);
+    if (!args) return undefined;
+    const descriptor: AdvancedCommandDescriptor = {
+      component,
+      ...(componentRole ? { componentRole } : {}),
+      capability,
+      capabilityVersion: Number(capabilityVersion),
+      command,
+      arguments: args,
+      transport,
+      confirmation,
+      label,
+      labelSource: labelSource as AdvancedCommandDescriptor["labelSource"]
+    };
+    const key = `${component}\u0000${capability}\u0000${command}\u0000${JSON.stringify(args)}`;
+    if (seen.has(key)) return undefined;
+    seen.add(key);
+    result.push(descriptor);
+  }
+  return result.sort(compareAdvancedCommandDescriptors).map(cloneAdvancedCommandDescriptor);
+}
+
+function parseAdvancedArguments(
+  value: unknown
+): AdvancedCommandDescriptor["arguments"] | undefined {
+  if (!Array.isArray(value) || value.length > 16) return undefined;
+  const result: AdvancedCommandDescriptor["arguments"] = [];
+  const names = new Set<string>();
+  for (const raw of value) {
+    const item = asRecord(raw);
+    const name = readString(item?.name);
+    if (!safeToken(name) || names.has(name)) return undefined;
+    names.add(name);
+    const required = item?.required;
+    const sensitive = item?.sensitive;
+    const schema = parseAdvancedSchema(item?.schema);
+    if (typeof required !== "boolean" || typeof sensitive !== "boolean" || !schema) {
+      return undefined;
+    }
+    const unit = item?.unit;
+    if (unit !== undefined && (typeof unit !== "string" || unit.length > 64)) return undefined;
+    result.push({
+      name,
+      required,
+      sensitive,
+      ...(unit ? { unit } : {}),
+      schema
+    });
+  }
+  return result;
+}
+
+function parseAdvancedSchema(value: unknown): AdvancedCommandDescriptor["arguments"][number]["schema"] | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const copy = jsonValue(record);
+  const copyRecord = asRecord(copy);
+  if (!copyRecord) return undefined;
+  const type = copyRecord.type;
+  if (
+    type !== undefined &&
+    !["array", "boolean", "integer", "number", "object", "string"].includes(String(type))
+  ) {
+    return undefined;
+  }
+  const minimum = copyRecord.minimum;
+  const maximum = copyRecord.maximum;
+  if (
+    (minimum !== undefined && (typeof minimum !== "number" || !Number.isFinite(minimum))) ||
+    (maximum !== undefined && (typeof maximum !== "number" || !Number.isFinite(maximum))) ||
+    (typeof minimum === "number" && typeof maximum === "number" && minimum > maximum)
+  ) {
+    return undefined;
+  }
+  if (copyRecord.enum !== undefined) {
+    if (!Array.isArray(copyRecord.enum) || copyRecord.enum.length > 128) return undefined;
+  }
+  return copyRecord as AdvancedCommandDescriptor["arguments"][number]["schema"];
+}
+
+function parseAdvancedCommandOmissions(value: unknown): AdvancedCommandOmission[] | undefined {
+  if (!Array.isArray(value) || value.length > 512) return undefined;
+  const result: AdvancedCommandOmission[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    const item = asRecord(raw);
+    const component = readString(item?.component);
+    const capability = readString(item?.capability);
+    const command = item?.command === undefined ? undefined : readString(item.command);
+    const reason = item?.reason;
+    if (
+      !safeToken(component) ||
+      !safeToken(capability) ||
+      (item?.command !== undefined && (typeof command !== "string" || !safeToken(command))) ||
+      !["definition_unavailable", "dangerous_command", "sensitive_argument", "schema_invalid"].includes(String(reason))
+    ) {
+      return undefined;
+    }
+    const omission: AdvancedCommandOmission = {
+      component,
+      capability,
+      ...(command ? { command } : {}),
+      reason: reason as AdvancedCommandOmission["reason"]
+    };
+    const key = `${component}\u0000${capability}\u0000${command ?? ""}\u0000${reason}`;
+    if (seen.has(key)) return undefined;
+    seen.add(key);
+    result.push(omission);
+  }
+  return result.sort(compareAdvancedOmissions).map(cloneAdvancedCommandOmission);
+}
+
+function projectedAdvancedSwitchControls(
+  device: MutableDevice,
+  commands: readonly AdvancedCommandDescriptor[]
+): BridgeDeviceControl[] {
+  const grouped = new Map<string, AdvancedCommandDescriptor[]>();
+  for (const command of commands) {
+    if (command.arguments.length !== 0 || (command.command !== "on" && command.command !== "off")) {
+      continue;
+    }
+    const key = `${command.component}\u0000${command.capability}`;
+    grouped.set(key, [...(grouped.get(key) ?? []), command]);
+  }
+  const controls: BridgeDeviceControl[] = [];
+  for (const [key, descriptors] of grouped) {
+    const [component, capability] = key.split("\u0000");
+    if (!component || !capability) continue;
+    if (!hasExactSwitchState(device, component, capability)) continue;
+    const commandNames = new Set(descriptors.map((descriptor) => descriptor.command));
+    if (!commandNames.has("on") || !commandNames.has("off") || descriptors.length !== 2) continue;
+    const label = descriptors.find((descriptor) => descriptor.command === "on")?.label ?? capability;
+    const control = controlFromParts({
+      id: `advanced:${component}:${capability}:switch`,
+      kind: "toggle",
+      label,
+      component,
+      capability,
+      attribute: "switch",
+      commands: ["on", "off"],
+      transport: "advanced"
+    });
+    if (control) controls.push(control);
+  }
+  return controls.sort(byId);
+}
+
+function hasExactSwitchState(device: MutableDevice, component: string, capability: string): boolean {
+  const state = device.states.get(`${component}\u0000${capability}\u0000switch`);
+  return state?.attribute === "switch" && (state.value === "on" || state.value === "off");
+}
+
+function compareAdvancedCommandDescriptors(
+  left: AdvancedCommandDescriptor,
+  right: AdvancedCommandDescriptor
+): number {
+  return `${left.component}:${left.capability}:${left.command}`.localeCompare(
+    `${right.component}:${right.capability}:${right.command}`
+  );
+}
+
+function compareAdvancedOmissions(
+  left: AdvancedCommandOmission,
+  right: AdvancedCommandOmission
+): number {
+  return `${left.component}:${left.capability}:${left.command ?? ""}:${left.reason}`.localeCompare(
+    `${right.component}:${right.capability}:${right.command ?? ""}:${right.reason}`
+  );
 }
 
 function possibleStates(value: unknown): { options: string[]; optionLabels: Record<string, string>; optionCommands: Record<string, string> } | null | undefined {
@@ -2601,9 +2860,32 @@ function mapsEqual<T>(left: ReadonlyMap<string, T>, right: ReadonlyMap<string, T
 function cloneControl(control: BridgeDeviceControl): BridgeDeviceControl {
   return {
     ...control,
+    ...(control.commands ? { commands: [...control.commands] } : {}),
+    ...(control.options ? { options: [...control.options] } : {}),
     ...(control.optionLabels ? { optionLabels: { ...control.optionLabels } } : {}),
     ...(control.optionCommands ? { optionCommands: { ...control.optionCommands } } : {})
   };
+}
+
+function cloneAdvancedCommandDescriptor(
+  descriptor: AdvancedCommandDescriptor
+): AdvancedCommandDescriptor {
+  return {
+    ...descriptor,
+    arguments: descriptor.arguments.map((argument) => ({
+      ...argument,
+      schema: {
+        ...argument.schema,
+        ...(argument.schema.enum ? { enum: [...argument.schema.enum] } : {})
+      }
+    }))
+  };
+}
+
+function cloneAdvancedCommandOmission(
+  omission: AdvancedCommandOmission
+): AdvancedCommandOmission {
+  return { ...omission };
 }
 
 function cloneState(state: BridgeDeviceState): BridgeDeviceState {

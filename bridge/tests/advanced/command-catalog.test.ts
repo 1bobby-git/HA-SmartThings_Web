@@ -152,6 +152,29 @@ describe("AdvancedCommandCatalog", () => {
     ]);
   });
 
+  test("retains aggregate omissions while grouping omissions per device", async () => {
+    const catalog = new AdvancedCommandCatalog(async (capability, version) =>
+      definition(capability, { unlock: { name: "unlock", arguments: [] } }, version)
+    );
+
+    const result = await catalog.build([
+      binding("dev_b", "main", "lock", "smartthings.lock"),
+      binding("dev_a", "main", "lock", "smartthings.lock")
+    ]);
+
+    expect(result.omissions).toEqual([
+      { component: "main", capability: "lock", command: "unlock", reason: "dangerous_command" },
+      { component: "main", capability: "lock", command: "unlock", reason: "dangerous_command" }
+    ]);
+    expect([...result.omissionsByDevice.keys()]).toEqual(["dev_a", "dev_b"]);
+    expect(result.omissionsByDevice.get("dev_a")).toEqual([
+      { component: "main", capability: "lock", command: "unlock", reason: "dangerous_command" }
+    ]);
+    expect(result.omissionsByDevice.get("dev_b")).toEqual([
+      { component: "main", capability: "lock", command: "unlock", reason: "dangerous_command" }
+    ]);
+  });
+
   test("honors bounded concurrent definition loading", async () => {
     let active = 0;
     let peak = 0;
