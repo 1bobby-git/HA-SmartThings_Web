@@ -41,6 +41,38 @@ describe("SafeCommandService", () => {
     });
   });
 
+  test("routes a composite parent aggregate through its matched child devices", async () => {
+    const fixture = multiSwitchFixture(["main", "switch2", "switch3", "switch4"]);
+    const mapped = configureChildMappedSwitch(fixture.store);
+    fixture.resync.mockImplementation(async () => {
+      mapped.setStates("off");
+      return deviceStatusEvidence();
+    });
+
+    await expect(
+      fixture.service.execute(aggregateCommand("off", "request_child_mapped_off"))
+    ).resolves.toMatchObject({
+      status: "confirmed",
+      confirmation: "inventory_snapshot",
+      transport: "advanced"
+    });
+
+    const transaction = fixture.executeComponentTransaction.mock.calls[0]?.[0];
+    expect(transaction?.actions.map((action) => action.deviceId)).toEqual([
+      "dev_145",
+      "dev_116",
+      "dev_117"
+    ]);
+    expect(transaction?.actions.every((action) => action.component === "identifier_main")).toBe(
+      true
+    );
+    expect(transaction?.actions.every((action) => action.command === "off")).toBe(true);
+    expect(fixture.executeDeviceAction).not.toHaveBeenCalled();
+    expect(
+      fixture.resync.mock.calls.map(([request]) => request?.deviceId).sort()
+    ).toEqual(["dev_116", "dev_117", "dev_145"]);
+  });
+
   test("waits for a final Advanced status refresh before rollback", async () => {
     const fixture = multiSwitchFixture(["main", "switch2"]);
     fixture.resync
@@ -2896,6 +2928,95 @@ function multiSwitchFixture(
     executeDeviceAction,
     executeComponentTransaction
   };
+}
+
+function configureChildMappedSwitch(store: DeviceStore) {
+  const mappings = [
+    { role: "switch2", childId: "dev_145", offsetMs: 2_000 },
+    { role: "switch3", childId: "dev_116", offsetMs: 3_000 },
+    { role: "switch4", childId: "dev_117", offsetMs: 4_000 }
+  ] as const;
+  let generation = 0;
+  const setStates = (
+    value: "on" | "off",
+    source: BridgeStateSource = "COMMAND_STATUS_RECHECK"
+  ) => {
+    generation += 1;
+    const base = Date.parse("2026-09-01T02:00:00.000Z") + generation * 60_000;
+    store.observeAdvancedDeviceSnapshot(
+      {
+        items: [
+          {
+            deviceId: "dev_001",
+            locationId: "loc_001",
+            deviceTypeName: "switch",
+            childDevices: mappings.map(({ childId }) => ({ deviceId: childId })),
+            components: [
+              {
+                id: "identifier_main",
+                label: "Main",
+                capabilities: [
+                  {
+                    id: "identifier_switch",
+                    version: 1,
+                    status: {
+                      switch: {
+                        value,
+                        timestamp: new Date(base + 4_500).toISOString()
+                      }
+                    }
+                  }
+                ]
+              },
+              ...mappings.map(({ role, offsetMs }) => ({
+                id: `identifier_${role}`,
+                label: role,
+                capabilities: [
+                  {
+                    id: "identifier_switch",
+                    version: 1,
+                    status: {
+                      switch: {
+                        value,
+                        timestamp: new Date(base + offsetMs).toISOString()
+                      }
+                    }
+                  }
+                ]
+              }))
+            ]
+          },
+          ...mappings.map(({ childId, offsetMs }) => ({
+            deviceId: childId,
+            locationId: "loc_001",
+            deviceTypeName: "switch",
+            parentDeviceId: "dev_001",
+            components: [
+              {
+                id: "identifier_main",
+                label: "Main",
+                capabilities: [
+                  {
+                    id: "identifier_switch",
+                    version: 1,
+                    status: {
+                      switch: {
+                        value,
+                        timestamp: new Date(base + offsetMs + 100).toISOString()
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }))
+        ]
+      },
+      { source }
+    );
+  };
+  setStates("on", "ADVANCED_SNAPSHOT");
+  return { setStates };
 }
 
 function readyDeviceStore(

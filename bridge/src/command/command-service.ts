@@ -201,6 +201,7 @@ interface DedupeEntry {
 }
 
 interface ComponentVectorState {
+  deviceId: string;
   component: string;
   capability: string;
   attribute: string;
@@ -212,9 +213,11 @@ interface ComponentSwitchPlan {
   rollbackTransaction: ComponentTransactionExecutionInput;
   desiredVector: ComponentVectorState[];
   originalVector: ComponentVectorState[];
+  verificationDeviceIds: string[];
 }
 
 interface ComponentSwitchEntry {
+  deviceId: string;
   state: BridgeDeviceState;
   capabilityVersion: number;
   originalCommand: "on" | "off";
@@ -319,10 +322,11 @@ export class SafeCommandService {
             device,
             effective,
             state,
-            this.options.devices
+            this.options.devices,
+            snapshot
           );
     if (componentPlan) {
-      if (componentVectorMatches(snapshot, effective.targetId, componentPlan.desiredVector)) {
+      if (componentVectorMatches(snapshot, componentPlan.desiredVector)) {
         return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
       }
       return await this.#executeComponentPlan(effective, componentPlan);
@@ -437,10 +441,9 @@ export class SafeCommandService {
       request.timeout === undefined ? this.options.timeoutMs : request.timeout * 1_000;
     const confirmation = waitForComponentVector({
       devices: this.options.devices,
-      deviceId: request.targetId,
       expected: plan.desiredVector,
       afterSequence: this.options.devices.currentSequence(),
-      resync: () => this.options.resync({ deviceId: request.targetId })
+      resync: () => this.#resyncComponentPlan(plan)
     });
     try {
       await execute(plan.transaction);
@@ -467,10 +470,9 @@ export class SafeCommandService {
     }
     const rollbackConfirmation = waitForComponentVector({
       devices: this.options.devices,
-      deviceId: request.targetId,
       expected: plan.originalVector,
       afterSequence: this.options.devices.currentSequence(),
-      resync: () => this.options.resync({ deviceId: request.targetId })
+      resync: () => this.#resyncComponentPlan(plan)
     });
     try {
       await execute(plan.rollbackTransaction);
@@ -489,6 +491,26 @@ export class SafeCommandService {
       throw new SafeCommandError("component_command_rollback_failed");
     }
     throw new SafeCommandError("command_confirmation_timeout");
+  }
+
+  async #resyncComponentPlan(
+    plan: ComponentSwitchPlan
+  ): Promise<CommandResyncEvidence | undefined> {
+    const evidence = await Promise.all(
+      plan.verificationDeviceIds.map((deviceId) => this.options.resync({ deviceId }))
+    );
+    const verified = evidence.filter(
+      (item): item is CommandResyncEvidence =>
+        item !== undefined && item.source === "advanced_device_status"
+    );
+    if (verified.length !== evidence.length) {
+      return undefined;
+    }
+    return {
+      source: "advanced_device_status",
+      authoritativeSnapshot: false,
+      startedAtMs: Math.min(...verified.map((item) => item.startedAtMs))
+    };
   }
 
   async #executeScene(
@@ -843,17 +865,12 @@ function waitForLocationArmState(options: { devices: DeviceStore; locationId: st
 
 function waitForComponentVector(options: {
   devices: DeviceStore;
-  deviceId: string;
   expected: readonly ComponentVectorState[];
   afterSequence: number;
   resync: CommandResync;
 }): ConfirmationWait {
   const matchesSnapshot = () =>
-    componentVectorMatches(
-      options.devices.snapshot(),
-      options.deviceId,
-      options.expected
-    );
+    componentVectorMatches(options.devices.snapshot(), options.expected);
   return waitForPredicate({
     devices: options.devices,
     afterSequence: options.afterSequence,
@@ -1145,7 +1162,8 @@ function buildComponentSwitchPlan(
   device: BridgeDevice,
   request: ResolvedDeviceRequest,
   requestedState: BridgeDeviceState,
-  devices: DeviceStore
+  devices: DeviceStore,
+  snapshot: ReturnType<DeviceStore["snapshot"]>
 ): ComponentSwitchPlan | undefined {
   const desiredCommand = request.command;
   if (
@@ -1164,9 +1182,12 @@ function buildComponentSwitchPlan(
   ) {
     throw new SafeCommandError("unsupported_command");
   }
-  const entries: Array<ComponentSwitchEntry | undefined> = states.map((state) => {
+  const entryFor = (
+    deviceId: string,
+    state: BridgeDeviceState
+  ): ComponentSwitchEntry | undefined => {
     const capabilityVersion = devices.capabilityVersion(
-      device.id,
+      deviceId,
       state.component,
       state.capability
     );
@@ -1182,20 +1203,39 @@ function buildComponentSwitchPlan(
       return undefined;
     }
     return {
+      deviceId,
       state,
       capabilityVersion,
       originalCommand,
       desiredValue,
       desiredCommand
     };
-  });
-  if (entries.some((entry) => entry === undefined)) return undefined;
-  const safeEntries = entries.filter((entry): entry is ComponentSwitchEntry => entry !== undefined);
+  };
+  const childDeviceIds = device.advanced?.childDeviceIds ?? [];
+  let parentVerificationStates: BridgeDeviceState[] = [];
+  let safeEntries: ComponentSwitchEntry[];
+  if (childDeviceIds.length > 0) {
+    const childEntries = childMappedSwitchEntries(
+      states,
+      childDeviceIds,
+      snapshot,
+      entryFor
+    );
+    if (!childEntries) return undefined;
+    safeEntries = childEntries;
+    parentVerificationStates = states;
+  } else {
+    const entries = states.map((state) => entryFor(device.id, state));
+    if (entries.some((entry) => entry === undefined)) return undefined;
+    safeEntries = entries.filter(
+      (entry): entry is ComponentSwitchEntry => entry !== undefined
+    );
+  }
   const action = (
     entry: (typeof safeEntries)[number],
     command: "on" | "off"
   ): ComponentActionExecutionInput => ({
-    deviceId: device.id,
+    deviceId: entry.deviceId,
     component: entry.state.component,
     capability: entry.state.capability,
     capabilityVersion: entry.capabilityVersion,
@@ -1215,18 +1255,99 @@ function buildComponentSwitchPlan(
       rollbackActions: safeEntries.map((entry) => action(entry, entry.originalCommand))
     },
     desiredVector: safeEntries.map((entry) => ({
+      deviceId: entry.deviceId,
       component: entry.state.component,
       capability: entry.state.capability,
       attribute: entry.state.attribute,
       value: entry.desiredValue
+    })).concat(parentVerificationStates.map((state) => {
+      const value = desiredValueFor(desiredCommand, [], state);
+      if (value === undefined) throw new SafeCommandError("invalid_arguments");
+      return {
+        deviceId: device.id,
+        component: state.component,
+        capability: state.capability,
+        attribute: state.attribute,
+        value
+      };
     })),
     originalVector: safeEntries.map((entry) => ({
+      deviceId: entry.deviceId,
       component: entry.state.component,
       capability: entry.state.capability,
       attribute: entry.state.attribute,
       value: entry.state.value
-    }))
+    })).concat(parentVerificationStates.map((state) => ({
+      deviceId: device.id,
+      component: state.component,
+      capability: state.capability,
+      attribute: state.attribute,
+      value: state.value
+    }))),
+    verificationDeviceIds: [...new Set(safeEntries.map((entry) => entry.deviceId))]
   };
+}
+
+function childMappedSwitchEntries(
+  parentStates: readonly BridgeDeviceState[],
+  childDeviceIds: readonly string[],
+  snapshot: ReturnType<DeviceStore["snapshot"]>,
+  entryFor: (deviceId: string, state: BridgeDeviceState) => ComponentSwitchEntry | undefined
+): ComponentSwitchEntry[] | undefined {
+  const secondaryStates = parentStates.filter((state) => componentRole(state) !== "main");
+  if (secondaryStates.length === 0 || secondaryStates.length !== childDeviceIds.length) {
+    return undefined;
+  }
+  const candidates = childDeviceIds.map((deviceId) => {
+    const device = snapshot.devices.find((item) => item.id === deviceId);
+    const state = device?.states.find(
+      (item) =>
+        item.attribute === "switch" &&
+        item.componentRole !== undefined &&
+        componentRole(item) === "main"
+    );
+    if (
+      !device ||
+      !device.online ||
+      !state ||
+      !state.updatedAt ||
+      dangerousControlText(device.type ?? "") ||
+      (device.controls ?? []).some(dangerousControl)
+    ) {
+      return undefined;
+    }
+    return { device, state, updatedAt: state.updatedAt };
+  });
+  if (candidates.some((candidate) => candidate === undefined)) return undefined;
+  const remaining = candidates.filter(
+    (candidate): candidate is NonNullable<typeof candidate> => candidate !== undefined
+  );
+  const entries: ComponentSwitchEntry[] = [];
+  for (const parentState of secondaryStates) {
+    const parentUpdatedAt = parentState.updatedAt;
+    if (!parentUpdatedAt) return undefined;
+    const matches = remaining
+      .map((candidate, index) => ({
+        ...candidate,
+        index,
+        deltaMs: Math.abs(
+          Date.parse(candidate.updatedAt) - Date.parse(parentUpdatedAt)
+        )
+      }))
+      .filter(
+        (candidate) =>
+          candidate.deltaMs <= 2_000 &&
+          stateValuesEqual(candidate.state.value, parentState.value)
+      )
+      .sort((left, right) => left.deltaMs - right.deltaMs);
+    const match = matches[0];
+    if (!match || (matches[1] && matches[1].deltaMs === match.deltaMs)) return undefined;
+    const entry = entryFor(match.device.id, match.state);
+    if (!entry) return undefined;
+    entries.push(entry);
+    remaining.splice(match.index, 1);
+  }
+  return remaining.length === 0 ? entries : undefined;
 }
 
 function switchCommandForValue(state: BridgeDeviceState): "on" | "off" | undefined {
@@ -1265,12 +1386,11 @@ function componentRole(state: BridgeDeviceState): string {
 
 function componentVectorMatches(
   snapshot: ReturnType<DeviceStore["snapshot"]>,
-  deviceId: string,
   expected: readonly ComponentVectorState[]
 ): boolean {
-  const device = snapshot.devices.find((candidate) => candidate.id === deviceId);
-  if (!device) return false;
   return expected.every((item) => {
+    const device = snapshot.devices.find((candidate) => candidate.id === item.deviceId);
+    if (!device) return false;
     const state = findState(
       device,
       item.component,
