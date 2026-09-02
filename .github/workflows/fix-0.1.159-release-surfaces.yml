@@ -1,0 +1,118 @@
+name: Fix 0.1.159 release surfaces
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fix-0.1.159-release-surfaces.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Synchronize 0.1.159 release surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          old = "0.1.158"
+          new = "0.1.159"
+
+          for raw_path in (
+              "tests/addon-config.test.ts",
+              "tests/protocol-version-contract.test.ts",
+          ):
+              path = Path(raw_path)
+              text = path.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"Expected {old} in {path}")
+              path.write_text(text.replace(old, new), encoding="utf-8")
+
+          protocol_path = Path("protocol/version.json")
+          protocol = json.loads(protocol_path.read_text(encoding="utf-8"))
+          protocol["bridge_version"] = new
+          protocol_path.write_text(json.dumps(protocol, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+          runtime_path = Path("bridge/src/runtime.ts")
+          runtime = runtime_path.read_text(encoding="utf-8")
+          old_runtime = f'const bridgeVersion = "{old}";'
+          new_runtime = f'const bridgeVersion = "{new}";'
+          if runtime.count(old_runtime) != 1:
+              raise SystemExit(f"Expected exactly one runtime version constant: {old_runtime}")
+          runtime_path.write_text(runtime.replace(old_runtime, new_runtime, 1), encoding="utf-8")
+
+          changelog_path = Path("addon/smartthings_web_bridge/CHANGELOG.md")
+          changelog = changelog_path.read_text(encoding="utf-8")
+          heading = "## 0.1.159"
+          if heading not in changelog:
+              entry = (
+                  "## 0.1.159\n\n"
+                  "- Home Assistant 2026.3 이상 로컬 Brands Proxy API용 SmartThings 아이콘과 "
+                  "라이트/다크 로고를 통합 패키지에 포함했습니다.\n"
+                  "- Bridge 프로토콜 계약과 장치 제어 동작은 변경하지 않았습니다.\n\n"
+              )
+              changelog_path.write_text(entry + changelog, encoding="utf-8")
+          PY
+
+      - name: Verify synchronized versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const YAML = require("yaml");
+          const expected = "0.1.159";
+          const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          const packageLock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
+          const protocol = JSON.parse(fs.readFileSync("protocol/version.json", "utf8"));
+          const manifest = JSON.parse(fs.readFileSync("custom_components/smartthings_web/manifest.json", "utf8"));
+          const addon = YAML.parse(fs.readFileSync("addon/smartthings_web_bridge/config.yaml", "utf8"));
+          const runtime = fs.readFileSync("bridge/src/runtime.ts", "utf8");
+          for (const [name, value] of Object.entries({
+            package: packageJson.version,
+            packageLock: packageLock.version,
+            packageLockRoot: packageLock.packages?.[""]?.version,
+            protocol: protocol.bridge_version,
+            manifest: manifest.version,
+            addon: addon.version,
+          })) {
+            if (value !== expected) throw new Error(`${name}=${value}, expected ${expected}`);
+          }
+          if (!runtime.includes(`const bridgeVersion = "${expected}";`)) {
+            throw new Error("runtime bridge version is not synchronized");
+          }
+          NODE
+          npm ci
+          npm test
+          npm run typecheck
+          git diff --check
+
+      - name: Commit synchronized release surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/fix-0.1.159-release-surfaces.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            tests/addon-config.test.ts \
+            tests/protocol-version-contract.test.ts \
+            protocol/version.json \
+            bridge/src/runtime.ts \
+            addon/smartthings_web_bridge/CHANGELOG.md \
+            .github/workflows/fix-0.1.159-release-surfaces.yml
+          git commit -m "Synchronize SmartThings Web 0.1.159 release surfaces"
+          git push origin HEAD:main
