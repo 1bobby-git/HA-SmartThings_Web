@@ -1112,7 +1112,7 @@ def _primary_switch_collision_targets(
     current_registry_entries: Sequence[object],
     inventory: BridgeInventory,
 ) -> dict[str, str]:
-    """Return room-qualified IDs for generated primary switches sharing a base."""
+    """Return device-name-only IDs for generated primary switches."""
     rows: list[tuple[object, object, str, str]] = []
     for entity_entry in _all_registry_entries(registry, current_registry_entries):
         domain = getattr(entity_entry, "domain", "")
@@ -1129,14 +1129,7 @@ def _primary_switch_collision_targets(
         object_id = canonical_primary_control_object_id(inventory, device)
         if not object_id:
             continue
-        rows.append(
-            (
-                entity_entry,
-                device,
-                str(getattr(entity_entry, "unique_id", "")),
-                object_id,
-            )
-        )
+        rows.append((entity_entry, device, str(getattr(entity_entry, "unique_id", "")), object_id))
 
     grouped: dict[str, list[tuple[object, object, str, str]]] = {}
     for row in rows:
@@ -1148,72 +1141,63 @@ def _primary_switch_collision_targets(
         for entity_entry in current_registry_entries
         if getattr(entity_entry, "platform", None) == DOMAIN
     }
-    assigned: set[str] = set()
     for exact_entity_id, group in grouped.items():
-        owner = registry.async_get(exact_entity_id)
-        owner_unique_id = (
-            str(getattr(owner, "unique_id", "")) if owner is not None else ""
-        )
-        owner_platform = getattr(owner, "platform", None) if owner is not None else None
-        collides = len(group) > 1 or (
-            owner_platform == DOMAIN
-            and owner_unique_id not in {row[2] for row in group}
-        )
-        if not collides:
+        ordered_group = sorted(group, key=lambda row: (_primary_switch_location_room_key(inventory, row[1]), row[2]))
+        generated_group = [
+            row for row in ordered_group
+            if _generated_primary_switch_entity_id(
+                row[0], row[3],
+                qualified_object_id=_qualified_primary_switch_object_id(inventory, row[1], row[3]),
+                qualified_device_suffix=(slugify(str(getattr(row[1], "device_id", ""))) or row[2]),
+            )
+        ]
+        if not generated_group:
             continue
-        for _entity_entry, device, unique_id, object_id in sorted(
-            group,
-            key=lambda row: (
-                _primary_switch_location_room_key(inventory, row[1]),
-                row[2],
-            ),
-        ):
+        generated_unique_ids = {row[2] for row in generated_group}
+        next_index = 1
+        for entity_entry, _device, unique_id, _object_id in generated_group:
+            candidate = None
+            for index in range(next_index, 1000):
+                numbered_candidate = exact_entity_id if index == 1 else f"{exact_entity_id}_{index}"
+                occupant = registry.async_get(numbered_candidate)
+                occupant_unique_id = str(getattr(occupant, "unique_id", "")) if occupant is not None else ""
+                if occupant is not None and occupant_unique_id not in generated_unique_ids:
+                    continue
+                candidate = numbered_candidate
+                next_index = index + 1
+                break
+            if candidate is None:
+                break
             if unique_id not in current_unique_ids:
                 continue
-            candidate = (
-                "switch."
-                f"{_qualified_primary_switch_object_id(inventory, device, object_id)}"
-            )
-            entity_entry = next(
-                (
-                    row
-                    for row in current_registry_entries
-                    if str(getattr(row, "unique_id", "")) == unique_id
-                ),
-                None,
-            )
-            if entity_entry is None or not _generated_primary_switch_entity_id(
-                entity_entry,
-                object_id,
-            ):
-                continue
-            if candidate in assigned:
-                device_suffix = (
-                    slugify(str(getattr(device, "device_id", ""))) or unique_id
-                )
-                candidate = f"{candidate}_{device_suffix}"
-            if candidate == exact_entity_id:
+            if candidate == str(getattr(entity_entry, "entity_id", "")):
                 continue
             targets[unique_id] = candidate
-            assigned.add(candidate)
     return targets
 
 
-def _generated_primary_switch_entity_id(entity_entry: object, object_id: str) -> bool:
+def _generated_primary_switch_entity_id(
+    entity_entry: object,
+    object_id: str,
+    *,
+    qualified_object_id: str | None = None,
+    qualified_device_suffix: str | None = None,
+) -> bool:
     """Return whether the current switch ID is one of our generated forms."""
     current_object_id = str(getattr(entity_entry, "entity_id", "")).partition(".")[2]
     if not current_object_id:
         return False
-    generated = {
-        object_id,
-        f"{object_id}_switch",
-    }
+    generated = {object_id, f"{object_id}_switch"}
+    if qualified_object_id:
+        generated.add(qualified_object_id)
+        if qualified_device_suffix:
+            generated.add(f"{qualified_object_id}_{qualified_device_suffix}")
     if current_object_id in generated:
         return True
     for generated_object_id in generated:
         numbered_prefix = f"{generated_object_id}_"
         if current_object_id.startswith(numbered_prefix):
-            suffix = current_object_id[len(numbered_prefix) :]
+            suffix = current_object_id[len(numbered_prefix):]
             if suffix.isdigit() and int(suffix) >= 2:
                 return True
     return _generated_primary_switch_feedback_object_id(current_object_id, object_id)

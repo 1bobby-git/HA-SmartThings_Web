@@ -528,7 +528,7 @@ export class SmartThingsWebUiCommandExecutor {
       let action = page.getByRole("button", { name: actionName });
       if ((await action.count()) !== 1) {
         const monitor = page.getByRole("button", {
-          name: /^(?:SmartThings\s+)?Home Monitor$|^홈 모니터$/iu
+          name: homeMonitorName(input.locationNames?.[input.locationId])
         });
         await clickExactlyOne(monitor);
         action = page.getByRole("button", { name: actionName });
@@ -1827,6 +1827,17 @@ function locationActionName(action: "armAway" | "armStay" | "disarm"): RegExp {
   if (action === "armAway") return /^(?:Arm away|Away|외출|외출 모드)$/iu;
   if (action === "armStay") return /^(?:Arm stay|Stay|재실|재실 모드)$/iu;
   return /^(?:Disarm|Disarmed|해제|보안 해제)$/iu;
+}
+
+function homeMonitorName(locationName?: string): RegExp {
+  const normalizedLocationName = locationName?.trim();
+  const locationPrefix = normalizedLocationName
+    ? `(?:${escapeRegExp(normalizedLocationName)}\\s*)?`
+    : "";
+  return new RegExp(
+    `^\\s*${locationPrefix}(?:(?:SmartThings\\s*)?Home\\s*Monitor|홈\\s*모니터)\\s*$`,
+    "iu"
+  );
 }
 
 function controlLabelFor(attribute: string): string | undefined {
