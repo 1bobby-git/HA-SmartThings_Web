@@ -27,6 +27,7 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
+          import re
 
           p = Path('custom_components/smartthings_web/__init__.py')
           s = p.read_text(encoding='utf-8')
@@ -45,24 +46,33 @@ jobs:
 
           p = Path('custom_components/smartthings_web/tests/test_init.py')
           s = p.read_text(encoding='utf-8')
-          replacements = {
-              'def test_primary_switch_name_collision_uses_location_room_qualified_ids(self) -> None:': 'def test_primary_switch_name_collision_uses_device_name_numbered_ids(self) -> None:',
-              '"""Do not steal an exact primary switch ID across config entries."""': '"""Use only the device name and a numeric suffix across config entries."""',
-              'self.assertEqual(home_entry.entity_id, "switch.home_anbang_meoltitaeb")': 'self.assertEqual(home_entry.entity_id, "switch.meoltitaeb_2")',
-              'self.assertEqual(home_entry.suggested_object_id, "home_anbang_meoltitaeb")': 'self.assertEqual(home_entry.suggested_object_id, "meoltitaeb_2")',
-              '"""Both load orders end with stable meaningful IDs, not _2 or _switch."""': '"""Both load orders converge on device-name-only IDs with numeric suffixes."""',
-              '''        expected = {
-              "switch.home_anbang_meoltitaeb",
-              "switch.sparkplus_samuseol_meoltitaeb",
-          }''': '''        expected = {
-              "switch.meoltitaeb",
-              "switch.meoltitaeb_2",
-          }''',
-          }
-          for old_text, new_text in replacements.items():
-              if old_text not in s:
-                  raise SystemExit(f'test_init replacement not found: {old_text[:80]}')
-              s = s.replace(old_text, new_text, 1)
+          s, n1 = re.subn(
+              r'(    def test_primary_switch_name_collision_uses_location_room_qualified_ids\(self\) -> None:\n)(.*?)(?=    def test_primary_switch_name_collision_converges_independent_of_entry_order)',
+              lambda m: m.group(1).replace(
+                  'test_primary_switch_name_collision_uses_location_room_qualified_ids',
+                  'test_primary_switch_name_collision_uses_device_name_numbered_ids',
+              ) + m.group(2)
+                  .replace('"""Do not steal an exact primary switch ID across config entries."""', '"""Use only the device name and a numeric suffix across config entries."""')
+                  .replace('self.assertEqual(home_entry.entity_id, "switch.home_anbang_meoltitaeb")', 'self.assertEqual(home_entry.entity_id, "switch.meoltitaeb_2")')
+                  .replace('self.assertEqual(home_entry.suggested_object_id, "home_anbang_meoltitaeb")', 'self.assertEqual(home_entry.suggested_object_id, "meoltitaeb_2")'),
+              s,
+              count=1,
+              flags=re.S,
+          )
+          if n1 != 1:
+              raise SystemExit('first primary collision test not found')
+          s, n2 = re.subn(
+              r'(    def test_primary_switch_name_collision_converges_independent_of_entry_order\(self\) -> None:\n)(.*?)(?=    def test_primary_switch_collision_preserves_arbitrary_custom_entity_id)',
+              lambda m: m.group(1) + m.group(2)
+                  .replace('"""Both load orders end with stable meaningful IDs, not _2 or _switch."""', '"""Both load orders converge on device-name-only IDs with numeric suffixes."""')
+                  .replace('"switch.home_anbang_meoltitaeb",', '"switch.meoltitaeb",')
+                  .replace('"switch.sparkplus_samuseol_meoltitaeb",', '"switch.meoltitaeb_2",'),
+              s,
+              count=1,
+              flags=re.S,
+          )
+          if n2 != 1:
+              raise SystemExit('convergence collision test not found')
           p.write_text(s, encoding='utf-8')
 
           for filename in ('tests/addon-config.test.ts', 'tests/protocol-version-contract.test.ts'):
