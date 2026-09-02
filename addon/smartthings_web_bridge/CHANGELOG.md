@@ -1,3 +1,10 @@
+## 0.1.161
+
+- 최종 SmartThings 기본 아이콘을 통합 구성 요소와 애드온에 다시 적용했습니다.
+- 통합 구성 요소는 Home Assistant 로컬 Brands Proxy API가 제공하는 256px 및 512px 투명 PNG를 포함합니다.
+- 애드온 아이콘은 동일한 디자인의 128px 투명 PNG로 맞췄습니다.
+- 세션 유지, 프로토콜 및 기기 제어 동작은 변경하지 않았습니다.
+
 ## 0.1.160
 
 - `/location` 정적 GET뿐 아니라 로그인된 동일 브라우저의 경량 Advanced location GET도 5분마다 호출해 실제 SmartThings 인증 세션을 갱신합니다.
