@@ -1,3 +1,8 @@
+## 0.1.164
+
+- Home Monitor 가용성을 armState 수집 여부와 분리했습니다. Location이 존재하면 초기 상태가 아직 없어도 alarm_control_panel을 제어할 수 있습니다.
+- 다중 Location에서 Sparkplus처럼 첫 SECURITY_ARM_STATE_EVENT가 아직 수신되지 않은 Home Monitor도 unavailable 대신 unknown 상태로 유지하고 외출/재실/해제 명령을 허용합니다.
+
 ## 0.1.163
 
 - Home Monitor 제어를 my.smartthings.com 대시보드 카드와 열린 모달에 정확히 연결하고, Home/다중 Location 모두 동일한 위치 단위 경로를 사용합니다.
