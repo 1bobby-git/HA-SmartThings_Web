@@ -3,7 +3,7 @@ name: Release
 on:
   workflow_run:
     workflows:
-      - Security checks
+      - Validate
     types:
       - completed
     branches:
@@ -32,7 +32,7 @@ jobs:
           ref: ${{ env.RELEASE_SHA }}
           fetch-depth: 0
 
-      - name: Wait for HACS and Hassfest validation
+      - name: Wait for security checks
         shell: bash
         run: |
           set -euo pipefail
@@ -40,7 +40,7 @@ jobs:
             run_json="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${RELEASE_SHA}&event=push&per_page=100")"
             read -r status conclusion < <(python -c '
           import json, sys
-          runs=[r for r in json.load(sys.stdin).get("workflow_runs", []) if r.get("name")=="Validate"]
+          runs=[r for r in json.load(sys.stdin).get("workflow_runs", []) if r.get("name")=="Security checks"]
           run=max(runs, key=lambda x:x.get("created_at", ""), default={})
           print(run.get("status", "missing"), run.get("conclusion") or "pending")
           ' <<<"${run_json}")
@@ -48,7 +48,7 @@ jobs:
               [[ "${conclusion}" == "success" ]]
               break
             fi
-            [[ "${attempt}" != "30" ]] || { echo "Validate did not complete successfully." >&2; exit 1; }
+            [[ "${attempt}" != "30" ]] || { echo "Security checks did not complete successfully." >&2; exit 1; }
             sleep 10
           done
 
