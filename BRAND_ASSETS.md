@@ -14,3 +14,5 @@ Included files:
 - `dark_logo.png` and `dark_logo@2x.png` — dark-theme SmartThings wordmark
 
 Home Assistant 2026.3 and later serves these files through the local Brands Proxy API. The integration-local assets take precedence over legacy CDN assets.
+
+The v0.1.161 refresh reapplies the final SmartThings icon to the integration package and provides the same design as a 128×128 transparent add-on icon. No external Brands repository is required at runtime.
