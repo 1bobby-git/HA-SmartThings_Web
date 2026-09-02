@@ -21,7 +21,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.13'
-      - name: Fix regression expectations and collision priority
+      - name: Finalize source, tests, and release versions
         shell: bash
         run: |
           set -euo pipefail
@@ -78,9 +78,19 @@ jobs:
           for filename in ('tests/addon-config.test.ts', 'tests/protocol-version-contract.test.ts'):
               p = Path(filename)
               s = p.read_text(encoding='utf-8')
-              if '0.1.161' not in s:
-                  raise SystemExit(f'old version expectation missing: {filename}')
               p.write_text(s.replace('0.1.161', '0.1.162'), encoding='utf-8')
+
+          p = Path('protocol/version.json')
+          s = p.read_text(encoding='utf-8')
+          if '"bridge_version": "0.1.161"' not in s:
+              raise SystemExit('protocol bridge version mismatch')
+          p.write_text(s.replace('"bridge_version": "0.1.161"', '"bridge_version": "0.1.162"', 1), encoding='utf-8')
+
+          p = Path('bridge/src/runtime.ts')
+          s = p.read_text(encoding='utf-8')
+          if 'const bridgeVersion = "0.1.161";' not in s:
+              raise SystemExit('runtime bridge version mismatch')
+          p.write_text(s.replace('const bridgeVersion = "0.1.161";', 'const bridgeVersion = "0.1.162";', 1), encoding='utf-8')
           PY
       - name: Full regression suite
         shell: bash
