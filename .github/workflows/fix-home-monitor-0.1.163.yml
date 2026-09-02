@@ -1,0 +1,274 @@
+name: Fix Home Monitor 0.1.163
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - name: Apply Home Monitor dashboard fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          p = Path('bridge/src/browser/command-page.ts')
+          s = p.read_text(encoding='utf-8')
+          old = '''    try {
+              const actionName = locationActionName(input.action);
+              let action = page.getByRole("button", { name: actionName });
+              if ((await action.count()) !== 1) {
+                const monitor = page.getByRole("button", {
+                  name: homeMonitorName(input.locationNames?.[input.locationId])
+                });
+                await clickExactlyOne(monitor);
+                action = page.getByRole("button", { name: actionName });
+                try {
+                  await action.first().waitFor({ state: "visible", timeout: 15_000 });
+                } catch {
+                  throw new Error("command_control_not_found");
+                }
+              }
+              await clickExactlyOne(action);
+            } finally {'''
+          new = '''    try {
+              const actionName = locationActionName(input.action);
+              let action = await findLocationActionControl(page, actionName, 250);
+              if (!action) {
+                const monitor = await findHomeMonitorControl(
+                  page,
+                  homeMonitorName(input.locationNames?.[input.locationId])
+                );
+                if (!monitor) throw new Error("command_control_not_found");
+                await monitor.click({ timeout: 15_000 });
+
+                const dialog = page.getByRole("dialog");
+                try {
+                  await dialog.first().waitFor({ state: "visible", timeout: 15_000 });
+                } catch {
+                  throw new Error("command_control_not_found");
+                }
+                if ((await dialog.count()) !== 1) {
+                  throw new Error("command_control_ambiguous");
+                }
+                action = await findLocationActionControl(dialog, actionName, 15_000);
+              }
+              if (!action) throw new Error("command_control_not_found");
+              await action.click({ timeout: 15_000 });
+            } finally {'''
+          if old not in s:
+              raise SystemExit('location action block not found')
+          s = s.replace(old, new, 1)
+
+          old = '''function locationActionName(action: "armAway" | "armStay" | "disarm"): RegExp {
+            if (action === "armAway") return /^(?:Arm away|Away|외출|외출 모드)$/iu;
+            if (action === "armStay") return /^(?:Arm stay|Stay|재실|재실 모드)$/iu;
+            return /^(?:Disarm|Disarmed|해제|보안 해제)$/iu;
+          }
+
+          function homeMonitorName(locationName?: string): RegExp {
+            const normalizedLocationName = locationName?.trim();
+            const locationPrefix = normalizedLocationName
+              ? `(?:${escapeRegExp(normalizedLocationName)}\\s*)?`
+              : "";
+            return new RegExp(
+              `^\\s*${locationPrefix}(?:(?:SmartThings\\s*)?Home\\s*Monitor|홈\\s*모니터)\\s*$`,
+              "iu"
+            );
+          }'''
+          new = '''async function findLocationActionControl(
+            scope: CommandControlSurface,
+            actionName: RegExp,
+            timeoutMs: number
+          ): Promise<CommandLocatorLike | undefined> {
+            for (const role of ["button", "radio", "tab"]) {
+              const candidate = scope.getByRole(role, { name: actionName });
+              const count = await candidate.count();
+              if (count > 1) throw new Error("command_control_ambiguous");
+              if (count !== 1) continue;
+              try {
+                await candidate.first().waitFor({ state: "visible", timeout: timeoutMs });
+                return candidate;
+              } catch {
+                continue;
+              }
+            }
+            return undefined;
+          }
+
+          async function findHomeMonitorControl(
+            scope: CommandControlSurface,
+            monitorName: RegExp
+          ): Promise<CommandLocatorLike | undefined> {
+            for (const role of ["button", "link"]) {
+              const candidate = scope.getByRole(role, { name: monitorName });
+              const count = await candidate.count();
+              if (count > 1) throw new Error("command_control_ambiguous");
+              if (count === 1) {
+                try {
+                  await candidate.first().waitFor({ state: "visible", timeout: 15_000 });
+                  return candidate;
+                } catch {
+                  continue;
+                }
+              }
+            }
+            return undefined;
+          }
+
+          function locationActionName(action: "armAway" | "armStay" | "disarm"): RegExp {
+            if (action === "armAway") {
+              return /^(?:Arm away|Away|Away mode|외출|외출 모드|외출 중|외출중)$/iu;
+            }
+            if (action === "armStay") {
+              return /^(?:Arm stay|Stay|Stay mode|재실|재실 모드|재실 중|재실중|집에 있음|귀가)$/iu;
+            }
+            return /^(?:Disarm|Disarmed|Off|해제|해제됨|보안 해제|사용 안 함)$/iu;
+          }
+
+          function homeMonitorName(locationName?: string): RegExp {
+            const normalizedLocationName = locationName?.trim();
+            const locationPrefix = normalizedLocationName
+              ? `(?:${escapeRegExp(normalizedLocationName)}\\s*)?`
+              : "";
+            return new RegExp(
+              `^\\s*${locationPrefix}(?:(?:SmartThings\\s*)?Home\\s*Monitor|홈\\s*모니터|홈모니터)\\s*$`,
+              "iu"
+            );
+          }'''
+          if old not in s:
+              raise SystemExit('home monitor helpers block not found')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+
+          p = Path('bridge/src/state/device-store.ts')
+          s = p.read_text(encoding='utf-8')
+          old = '''    const updatedAt = validTimestamp(
+              event?.event_time ?? event?.eventTime ?? event?.updatedAt ?? data?.event_time ?? data?.eventTime
+            );
+            if (!locationId || !armState || !safeToken(armState) || !updatedAt) {
+              return;
+            }'''
+          new = '''    const updatedAt =
+              validTimestamp(
+                event?.event_time ?? event?.eventTime ?? event?.updatedAt ?? data?.event_time ?? data?.eventTime
+              ) ?? new Date().toISOString();
+            if (!locationId || !armState || !safeToken(armState)) {
+              return;
+            }'''
+          if old not in s:
+              raise SystemExit('security arm timestamp block not found')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+
+          # Synchronize release surfaces.
+          version_files = [
+              'package.json',
+              'package-lock.json',
+              'protocol/version.json',
+              'bridge/src/runtime.ts',
+              'addon/smartthings_web_bridge/config.yaml',
+              'custom_components/smartthings_web/manifest.json',
+              'tests/addon-config.test.ts',
+              'tests/protocol-version-contract.test.ts',
+          ]
+          for filename in version_files:
+              p = Path(filename)
+              s = p.read_text(encoding='utf-8')
+              if '0.1.162' not in s:
+                  raise SystemExit(f'0.1.162 version surface missing: {filename}')
+              p.write_text(s.replace('0.1.162', '0.1.163'), encoding='utf-8')
+
+          # Document the behavior change in the add-on changelog used by release gates.
+          p = Path('addon/smartthings_web_bridge/CHANGELOG.md')
+          s = p.read_text(encoding='utf-8')
+          if '## 0.1.163' not in s:
+              p.write_text(
+                  '## 0.1.163\n\n'
+                  '- Home Monitor 제어를 my.smartthings.com 대시보드 카드와 열린 모달에 정확히 연결하고, Home/다중 Location 모두 동일한 위치 단위 경로를 사용합니다.\n'
+                  '- Home Monitor 모드 컨트롤을 열린 모달 내부로 한정하고 button/radio/tab 및 한국어 상태 문구 변형을 지원합니다.\n'
+                  '- SECURITY_ARM_STATE_EVENT가 타임스탬프를 생략해도 수신 시각으로 상태를 반영하여 HA alarm_control_panel을 즉시 동기화합니다.\n\n'
+                  + s,
+                  encoding='utf-8',
+              )
+          PY
+      - name: Add Home Monitor regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('bridge/tests/state/device-store.test.ts')
+          s = p.read_text(encoding='utf-8')
+          marker = '  test("applies and persists a live device health event as an inventory change", () => {'
+          if marker not in s:
+              raise SystemExit('device-store insertion marker not found')
+          test = '''  test("accepts a Home Monitor security event without a source timestamp", () => {
+            const store = new DeviceStore();
+            const listener = vi.fn();
+            store.subscribe(listener);
+
+            store.observe(
+              receivedFrame(
+                `42${JSON.stringify([
+                  "api/subscription SECURITY_ARM_STATE_EVENT",
+                  {
+                    data: {
+                      security_arm_state_event: {
+                        location_id: "loc_001",
+                        arm_state: "AWAY"
+                      }
+                    }
+                  }
+                ])}`
+              )
+            );
+
+            expect(store.snapshot()).toMatchObject({
+              sequence: 1,
+              locations: [expect.objectContaining({ id: "loc_001", armState: "AWAY" })]
+            });
+            expect(listener).toHaveBeenCalledWith({ schemaVersion: 1, sequence: 1, type: "inventory" });
+          });
+
+'''
+          if 'accepts a Home Monitor security event without a source timestamp' not in s:
+              p.write_text(s.replace(marker, test + marker, 1), encoding='utf-8')
+          PY
+      - name: Full regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'aiohttp>=3.10,<4' 'yarl>=1.9,<2' 'voluptuous>=0.15,<1'
+          python -m compileall -q custom_components/smartthings_web
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+          npm ci
+          npm run typecheck
+          npm test
+      - name: Commit Home Monitor fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/fix-home-monitor-0.1.163.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Fix Home Monitor dashboard control and state sync'
+          git push origin HEAD:main
