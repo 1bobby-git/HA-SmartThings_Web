@@ -1,3 +1,8 @@
+## 0.1.159
+
+- Home Assistant 2026.3 이상 로컬 Brands Proxy API용 SmartThings 아이콘과 라이트/다크 로고를 통합 패키지에 포함했습니다.
+- Bridge 프로토콜 계약과 장치 제어 동작은 변경하지 않았습니다.
+
 # Changelog
 
 ## 0.1.158
