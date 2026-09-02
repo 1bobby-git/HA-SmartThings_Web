@@ -26,13 +26,13 @@ async def async_setup_entry(
     entry: SmartThingsWebConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Create SmartThings Home Monitor when arm state is available."""
+    """Create SmartThings Home Monitor as soon as the configured location exists."""
     runtime = entry.runtime_data
     known = False
 
     def discover() -> None:
         nonlocal known
-        if known or location_arm_state(runtime.inventory, runtime.location_id) is None:
+        if known or runtime.location_id not in runtime.inventory.locations:
             return
         known = True
         async_add_entities([SmartThingsWebHomeMonitor(runtime)])
@@ -62,8 +62,13 @@ class SmartThingsWebHomeMonitor(AlarmControlPanelEntity):
 
     @property
     def available(self) -> bool:
-        """Return whether SmartThings Home Monitor state is present."""
-        return location_arm_state(self.runtime.inventory, self.runtime.location_id) is not None
+        """Return whether the configured SmartThings location is present.
+
+        Home Monitor arm state is push-driven and may be absent until the
+        location has emitted its first security event. A valid location must
+        remain controllable during that initial unknown-state window.
+        """
+        return self.runtime.location_id in self.runtime.inventory.locations
 
     @property
     def state(self) -> str | None:
