@@ -3503,8 +3503,8 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         )
         self.assertLess(len(registry_entry.entity_id), 80)
 
-    def test_primary_switch_name_collision_uses_location_room_qualified_ids(self) -> None:
-        """Do not steal an exact primary switch ID across config entries."""
+    def test_primary_switch_name_collision_uses_device_name_numbered_ids(self) -> None:
+        """Use only the device name and a numeric suffix across config entries."""
         registry, devices = self._primary_switch_collision_registry()
         home_entry = registry.async_get("switch.meoltitaeb_switch")
         spark_entry = registry.async_get("switch.meoltitaeb")
@@ -3535,13 +3535,13 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             self._primary_switch_collision_inventory(devices),
         )
 
-        self.assertEqual(home_entry.entity_id, "switch.home_anbang_meoltitaeb")
+        self.assertEqual(home_entry.entity_id, "switch.meoltitaeb_2")
         self.assertEqual(home_entry.object_id_base, None)
-        self.assertEqual(home_entry.suggested_object_id, "home_anbang_meoltitaeb")
+        self.assertEqual(home_entry.suggested_object_id, "meoltitaeb_2")
         self.assertEqual(spark_entry.entity_id, "switch.meoltitaeb")
 
     def test_primary_switch_name_collision_converges_independent_of_entry_order(self) -> None:
-        """Both load orders end with stable meaningful IDs, not _2 or _switch."""
+        """Both load orders converge on device-name-only IDs with numeric suffixes."""
         results: list[set[str]] = []
         for first_location, second_location in (
             ("loc_home", "loc_spark"),
@@ -3574,8 +3574,8 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             results.append({entry.entity_id for entry in registry.entries})
 
         expected = {
-            "switch.home_anbang_meoltitaeb",
-            "switch.sparkplus_samuseol_meoltitaeb",
+            "switch.meoltitaeb",
+            "switch.meoltitaeb_2",
         }
         self.assertEqual(results, [expected, expected])
 

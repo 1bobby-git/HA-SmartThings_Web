@@ -1142,7 +1142,14 @@ def _primary_switch_collision_targets(
         if getattr(entity_entry, "platform", None) == DOMAIN
     }
     for exact_entity_id, group in grouped.items():
-        ordered_group = sorted(group, key=lambda row: (_primary_switch_location_room_key(inventory, row[1]), row[2]))
+        ordered_group = sorted(
+    group,
+    key=lambda row: (
+        str(getattr(row[0], "entity_id", "")) != exact_entity_id,
+        _primary_switch_location_room_key(inventory, row[1]),
+        row[2],
+    ),
+)
         generated_group = [
             row for row in ordered_group
             if _generated_primary_switch_entity_id(
