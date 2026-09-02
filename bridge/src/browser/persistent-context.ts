@@ -11,6 +11,9 @@ export interface PersistentContextLaunch {
   options: {
     headless: false;
     chromiumSandbox: true;
+    handleSIGHUP: false;
+    handleSIGINT: false;
+    handleSIGTERM: false;
     downloadsPath: string;
     timeout: number;
     viewport: { width: number; height: number };
@@ -66,14 +69,20 @@ export function createPersistentContextLaunch(paths: PersistentContextPaths): Pe
     options: {
       headless: false,
       chromiumSandbox: true,
+      handleSIGHUP: false,
+      handleSIGINT: false,
+      handleSIGTERM: false,
       downloadsPath: normalizeBridgePath(paths.downloadDir),
       timeout: 30_000,
       viewport: { width: 1440, height: 1000 },
       args: [
         "--no-first-run",
         "--no-default-browser-check",
+        "--profile-directory=Default",
+        "--password-store=basic",
         "--restore-last-session",
         "--hide-crash-restore-bubble",
+        "--disable-session-crashed-bubble",
         "--disable-background-timer-throttling",
         "--disable-backgrounding-occluded-windows",
         "--disable-renderer-backgrounding"

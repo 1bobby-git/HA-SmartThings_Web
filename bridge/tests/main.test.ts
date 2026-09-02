@@ -28,6 +28,7 @@ describe("graceful shutdown", () => {
       }
     );
 
+    expect(handlers.has("SIGHUP")).toBe(true);
     handlers.get("SIGTERM")?.();
     await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
 

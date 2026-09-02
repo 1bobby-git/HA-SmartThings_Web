@@ -38,8 +38,9 @@ export function installShutdownHandlers(
       }
     );
   };
-  processLike.once("SIGTERM", shutdown);
-  processLike.once("SIGINT", shutdown);
+  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+    processLike.once(signal, shutdown);
+  }
 }
 
 export function startupFailureToken(error: unknown): string {

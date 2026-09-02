@@ -98,7 +98,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.159";
+const bridgeVersion = "0.1.160";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
@@ -674,7 +674,14 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     try {
       const keeper = await keeperManager.ensureKeeper();
       if (generation === activeContextGeneration && context === currentContext && !stopped) {
-        const keeperStatus = statusForKeeperUrl(keeper.url());
+        const keeperStatus: RuntimeStatusPatch =
+          keeperManager.authenticationRecoveryPending()
+            ? {
+                authenticated: false,
+                state: "LOGIN_REQUIRED",
+                urlCategory: classifySmartThingsUrl(keeper.url())
+              }
+            : statusForKeeperUrl(keeper.url());
         const currentState = status.getSnapshot().state;
         if (
           keeperStatus.authenticated === true &&
@@ -703,8 +710,6 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       keeperManager !== undefined &&
       context !== undefined &&
       generation === activeContextGeneration &&
-      createHealthReport(snapshot).ready &&
-      snapshot.state === "CONNECTED" &&
       snapshot.authenticated &&
       snapshot.keeperPresent &&
       classifySmartThingsUrl(keeper?.url() ?? "") === "smartthings_location";
@@ -716,12 +721,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     if (
       now - sessionTouchReadySinceMs < SESSION_TOUCH_INTERVAL_MS ||
       now - lastSessionTouchAttemptAtMs < SESSION_TOUCH_INTERVAL_MS ||
-      sessionTouchInFlight ||
-      legacyCommandExecutor.hasForegroundOperation() ||
-      legacyCommandExecutor.hasWarmCommandPage() ||
-      detailDiscovery.isRunning() ||
-      !isProbeBrowserIsolated(context, keeperManager) ||
-      physicalActionProbe.snapshot(getProbeEvidence()).state === "armed"
+      sessionTouchInFlight
     ) {
       return;
     }
@@ -1489,8 +1489,10 @@ async function stopRuntime(options: {
   clearInterval(options.detailDiscoveryInterval);
   clearInterval(options.reconciliationInterval);
   const context = options.getContext();
+  if (context) {
+    await closeContextQuietly(context);
+  }
   await Promise.allSettled([
-    context?.close?.(),
     options.server.close(),
     Promise.resolve().then(() => options.aliases.close()),
     Promise.resolve().then(() => options.captures.close()),

@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   ADVANCED_DEVICE_SNAPSHOT_URLS,
   KEEPER_URL,
+  SESSION_TOUCH_AUTH_PATH,
   KeeperPageManager,
   fetchAdvancedDeviceSnapshotEntries,
   fetchAdvancedDeviceSnapshots
@@ -302,9 +303,47 @@ describe("KeeperPageManager", () => {
       redirect: "manual",
       signal: expect.any(AbortSignal)
     });
+    expect(fetchMock).toHaveBeenCalledWith(SESSION_TOUCH_AUTH_PATH, {
+      cache: "no-store",
+      credentials: "same-origin",
+      method: "GET",
+      redirect: "manual",
+      signal: expect.any(AbortSignal)
+    });
     expect(String(keeper.evaluateCalls[0]?.[0])).not.toMatch(
       /cupcake-api|api\/devices|api\/device|api\/scene|command|cookie|localStorage|sessionStorage|document/i
     );
+  });
+
+
+  test("re-enters SmartThings with the remembered Samsung session after reauthentication", async () => {
+    let now = 10_000;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, type: "basic" })
+      .mockResolvedValueOnce({ ok: false, status: 302, type: "opaqueredirect" });
+    vi.stubGlobal("fetch", fetchMock);
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    keeper.executeEvaluate = true;
+    const manager = new KeeperPageManager(new FakeContext([keeper]), {
+      now: () => now,
+      sessionReauthRecoveryDelayMs: 30_000,
+      loginRecoveryDelayMs: 900_000,
+      sessionRecoveryRetryMs: 300_000
+    });
+
+    await expect(manager.touchAuthenticatedSession()).resolves.toBe("reauth");
+    expect(manager.authenticationRecoveryPending()).toBe(true);
+    await manager.ensureKeeper();
+    expect(keeper.goto).not.toHaveBeenCalled();
+
+    now += 30_001;
+    await manager.ensureKeeper();
+
+    expect(keeper.goto).toHaveBeenCalledWith(KEEPER_URL, {
+      waitUntil: "domcontentloaded"
+    });
+    expect(manager.authenticationRecoveryPending()).toBe(false);
   });
 
   test("does not touch a Samsung login page", async () => {

@@ -1,7 +1,12 @@
 export const KEEPER_URL = "https://my.smartthings.com/location";
 export const ADVANCED_URL = "https://my.smartthings.com/advanced";
 const SESSION_TOUCH_PATH = "/location";
-const SESSION_TOUCH_TIMEOUT_MS = 5_000;
+export const SESSION_TOUCH_AUTH_PATH =
+  "/advanced/cupcake-api/api/locations?allowed=true";
+const SESSION_TOUCH_TIMEOUT_MS = 12_000;
+const SESSION_REAUTH_RECOVERY_DELAY_MS = 30_000;
+const LOGIN_RECOVERY_DELAY_MS = 15 * 60_000;
+const SESSION_RECOVERY_RETRY_MS = 5 * 60_000;
 export const ADVANCED_DEVICE_SNAPSHOT_URLS = [
   "/advanced/cupcake-api/api/devices?type=HUB",
   "/advanced/cupcake-api/api/devices?includeHealth=true&includeStatus=true&includeGroups=true&includeUserDevices=true&includeAllowedActions=true&includeRestricted=true",
@@ -31,6 +36,13 @@ export interface AdvancedDeviceSnapshotEntry {
 }
 
 export type SessionTouchOutcome = "ok" | "reauth" | "failed";
+
+export interface KeeperPageManagerOptions {
+  now?: () => number;
+  sessionReauthRecoveryDelayMs?: number;
+  loginRecoveryDelayMs?: number;
+  sessionRecoveryRetryMs?: number;
+}
 
 export async function fetchAdvancedDeviceSnapshots(
   page: BrowserPageLike,
@@ -92,11 +104,43 @@ export class KeeperPageManager {
   #keeper: BrowserPageLike | undefined;
   #restoredPagesReconciled = false;
   readonly #commandPages = new WeakSet<BrowserPageLike>();
+  readonly #now: () => number;
+  readonly #sessionReauthRecoveryDelayMs: number;
+  readonly #loginRecoveryDelayMs: number;
+  readonly #sessionRecoveryRetryMs: number;
+  #sessionReauthObservedAtMs: number | undefined;
+  #loginObservedAtMs: number | undefined;
+  #lastRecoveryAttemptAtMs: number | undefined;
+  #sessionRecoveryInFlight: Promise<void> | undefined;
 
-  constructor(private readonly context: BrowserContextLike) {}
+  constructor(
+    private readonly context: BrowserContextLike,
+    options: KeeperPageManagerOptions = {}
+  ) {
+    this.#now = options.now ?? Date.now;
+    this.#sessionReauthRecoveryDelayMs = validDelay(
+      options.sessionReauthRecoveryDelayMs,
+      SESSION_REAUTH_RECOVERY_DELAY_MS
+    );
+    this.#loginRecoveryDelayMs = validDelay(
+      options.loginRecoveryDelayMs,
+      LOGIN_RECOVERY_DELAY_MS
+    );
+    this.#sessionRecoveryRetryMs = validDelay(
+      options.sessionRecoveryRetryMs,
+      SESSION_RECOVERY_RETRY_MS
+    );
+  }
 
   currentKeeper(): BrowserPageLike | undefined {
     return this.#keeper && !this.#keeper.isClosed() ? this.#keeper : undefined;
+  }
+
+  authenticationRecoveryPending(): boolean {
+    return (
+      this.#sessionReauthObservedAtMs !== undefined ||
+      this.#loginObservedAtMs !== undefined
+    );
   }
 
   async reconcileRestoredPages(): Promise<BrowserPageLike | undefined> {
@@ -110,6 +154,9 @@ export class KeeperPageManager {
       pages.find((page) => isSamsungLoginUrl(page.url())) ??
       pages.find((page) => page.url() === "about:blank");
     this.#keeper = keeper;
+    if (keeper && isSamsungLoginUrl(keeper.url())) {
+      this.#loginObservedAtMs ??= this.#now();
+    }
     for (const page of pages) {
       if (page === keeper) continue;
       await page.close().catch(() => undefined);
@@ -143,8 +190,19 @@ export class KeeperPageManager {
       await duplicate.close();
     }
 
-    if (!isKeeperSettledUrl(keeper.url()) && !isSamsungLoginUrl(keeper.url())) {
+    await this.recoverRememberedSessionIfDue(keeper);
+    const currentUrl = keeper.url();
+    if (isKeeperSettledUrl(currentUrl)) {
+      this.#loginObservedAtMs = undefined;
+    } else if (isSamsungLoginUrl(currentUrl)) {
+      this.#loginObservedAtMs ??= this.#now();
+    } else {
       await keeper.goto(KEEPER_URL, { waitUntil: "domcontentloaded" });
+      if (isKeeperSettledUrl(keeper.url())) {
+        this.clearRecoveryState();
+      } else if (isSamsungLoginUrl(keeper.url())) {
+        this.#loginObservedAtMs ??= this.#now();
+      }
     }
 
     return keeper;
@@ -154,6 +212,11 @@ export class KeeperPageManager {
     const keeper = await this.ensureKeeper();
     const target = isConcreteLocationUrl(keeper.url()) ? keeper.url() : KEEPER_URL;
     await keeper.goto(target, { waitUntil: "domcontentloaded" });
+    if (isKeeperSettledUrl(keeper.url())) {
+      this.clearRecoveryState();
+    } else if (isSamsungLoginUrl(keeper.url())) {
+      this.#loginObservedAtMs ??= this.#now();
+    }
     return keeper;
   }
 
@@ -163,16 +226,22 @@ export class KeeperPageManager {
     const keeper = this.currentKeeper() ?? await this.reconcileRestoredPages();
     if (!keeper) return "failed";
     const url = keeper.url();
-    if (isSamsungLoginUrl(url)) return "reauth";
+    if (isSamsungLoginUrl(url)) {
+      this.observeSessionTouchOutcome("reauth", url);
+      return "reauth";
+    }
     if (!isKeeperSettledUrl(url) || !keeper.evaluate) return "failed";
     try {
-      return await keeper.evaluate(
-        async ({ path, timeout }) => {
+      const outcome = await keeper.evaluate<
+        SessionTouchOutcome,
+        { path: string; authPath: string; timeout: number }
+      >(
+        async ({ path, authPath, timeout }) => {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), timeout);
-          try {
+          const request = async (target: string): Promise<SessionTouchOutcome> => {
             // api-free-audit: authenticated-page-same-origin-read-only-session-touch
-            const response = await fetch(path, {
+            const response = await fetch(target, {
               cache: "no-store",
               credentials: "same-origin",
               method: "GET",
@@ -188,6 +257,13 @@ export class KeeperPageManager {
               return "reauth";
             }
             return response.ok ? "ok" : "failed";
+          };
+          try {
+            const locationOutcome = await request(path);
+            if (locationOutcome === "reauth") return "reauth";
+            const authenticatedOutcome = await request(authPath);
+            if (authenticatedOutcome === "reauth") return "reauth";
+            return authenticatedOutcome === "ok" ? "ok" : "failed";
           } catch {
             return "failed";
           } finally {
@@ -196,9 +272,12 @@ export class KeeperPageManager {
         },
         {
           path: SESSION_TOUCH_PATH,
+          authPath: SESSION_TOUCH_AUTH_PATH,
           timeout: Math.max(1, Math.min(SESSION_TOUCH_TIMEOUT_MS, timeoutMs))
         }
       );
+      this.observeSessionTouchOutcome(outcome, keeper.url());
+      return outcome;
     } catch {
       return "failed";
     }
@@ -238,6 +317,76 @@ export class KeeperPageManager {
   private findReusableBlankPage(): BrowserPageLike | undefined {
     return this.context.pages().find((page) => !page.isClosed() && page.url() === "about:blank");
   }
+
+  private async recoverRememberedSessionIfDue(keeper: BrowserPageLike): Promise<void> {
+    const now = this.#now();
+    const loginPage = isSamsungLoginUrl(keeper.url());
+    if (loginPage) {
+      this.#loginObservedAtMs ??= now;
+    }
+    const observedAt = this.#sessionReauthObservedAtMs ?? this.#loginObservedAtMs;
+    if (observedAt === undefined) return;
+    const recoveryDelay = this.#sessionReauthObservedAtMs === undefined
+      ? this.#loginRecoveryDelayMs
+      : this.#sessionReauthRecoveryDelayMs;
+    if (now - observedAt < recoveryDelay) return;
+    if (
+      this.#lastRecoveryAttemptAtMs !== undefined &&
+      now - this.#lastRecoveryAttemptAtMs < this.#sessionRecoveryRetryMs
+    ) {
+      return;
+    }
+    if (this.#sessionRecoveryInFlight) {
+      await this.#sessionRecoveryInFlight;
+      return;
+    }
+
+    this.#lastRecoveryAttemptAtMs = now;
+    const recovery = (async () => {
+      try {
+        await keeper.goto(KEEPER_URL, { waitUntil: "domcontentloaded" });
+      } catch {
+        return;
+      }
+      if (isKeeperSettledUrl(keeper.url())) {
+        this.clearRecoveryState();
+      } else if (isSamsungLoginUrl(keeper.url())) {
+        this.#sessionReauthObservedAtMs = undefined;
+        this.#loginObservedAtMs = this.#now();
+      }
+    })();
+    this.#sessionRecoveryInFlight = recovery;
+    try {
+      await recovery;
+    } finally {
+      if (this.#sessionRecoveryInFlight === recovery) {
+        this.#sessionRecoveryInFlight = undefined;
+      }
+    }
+  }
+
+  private observeSessionTouchOutcome(outcome: SessionTouchOutcome, url: string): void {
+    if (outcome === "ok") {
+      this.clearRecoveryState();
+      return;
+    }
+    if (outcome !== "reauth") return;
+    const now = this.#now();
+    this.#sessionReauthObservedAtMs ??= now;
+    if (isSamsungLoginUrl(url)) {
+      this.#loginObservedAtMs ??= now;
+    }
+  }
+
+  private clearRecoveryState(): void {
+    this.#sessionReauthObservedAtMs = undefined;
+    this.#loginObservedAtMs = undefined;
+    this.#lastRecoveryAttemptAtMs = undefined;
+  }
+}
+
+function validDelay(value: number | undefined, fallback: number): number {
+  return Number.isFinite(value) && value !== undefined && value >= 0 ? value : fallback;
 }
 
 function isKeeperCandidateUrl(value: string): boolean {

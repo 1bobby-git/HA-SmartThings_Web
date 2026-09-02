@@ -10,7 +10,10 @@ import {
   isWholeAdvancedDevicesSnapshotUrl,
   type BridgeRuntimeDependencies
 } from "../src/runtime.js";
-import { ADVANCED_DEVICE_SNAPSHOT_URLS } from "../src/browser/keeper-page.js";
+import {
+  ADVANCED_DEVICE_SNAPSHOT_URLS,
+  SESSION_TOUCH_AUTH_PATH
+} from "../src/browser/keeper-page.js";
 import type { PhysicalActionProbeSnapshot } from "../src/inspector/physical-action-correlation-probe.js";
 import {
   PROTOCOL_CONTRACT_FINGERPRINT,
@@ -1313,6 +1316,54 @@ describe("createBridgeRuntime", () => {
     });
   });
 
+
+  test("keeps an authenticated session warm while realtime health is degraded", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const root = createTempRoot();
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    const context = new FakeContext([keeper]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        config: {
+          dataDir: root,
+          host: "127.0.0.1",
+          port: 0,
+          heartbeatIntervalMs: 1_000,
+          browserMaxRestarts: 2,
+          browserRetryDelayMs: 0
+        },
+        chromium: { launchPersistentContext: vi.fn(async () => context) }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    keeper.goto.mockClear();
+    keeper.evaluate.mockClear();
+    keeper.evaluateCalls.length = 0;
+    runtime.status.update({
+      authenticated: true,
+      keeperPresent: true,
+      pushConnected: false,
+      parserHealthy: false,
+      initialSnapshotComplete: false,
+      state: "STALE"
+    });
+
+    await vi.advanceTimersByTimeAsync(301_000);
+
+    expect(keeper.goto).not.toHaveBeenCalled();
+    expect(keeper.evaluateCalls).toHaveLength(1);
+    expect(keeper.evaluateCalls[0]?.[1]).toMatchObject({
+      path: "/location",
+      authPath: SESSION_TOUCH_AUTH_PATH
+    });
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      authenticated: true,
+      state: "STALE"
+    });
+  });
+
   test("skips periodic touch while the keeper is on Samsung login", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
@@ -1521,7 +1572,7 @@ describe("createBridgeRuntime", () => {
     });
   });
 
-  test("skips periodic touch while browser isolation is busy", async () => {
+  test("keeps the session warm while another browser page is open", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     const root = createTempRoot();
@@ -1563,7 +1614,7 @@ describe("createBridgeRuntime", () => {
     runtime.status.update({ lastPushAtMs: Date.now() });
     await vi.advanceTimersByTimeAsync(63_000);
 
-    expect(keeper.evaluateCalls).toEqual([]);
+    expect(keeper.evaluateCalls).toHaveLength(1);
     expect(runtime.status.getSnapshot()).toMatchObject({
       authenticated: true,
       state: "CONNECTED"

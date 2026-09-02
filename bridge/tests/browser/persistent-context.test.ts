@@ -21,11 +21,17 @@ describe("persistent Chromium context", () => {
     expect(launch.userDataDir).toBe("/data/chromium-profile");
     expect(launch.options.headless).toBe(false);
     expect(launch.options.chromiumSandbox).toBe(true);
+    expect(launch.options.handleSIGHUP).toBe(false);
+    expect(launch.options.handleSIGINT).toBe(false);
+    expect(launch.options.handleSIGTERM).toBe(false);
     expect(launch.options.downloadsPath).toBe("/data/downloads");
     expect(launch.options.timeout).toBe(30_000);
     expect(launch.options.args).toContain("--no-first-run");
+    expect(launch.options.args).toContain("--profile-directory=Default");
+    expect(launch.options.args).toContain("--password-store=basic");
     expect(launch.options.args).toContain("--restore-last-session");
     expect(launch.options.args).toContain("--hide-crash-restore-bubble");
+    expect(launch.options.args).toContain("--disable-session-crashed-bubble");
     expect(launch.options.args).not.toContain("--no-sandbox");
     expect(launch.options.args).toContain("--disable-background-timer-throttling");
     expect(launch.options.args).toContain("--disable-backgrounding-occluded-windows");

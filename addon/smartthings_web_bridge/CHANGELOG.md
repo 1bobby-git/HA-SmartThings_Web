@@ -1,3 +1,10 @@
+## 0.1.160
+
+- `/location` 정적 GET뿐 아니라 로그인된 동일 브라우저의 경량 Advanced location GET도 5분마다 호출해 실제 SmartThings 인증 세션을 갱신합니다.
+- realtime 상태가 `STALE`·동기화 중이거나 명령/상세 페이지가 열려 있어도 인증된 keeper가 있으면 세션 유지를 계속하고, 인증 만료가 확인되면 30초 뒤 저장된 Samsung SSO 세션으로 `/location` 재진입을 시도합니다. 로그인 화면이 계속되면 15분 간격으로 재시도합니다.
+- Chromium은 항상 `Default` 프로필과 `/data/chromium-profile`의 basic password store·XDG data/state 경로를 사용하며, 종료 신호는 Bridge가 직접 처리해 브라우저 프로필을 먼저 정상 종료합니다.
+- 비밀번호·MFA·쿠키를 별도 파일이나 로그로 복사하지 않으며 기존 config entry, entity ID, unique ID, 장치/영역 이름과 명령 구조는 변경하지 않습니다.
+
 ## 0.1.159
 
 - Home Assistant 2026.3 이상 로컬 Brands Proxy API용 SmartThings 아이콘과 라이트/다크 로고를 통합 패키지에 포함했습니다.
