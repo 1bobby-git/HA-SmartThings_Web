@@ -1,0 +1,101 @@
+name: Finalize 0.1.162
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - name: Fix regression expectations and collision priority
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('custom_components/smartthings_web/__init__.py')
+          s = p.read_text(encoding='utf-8')
+          old = '''        ordered_group = sorted(
+              group,
+              key=lambda row: (
+                  _primary_switch_location_room_key(inventory, row[1]),
+                  row[2],
+              ),
+          )'''
+          new = '''        ordered_group = sorted(
+              group,
+              key=lambda row: (
+                  str(getattr(row[0], "entity_id", "")) != exact_entity_id,
+                  _primary_switch_location_room_key(inventory, row[1]),
+                  row[2],
+              ),
+          )'''
+          if old not in s:
+              raise SystemExit('collision ordering block not found')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+
+          p = Path('custom_components/smartthings_web/tests/test_init.py')
+          s = p.read_text(encoding='utf-8')
+          replacements = {
+              'def test_primary_switch_name_collision_uses_location_room_qualified_ids(self) -> None:': 'def test_primary_switch_name_collision_uses_device_name_numbered_ids(self) -> None:',
+              '"""Do not steal an exact primary switch ID across config entries."""': '"""Use only the device name and a numeric suffix across config entries."""',
+              'self.assertEqual(home_entry.entity_id, "switch.home_anbang_meoltitaeb")': 'self.assertEqual(home_entry.entity_id, "switch.meoltitaeb_2")',
+              'self.assertEqual(home_entry.suggested_object_id, "home_anbang_meoltitaeb")': 'self.assertEqual(home_entry.suggested_object_id, "meoltitaeb_2")',
+              '"""Both load orders end with stable meaningful IDs, not _2 or _switch."""': '"""Both load orders converge on device-name-only IDs with numeric suffixes."""',
+              '''        expected = {
+              "switch.home_anbang_meoltitaeb",
+              "switch.sparkplus_samuseol_meoltitaeb",
+          }''': '''        expected = {
+              "switch.meoltitaeb",
+              "switch.meoltitaeb_2",
+          }''',
+          }
+          for old_text, new_text in replacements.items():
+              if old_text not in s:
+                  raise SystemExit(f'test_init replacement not found: {old_text[:80]}')
+              s = s.replace(old_text, new_text, 1)
+          p.write_text(s, encoding='utf-8')
+
+          for filename in ('tests/addon-config.test.ts', 'tests/protocol-version-contract.test.ts'):
+              p = Path(filename)
+              s = p.read_text(encoding='utf-8')
+              if '0.1.161' not in s:
+                  raise SystemExit(f'old version expectation missing: {filename}')
+              p.write_text(s.replace('0.1.161', '0.1.162'), encoding='utf-8')
+          PY
+      - name: Full regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'aiohttp>=3.10,<4' 'yarl>=1.9,<2' 'voluptuous>=0.15,<1'
+          python -m compileall -q custom_components/smartthings_web
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+          npm ci
+          npm run typecheck
+          npm test
+      - name: Commit final fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/finalize-0.1.162.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Finalize 0.1.162 regressions'
+          git push origin HEAD:main
