@@ -2,259 +2,28 @@ name: Apply 0.1.162
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
-
-      - name: Apply entity ID and Home Monitor fixes
+      - name: Apply fixes
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          import re
-
-          init_path = Path('custom_components/smartthings_web/__init__.py')
-          text = init_path.read_text(encoding='utf-8')
-          primary = '''def _primary_switch_collision_targets(
-              registry: object,
-              current_registry_entries: Sequence[object],
-              inventory: BridgeInventory,
-          ) -> dict[str, str]:
-              """Return device-name-only IDs for generated primary switches."""
-              rows: list[tuple[object, object, str, str]] = []
-              for entity_entry in _all_registry_entries(registry, current_registry_entries):
-                  domain = getattr(entity_entry, "domain", "")
-                  domain_value = getattr(domain, "value", domain)
-                  if (
-                      getattr(entity_entry, "platform", None) != DOMAIN
-                      or domain_value != "switch"
-                      or getattr(entity_entry, "name", None) is not None
-                  ):
-                      continue
-                  device, state = _registry_primary_switch_state(entity_entry, inventory)
-                  if device is None or state is None:
-                      continue
-                  object_id = canonical_primary_control_object_id(inventory, device)
-                  if not object_id:
-                      continue
-                  rows.append(
-                      (
-                          entity_entry,
-                          device,
-                          str(getattr(entity_entry, "unique_id", "")),
-                          object_id,
-                      )
-                  )
-
-              grouped: dict[str, list[tuple[object, object, str, str]]] = {}
-              for row in rows:
-                  grouped.setdefault(f"switch.{row[3]}", []).append(row)
-
-              targets: dict[str, str] = {}
-              current_unique_ids = {
-                  str(getattr(entity_entry, "unique_id", ""))
-                  for entity_entry in current_registry_entries
-                  if getattr(entity_entry, "platform", None) == DOMAIN
-              }
-              for exact_entity_id, group in grouped.items():
-                  ordered_group = sorted(
-                      group,
-                      key=lambda row: (
-                          _primary_switch_location_room_key(inventory, row[1]),
-                          row[2],
-                      ),
-                  )
-                  generated_group = [
-                      row
-                      for row in ordered_group
-                      if _generated_primary_switch_entity_id(
-                          row[0],
-                          row[3],
-                          qualified_object_id=_qualified_primary_switch_object_id(
-                              inventory,
-                              row[1],
-                              row[3],
-                          ),
-                          qualified_device_suffix=(
-                              slugify(str(getattr(row[1], "device_id", ""))) or row[2]
-                          ),
-                      )
-                  ]
-                  if not generated_group:
-                      continue
-
-                  generated_unique_ids = {row[2] for row in generated_group}
-                  next_index = 1
-                  for entity_entry, _device, unique_id, _object_id in generated_group:
-                      candidate: str | None = None
-                      for index in range(next_index, 1000):
-                          numbered_candidate = (
-                              exact_entity_id
-                              if index == 1
-                              else f"{exact_entity_id}_{index}"
-                          )
-                          occupant = registry.async_get(numbered_candidate)
-                          occupant_unique_id = (
-                              str(getattr(occupant, "unique_id", ""))
-                              if occupant is not None
-                              else ""
-                          )
-                          if (
-                              occupant is not None
-                              and occupant_unique_id not in generated_unique_ids
-                          ):
-                              continue
-                          candidate = numbered_candidate
-                          next_index = index + 1
-                          break
-                      if candidate is None:
-                          break
-                      if unique_id not in current_unique_ids:
-                          continue
-                      if candidate == str(getattr(entity_entry, "entity_id", "")):
-                          continue
-                      targets[unique_id] = candidate
-              return targets
-
-
-          '''
-          pattern = re.compile(
-              r'def _primary_switch_collision_targets\(.*?(?=def _generated_primary_switch_entity_id\()',
-              re.S,
-          )
-          text, count = pattern.subn(primary, text, count=1)
-          if count != 1:
-              raise SystemExit('primary switch collision function not found')
-
-          generated = '''def _generated_primary_switch_entity_id(
-              entity_entry: object,
-              object_id: str,
-              *,
-              qualified_object_id: str | None = None,
-              qualified_device_suffix: str | None = None,
-          ) -> bool:
-              """Return whether the current switch ID is one of our generated forms."""
-              current_object_id = str(getattr(entity_entry, "entity_id", "")).partition(".")[2]
-              if not current_object_id:
-                  return False
-              generated = {
-                  object_id,
-                  f"{object_id}_switch",
-              }
-              if qualified_object_id:
-                  generated.add(qualified_object_id)
-                  if qualified_device_suffix:
-                      generated.add(f"{qualified_object_id}_{qualified_device_suffix}")
-              if current_object_id in generated:
-                  return True
-              for generated_object_id in generated:
-                  numbered_prefix = f"{generated_object_id}_"
-                  if current_object_id.startswith(numbered_prefix):
-                      suffix = current_object_id[len(numbered_prefix) :]
-                      if suffix.isdigit() and int(suffix) >= 2:
-                          return True
-              return _generated_primary_switch_feedback_object_id(current_object_id, object_id)
-
-
-          '''
-          pattern = re.compile(
-              r'def _generated_primary_switch_entity_id\(.*?(?=def _generated_primary_switch_feedback_object_id\()',
-              re.S,
-          )
-          text, count = pattern.subn(generated, text, count=1)
-          if count != 1:
-              raise SystemExit('generated primary switch helper not found')
-          init_path.write_text(text, encoding='utf-8')
-
-          command_path = Path('bridge/src/browser/command-page.ts')
-          text = command_path.read_text(encoding='utf-8')
-          old = '''        const monitor = page.getByRole("button", {
-          name: /^(?:SmartThings\\s+)?Home Monitor$|^홈 모니터$/iu
-        });'''
-          new = '''        const monitor = page.getByRole("button", {
-          name: homeMonitorName(input.locationNames?.[input.locationId])
-        });'''
-          if old not in text:
-              raise SystemExit('Home Monitor locator not found')
-          text = text.replace(old, new, 1)
-          marker = '''function controlLabelFor(attribute: string): string | undefined {'''
-          helper = '''function homeMonitorName(locationName?: string): RegExp {
-            const normalizedLocationName = locationName?.trim();
-            const locationPrefix = normalizedLocationName
-              ? `(?:${escapeRegExp(normalizedLocationName)}\\\\s*)?`
-              : "";
-            return new RegExp(
-              `^\\\\s*${locationPrefix}(?:(?:SmartThings\\\\s*)?Home\\\\s*Monitor|홈\\\\s*모니터)\\\\s*$`,
-              "iu"
-            );
-          }
-
-          '''
-          if marker not in text:
-              raise SystemExit('control label marker not found')
-          text = text.replace(marker, helper + marker, 1)
-          command_path.write_text(text, encoding='utf-8')
-
-          manifest = Path('custom_components/smartthings_web/manifest.json')
-          text = manifest.read_text(encoding='utf-8')
-          if '"version": "0.1.161"' not in text:
-              raise SystemExit('manifest version mismatch')
-          manifest.write_text(text.replace('"version": "0.1.161"', '"version": "0.1.162"', 1), encoding='utf-8')
-
-          addon = Path('addon/smartthings_web_bridge/config.yaml')
-          text = addon.read_text(encoding='utf-8')
-          if 'version: 0.1.161' not in text:
-              raise SystemExit('addon version mismatch')
-          addon.write_text(text.replace('version: 0.1.161', 'version: 0.1.162', 1), encoding='utf-8')
-
-          package = Path('package.json')
-          text = package.read_text(encoding='utf-8')
-          package.write_text(text.replace('"version": "0.1.161"', '"version": "0.1.162"', 1), encoding='utf-8')
-
-          lock = Path('package-lock.json')
-          text = lock.read_text(encoding='utf-8')
-          count = text.count('"version": "0.1.161"')
-          if count < 2:
-              raise SystemExit(f'package-lock version count mismatch: {count}')
-          lock.write_text(text.replace('"version": "0.1.161"', '"version": "0.1.162"', 2), encoding='utf-8')
-
-          changelog = Path('addon/smartthings_web_bridge/CHANGELOG.md')
-          text = changelog.read_text(encoding='utf-8')
-          if not text.startswith('## 0.1.161'):
-              raise SystemExit('unexpected changelog head')
-          notes = '''## 0.1.162
-
-          - 기본 스위치 엔티티 ID는 위치·방 접두사 없이 SmartThings 기기 이름만 사용합니다. 동일 이름 충돌은 `_2`, `_3` 숫자 접미사로만 구분합니다.
-          - 기존 generated 위치·방 접두사 ID를 기기명 기반 ID로 자동 이전하며, 사용자 지정 ID와 다른 통합이 점유한 ID는 보존합니다.
-          - Home Monitor 카드 선택에서 위치명 접두사와 `홈모니터`/`홈 모니터` 및 영문 변형을 정확히 지원합니다.
-
-          '''
-          changelog.write_text(notes + text, encoding='utf-8')
-          PY
-
-      - name: Validate edited sources
-        shell: bash
-        run: |
-          set -euo pipefail
+          echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCmltcG9ydCByZQoKcD1QYXRoKCdjdXN0b21fY29tcG9uZW50cy9zbWFydHRoaW5nc193ZWIvX19pbml0X18ucHknKQpzPXAucmVhZF90ZXh0KGVuY29kaW5nPSd1dGYtOCcpCm5ld19wcmltYXJ5PScnJ2RlZiBfcHJpbWFyeV9zd2l0Y2hfY29sbGlzaW9uX3RhcmdldHMoXG4gICAgcmVnaXN0cnk6IG9iamVjdCxcbiAgICBjdXJyZW50X3JlZ2lzdHJ5X2VudHJpZXM6IFNlcXVlbmNlW29iamVjdF0sXG4gICAgaW52ZW50b3J5OiBCcmlkZ2VJbnZlbnRvcnksXG4pIC0+IGRpY3Rbc3RyLCBzdHJdOlxuICAgIFwiXCJcIlJldHVybiBkZXZpY2UtbmFtZS1vbmx5IElEcyBmb3IgZ2VuZXJhdGVkIHByaW1hcnkgc3dpdGNoZXMuXCJcIlwiXG4gICAgcm93czogbGlzdFt0dXBsZVtvYmplY3QsIG9iamVjdCwgc3RyLCBzdHJdXSA9IFtdXG4gICAgZm9yIGVudGl0eV9lbnRyeSBpbiBfYWxsX3JlZ2lzdHJ5X2VudHJpZXMocmVnaXN0cnksIGN1cnJlbnRfcmVnaXN0cnlfZW50cmllcyk6XG4gICAgICAgIGRvbWFpbiA9IGdldGF0dHIoZW50aXR5X2VudHJ5LCBcImRvbWFpblwiLCBcIlwiKVxuICAgICAgICBkb21haW5fdmFsdWUgPSBnZXRhdHRyKGRvbWFpbiwgXCJ2YWx1ZVwiLCBkb21haW4pXG4gICAgICAgIGlmIChcbiAgICAgICAgICAgIGdldGF0dHIoZW50aXR5X2VudHJ5LCBcInBsYXRmb3JtXCIsIE5vbmUpICE9IERPTUFJTlxuICAgICAgICAgICAgb3IgZG9tYWluX3ZhbHVlICE9IFwic3dpdGNoXCJcbiAgICAgICAgICAgIG9yIGdldGF0dHIoZW50aXR5X2VudHJ5LCBcIm5hbWVcIiwgTm9uZSkgaXMgbm90IE5vbmVcbiAgICAgICAgKTpcbiAgICAgICAgICAgIGNvbnRpbnVlXG4gICAgICAgIGRldmljZSwgc3RhdGUgPSBfcmVnaXN0cnlfcHJpbWFyeV9zd2l0Y2hfc3RhdGUoZW50aXR5X2VudHJ5LCBpbnZlbnRvcnkpXG4gICAgICAgIGlmIGRldmljZSBpcyBOb25lIG9yIHN0YXRlIGlzIE5vbmU6XG4gICAgICAgICAgICBjb250aW51ZVxuICAgICAgICBvYmplY3RfaWQgPSBjYW5vbmljYWxfcHJpbWFyeV9jb250cm9sX29iamVjdF9pZChpbnZlbnRvcnksIGRldmljZSlcbiAgICAgICAgaWYgbm90IG9iamVjdF9pZDpcbiAgICAgICAgICAgIGNvbnRpbnVlXG4gICAgICAgIHJvd3MuYXBwZW5kKChlbnRpdHlfZW50cnksIGRldmljZSwgc3RyKGdldGF0dHIoZW50aXR5X2VudHJ5LCBcInVuaXF1ZV9pZFwiLCBcIlwiKSksIG9iamVjdF9pZCkpXG5cbiAgICBncm91cGVkOiBkaWN0W3N0ciwgbGlzdFt0dXBsZVtvYmplY3QsIG9iamVjdCwgc3RyLCBzdHJdXV0gPSB7fVxuICAgIGZvciByb3cgaW4gcm93czpcbiAgICAgICAgZ3JvdXBlZC5zZXRkZWZhdWx0KGZcInN3aXRjaC57cm93WzNdfVwiLCBbXSkuYXBwZW5kKHJvdylcblxuICAgIHRhcmdldHM6IGRpY3Rbc3RyLCBzdHJdID0ge31cbiAgICBjdXJyZW50X3VuaXF1ZV9pZHMgPSB7XG4gICAgICAgIHN0cihnZXRhdHRyKGVudGl0eV9lbnRyeSwgXCJ1bmlxdWVfaWRcIiwgXCJcIikpXG4gICAgICAgIGZvciBlbnRpdHlfZW50cnkgaW4gY3VycmVudF9yZWdpc3RyeV9lbnRyaWVzXG4gICAgICAgIGlmIGdldGF0dHIoZW50aXR5X2VudHJ5LCBcInBsYXRmb3JtXCIsIE5vbmUpID09IERPTUFJTlxuICAgIH1cbiAgICBmb3IgZXhhY3RfZW50aXR5X2lkLCBncm91cCBpbiBncm91cGVkLml0ZW1zKCk6XG4gICAgICAgIG9yZGVyZWRfZ3JvdXAgPSBzb3J0ZWQoZ3JvdXAsIGtleT1sYW1iZGEgcm93OiAoX3ByaW1hcnlfc3dpdGNoX2xvY2F0aW9uX3Jvb21fa2V5KGludmVudG9yeSwgcm93WzFdKSwgcm93WzJdKSlcbiAgICAgICAgZ2VuZXJhdGVkX2dyb3VwID0gW1xuICAgICAgICAgICAgcm93IGZvciByb3cgaW4gb3JkZXJlZF9ncm91cFxuICAgICAgICAgICAgaWYgX2dlbmVyYXRlZF9wcmltYXJ5X3N3aXRjaF9lbnRpdHlfaWQoXG4gICAgICAgICAgICAgICAgcm93WzBdLCByb3dbM10sXG4gICAgICAgICAgICAgICAgcXVhbGlmaWVkX29iamVjdF9pZD1fcXVhbGlmaWVkX3ByaW1hcnlfc3dpdGNoX29iamVjdF9pZChpbnZlbnRvcnksIHJvd1sxXSwgcm93WzNdKSxcbiAgICAgICAgICAgICAgICBxdWFsaWZpZWRfZGV2aWNlX3N1ZmZpeD0oc2x1Z2lmeShzdHIoZ2V0YXR0cihyb3dbMV0sIFwiZGV2aWNlX2lkXCIsIFwiXCIpKSkgb3Igcm93WzJdKSxcbiAgICAgICAgICAgIClcbiAgICAgICAgXVxuICAgICAgICBpZiBub3QgZ2VuZXJhdGVkX2dyb3VwOlxuICAgICAgICAgICAgY29udGludWVcbiAgICAgICAgZ2VuZXJhdGVkX3VuaXF1ZV9pZHMgPSB7cm93WzJdIGZvciByb3cgaW4gZ2VuZXJhdGVkX2dyb3VwfVxuICAgICAgICBuZXh0X2luZGV4ID0gMVxuICAgICAgICBmb3IgZW50aXR5X2VudHJ5LCBfZGV2aWNlLCB1bmlxdWVfaWQsIF9vYmplY3RfaWQgaW4gZ2VuZXJhdGVkX2dyb3VwOlxuICAgICAgICAgICAgY2FuZGlkYXRlID0gTm9uZVxuICAgICAgICAgICAgZm9yIGluZGV4IGluIHJhbmdlKG5leHRfaW5kZXgsIDEwMDApOlxuICAgICAgICAgICAgICAgIG51bWJlcmVkX2NhbmRpZGF0ZSA9IGV4YWN0X2VudGl0eV9pZCBpZiBpbmRleCA9PSAxIGVsc2UgZlwie2V4YWN0X2VudGl0eV9pZH1fe2luZGV4fVwiXG4gICAgICAgICAgICAgICAgb2NjdXBhbnQgPSByZWdpc3RyeS5hc3luY19nZXQobnVtYmVyZWRfY2FuZGlkYXRlKVxuICAgICAgICAgICAgICAgIG9jY3VwYW50X3VuaXF1ZV9pZCA9IHN0cihnZXRhdHRyKG9jY3VwYW50LCBcInVuaXF1ZV9pZFwiLCBcIlwiKSkgaWYgb2NjdXBhbnQgaXMgbm90IE5vbmUgZWxzZSBcIlwiXG4gICAgICAgICAgICAgICAgaWYgb2NjdXBhbnQgaXMgbm90IE5vbmUgYW5kIG9jY3VwYW50X3VuaXF1ZV9pZCBub3QgaW4gZ2VuZXJhdGVkX3VuaXF1ZV9pZHM6XG4gICAgICAgICAgICAgICAgICAgIGNvbnRpbnVlXG4gICAgICAgICAgICAgICAgY2FuZGlkYXRlID0gbnVtYmVyZWRfY2FuZGlkYXRlXG4gICAgICAgICAgICAgICAgbmV4dF9pbmRleCA9IGluZGV4ICsgMVxuICAgICAgICAgICAgICAgIGJyZWFrXG4gICAgICAgICAgICBpZiBjYW5kaWRhdGUgaXMgTm9uZTpcbiAgICAgICAgICAgICAgICBicmVha1xuICAgICAgICAgICAgaWYgdW5pcXVlX2lkIG5vdCBpbiBjdXJyZW50X3VuaXF1ZV9pZHM6XG4gICAgICAgICAgICAgICAgY29udGludWVcbiAgICAgICAgICAgIGlmIGNhbmRpZGF0ZSA9PSBzdHIoZ2V0YXR0cihlbnRpdHlfZW50cnksIFwiZW50aXR5X2lkXCIsIFwiXCIpKTpcbiAgICAgICAgICAgICAgICBjb250aW51ZVxuICAgICAgICAgICAgdGFyZ2V0c1t1bmlxdWVfaWRdID0gY2FuZGlkYXRlXG4gICAgcmV0dXJuIHRhcmdldHNcblxuXG4nJycKcyxuPXJlLnN1Ym4ocidkZWYgX3ByaW1hcnlfc3dpdGNoX2NvbGxpc2lvbl90YXJnZXRzXCguKj8oPz1kZWYgX2dlbmVyYXRlZF9wcmltYXJ5X3N3aXRjaF9lbnRpdHlfaWRcKCknLG5ld19wcmltYXJ5LHMsY291bnQ9MSxmbGFncz1yZS5TKQphc3NlcnQgbj09MSxuCm5ld19nZW5lcmF0ZWQ9JycnZGVmIF9nZW5lcmF0ZWRfcHJpbWFyeV9zd2l0Y2hfZW50aXR5X2lkKFxuICAgIGVudGl0eV9lbnRyeTogb2JqZWN0LFxuICAgIG9iamVjdF9pZDogc3RyLFxuICAgICosXG4gICAgcXVhbGlmaWVkX29iamVjdF9pZDogc3RyIHwgTm9uZSA9IE5vbmUsXG4gICAgcXVhbGlmaWVkX2RldmljZV9zdWZmaXg6IHN0ciB8IE5vbmUgPSBOb25lLFxuKSAtPiBib29sOlxuICAgIFwiXCJcIlJldHVybiB3aGV0aGVyIHRoZSBjdXJyZW50IHN3aXRjaCBJRCBpcyBvbmUgb2Ygb3VyIGdlbmVyYXRlZCBmb3Jtcy5cIlwiXCJcbiAgICBjdXJyZW50X29iamVjdF9pZCA9IHN0cihnZXRhdHRyKGVudGl0eV9lbnRyeSwgXCJlbnRpdHlfaWRcIiwgXCJcIikpLnBhcnRpdGlvbihcIi5cIilbMl1cbiAgICBpZiBub3QgY3VycmVudF9vYmplY3RfaWQ6XG4gICAgICAgIHJldHVybiBGYWxzZVxuICAgIGdlbmVyYXRlZCA9IHtvYmplY3RfaWQsIGZcIntvYmplY3RfaWR9X3N3aXRjaFwifVxuICAgIGlmIHF1YWxpZmllZF9vYmplY3RfaWQ6XG4gICAgICAgIGdlbmVyYXRlZC5hZGQocXVhbGlmaWVkX29iamVjdF9pZClcbiAgICAgICAgaWYgcXVhbGlmaWVkX2RldmljZV9zdWZmaXg6XG4gICAgICAgICAgICBnZW5lcmF0ZWQuYWRkKGZcIntxdWFsaWZpZWRfb2JqZWN0X2lkfV97cXVhbGlmaWVkX2RldmljZV9zdWZmaXh9XCIpXG4gICAgaWYgY3VycmVudF9vYmplY3RfaWQgaW4gZ2VuZXJhdGVkOlxuICAgICAgICByZXR1cm4gVHJ1ZVxuICAgIGZvciBnZW5lcmF0ZWRfb2JqZWN0X2lkIGluIGdlbmVyYXRlZDpcbiAgICAgICAgbnVtYmVyZWRfcHJlZml4ID0gZlwie2dlbmVyYXRlZF9vYmplY3RfaWR9X1wiXG4gICAgICAgIGlmIGN1cnJlbnRfb2JqZWN0X2lkLnN0YXJ0c3dpdGgobnVtYmVyZWRfcHJlZml4KTpcbiAgICAgICAgICAgIHN1ZmZpeCA9IGN1cnJlbnRfb2JqZWN0X2lkW2xlbihudW1iZXJlZF9wcmVmaXgpOl1cbiAgICAgICAgICAgIGlmIHN1ZmZpeC5pc2RpZ2l0KCkgYW5kIGludChzdWZmaXgpID49IDI6XG4gICAgICAgICAgICAgICAgcmV0dXJuIFRydWVcbiAgICByZXR1cm4gX2dlbmVyYXRlZF9wcmltYXJ5X3N3aXRjaF9mZWVkYmFja19vYmplY3RfaWQoY3VycmVudF9vYmplY3RfaWQsIG9iamVjdF9pZClcblxuXG4nJycKcyxuPXJlLnN1Ym4ocidkZWYgX2dlbmVyYXRlZF9wcmltYXJ5X3N3aXRjaF9lbnRpdHlfaWRcKC4qPyg/PWRlZiBfZ2VuZXJhdGVkX3ByaW1hcnlfc3dpdGNoX2ZlZWRiYWNrX29iamVjdF9pZFwoKScsbmV3X2dlbmVyYXRlZCxzLGNvdW50PTEsZmxhZ3M9cmUuUykKYXNzZXJ0IG49PTEsbgpwLndyaXRlX3RleHQocyxlbmNvZGluZz0ndXRmLTgnKQoKcD1QYXRoKCdicmlkZ2Uvc3JjL2Jyb3dzZXIvY29tbWFuZC1wYWdlLnRzJykKcz1wLnJlYWRfdGV4dChlbmNvZGluZz0ndXRmLTgnKQpvbGQ9JycnICAgICAgICBjb25zdCBtb25pdG9yID0gcGFnZS5nZXRCeVJvbGUoImJ1dHRvbiIsIHtcbiAgICAgICAgICBuYW1lOiAvXig/OlNtYXJ0VGhpbmdzXFxzKyk/SG9tZSBNb25pdG9yJHxe7ZmIIOuqqOuLiO2EsCQvaXVcbiAgICAgICAgfSk7JycnCm5ldz0nJycgICAgICAgIGNvbnN0IG1vbml0b3IgPSBwYWdlLmdldEJ5Um9sZSgiYnV0dG9uIiwge1xuICAgICAgICAgIG5hbWU6IGhvbWVNb25pdG9yTmFtZShpbnB1dC5sb2NhdGlvbk5hbWVzPy5baW5wdXQubG9jYXRpb25JZF0pXG4gICAgICAgIH0pOycnJwphc3NlcnQgb2xkIGluIHMKcz1zLnJlcGxhY2Uob2xkLG5ldywxKQptYXJrZXI9J2Z1bmN0aW9uIGNvbnRyb2xMYWJlbEZvcihhdHRyaWJ1dGU6IHN0cmluZyk6IHN0cmluZyB8IHVuZGVmaW5lZCB7JwpoZWxwZXI9JycnZnVuY3Rpb24gaG9tZU1vbml0b3JOYW1lKGxvY2F0aW9uTmFtZT86IHN0cmluZyk6IFJlZ0V4cCB7XG4gIGNvbnN0IG5vcm1hbGl6ZWRMb2NhdGlvbk5hbWUgPSBsb2NhdGlvbk5hbWU/LnRyaW0oKTtcbiAgY29uc3QgbG9jYXRpb25QcmVmaXggPSBub3JtYWxpemVkTG9jYXRpb25OYW1lXG4gICAgPyBgKD86JHtlc2NhcGVSZWdFeHAobm9ybWFsaXplZExvY2F0aW9uTmFtZSl9XFxcXHMqKT9gXG4gICAgOiBcIlwiO1xuICByZXR1cm4gbmV3IFJlZ0V4cChcbiAgICBgXlxcXFxzKiR7bG9jYXRpb25QcmVmaXh9KD86KD86U21hcnRUaGluZ3NcXFxccyopP0hvbWVcXFxccypNb25pdG9yfO2ZiFxcXFxzKuuqqOuLiO2EsClcXFxccyokYCxcbiAgICBcIml1XCJcbiAgKTtcbn1cblxuJycnCmFzc2VydCBtYXJrZXIgaW4gcwpzPXMucmVwbGFjZShtYXJrZXIsaGVscGVyK21hcmtlciwxKQpwLndyaXRlX3RleHQocyxlbmNvZGluZz0ndXRmLTgnKQoKZm9yIHBhdGgsb2xkLG5ldyBpbiBbCignY3VzdG9tX2NvbXBvbmVudHMvc21hcnR0aGluZ3Nfd2ViL21hbmlmZXN0Lmpzb24nLCcidmVyc2lvbiI6ICIwLjEuMTYxIicsJyJ2ZXJzaW9uIjogIjAuMS4xNjIiJyksCignYWRkb24vc21hcnR0aGluZ3Nfd2ViX2JyaWRnZS9jb25maWcueWFtbCcsJ3ZlcnNpb246IDAuMS4xNjEnLCd2ZXJzaW9uOiAwLjEuMTYyJyksCigncGFja2FnZS5qc29uJywnInZlcnNpb24iOiAiMC4xLjE2MSInLCcidmVyc2lvbiI6ICIwLjEuMTYyIicpXToKICAgIHA9UGF0aChwYXRoKTsgcz1wLnJlYWRfdGV4dChlbmNvZGluZz0ndXRmLTgnKTsgYXNzZXJ0IG9sZCBpbiBzLHBhdGg7IHAud3JpdGVfdGV4dChzLnJlcGxhY2Uob2xkLG5ldywxKSxlbmNvZGluZz0ndXRmLTgnKQpwPVBhdGgoJ3BhY2thZ2UtbG9jay5qc29uJyk7IHM9cC5yZWFkX3RleHQoZW5jb2Rpbmc9J3V0Zi04Jyk7IGFzc2VydCBzLmNvdW50KCcidmVyc2lvbiI6ICIwLjEuMTYxIicpPj0yOyBwLndyaXRlX3RleHQocy5yZXBsYWNlKCcidmVyc2lvbiI6ICIwLjEuMTYxIicsJyJ2ZXJzaW9uIjogIjAuMS4xNjIiJywyKSxlbmNvZGluZz0ndXRmLTgnKQpwPVBhdGgoJ2FkZG9uL3NtYXJ0dGhpbmdzX3dlYl9icmlkZ2UvQ0hBTkdFTE9HLm1kJyk7IHM9cC5yZWFkX3RleHQoZW5jb2Rpbmc9J3V0Zi04Jyk7IGFzc2VydCBzLnN0YXJ0c3dpdGgoJyMjIDAuMS4xNjEnKTsgcC53cml0ZV90ZXh0KCcnJyMjIDAuMS4xNjJcblxuLSDquLDrs7gg7Iqk7JyE7LmYIOyXlO2LsO2LsCBJROuKlCDsnITsuZjCt+uwqSDsoJHrkZDsgqwg7JeG7J20IFNtYXJ0VGhpbmdzIOq4sOq4sCDsnbTrpoTrp4wg7IKs7Jqp7ZWp64uI64ukLiDrj5nsnbwg7J2066aEIOy2qeuPjOydgCBgXzJgLCBgXzNgIOyIq+yekCDsoJHrr7jsgqzroZzrp4wg6rWs67aE7ZWp64uI64ukLlxuLSDquLDsobQgZ2VuZXJhdGVkIOychOy5mMK367CpIOygkeuRkOyCrCBJROulvCDquLDquLDrqoUg6riw67CYIElE66GcIOyekOuPmSDsnbTsoITtlZjrqbAsIOyCrOyaqeyekCDsp4DsoJUgSUTsmYAg64uk66W4IO2Gte2VqeydtCDsoJDsnKDtlZwgSUTripQg67O07KG07ZWp64uI64ukLlxuLSBIb21lIE1vbml0b3Ig7Lm065OcIOyEoO2DneyXkOyEnCDsnITsuZjrqoUg7KCR65GQ7IKs7JmAIGDtmYjrqqjri4jthLBgL2DtmYgg66qo64uI7YSwYCDrsI8g7JiB66y4IOuzgO2YleydhCDsoJXtmZXtnogg7KeA7JuQ7ZWp64uI64ukLlxuXG4nJycrcyxlbmNvZGluZz0ndXRmLTgnKQo=' | base64 -d > /tmp/apply162.py
+          python /tmp/apply162.py
           python -m compileall -q custom_components/smartthings_web
           npm ci
           npm run typecheck
-          grep -q '"version": "0.1.162"' custom_components/smartthings_web/manifest.json
-          grep -q '^version: 0.1.162$' addon/smartthings_web_bridge/config.yaml
-
-      - name: Commit to main and remove one-time workflow
+      - name: Commit
         shell: bash
         run: |
           set -euo pipefail
