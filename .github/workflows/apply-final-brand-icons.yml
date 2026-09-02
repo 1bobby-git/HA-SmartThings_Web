@@ -1,4 +1,4 @@
-name: Apply final SmartThings icon
+name: Reapply SmartThings local brand assets
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: apply-final-smartthings-icon
+  group: reapply-smartthings-local-brand-assets
   cancel-in-progress: false
 
 jobs:
@@ -29,52 +29,62 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin main
-          git checkout -B icon-release origin/main
+          git checkout -B local-brand-release origin/main
 
-      - name: Download and validate final icon
+      - name: Install image tooling
+        shell: bash
+        run: python -m pip install --disable-pip-version-check Pillow
+
+      - name: Apply final SmartThings icons
         shell: bash
         run: |
           set -euo pipefail
-          source_base="https://raw.githubusercontent.com/1bobby-git/brands/464246d3df46c9426ec9dc6873a6f9561a326d2c/custom_integrations/smartthings_web"
+          source_base="https://raw.githubusercontent.com/1bobby-git/brands/4620f91aab78031a7b99749c97ff8f7748fd35c5/custom_integrations/smartthings_web"
           tmp="$(mktemp -d)"
-          echo "ICON_TMP=${tmp}" >> "${GITHUB_ENV}"
+          trap 'rm -rf "${tmp}"' EXIT
+
           curl --fail --location --retry 3 --retry-delay 2 "${source_base}/icon.png" --output "${tmp}/icon.png"
           curl --fail --location --retry 3 --retry-delay 2 "${source_base}/icon@2x.png" --output "${tmp}/icon@2x.png"
-          python - "${tmp}/icon.png" 256 "${tmp}/icon@2x.png" 512 <<'PY'
+
+          python - "${tmp}/icon.png" "${tmp}/icon@2x.png" <<'PY'
           from pathlib import Path
-          import struct
+          from PIL import Image
           import sys
 
-          for raw_path, expected in zip(sys.argv[1::2], sys.argv[2::2], strict=True):
-              path = Path(raw_path)
-              size = int(expected)
-              data = path.read_bytes()
-              if data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
-                  raise SystemExit(f"Invalid PNG: {path}")
-              width, height = struct.unpack(">II", data[16:24])
-              if (width, height) != (size, size):
-                  raise SystemExit(f"Unexpected size for {path}: {width}x{height}")
-              color_type = data[25]
-              if color_type not in {3, 6}:
-                  raise SystemExit(f"PNG lacks alpha-capable color type: {path}")
-              if color_type == 3 and b"tRNS" not in data:
-                  raise SystemExit(f"Indexed PNG lacks transparency: {path}")
+          icon_path = Path(sys.argv[1])
+          icon_2x_path = Path(sys.argv[2])
+
+          icon = Image.open(icon_path).convert("RGBA")
+          icon_2x = Image.open(icon_2x_path).convert("RGBA")
+          if icon.size != (256, 256):
+              raise SystemExit(f"Unexpected icon.png size: {icon.size}")
+          if icon_2x.size != (512, 512):
+              raise SystemExit(f"Unexpected icon@2x.png size: {icon_2x.size}")
+          for name, image in (("icon.png", icon), ("icon@2x.png", icon_2x)):
+              minimum, maximum = image.getchannel("A").getextrema()
+              if minimum != 0 or maximum != 255:
+                  raise SystemExit(f"{name} does not contain a full alpha range")
+
+          icon.save(icon_path, format="PNG", optimize=True, compress_level=9)
+          icon_2x.save(icon_2x_path, format="PNG", optimize=True, compress_level=9)
+          icon.resize((128, 128), Image.Resampling.LANCZOS).save(
+              icon_path.parent / "addon-icon.png",
+              format="PNG",
+              optimize=True,
+              compress_level=9,
+          )
           PY
 
-      - name: Apply icon and synchronize version
-        shell: bash
-        run: |
-          set -euo pipefail
-          install -m 0644 "${ICON_TMP}/icon.png" custom_components/smartthings_web/brand/icon.png
-          install -m 0644 "${ICON_TMP}/icon@2x.png" custom_components/smartthings_web/brand/icon@2x.png
-          install -m 0644 "${ICON_TMP}/icon.png" addon/smartthings_web_bridge/icon.png
+          install -m 0644 "${tmp}/icon.png" custom_components/smartthings_web/brand/icon.png
+          install -m 0644 "${tmp}/icon@2x.png" custom_components/smartthings_web/brand/icon@2x.png
+          install -m 0644 "${tmp}/addon-icon.png" addon/smartthings_web_bridge/icon.png
 
           python - <<'PY'
           from pathlib import Path
 
           old = "0.1.160"
           new = "0.1.161"
-          version_paths = [
+          paths = [
               Path("package.json"),
               Path("package-lock.json"),
               Path("custom_components/smartthings_web/manifest.json"),
@@ -84,10 +94,10 @@ jobs:
               Path("tests/addon-config.test.ts"),
               Path("tests/protocol-version-contract.test.ts"),
           ]
-          for path in version_paths:
+          for path in paths:
               text = path.read_text(encoding="utf-8")
               if old not in text:
-                  raise SystemExit(f"Expected version {old} in {path}")
+                  raise SystemExit(f"Expected {old} in {path}")
               path.write_text(text.replace(old, new), encoding="utf-8")
 
           changelog_path = Path("addon/smartthings_web_bridge/CHANGELOG.md")
@@ -96,26 +106,34 @@ jobs:
           if heading not in changelog:
               entry = (
                   "## 0.1.161\n\n"
-                  "- SmartThings Web과 SmartThings Find에 최종 SmartThings 기본 아이콘을 적용했습니다.\n"
-                  "- Home Assistant 로컬 Brands Proxy API용 256px 및 512px 투명 PNG를 갱신했습니다.\n"
-                  "- 브리지 세션, 프로토콜 및 기기 제어 동작은 변경하지 않았습니다.\n\n"
+                  "- 최종 SmartThings 기본 아이콘을 통합 구성 요소와 애드온에 다시 적용했습니다.\n"
+                  "- 통합 구성 요소는 Home Assistant 로컬 Brands Proxy API가 제공하는 256px 및 512px 투명 PNG를 포함합니다.\n"
+                  "- 애드온 아이콘은 동일한 디자인의 128px 투명 PNG로 맞췄습니다.\n"
+                  "- 세션 유지, 프로토콜 및 기기 제어 동작은 변경하지 않았습니다.\n\n"
               )
               changelog_path.write_text(entry + changelog, encoding="utf-8")
           PY
 
-          rm -rf "${ICON_TMP}"
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+
+          expected = {
+              Path("custom_components/smartthings_web/brand/icon.png"): (256, 256),
+              Path("custom_components/smartthings_web/brand/icon@2x.png"): (512, 512),
+              Path("addon/smartthings_web_bridge/icon.png"): (128, 128),
+          }
+          for path, size in expected.items():
+              image = Image.open(path).convert("RGBA")
+              if image.size != size:
+                  raise SystemExit(f"Unexpected size for {path}: {image.size}")
+              if image.getchannel("A").getextrema() != (0, 255):
+                  raise SystemExit(f"Missing transparency in {path}")
+          PY
+
           git diff --check
 
-      - name: Run regression checks
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm ci
-          npm test
-          npm run typecheck
-          python -m compileall -q custom_components/smartthings_web
-
-      - name: Commit and push
+      - name: Commit local brand release
         shell: bash
         run: |
           set -euo pipefail
@@ -123,5 +141,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "Update SmartThings default icon for 0.1.161"
+          git commit -m "Reapply SmartThings local brand assets for 0.1.161"
           git push origin HEAD:main
