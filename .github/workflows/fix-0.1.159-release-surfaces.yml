@@ -67,6 +67,10 @@ jobs:
               changelog_path.write_text(entry + changelog, encoding="utf-8")
           PY
 
+      - name: Install locked dependencies
+        shell: bash
+        run: npm ci
+
       - name: Verify synchronized versions
         shell: bash
         run: |
@@ -95,7 +99,6 @@ jobs:
             throw new Error("runtime bridge version is not synchronized");
           }
           NODE
-          npm ci
           npm test
           npm run typecheck
           git diff --check
