@@ -1,0 +1,127 @@
+name: Apply final SmartThings icon
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-final-brand-icons.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-final-smartthings-icon
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out latest main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Prepare latest branch state
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout -B icon-release origin/main
+
+      - name: Download and validate final icon
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_base="https://raw.githubusercontent.com/1bobby-git/brands/464246d3df46c9426ec9dc6873a6f9561a326d2c/custom_integrations/smartthings_web"
+          tmp="$(mktemp -d)"
+          echo "ICON_TMP=${tmp}" >> "${GITHUB_ENV}"
+          curl --fail --location --retry 3 --retry-delay 2 "${source_base}/icon.png" --output "${tmp}/icon.png"
+          curl --fail --location --retry 3 --retry-delay 2 "${source_base}/icon@2x.png" --output "${tmp}/icon@2x.png"
+          python - "${tmp}/icon.png" 256 "${tmp}/icon@2x.png" 512 <<'PY'
+          from pathlib import Path
+          import struct
+          import sys
+
+          for raw_path, expected in zip(sys.argv[1::2], sys.argv[2::2], strict=True):
+              path = Path(raw_path)
+              size = int(expected)
+              data = path.read_bytes()
+              if data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+                  raise SystemExit(f"Invalid PNG: {path}")
+              width, height = struct.unpack(">II", data[16:24])
+              if (width, height) != (size, size):
+                  raise SystemExit(f"Unexpected size for {path}: {width}x{height}")
+              color_type = data[25]
+              if color_type not in {3, 6}:
+                  raise SystemExit(f"PNG lacks alpha-capable color type: {path}")
+              if color_type == 3 and b"tRNS" not in data:
+                  raise SystemExit(f"Indexed PNG lacks transparency: {path}")
+          PY
+
+      - name: Apply icon and synchronize version
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 0644 "${ICON_TMP}/icon.png" custom_components/smartthings_web/brand/icon.png
+          install -m 0644 "${ICON_TMP}/icon@2x.png" custom_components/smartthings_web/brand/icon@2x.png
+          install -m 0644 "${ICON_TMP}/icon.png" addon/smartthings_web_bridge/icon.png
+
+          python - <<'PY'
+          from pathlib import Path
+
+          old = "0.1.160"
+          new = "0.1.161"
+          version_paths = [
+              Path("package.json"),
+              Path("package-lock.json"),
+              Path("custom_components/smartthings_web/manifest.json"),
+              Path("addon/smartthings_web_bridge/config.yaml"),
+              Path("protocol/version.json"),
+              Path("bridge/src/runtime.ts"),
+              Path("tests/addon-config.test.ts"),
+              Path("tests/protocol-version-contract.test.ts"),
+          ]
+          for path in version_paths:
+              text = path.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"Expected version {old} in {path}")
+              path.write_text(text.replace(old, new), encoding="utf-8")
+
+          changelog_path = Path("addon/smartthings_web_bridge/CHANGELOG.md")
+          changelog = changelog_path.read_text(encoding="utf-8")
+          heading = "## 0.1.161"
+          if heading not in changelog:
+              entry = (
+                  "## 0.1.161\n\n"
+                  "- SmartThings Web과 SmartThings Find에 최종 SmartThings 기본 아이콘을 적용했습니다.\n"
+                  "- Home Assistant 로컬 Brands Proxy API용 256px 및 512px 투명 PNG를 갱신했습니다.\n"
+                  "- 브리지 세션, 프로토콜 및 기기 제어 동작은 변경하지 않았습니다.\n\n"
+              )
+              changelog_path.write_text(entry + changelog, encoding="utf-8")
+          PY
+
+          rm -rf "${ICON_TMP}"
+          git diff --check
+
+      - name: Run regression checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm test
+          npm run typecheck
+          python -m compileall -q custom_components/smartthings_web
+
+      - name: Commit and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/apply-final-brand-icons.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Update SmartThings default icon for 0.1.161"
+          git push origin HEAD:main
