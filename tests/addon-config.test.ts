@@ -10,20 +10,20 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("packages Advanced command and entity-ID parity as version 0.1.162", () => {
+  test("packages Advanced command and entity-ID parity as version 0.1.163", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.162");
+    expect(config.version).toBe("0.1.163");
     expect(config.homeassistant_api).toBe(true);
-    expect(packageMetadata.version).toBe("0.1.162");
-    expect(protocolMetadata.bridge_version).toBe("0.1.162");
+    expect(packageMetadata.version).toBe("0.1.163");
+    expect(protocolMetadata.bridge_version).toBe("0.1.163");
     expect(protocolMetadata.protocol_version).toBe(5);
-    expect(runtime).toContain('const bridgeVersion = "0.1.162";');
-    expect(changelog).toContain("## 0.1.162");
+    expect(runtime).toContain('const bridgeVersion = "0.1.163";');
+    expect(changelog).toContain("## 0.1.163");
     expect(changelog).toContain("## 0.1.156");
     expect(changelog).toContain("## 0.1.155");
     expect(runtime).not.toContain("AUTHENTICATED_KEEPER_KEEPALIVE_MS");

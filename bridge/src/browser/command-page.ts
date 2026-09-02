@@ -525,20 +525,28 @@ export class SmartThingsWebUiCommandExecutor {
     const page = await this.openLocationPage(input.locationId, input.locationNames);
     try {
       const actionName = locationActionName(input.action);
-      let action = page.getByRole("button", { name: actionName });
-      if ((await action.count()) !== 1) {
-        const monitor = page.getByRole("button", {
-          name: homeMonitorName(input.locationNames?.[input.locationId])
-        });
-        await clickExactlyOne(monitor);
-        action = page.getByRole("button", { name: actionName });
+      let action = await findLocationActionControl(page, actionName, 250);
+      if (!action) {
+        const monitor = await findHomeMonitorControl(
+          page,
+          homeMonitorName(input.locationNames?.[input.locationId])
+        );
+        if (!monitor) throw new Error("command_control_not_found");
+        await monitor.click({ timeout: 15_000 });
+
+        const dialog = page.getByRole("dialog");
         try {
-          await action.first().waitFor({ state: "visible", timeout: 15_000 });
+          await dialog.first().waitFor({ state: "visible", timeout: 15_000 });
         } catch {
           throw new Error("command_control_not_found");
         }
+        if ((await dialog.count()) !== 1) {
+          throw new Error("command_control_ambiguous");
+        }
+        action = await findLocationActionControl(dialog, actionName, 15_000);
       }
-      await clickExactlyOne(action);
+      if (!action) throw new Error("command_control_not_found");
+      await action.click({ timeout: 15_000 });
     } finally {
       await page.close().catch(() => undefined);
     }
@@ -1823,10 +1831,54 @@ async function clickExactlyOne(control: CommandLocatorLike): Promise<void> {
   await control.click({ timeout: 15_000 });
 }
 
+async function findLocationActionControl(
+  scope: CommandControlSurface,
+  actionName: RegExp,
+  timeoutMs: number
+): Promise<CommandLocatorLike | undefined> {
+  for (const role of ["button", "radio", "tab"]) {
+    const candidate = scope.getByRole(role, { name: actionName });
+    const count = await candidate.count();
+    if (count > 1) throw new Error("command_control_ambiguous");
+    if (count !== 1) continue;
+    try {
+      await candidate.first().waitFor({ state: "visible", timeout: timeoutMs });
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
+async function findHomeMonitorControl(
+  scope: CommandControlSurface,
+  monitorName: RegExp
+): Promise<CommandLocatorLike | undefined> {
+  for (const role of ["button", "link"]) {
+    const candidate = scope.getByRole(role, { name: monitorName });
+    const count = await candidate.count();
+    if (count > 1) throw new Error("command_control_ambiguous");
+    if (count === 1) {
+      try {
+        await candidate.first().waitFor({ state: "visible", timeout: 15_000 });
+        return candidate;
+      } catch {
+        continue;
+      }
+    }
+  }
+  return undefined;
+}
+
 function locationActionName(action: "armAway" | "armStay" | "disarm"): RegExp {
-  if (action === "armAway") return /^(?:Arm away|Away|외출|외출 모드)$/iu;
-  if (action === "armStay") return /^(?:Arm stay|Stay|재실|재실 모드)$/iu;
-  return /^(?:Disarm|Disarmed|해제|보안 해제)$/iu;
+  if (action === "armAway") {
+    return /^(?:Arm away|Away|Away mode|외출|외출 모드|외출 중|외출중)$/iu;
+  }
+  if (action === "armStay") {
+    return /^(?:Arm stay|Stay|Stay mode|재실|재실 모드|재실 중|재실중|집에 있음|귀가)$/iu;
+  }
+  return /^(?:Disarm|Disarmed|Off|해제|해제됨|보안 해제|사용 안 함)$/iu;
 }
 
 function homeMonitorName(locationName?: string): RegExp {
@@ -1835,7 +1887,7 @@ function homeMonitorName(locationName?: string): RegExp {
     ? `(?:${escapeRegExp(normalizedLocationName)}\\s*)?`
     : "";
   return new RegExp(
-    `^\\s*${locationPrefix}(?:(?:SmartThings\\s*)?Home\\s*Monitor|홈\\s*모니터)\\s*$`,
+    `^\\s*${locationPrefix}(?:(?:SmartThings\\s*)?Home\\s*Monitor|홈\\s*모니터|홈모니터)\\s*$`,
     "iu"
   );
 }

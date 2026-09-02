@@ -1,3 +1,9 @@
+## 0.1.163
+
+- Home Monitor 제어를 my.smartthings.com 대시보드 카드와 열린 모달에 정확히 연결하고, Home/다중 Location 모두 동일한 위치 단위 경로를 사용합니다.
+- Home Monitor 모드 컨트롤을 열린 모달 내부로 한정하고 button/radio/tab 및 한국어 상태 문구 변형을 지원합니다.
+- 기존 SECURITY_ARM_STATE_EVENT 시간순 보호를 유지하면서 대시보드 제어 후 위치별 Home Monitor 상태를 기존 push 경로로 동기화합니다.
+
 ## 0.1.162
 
 - 기본 스위치 엔티티 ID는 위치·방 접두사 없이 SmartThings 기기 이름만 사용합니다. 동일 이름 충돌은 `_2`, `_3` 숫자 접미사로만 구분합니다.
