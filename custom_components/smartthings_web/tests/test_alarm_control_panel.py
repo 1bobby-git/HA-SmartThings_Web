@@ -119,19 +119,29 @@ def _runtime(location: BridgeLocation | str | None) -> SmartThingsWebRuntime:
 class SmartThingsWebHomeMonitorTests(unittest.IsolatedAsyncioTestCase):
     """Map location arm state to HA alarm state and exact arm commands."""
 
-    async def test_setup_discovers_home_monitor_only_after_arm_state_exists(self) -> None:
-        runtime = _runtime(BridgeLocation("loc_001", "Home", None))
+    async def test_setup_discovers_home_monitor_when_location_exists_without_arm_state(self) -> None:
+        runtime = _runtime(BridgeLocation("loc_001", "Sparkplus", None))
         added: list[SmartThingsWebHomeMonitor] = []
 
         await async_setup_entry(object(), _FakeEntry(runtime), added.extend)
 
+        self.assertEqual(len(added), 1)
+        self.assertEqual(added[0]._attr_name, "Sparkplus Home Monitor")
+        self.assertEqual(added[0]._attr_unique_id, "loc_001_home_monitor")
+        self.assertTrue(added[0].available)
+        self.assertIsNone(added[0].state)
+
+    async def test_setup_waits_only_until_location_exists(self) -> None:
+        runtime = _runtime(None)
+        added: list[SmartThingsWebHomeMonitor] = []
+
+        await async_setup_entry(object(), _FakeEntry(runtime), added.extend)
         self.assertEqual(added, [])
 
         runtime.inventory.locations["loc_001"] = BridgeLocation(
             "loc_001",
-            "Home",
-            "stay",
-            "2026-08-29T00:00:00Z",
+            "Sparkplus",
+            None,
         )
         for listener in tuple(runtime.listeners):
             listener()
@@ -139,18 +149,9 @@ class SmartThingsWebHomeMonitorTests(unittest.IsolatedAsyncioTestCase):
             listener()
 
         self.assertEqual(len(added), 1)
-        self.assertEqual(added[0]._attr_name, "Home Home Monitor")
-        self.assertEqual(added[0]._attr_unique_id, "loc_001_home_monitor")
-        self.assertEqual(
-            added[0]._attr_device_info,
-            {
-                "identifiers": {("smartthings_web", "loc_001")},
-                "name": "Home",
-                "manufacturer": "SmartThings",
-            },
-        )
+        self.assertEqual(added[0]._attr_name, "Sparkplus Home Monitor")
 
-    async def test_availability_and_state_follow_current_location_arm_state(self) -> None:
+    async def test_availability_tracks_location_presence_and_state_tracks_arm_state(self) -> None:
         runtime = _runtime(BridgeLocation("loc_001", "Home", "disarmed"))
         entity = SmartThingsWebHomeMonitor(runtime)
 
@@ -177,10 +178,14 @@ class SmartThingsWebHomeMonitorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(entity.state, ha_state)
 
         runtime.inventory.locations["loc_001"] = BridgeLocation("loc_001", "Home", None)
-        self.assertFalse(entity.available)
+        self.assertTrue(entity.available)
         self.assertIsNone(entity.state)
 
         runtime.inventory.locations["loc_001"] = "Home"
+        self.assertTrue(entity.available)
+        self.assertIsNone(entity.state)
+
+        runtime.inventory.locations.pop("loc_001")
         self.assertFalse(entity.available)
         self.assertIsNone(entity.state)
 
