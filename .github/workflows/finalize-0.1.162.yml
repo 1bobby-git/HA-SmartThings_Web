@@ -30,13 +30,7 @@ jobs:
 
           p = Path('custom_components/smartthings_web/__init__.py')
           s = p.read_text(encoding='utf-8')
-          old = '''        ordered_group = sorted(
-              group,
-              key=lambda row: (
-                  _primary_switch_location_room_key(inventory, row[1]),
-                  row[2],
-              ),
-          )'''
+          old = '        ordered_group = sorted(group, key=lambda row: (_primary_switch_location_room_key(inventory, row[1]), row[2]))'
           new = '''        ordered_group = sorted(
               group,
               key=lambda row: (
