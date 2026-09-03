@@ -1,0 +1,2 @@
+#!/usr/bin/env sh
+exec Xvfb :99 -screen 0 1440x1000x24 -nolisten tcp -nolock

@@ -1,0 +1,2 @@
+#!/usr/bin/env sh
+exec websockify 127.0.0.1:6080 127.0.0.1:5900

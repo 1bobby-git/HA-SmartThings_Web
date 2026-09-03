@@ -1,0 +1,13 @@
+services:
+  smartthings-web-bridge:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      - smartthings-web-data:/data
+    shm_size: 1gb
+    ports:
+      - "127.0.0.1:8099:8099"
+
+volumes:
+  smartthings-web-data:

@@ -1,0 +1,88 @@
+{
+  "observed_at": "2026-08-24T13:54:49+09:00",
+  "decision": "LIMITED",
+  "environment": {
+    "home_assistant_os_version": "18.2",
+    "home_assistant_core_version": "2026.8.3",
+    "installed_supervisor_slug": "local_smartthings_web_bridge",
+    "bridge_version": "0.1.22",
+    "chromium_version": "151.0.7922.34"
+  },
+  "container_posture": {
+    "privileged": false,
+    "network_mode": "bridge",
+    "full_access": false,
+    "addon_privilege_list_empty": true,
+    "apparmor_mode": "enforce",
+    "browser_uid": 1001,
+    "chromium_sandbox_enabled": true,
+    "no_no_sandbox_flag": true
+  },
+  "manual_login_observation": {
+    "ingress_status_page_rendered": true,
+    "novnc_samsung_login_rendered": true,
+    "manual_vnc_login_completed": true,
+    "state_after_login": "CONNECTED",
+    "ready_initially_true": true,
+    "observed_device_count": 213,
+    "decoded_device_event_count_increased": true,
+    "protocol_change_count": 0,
+    "restart_count": 0,
+    "invalid_frame_count": 1,
+    "protocol_fingerprint": "1:93ad956a7d0c0139"
+  },
+  "readiness_defect": {
+    "old_snapshot_ttl_ms": 120000,
+    "observed_ready_after_old_ttl": false,
+    "state_after_old_ttl": "CONNECTED",
+    "device_event_counters_still_increased": true,
+    "fixed_in_bridge_version": "0.1.23",
+    "fixed_semantics": "current-context initial snapshot proof persists while heartbeat freshness recent push traffic and current-context parser proof gate readiness"
+  },
+  "post_fix_verification": {
+    "bridge_version": "0.1.24",
+    "addon_restart_session_restored": true,
+    "observer_first_keeper_reload": true,
+    "state": "CONNECTED",
+    "ready_after_old_snapshot_ttl": true,
+    "initial_snapshot_age_ms": 147196,
+    "old_snapshot_ttl_exceeded": true,
+    "observed_device_count": 213,
+    "decoded_device_event_count": 77,
+    "protocol_change_count": 0,
+    "restart_count": 0,
+    "ingress_backend_status": 200,
+    "novnc_asset_status": 200,
+    "novnc_websocket_status": 101,
+    "apparmor_mode": "enforce"
+  },
+  "post_dedupe_fix_verification": {
+    "bridge_version": "0.1.25",
+    "supervisor_version_latest": "0.1.25",
+    "update_available": false,
+    "addon_restart_session_restored": true,
+    "state": "CONNECTED",
+    "ready_after_old_snapshot_ttl": true,
+    "initial_snapshot_age_ms": 145892,
+    "observed_device_count": 213,
+    "decoded_device_event_count": 170,
+    "unique_logical_event_count": 85,
+    "duplicate_delivery_count": 85,
+    "protocol_invalid_frame_count": 1,
+    "protocol_change_count": 0,
+    "restart_count": 0,
+    "local_source_candidate_count": 1,
+    "source_backups_archived_outside_discovery_root": true,
+    "apparmor_mode": "enforce",
+    "privileged": false,
+    "network_mode": "bridge",
+    "added_capabilities": 0
+  },
+  "limitations": [
+    "Host reboot recovery is unverified.",
+    "Physical-action correlation is unverified.",
+    "Long-idle durability is unverified.",
+    "Command behavior remains out of Phase 1 scope.",
+    "Complete API independence remains limited to observed samples."
+  ]
+}

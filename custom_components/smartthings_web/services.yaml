@@ -1,0 +1,106 @@
+execute_command:
+  name: Execute command
+  description: Execute a validated Advanced SmartThings Web command through the local Bridge.
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: smartthings_web
+    component:
+      name: Component
+      default: main
+      selector:
+        text:
+    capability:
+      name: Capability
+      required: true
+      selector:
+        text:
+    command:
+      name: Command
+      required: true
+      selector:
+        text:
+    arguments:
+      name: Arguments
+      default: []
+      selector:
+        object:
+    confirm:
+      name: Confirm state
+      default: true
+      selector:
+        boolean:
+    timeout:
+      name: Confirmation timeout
+      default: 30
+      selector:
+        number:
+          min: 1
+          max: 120
+          unit_of_measurement: s
+
+list_commands:
+  name: List commands
+  description: Return the safe Advanced command catalog for one SmartThings Web device.
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: smartthings_web
+    component:
+      name: Component
+      selector:
+        text:
+    capability:
+      name: Capability
+      selector:
+        text:
+
+speak:
+  name: Speak
+  description: Speak one phrase through a unique speechSynthesis.speak Advanced command.
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: smartthings_web
+    phrase:
+      name: Phrase
+      required: true
+      selector:
+        text:
+          multiline: true
+    timeout:
+      name: Confirmation timeout
+      default: 30
+      selector:
+        number:
+          min: 1
+          max: 120
+          unit_of_measurement: s
+
+reload_inventory:
+  name: Reload inventory
+  description: Run one coalesced Advanced inventory reconciliation.
+
+refresh_device:
+  name: Refresh device
+  description: Execute the observed stateless refresh command for one device.
+  fields:
+    device_id:
+      name: Device ID
+      required: true
+      selector:
+        device:
+          integration: smartthings_web
+
+reconnect_realtime:
+  name: Reconnect realtime
+  description: Reconnect the Location Socket.IO keeper and resynchronize after recovery.

@@ -1,0 +1,7 @@
+#!/command/with-contenv sh
+export HOME=/data
+export XDG_CACHE_HOME=/data/chromium-profile/.cache
+export XDG_CONFIG_HOME=/data/chromium-profile/.config
+export XDG_DATA_HOME=/data/chromium-profile/.local/share
+export XDG_STATE_HOME=/data/chromium-profile/.local/state
+exec s6-setuidgid pwuser node --experimental-sqlite /app/dist/bridge/src/main.js

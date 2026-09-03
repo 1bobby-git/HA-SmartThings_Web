@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+export DISPLAY=:99
+export HOME=/tmp/openbox-home
+export XDG_CACHE_HOME=/tmp/openbox-cache
+exec openbox

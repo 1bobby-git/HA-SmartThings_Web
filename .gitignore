@@ -1,0 +1,15 @@
+node_modules/
+dist/
+dist-addon/
+coverage/
+.vitest/
+.env
+.env.*
+!.env.example
+*.log
+playwright-report/
+test-results/
+__pycache__/
+*.pyc
+.worktrees/
+/stw-smartthings-web-*.tar.gz

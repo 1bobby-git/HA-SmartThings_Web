@@ -1,0 +1,119 @@
+# HAOS Passive Soak
+
+The Phase 1 durability gate uses an external, read-only collector. It does not click the SmartThings UI, change a device, restart Home Assistant, or issue a SmartThings request from the bridge.
+
+## Default run
+
+From the repository root:
+
+```powershell
+$soakOutput = Join-Path $env:LOCALAPPDATA "HA-SmartThings-Web\soak\$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+npm run soak:haos -- --duration-hours 72 --interval-seconds 300 --output-dir $soakOutput
+```
+
+The defaults target the current HAOS validation environment through the existing `pve-new-ts` SSH host, VM `100`, and installed app slug `local_smartthings_web_bridge`. Override them only for another controlled environment with `--ssh-target`, `--vm-id`, and `--addon-slug`.
+
+The output directory must resolve outside this Git repository. The collector refuses an in-repository path, uses SSH batch mode with a bounded timeout, and never persists SSH stdout, stderr, the complete Supervisor app record, an Ingress path, or a browser/network capture.
+
+Inside the production-pruned add-on container, use the compiled local collector:
+
+```sh
+node dist/tools/haos-soak.js --local-bridge
+```
+
+The equivalent package script is:
+
+```sh
+npm run soak:haos:addon
+```
+
+Local Bridge mode defaults to `http://127.0.0.1:8098` and `/data/bridge-secret`. It also accepts loopback-only `--bridge-url` overrides and explicit `--bridge-token-file` paths for controlled add-on tests. Non-loopback URLs remain rejected. Inventory request, inventory response, SSE request, SSE response, and Bridge auth failures are preserved as distinct sanitized sample error codes. Unknown cgroup memory is not reported as zero; absence or unreadable cgroup memory records a fail-closed sample error, while an actual cgroup value of `0` remains valid.
+
+## Resume an interrupted run
+
+Each new run writes `collector-config.json` and holds `.collector.lock` for its lifetime. The lock allows exactly one collector to append to a run directory. A second collector fails closed; after an abnormal exit, the dead process lock is removed automatically by the next resume attempt.
+
+Resume the same external directory with the original duration and interval:
+
+```powershell
+npm run soak:haos -- --resume --duration-hours 72 --interval-seconds 300 --output-dir $soakOutput
+```
+
+`--resume` requires an explicit `--output-dir`. The SSH target, VM ID, app slug, and maximum memory-growth setting must also match the immutable collector configuration from the original run. The collector strictly replays only complete, allowlisted JSONL lines, preserves the original start/end times, and continues after the last persisted sample. It does not hide downtime: an interruption longer than twice the configured interval still produces the existing `sample_gap` failure.
+
+## Stored evidence
+
+`samples.jsonl` contains only an explicit allowlist:
+
+- sample timestamp;
+- live, ready, runtime state, safe URL category, and aggregate connection/device counts;
+- decoded, unique, duplicate, dedupe-journal, invalid-frame, protocol-change, restart, inventory-count, and inventory/SSE sequence counts;
+- bridge, browser, and protocol versions;
+- heartbeat/snapshot/frame/event/parser/push ages and browser uptime;
+- CPU, memory, network-byte, and block-I/O aggregates from Supervisor stats.
+
+`status.json` is the latest automatic evaluation. `run.json` contains timing and the `allowlisted_aggregates_only` output policy. `collector-config.json` contains only the fixed non-secret collector settings needed for safe resume, while `.collector.lock` contains only the collector process ID and creation time. On completion, `final-summary.json` and its SHA-256 sidecar are written. A future repository fixture may contain only the reviewed final aggregate and hash, never the external JSONL stream.
+
+## Verdict rules
+
+The run fails if any sample:
+
+- is not live, ready, and `CONNECTED`;
+- increases the protocol-change or restart counter above the first sample, or rolls browser uptime backward and thereby proves a browser/context restart during this run;
+- raises the invalid-frame count above the first sample;
+- regresses decoded, unique, or duplicate event counters;
+- changes local inventory count or regresses local inventory/SSE sequence counters when those local counters are present;
+- is missing for more than twice the configured interval;
+- records a sanitized collection error; or
+- shows sustained first-window to last-window memory growth above 256 MiB by default.
+
+Equal event counters are allowed during a passive idle period but produce `event_counters_flat` as a warning. The status remains `pending` until a sample reaches the configured end time. Only a complete run with no failures becomes `pass`.
+
+## Deployment gate
+
+Inspect the external run without opening the raw sample stream:
+
+```powershell
+npm run soak:deployment-gate -- --run-dir $soakOutput
+```
+
+The command reads only `run.json`, the current `status.json` while a run is active, and the sealed `final-summary.json` plus its SHA-256 sidecar after completion. It never reads `samples.jsonl`, never writes to the run directory, and never deploys or restarts anything.
+
+Deployment is eligible only when all of these independent checks pass:
+
+- the run metadata is complete and uses the allowlisted aggregate policy;
+- duration is at least 72 hours, interval is at most 300 seconds, and at least 865 successful samples exist with no errors;
+- the final sample reaches the declared end time, sample gaps stay within the evaluator limit, and failures are empty;
+- memory and monotonic protocol counters remain within the Phase 1 durability rules;
+- both baseline and final evidence contain the local Bridge inventory count plus inventory/SSE sequences, with a stable device count and non-regressing sequences;
+- `final-summary.json` is strict allowlisted data and its exact bytes match `final-summary.json.sha256`.
+
+Exit code `0` and `deploymentEligible=true` are both required. Every other result is fail-closed. In particular, a healthy `pending` result still returns a nonzero exit code and does not release the candidate.
+
+After the gate passes, run the non-mutating candidate preflight:
+
+```powershell
+npm run deploy:haos:preflight -- --run-dir $soakOutput --expected-installed-version 0.1.25 --expected-candidate-version 0.1.26
+```
+
+This packages the ignored local candidate and verifies that the source is clean, on `main`, published to `origin/main`, and newer than the expected installed version. Its remote check runs only `ha apps info ... --raw-json` through the existing HAOS guest path, then reconstructs the slug, versions, running/boot state, local-build status, AppArmor mode, and Ingress boolean. It drops the Ingress URL, IP address, options, and every unrecognized field. The preflight has no execute mode and cannot upload, reload, rebuild, stop, start, or restart the app.
+
+After publishing the candidate commit, create its package once and retain the two exact identities printed by Git and the packager:
+
+```powershell
+$candidateCommit = git rev-parse HEAD
+$candidatePackage = npm run --silent package:addon | ConvertFrom-Json
+$candidateManifest = $candidatePackage.manifestSha256
+```
+
+Preview the complete deployment decision without changing HAOS:
+
+```powershell
+npm run deploy:haos:candidate -- --run-dir $soakOutput --expected-installed-version 0.1.25 --expected-candidate-version 0.1.26 --expected-commit-sha $candidateCommit --expected-candidate-manifest-sha $candidateManifest
+```
+
+The preview must report `deploymentEligible=true`. It also proves that the installed runtime file matches the pinned rollback commit and that a fresh rollback package has the pinned manifest. A preview never uploads, reloads, rebuilds, starts, stops, or restarts anything.
+
+Run the exact same command with `--execute` only after reviewing that eligible preview. Execution uploads two sub-1 MiB archives through the HAOS guest-agent stdin path: the exact candidate and a rollback package materialized from the pinned rollback commit. It verifies archive and manifest hashes, stores the rollback archive outside the local app scan directory, repeats the full soak/source/installed/runtime preflight immediately before activation, then reloads Supervisor and force-rebuilds the local app. Success requires the expected version, the exact packaged manifest inside the running container, started/automatic/local-build posture, enforced AppArmor, enabled Ingress, and both live and ready health endpoints. Any activation, rebuild, or postflight failure restores the pinned rollback package, rebuilds it, verifies health, and verifies the pinned runtime hash before reporting the failed candidate as rolled back.
+
+This test proves passive long-idle durability only. Host reboot, network interruption, browser command feasibility, and complete API independence remain separate Phase 1 gates; targeted physical-action correlation was verified independently on 0.1.28.

@@ -1,0 +1,53 @@
+# 로컬 SmartThings Web Bridge 업데이트
+
+## 업데이트가 표시되지 않는 이유
+
+Home Assistant에 설치된 앱 ID가 `local_smartthings_web_bridge`라면 GitHub 앱 저장소에서 설치한 앱이 아니라 `/addons`의 파일을 사용하는 **로컬 앱**입니다.
+
+로컬 앱의 **업데이트 확인**과 **업데이트**는 GitHub 릴리스 파일을 자동으로 내려받지 않습니다. `/addons`에 남아 있는 `config.yaml`이 이전 버전이면 앱 화면에도 계속 이전 버전만 표시됩니다.
+
+`http://local-smartthings-web-bridge:8100` 주소를 유지하려면 로컬 앱 설치를 유지해야 하므로, 새 릴리스 패키지를 `/addons`에 먼저 동기화한 뒤 Supervisor 업데이트를 실행해야 합니다.
+
+## 0.1.169로 업데이트
+
+Home Assistant의 **Terminal & SSH** 앱에서 다음 명령을 한 줄로 실행합니다.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/1bobby-git/HA-SmartThings_Web/main/tools/update-local-addon.sh -o /tmp/update-smartthings-web-bridge.sh && bash /tmp/update-smartthings-web-bridge.sh 0.1.169
+```
+
+스크립트는 다음 작업을 수행합니다.
+
+1. `ha addons info local_smartthings_web_bridge`로 설치된 로컬 앱을 확인합니다.
+2. `/addons`에서 `slug: smartthings_web_bridge`인 실제 로컬 앱 폴더를 찾습니다.
+3. 설치 정보는 있지만 `/addons` 소스가 없으면 `/addons/smartthings_web_bridge`에 소스를 자동 복원합니다.
+4. GitHub의 `smartthings-web-bridge-0.1.169.tgz`를 내려받습니다.
+5. 릴리스 SHA-256 `164b571378bb36d6798fc2326b94db7ba59ba0f21bad43dc60d3da1fe5d5b629`를 검증합니다.
+6. 기존 소스가 있으면 `/share/smartthings-web-bridge-backups`에 백업합니다.
+7. 로컬 앱 소스를 0.1.169 패키지로 교체합니다.
+8. `ha addons reload`, `ha addons update local_smartthings_web_bridge`, `ha addons start local_smartthings_web_bridge`를 실행합니다.
+9. `http://local-smartthings-web-bridge:8100/health/live` 응답을 확인합니다.
+
+완료 후 다음 명령으로 설치 버전을 확인합니다.
+
+```bash
+ha addons info local_smartthings_web_bridge
+```
+
+출력의 `version`과 `version_latest`가 `0.1.169`인지 확인한 다음 Home Assistant를 재시작합니다.
+
+## 첫 업데이트가 실패하는 경우
+
+Supervisor가 이미 사라진 이전 소스 위치를 기억하고 있으면 소스를 복원한 첫 업데이트가 실패할 수 있습니다. 스크립트가 아래 명령을 안내하면 순서대로 실행한 뒤 업데이트 명령을 다시 실행합니다.
+
+```bash
+ha supervisor repair
+ha addons reload
+```
+
+## 주의사항
+
+- 백업 폴더를 `/addons` 아래에 만들면 같은 slug가 중복 검색될 수 있으므로 스크립트는 `/share`에 백업합니다.
+- 기존 Samsung 로그인 프로필과 앱 옵션은 Supervisor의 앱 데이터 영역에 있으므로 `/addons` 소스 교체 대상에 포함되지 않습니다.
+- 앱 ID가 `d55cafb9_smartthings_web_bridge`이면 저장소 설치 앱입니다. 이 경우 앱 스토어에서 0.1.169로 업데이트하며 내부 주소는 `http://d55cafb9-smartthings-web-bridge:8100`입니다.
+- 통합 0.1.169는 `local`과 `d55cafb9` 두 내부 주소를 안전하게 확인한 뒤 실제 응답한 주소를 구성 항목에 저장합니다.

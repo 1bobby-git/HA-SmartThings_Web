@@ -1,0 +1,14 @@
+{
+  "domain": "smartthings_web",
+  "name": "SmartThings Web",
+  "codeowners": [
+    "@1bobby-git"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/1bobby-git/HA-SmartThings_Web",
+  "integration_type": "hub",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/1bobby-git/HA-SmartThings_Web/issues",
+  "requirements": [],
+  "version": "0.1.171"
+}
