@@ -181,6 +181,80 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertIn("dev_001", runtime.inventory.devices)
         self.assertEqual(sensor_value(runtime), 20)
 
+    def test_ready_reconnect_preserves_selected_location_when_snapshot_omits_every_device(self) -> None:
+        spark_state = BridgeState(
+            "main",
+            "switch",
+            "switch",
+            "on",
+            None,
+            "2026-09-03T00:00:00Z",
+        )
+        current = BridgeInventory(
+            sequence=50,
+            ready=True,
+            bridge_version="0.1.166",
+            protocol_version="5",
+            locations={"loc_home": "Home", "loc_spark": "Sparkplus"},
+            rooms={
+                "room_home": ("loc_home", "Living room"),
+                "room_spark": ("loc_spark", "Office"),
+            },
+            devices={
+                "dev_home": BridgeDevice(
+                    "dev_home",
+                    "loc_home",
+                    "room_home",
+                    "Home switch",
+                    "switch",
+                    True,
+                ),
+                "dev_spark": BridgeDevice(
+                    "dev_spark",
+                    "loc_spark",
+                    "room_spark",
+                    "Sparkplus switch",
+                    "switch",
+                    True,
+                    states={spark_state.key: spark_state},
+                ),
+            },
+        )
+        latest = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.167",
+            protocol_version="5",
+            locations={"loc_home": "Home", "loc_spark": "Sparkplus"},
+            rooms={"room_home": ("loc_home", "Living room")},
+            devices={
+                "dev_home": BridgeDevice(
+                    "dev_home",
+                    "loc_home",
+                    "room_home",
+                    "Home switch",
+                    "switch",
+                    True,
+                )
+            },
+        )
+        runtime = SmartThingsWebRuntime(FakeClient(), "loc_spark", current)
+
+        changed = runtime.apply_reconnect_inventory(latest)
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            set(runtime.inventory.devices),
+            {"dev_home", "dev_spark"},
+        )
+        self.assertEqual(
+            runtime.inventory.devices["dev_spark"].states[spark_state.key].value,
+            "on",
+        )
+        self.assertEqual(
+            runtime.inventory.rooms["room_spark"],
+            ("loc_spark", "Office"),
+        )
     def test_reconnect_inventory_snapshot_starts_new_epoch_with_lower_sequence(self) -> None:
         current = inventory(50, 20, "2026-08-24T21:00:00Z")
         restarted = inventory(1, 21, "2026-08-24T21:01:00Z")

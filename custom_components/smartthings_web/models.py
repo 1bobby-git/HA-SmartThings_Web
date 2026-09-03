@@ -307,7 +307,31 @@ class SmartThingsWebRuntime:
         authoritative = latest.ready and (
             allow_sequence_reset or latest.sequence > current.sequence
         )
-        devices = {} if authoritative else deepcopy(current.devices)
+        preserve_selected_location = (
+            authoritative
+            and allow_sequence_reset
+            and self.location_id in latest.locations
+            and any(
+                device.location_id == self.location_id
+                for device in current.devices.values()
+            )
+            and not any(
+                device.location_id == self.location_id
+                for device in latest.devices.values()
+            )
+        )
+        if authoritative:
+            devices = (
+                {
+                    device_id: deepcopy(device)
+                    for device_id, device in current.devices.items()
+                    if device.location_id == self.location_id
+                }
+                if preserve_selected_location
+                else {}
+            )
+        else:
+            devices = deepcopy(current.devices)
         for device_id, latest_device in latest.devices.items():
             existing = current.devices.get(device_id)
             if existing is None:
@@ -365,7 +389,15 @@ class SmartThingsWebRuntime:
                 else _merge_locations(current.locations, latest.locations)
             ),
             rooms=(
-                deepcopy(latest.rooms)
+                {
+                    **{
+                        room_id: deepcopy(room)
+                        for room_id, room in current.rooms.items()
+                        if preserve_selected_location
+                        and room[0] == self.location_id
+                    },
+                    **deepcopy(latest.rooms),
+                }
                 if authoritative
                 else {**current.rooms, **latest.rooms}
             ),
@@ -376,6 +408,10 @@ class SmartThingsWebRuntime:
                         scene_id: scene
                         for scene_id, scene in current.scenes.items()
                         if scene_id in latest.scenes
+                        or (
+                            preserve_selected_location
+                            and scene.location_id == self.location_id
+                        )
                     },
                     latest.scenes,
                 )
