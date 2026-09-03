@@ -1,4 +1,5 @@
 import type { BrowserPageLike, KeeperPageManager } from "./keeper-page.js";
+import { clickTextOnlyHomeMonitorAction } from "./home-monitor-dom.js";
 import { safeCameraImageUrl } from "../state/camera-image-store.js";
 
 interface CommandLocatorLike {
@@ -536,8 +537,24 @@ export class SmartThingsWebUiCommandExecutor {
         monitorName,
         monitorLabels,
         actionName,
-        15_000
+        3_000
       );
+      if (!action) {
+        const textResult = await clickTextOnlyHomeMonitorAction(
+          page,
+          monitorLabels,
+          locationActionLabels(input.action),
+          [
+            locationActionLabels("armAway"),
+            locationActionLabels("armStay"),
+            locationActionLabels("disarm")
+          ]
+        );
+        if (textResult === "clicked") return;
+        if (textResult === "ambiguous") {
+          throw new Error("command_control_ambiguous");
+        }
+      }
       if (
         !action &&
         await clickHomeMonitorCardActionByText(
