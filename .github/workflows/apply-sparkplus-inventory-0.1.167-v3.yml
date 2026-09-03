@@ -1,0 +1,115 @@
+name: Apply Sparkplus inventory preservation 0.1.167 v3
+
+on:
+  push:
+    branches:
+      - fix/sparkplus-inventory-preservation-0.1.167
+    paths:
+      - .github/workflows/apply-sparkplus-inventory-0.1.167-v3.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    name: Apply, test, and package fix
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out fix branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/sparkplus-inventory-preservation-0.1.167
+          fetch-depth: 0
+
+      - name: Run corrected patch script
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          workflow = Path(
+              ".github/workflows/apply-sparkplus-inventory-0.1.167-v2.yml"
+          ).read_text(encoding="utf-8")
+          marker = "          python - <<'PY'\n"
+          start = workflow.index(marker) + len(marker)
+          end = workflow.index("\n          PY\n", start)
+          encoded = workflow[start:end].splitlines()
+          script = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in encoded
+          )
+          script = script.replace(
+              '"""Retry one complete Bridge inventory when a known location is empty."""',
+              '"Retry one complete Bridge inventory when a known location is empty."',
+          ).replace(
+              '"""Recover a location omitted by one otherwise ready inventory epoch."""',
+              '"Recover a location omitted by one otherwise ready inventory epoch."',
+          )
+          compile(script, "sparkplus-inventory-patch.py", "exec")
+          exec(script, {"__name__": "__main__"})
+          PY
+
+          git diff --check
+          git status --short
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run full Node test suite
+        run: npm test
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Build Bridge
+        run: npm run build
+
+      - name: Package Bridge add-on
+        run: npm run package:addon
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+
+      - name: Install Python test dependencies
+        run: python -m pip install --disable-pip-version-check "aiohttp>=3.10,<4" "yarl>=1.9,<2" "voluptuous>=0.15,<1"
+
+      - name: Compile integration
+        run: python -m compileall -q custom_components/smartthings_web
+
+      - name: Run full integration test suite
+        run: python -m unittest discover -s custom_components/smartthings_web/tests -p "test_*.py"
+
+      - name: Commit verified changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            bridge/src/state/device-store.ts \
+            bridge/src/runtime.ts \
+            bridge/tests/state/device-store.test.ts \
+            custom_components/smartthings_web/__init__.py \
+            custom_components/smartthings_web/models.py \
+            custom_components/smartthings_web/manifest.json \
+            custom_components/smartthings_web/tests/test_init.py \
+            custom_components/smartthings_web/tests/test_models.py \
+            addon/smartthings_web_bridge/config.yaml \
+            addon/smartthings_web_bridge/CHANGELOG.md \
+            package.json \
+            package-lock.json \
+            protocol/version.json \
+            tests/addon-config.test.ts \
+            tests/protocol-version-contract.test.ts
+          git commit -m "fix: preserve missing Sparkplus inventory across restart"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
