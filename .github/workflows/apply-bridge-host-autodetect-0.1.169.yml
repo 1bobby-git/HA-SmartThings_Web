@@ -1,0 +1,586 @@
+name: Apply Bridge host auto-detection 0.1.169
+
+on:
+  push:
+    branches:
+      - fix/bridge-host-autodetect-0.1.169
+    paths:
+      - .github/workflows/apply-bridge-host-autodetect-0.1.169.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    name: Patch, test, package, and commit 0.1.169
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out fix branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/bridge-host-autodetect-0.1.169
+          fetch-depth: 0
+
+      - name: Apply Bridge hostname correction and release update
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}: {old[:100]!r}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          def replace_version(path: str, expected_count: int) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count("0.1.168")
+              if count != expected_count:
+                  raise SystemExit(f"{path}: expected {expected_count} version matches, found {count}")
+              target.write_text(text.replace("0.1.168", "0.1.169"), encoding="utf-8")
+
+          replace_once(
+              "custom_components/smartthings_web/const.py",
+              '''DEFAULT_BRIDGE_URL = "http://local-smartthings-web-bridge:8100"
+          LEGACY_BRIDGE_URLS = frozenset(
+              {
+                  "http://d55cafb9-smartthings-web-bridge:8100",
+              }
+          )
+          
+          
+          def normalize_bridge_url(value: str) -> str:
+              """Return the canonical local Bridge URL for known legacy add-on hosts."""
+              if not isinstance(value, str):
+                  raise ValueError("invalid_bridge_url")
+              normalized = value.strip()
+              if normalized.rstrip("/").lower() in LEGACY_BRIDGE_URLS:
+                  return DEFAULT_BRIDGE_URL
+              return normalized
+          ''',
+              '''REPOSITORY_BRIDGE_URL = "http://d55cafb9-smartthings-web-bridge:8100"
+          LOCAL_BRIDGE_URL = "http://local-smartthings-web-bridge:8100"
+          KNOWN_BRIDGE_URLS = (REPOSITORY_BRIDGE_URL, LOCAL_BRIDGE_URL)
+          DEFAULT_BRIDGE_URL = REPOSITORY_BRIDGE_URL
+          
+          
+          def normalize_bridge_url(value: str) -> str:
+              """Normalize a configured local Bridge URL without changing its hostname."""
+              if not isinstance(value, str):
+                  raise ValueError("invalid_bridge_url")
+              normalized = value.strip().rstrip("/")
+              if not normalized:
+                  raise ValueError("invalid_bridge_url")
+              known = {candidate.lower(): candidate for candidate in KNOWN_BRIDGE_URLS}
+              return known.get(normalized.lower(), normalized)
+          
+          
+          def bridge_url_candidates(value: str) -> tuple[str, ...]:
+              """Return safe candidates for repository and manually installed local apps."""
+              normalized = normalize_bridge_url(value)
+              if normalized not in KNOWN_BRIDGE_URLS:
+                  return (normalized,)
+              return (normalized,) + tuple(
+                  candidate for candidate in KNOWN_BRIDGE_URLS if candidate != normalized
+              )
+          ''',
+          )
+
+          replace_once(
+              "custom_components/smartthings_web/bridge_client.py",
+              "from .const import normalize_bridge_url\n",
+              "from .const import bridge_url_candidates, normalize_bridge_url\n",
+          )
+
+          replace_once(
+              "custom_components/smartthings_web/bridge_client.py",
+              '''class SmartThingsWebBridgeClient:
+          ''',
+              '''def _validated_bridge_base_url(base_url: str) -> str:
+              """Validate and canonicalize one local Bridge base URL."""
+              try:
+                  url = URL(normalize_bridge_url(base_url))
+              except (TypeError, ValueError) as err:
+                  raise BridgeClientError("invalid_bridge_url") from err
+              if (
+                  url.scheme not in {"http", "https"}
+                  or not url.host
+                  or url.user
+                  or url.password
+                  or url.query_string
+                  or url.fragment
+                  or url.path not in {"", "/"}
+                  or not _is_local_bridge_host(url.host)
+              ):
+                  raise BridgeClientError("invalid_bridge_url")
+              return str(url.with_path("").with_query(None).with_fragment(None)).rstrip("/")
+          
+          
+          class SmartThingsWebBridgeClient:
+          ''',
+          )
+
+          replace_once(
+              "custom_components/smartthings_web/bridge_client.py",
+              '''    def __init__(self, session: ClientSession, base_url: str, token: str | None = None) -> None:
+                  try:
+                      url = URL(normalize_bridge_url(base_url))
+                  except (TypeError, ValueError) as err:
+                      raise BridgeClientError("invalid_bridge_url") from err
+                  if (
+                      url.scheme not in {"http", "https"}
+                      or not url.host
+                      or url.user
+                      or url.password
+                      or url.query_string
+                      or url.fragment
+                      or url.path not in {"", "/"}
+                      or not _is_local_bridge_host(url.host)
+                  ):
+                      raise BridgeClientError("invalid_bridge_url")
+                  self._session = session
+                  self._base_url = str(url.with_path("").with_query(None).with_fragment(None)).rstrip("/")
+                  self._token = token
+          ''',
+              '''    def __init__(self, session: ClientSession, base_url: str, token: str | None = None) -> None:
+                  self._session = session
+                  self._base_urls = tuple(
+                      _validated_bridge_base_url(candidate)
+                      for candidate in bridge_url_candidates(base_url)
+                  )
+                  self._base_url = self._base_urls[0]
+                  self._token = token
+          ''',
+          )
+
+          replace_once(
+              "custom_components/smartthings_web/bridge_client.py",
+              '''    @property
+              def base_url(self) -> str:
+                  """Return the validated canonical Bridge base URL."""
+                  return self._base_url
+          
+              async def async_pair(self, code: str) -> str:
+          ''',
+              '''    @property
+              def base_url(self) -> str:
+                  """Return the validated Bridge URL that most recently responded."""
+                  return self._base_url
+          
+              def _ordered_base_urls(self) -> tuple[str, ...]:
+                  """Try the active URL first, then the other known installation hostname."""
+                  return (self._base_url,) + tuple(
+                      candidate for candidate in self._base_urls if candidate != self._base_url
+                  )
+          
+              def _activate_base_url(self, base_url: str) -> None:
+                  """Remember the reachable hostname for subsequent HTTP and SSE requests."""
+                  self._base_url = base_url
+          
+              async def async_pair(self, code: str) -> str:
+          ''',
+          )
+
+          replace_once(
+              "custom_components/smartthings_web/bridge_client.py",
+              '''    async def _request_json(
+                  self,
+                  method: str,
+                  path: str,
+                  *,
+                  auth: bool = False,
+                  json_body: dict[str, Any] | None = None,
+                  timeout_seconds: int = 20,
+              ) -> dict[str, Any]:
+                  headers: dict[str, str] = {}
+                  if auth:
+                      if self._token is None:
+                          raise BridgeAuthError("missing_bridge_token")
+                      headers["Authorization"] = f"Bearer {self._token}"
+                  try:
+                      async with self._session.request(
+                          method,
+                          f"{self._base_url}{path}",
+                          headers=headers,
+                          json=json_body,
+                          timeout=ClientTimeout(total=timeout_seconds),
+                      ) as response:
+                          if response.status in {401, 403}:
+                              raise BridgeAuthError("bridge_auth_failed")
+                          if response.status >= 400:
+                              raise BridgeClientError(await _safe_bridge_error_code(response))
+                          value = await response.json(content_type="application/json")
+                          if not isinstance(value, dict):
+                              raise BridgeClientError("bridge_response_invalid")
+                          return value
+                  except BridgeClientError:
+                      raise
+                  except (ClientError, TimeoutError, ValueError) as err:
+                      raise BridgeClientError("bridge_request_failed") from err
+          ''',
+              '''    async def _request_json(
+                  self,
+                  method: str,
+                  path: str,
+                  *,
+                  auth: bool = False,
+                  json_body: dict[str, Any] | None = None,
+                  timeout_seconds: int = 20,
+              ) -> dict[str, Any]:
+                  headers: dict[str, str] = {}
+                  if auth:
+                      if self._token is None:
+                          raise BridgeAuthError("missing_bridge_token")
+                      headers["Authorization"] = f"Bearer {self._token}"
+                  last_error: Exception | None = None
+                  for base_url in self._ordered_base_urls():
+                      try:
+                          async with self._session.request(
+                              method,
+                              f"{base_url}{path}",
+                              headers=headers,
+                              json=json_body,
+                              timeout=ClientTimeout(
+                                  total=timeout_seconds,
+                                  connect=min(5, timeout_seconds),
+                              ),
+                          ) as response:
+                              if response.status in {401, 403}:
+                                  raise BridgeAuthError("bridge_auth_failed")
+                              if response.status >= 400:
+                                  raise BridgeClientError(await _safe_bridge_error_code(response))
+                              value = await response.json(content_type="application/json")
+                              if not isinstance(value, dict):
+                                  raise BridgeClientError("bridge_response_invalid")
+                              self._activate_base_url(base_url)
+                              return value
+                      except BridgeClientError:
+                          raise
+                      except (ClientError, TimeoutError, ValueError) as err:
+                          last_error = err
+                  raise BridgeClientError("bridge_request_failed") from last_error
+          ''',
+          )
+
+          replace_once(
+              "custom_components/smartthings_web/__init__.py",
+              '''    client = SmartThingsWebBridgeClient(
+                  async_get_clientsession(hass),
+                  entry.data[CONF_BRIDGE_URL],
+                  entry.data[CONF_BRIDGE_TOKEN],
+              )
+              _persist_canonical_bridge_url(hass, entry, client.base_url)
+              try:
+                  inventory = await client.async_get_inventory()
+              except BridgeAuthError as err:
+                  raise ConfigEntryAuthFailed from err
+              except BridgeClientError as err:
+                  raise ConfigEntryNotReady from err
+              location_id = entry.data[CONF_LOCATION_ID]
+          ''',
+              '''    client = SmartThingsWebBridgeClient(
+                  async_get_clientsession(hass),
+                  entry.data[CONF_BRIDGE_URL],
+                  entry.data[CONF_BRIDGE_TOKEN],
+              )
+              try:
+                  inventory = await client.async_get_inventory()
+              except BridgeAuthError as err:
+                  raise ConfigEntryAuthFailed from err
+              except BridgeClientError as err:
+                  raise ConfigEntryNotReady from err
+              _persist_canonical_bridge_url(hass, entry, client.base_url)
+              location_id = entry.data[CONF_LOCATION_ID]
+          ''',
+          )
+
+          replace_once(
+              "custom_components/smartthings_web/tests/test_bridge_client.py",
+              "from unittest.mock import AsyncMock\n",
+              "from unittest.mock import AsyncMock\n\nfrom aiohttp import ClientConnectionError\n",
+          )
+
+          replace_once(
+              "custom_components/smartthings_web/tests/test_bridge_client.py",
+              '''    def test_rewrites_repository_hostname_to_local_addon_hostname(self) -> None:
+                  client = SmartThingsWebBridgeClient(
+                      object(),
+                      "http://d55cafb9-smartthings-web-bridge:8100/",
+                  )  # type: ignore[arg-type]
+          
+                  self.assertEqual(
+                      client.base_url,
+                      "http://local-smartthings-web-bridge:8100",
+                  )
+          ''',
+              '''    def test_keeps_repository_hostname_and_orders_known_fallback(self) -> None:
+                  client = SmartThingsWebBridgeClient(
+                      object(),
+                      "http://d55cafb9-smartthings-web-bridge:8100/",
+                  )  # type: ignore[arg-type]
+          
+                  self.assertEqual(
+                      client.base_url,
+                      "http://d55cafb9-smartthings-web-bridge:8100",
+                  )
+                  self.assertEqual(
+                      client._base_urls,
+                      (
+                          "http://d55cafb9-smartthings-web-bridge:8100",
+                          "http://local-smartthings-web-bridge:8100",
+                      ),
+                  )
+          
+              async def test_inventory_falls_back_to_repository_addon_hostname(self) -> None:
+                  class FallbackSession:
+                      def __init__(self) -> None:
+                          self.calls: list[str] = []
+          
+                      def request(self, _method: str, url: str, **_kwargs: object) -> object:
+                          self.calls.append(url)
+                          if url.startswith("http://local-smartthings-web-bridge:8100"):
+                              raise ClientConnectionError("local add-on hostname is absent")
+                          return _FakeResponse(
+                              200,
+                              {
+                                  "schemaVersion": 1,
+                                  "ready": True,
+                                  "bridgeVersion": "0.1.169",
+                                  "protocolVersion": "5",
+                                  "locations": [],
+                                  "rooms": [],
+                                  "scenes": [],
+                                  "devices": [],
+                              },
+                          )
+          
+                  session = FallbackSession()
+                  client = SmartThingsWebBridgeClient(
+                      session,  # type: ignore[arg-type]
+                      "http://local-smartthings-web-bridge:8100",
+                      "x" * 32,
+                  )
+          
+                  inventory = await client.async_get_inventory()
+          
+                  self.assertTrue(inventory.ready)
+                  self.assertEqual(
+                      session.calls,
+                      [
+                          "http://local-smartthings-web-bridge:8100/api/v1/inventory",
+                          "http://d55cafb9-smartthings-web-bridge:8100/api/v1/inventory",
+                      ],
+                  )
+                  self.assertEqual(
+                      client.base_url,
+                      "http://d55cafb9-smartthings-web-bridge:8100",
+                  )
+          ''',
+          )
+
+          replace_once(
+              "custom_components/smartthings_web/tests/test_config_flow.py",
+              "config_flow.SmartThingsWebBridgeClient = FakeLegacyPairingClient  # type: ignore[assignment]",
+              "config_flow.SmartThingsWebBridgeClient = FakeResolvedPairingClient  # type: ignore[assignment]",
+          )
+          replace_once(
+              "custom_components/smartthings_web/tests/test_config_flow.py",
+              "async def test_new_pairing_stores_local_hostname_for_legacy_repository_url(self) -> None:",
+              "async def test_new_pairing_stores_the_reachable_repository_hostname(self) -> None:",
+          )
+          replace_once(
+              "custom_components/smartthings_web/tests/test_config_flow.py",
+              '''                    CONF_BRIDGE_URL: "http://d55cafb9-smartthings-web-bridge:8100",
+          ''',
+              '''                    CONF_BRIDGE_URL: "http://local-smartthings-web-bridge:8100",
+          ''',
+          )
+          replace_once(
+              "custom_components/smartthings_web/tests/test_config_flow.py",
+              '''            "http://local-smartthings-web-bridge:8100",
+                  )
+          
+              async def test_new_entries_default_to_safe_control_options''',
+              '''            "http://d55cafb9-smartthings-web-bridge:8100",
+                  )
+          
+              async def test_new_entries_default_to_safe_control_options''',
+          )
+          replace_once(
+              "custom_components/smartthings_web/tests/test_config_flow.py",
+              '''class FakeLegacyPairingClient:
+              """Pair a legacy repository hostname but expose the canonical local URL."""
+          
+              def __init__(self, _session: object, _bridge_url: str) -> None:
+                  self.base_url = "http://local-smartthings-web-bridge:8100"
+          ''',
+              '''class FakeResolvedPairingClient:
+              """Expose the repository hostname selected after a safe fallback probe."""
+          
+              def __init__(self, _session: object, _bridge_url: str) -> None:
+                  self.base_url = "http://d55cafb9-smartthings-web-bridge:8100"
+          ''',
+          )
+
+          init_path = Path("custom_components/smartthings_web/tests/test_init.py")
+          init_text = init_path.read_text(encoding="utf-8")
+          start = init_text.index("class BridgeUrlMigrationTests")
+          end = init_text.index("class EmptyLocationInventoryRecoveryTests")
+          replacement = '''class BridgeUrlMigrationTests(unittest.TestCase):
+              """Persist only the hostname that answered a validated Bridge request."""
+          
+              def test_persists_resolved_repository_hostname_after_fallback(self) -> None:
+                  updates: list[dict[str, object]] = []
+                  hass = SimpleNamespace(
+                      config_entries=SimpleNamespace(
+                          async_update_entry=lambda _entry, **kwargs: updates.append(kwargs)
+                      )
+                  )
+                  entry = SimpleNamespace(
+                      data={
+                          CONF_BRIDGE_URL: "http://local-smartthings-web-bridge:8100",
+                          CONF_BRIDGE_TOKEN: "x" * 32,
+                          CONF_LOCATION_ID: "loc_001",
+                      }
+                  )
+          
+                  integration._persist_canonical_bridge_url(
+                      hass,
+                      entry,
+                      "http://d55cafb9-smartthings-web-bridge:8100",
+                  )
+          
+                  self.assertEqual(
+                      updates,
+                      [
+                          {
+                              "data": {
+                                  CONF_BRIDGE_URL: "http://d55cafb9-smartthings-web-bridge:8100",
+                                  CONF_BRIDGE_TOKEN: "x" * 32,
+                                  CONF_LOCATION_ID: "loc_001",
+                              }
+                          }
+                      ],
+                  )
+          
+              def test_keeps_already_selected_repository_hostname(self) -> None:
+                  updates: list[dict[str, object]] = []
+                  hass = SimpleNamespace(
+                      config_entries=SimpleNamespace(
+                          async_update_entry=lambda _entry, **kwargs: updates.append(kwargs)
+                      )
+                  )
+                  entry = SimpleNamespace(
+                      data={CONF_BRIDGE_URL: "http://d55cafb9-smartthings-web-bridge:8100/"}
+                  )
+          
+                  integration._persist_canonical_bridge_url(
+                      hass,
+                      entry,
+                      "http://d55cafb9-smartthings-web-bridge:8100",
+                  )
+          
+                  self.assertEqual(updates, [])
+          
+          
+          '''
+          init_path.write_text(init_text[:start] + replacement + init_text[end:], encoding="utf-8")
+
+          replace_once(
+              "README.md",
+              '''3. 브리지 주소는 기본값인 `http://local-smartthings-web-bridge:8100`을 그대로 사용하고 8자리 페어링 코드를 입력합니다.
+          4. 연결할 SmartThings 위치를 선택합니다.
+          
+          기존 구성에 `http://d55cafb9-smartthings-web-bridge:8100`이 저장돼 있으면 0.1.168부터 시작 시 로컬 주소로 자동 변환됩니다.
+          ''',
+              '''3. 앱 저장소로 설치했다면 기본값인 `http://d55cafb9-smartthings-web-bridge:8100`을 사용하고, `/addons`에 수동 로컬 설치했다면 `http://local-smartthings-web-bridge:8100`을 사용합니다.
+          4. 8자리 페어링 코드를 입력하고 연결할 SmartThings 위치를 선택합니다.
+          
+          0.1.169부터 두 내부 호스트를 안전하게 순차 확인하여 실제 응답한 주소를 구성 항목에 저장합니다. 따라서 기존 구성에 잘못된 `local` 또는 `d55cafb9` 주소가 남아 있어도 설치된 앱 주소로 자동 복구됩니다.
+          ''',
+          )
+
+          replace_once(
+              "addon/smartthings_web_bridge/README.md",
+              '''Home Assistant 통합에 입력할 기본 브리지 주소는 `http://local-smartthings-web-bridge:8100`입니다. 기존 구성에 저장된 `d55cafb9` 저장소 호스트는 통합 0.1.168부터 시작 시 이 로컬 주소로 자동 변환됩니다.
+          ''',
+              '''앱 저장소 설치의 내부 주소는 `http://d55cafb9-smartthings-web-bridge:8100`, `/addons` 수동 로컬 설치의 내부 주소는 `http://local-smartthings-web-bridge:8100`입니다. 통합 0.1.169부터 두 주소를 안전하게 확인하고 실제 응답한 주소를 구성 항목에 저장합니다.
+          ''',
+          )
+
+          for filename, count in {
+              "package.json": 1,
+              "package-lock.json": 2,
+              "protocol/version.json": 1,
+              "custom_components/smartthings_web/manifest.json": 1,
+              "addon/smartthings_web_bridge/config.yaml": 1,
+              "bridge/src/runtime.ts": 1,
+              "tests/protocol-version-contract.test.ts": 2,
+              "tests/addon-config.test.ts": 6,
+              "custom_components/smartthings_web/tests/test_config_flow.py": 1,
+          }.items():
+              replace_version(filename, count)
+
+          changelog = Path("addon/smartthings_web_bridge/CHANGELOG.md")
+          changelog_text = changelog.read_text(encoding="utf-8")
+          if not changelog_text.startswith("## 0.1.168\n"):
+              raise SystemExit("unexpected changelog head")
+          changelog.write_text(
+              "## 0.1.169\n\n"
+              "- Home Assistant 앱 저장소 설치의 실제 내부 호스트(`d55cafb9-smartthings-web-bridge`)와 수동 로컬 설치 호스트(`local-smartthings-web-bridge`)를 구분하고, 네트워크 연결 실패 때만 다른 알려진 호스트를 안전하게 확인합니다.\n"
+              "- 0.1.168에서 저장소 앱 주소를 존재하지 않는 `local` 주소로 강제 변환하던 회귀를 제거했습니다.\n"
+              "- 페어링 또는 인벤토리 조회에 실제로 성공한 Bridge 주소만 구성 항목에 저장하며, HTTP 인증·명령 오류에는 다른 앱으로 재전송하지 않습니다.\n"
+              "- 통합, Bridge 앱, 프로토콜 및 패키지 버전을 0.1.169로 동기화해 HACS와 앱 스토어에서 새 업데이트를 감지할 수 있도록 했습니다.\n\n"
+              + changelog_text,
+              encoding="utf-8",
+          )
+          PY
+          git diff --check
+          git status --short
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+
+      - name: Run Home Assistant integration validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check aiohttp yarl
+          python -m compileall -q custom_components/smartthings_web
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Run Node validation and package Bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm test
+          npm run typecheck
+          npm run build
+          npm run package:addon
+
+      - name: Commit verified product source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-bridge-host-autodetect-0.1.169.yml
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: auto-detect installed Bridge hostname in 0.1.169"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
