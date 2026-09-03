@@ -91,6 +91,7 @@ async def async_setup_entry(
     """Create supported binary sensors."""
     runtime = entry.runtime_data
     known: set[str] = set()
+    migrated_names: dict[str, str] = {}
 
     def discover() -> None:
         entities = []
@@ -110,12 +111,17 @@ async def async_setup_entry(
             for state, description in candidates:
                 unique_id = "_".join((device.device_id, *state.key))
                 name_override = name_overrides.get(state.key)
-                migrate_entity_original_name(
-                    hass,
-                    "binary_sensor",
-                    unique_id,
-                    name_override,
-                )
+                if (
+                    name_override is not None
+                    and migrated_names.get(unique_id) != name_override
+                ):
+                    migrate_entity_original_name(
+                        hass,
+                        "binary_sensor",
+                        unique_id,
+                        name_override,
+                    )
+                    migrated_names[unique_id] = name_override
                 if unique_id not in known:
                     known.add(unique_id)
                     entities.append(

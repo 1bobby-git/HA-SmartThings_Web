@@ -250,6 +250,9 @@ class SmartThingsWebBinarySensorSetupTests(unittest.IsolatedAsyncioTestCase):
         )
         try:
             await async_setup_entry(object(), entry, added.extend)
+            for listener in tuple(runtime.listeners):
+                listener()
+                listener()
         finally:
             setup_globals["migrate_entity_original_name"] = original_migrate
 
@@ -264,6 +267,7 @@ class SmartThingsWebBinarySensorSetupTests(unittest.IsolatedAsyncioTestCase):
                 for role, label in role_labels.items()
             },
         )
+        self.assertEqual(len(migrations), len(role_labels))
         self.assertEqual(
             {unique_id: name for _, _, unique_id, name in migrations},
             {

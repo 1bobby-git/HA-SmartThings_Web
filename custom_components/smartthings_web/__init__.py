@@ -39,6 +39,7 @@ from .models import (
     FIRMWARE_ATTRIBUTES,
     IMAGE_ATTRIBUTES,
     SmartThingsWebRuntime,
+    STATE_ROLE_DISPLAY_NAMES,
     button_controls,
     control_kind,
     disambiguated_state_names,
@@ -245,13 +246,16 @@ def _subscribe_entity_registry_migration(
             if callable(cancel):
                 cancel()
         delayed_handles.clear()
+        # Run once after current platform-discovery callbacks and keep
+        # one settled retry for restored-state reservations. Older
+        # builds ran five passes per topology change and amplified
+        # entity_registry_updated WebSocket traffic.
         schedule_migration()
         call_later = getattr(hass.loop, "call_later", None)
         if callable(call_later):
-            for delay in (0.5, 2.0, 10.0, 30.0):
-                handle = call_later(delay, schedule_migration)
-                if handle is not None:
-                    delayed_handles.append(handle)
+            handle = call_later(15.0, schedule_migration)
+            if handle is not None:
+                delayed_handles.append(handle)
 
     unsubscribe_inventory = runtime.subscribe(schedule_settled_migrations)
     schedule_settled_migrations()
@@ -1458,6 +1462,14 @@ def _refresh_generated_registry_metadata(
         return
     if canonical_suggested_object_id is None:
         return
+    if (
+        getattr(entity_entry, "object_id_base", None)
+        == canonical_object_id_base
+        and getattr(entity_entry, "suggested_object_id", None)
+        == canonical_suggested_object_id
+        and getattr(entity_entry, "has_entity_name", True) is True
+    ):
+        return
     get_or_create = getattr(registry, "async_get_or_create", None)
     if not callable(get_or_create):
         return
@@ -1494,13 +1506,15 @@ def _refresh_generated_registry_original_name(
         return
     domain = getattr(entity_entry, "domain", "")
     domain_value = getattr(domain, "value", domain)
-    name = (
-        switch_name_overrides(device).get(getattr(state, "key", ()))
-        if domain_value == "switch" and getattr(state, "attribute", None) == "switch"
-        else None
-    )
-    if name is None:
-        name = _generated_registry_state_name(entity_entry, device, state, inventory)
+    # Sensor and binary-sensor platform discovery owns translated
+    # display names. Recomputing those labels from slug-oriented
+    # restore metadata here caused both paths to alternate names and
+    # flood Home Assistant clients with entity_registry_updated events.
+    # Keep this repair only for Web-labelled switch channels, where
+    # both paths share switch_name_overrides as their source of truth.
+    if domain_value != "switch" or getattr(state, "attribute", None) != "switch":
+        return
+    name = switch_name_overrides(device).get(getattr(state, "key", ()))
     if not name or getattr(entity_entry, "original_name", None) == name:
         return
     update = getattr(registry, "async_update_entity", None)
@@ -1997,8 +2011,11 @@ def _generated_registry_state_name(
     """Return the entity-local name that current setup would suggest."""
     base = None
     for candidate in (
-        getattr(entity_entry, "object_id_base", None),
+        # original_name is the entity-local display label. The
+        # object_id_base may already contain a generated qualifier
+        # left by an older migration pass.
         getattr(entity_entry, "original_name", None),
+        getattr(entity_entry, "object_id_base", None),
     ):
         if (
             isinstance(candidate, str)
@@ -2021,16 +2038,25 @@ def _generated_registry_state_name(
     if base is None:
         base = _readable_registry_state_attribute(state)
     base = _strip_generated_device_slug_prefix(base.strip(), device, inventory)
+    generated_qualifiers = _current_registry_state_qualifier_names(
+        device,
+        state,
+        siblings,
+        main_presence_name=main_presence_name,
+    )
     base = _normalized_registry_state_name_base(
         base,
         state,
         len(siblings),
         additional_qualifiers=(
-            (main_presence_name,)
-            if main_presence_name is not None
-            and str(getattr(state, "component_role", "")).strip().lower()
-            == "main"
-            else ()
+            *generated_qualifiers,
+            *(
+                (main_presence_name,)
+                if main_presence_name is not None
+                and str(getattr(state, "component_role", "")).strip().lower()
+                == "main"
+                else ()
+            ),
         ),
     )
     names = disambiguated_state_names(
@@ -2044,6 +2070,29 @@ def _generated_registry_state_name(
         return f"{base} {name[len(prefix):-1]}"
     return name
 
+
+def _current_registry_state_qualifier_names(
+    device: object,
+    state: object,
+    siblings: Sequence[object],
+    *,
+    main_presence_name: str | None,
+) -> tuple[str, ...]:
+    """Return the exact qualifier current discovery assigns to this state."""
+    marker = "__smartthings_web_state__"
+    names = disambiguated_state_names(
+        [(item, marker) for item in siblings],
+        all_states=getattr(device, "states", {}).values(),
+        main_presence_name=main_presence_name,
+    )
+    generated = names.get(getattr(state, "key", ()))
+    prefix = f"{marker} ("
+    if not isinstance(generated, str) or not generated.startswith(prefix):
+        return ()
+    if not generated.endswith(")"):
+        return ()
+    qualifier = generated[len(prefix) : -1].strip()
+    return (qualifier,) if qualifier else ()
 
 def _strip_generated_device_slug_prefix(
     base: str,
@@ -2148,6 +2197,9 @@ def _registry_state_qualifier_names(state: object) -> tuple[str, ...]:
             continue
         if field_name in {"component_role", "component"} and normalized.lower() == "main":
             continue
+        localized = STATE_ROLE_DISPLAY_NAMES.get(normalized.lower())
+        if localized is not None and localized not in names:
+            names.append(localized)
         normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", normalized)
         normalized = re.sub(r"[_-]+", " ", normalized).strip()
         if normalized and normalized not in names:

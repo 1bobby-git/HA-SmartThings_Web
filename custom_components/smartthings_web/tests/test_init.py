@@ -159,6 +159,7 @@ class FakeRegistry:
         self.removed: list[str] = []
         self.updated: list[tuple[str, str]] = []
         self.renamed: list[tuple[str, str]] = []
+        self.get_or_create_calls = 0
 
     def async_remove(self, entity_id: str) -> None:
         self.removed.append(entity_id)
@@ -183,6 +184,7 @@ class FakeRegistry:
         unique_id: str,
         **kwargs: object,
     ) -> SimpleNamespace:
+        self.get_or_create_calls += 1
         entity_id = self.async_get_entity_id(domain, platform, unique_id)
         if entity_id is None:
             raise AssertionError("test registry must not create rows during migration")
@@ -3633,6 +3635,86 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         )
         self.assertLess(len(registry_entry.entity_id), 80)
 
+    def test_localized_role_suffix_metadata_converges_without_websocket_churn(self) -> None:
+        """Collapse the live ``단일 도어`` restore-metadata feedback loop once."""
+        states: list[BridgeState] = []
+        for role in ("onedoor", "freezer"):
+            component = f"identifier_component_{role}"
+            states.extend(
+                [
+                    BridgeState(
+                        component,
+                        "contactSensor",
+                        "contact",
+                        "closed",
+                        None,
+                        "2026-09-03T00:00:00Z",
+                        component_role="main",
+                    ),
+                    BridgeState(
+                        component,
+                        "temperatureMeasurement",
+                        "temperature",
+                        3,
+                        "C",
+                        "2026-09-03T00:00:00Z",
+                        component_role=role,
+                    ),
+                ]
+            )
+        device = BridgeDevice(
+            "dev_fridge",
+            "loc_001",
+            None,
+            "Naengjanggo",
+            "refrigerator",
+            True,
+            states={state.key: state for state in states},
+        )
+        repeated = "contact_" + "_".join(("danil_doeo",) * 14)
+        registry_entry = SimpleNamespace(
+            entity_id="binary_sensor.naengjanggo_contact_danil_doeo",
+            domain="binary_sensor",
+            platform=DOMAIN,
+            unique_id=(
+                "dev_fridge_identifier_component_onedoor_contactSensor_contact"
+            ),
+            device_id="uuid_fridge",
+            name=None,
+            disabled_by=None,
+            original_name="Contact (단일 도어)",
+            object_id_base=repeated,
+            suggested_object_id=f"naengjanggo_{repeated}",
+            has_entity_name=True,
+        )
+        registry = FakeRegistry([registry_entry])
+        self.patch_registry(registry)
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.171",
+            protocol_version="5",
+            locations={"loc_001": "Home"},
+            rooms={},
+            devices={device.device_id: device},
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001",
+            data={CONF_LOCATION_ID: "loc_001"},
+        )
+
+        _migrate_entity_registry(object(), entry, inventory)
+        _migrate_entity_registry(object(), entry, inventory)
+        _migrate_entity_registry(object(), entry, inventory)
+
+        expected_base = integration.slugify("Contact (단일 도어)")
+        self.assertEqual(registry_entry.object_id_base, expected_base)
+        self.assertEqual(
+            registry_entry.suggested_object_id,
+            f"naengjanggo_{expected_base}",
+        )
+        self.assertEqual(registry_entry.original_name, "Contact (단일 도어)")
+        self.assertEqual(registry.get_or_create_calls, 1)
     def test_primary_switch_name_collision_uses_device_name_numbered_ids(self) -> None:
         """Use only the device name and a numeric suffix across config entries."""
         registry, devices = self._primary_switch_collision_registry()
@@ -4126,7 +4208,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         _subscribe_entity_registry_migration(hass, entry)
         self.assertEqual(
             [delay for delay, _callback in delayed],
-            [0.5, 2.0, 10.0, 30.0],
+            [15.0],
         )
         scheduled.pop(0)()
         self.assertEqual(registry.renamed, [])
