@@ -1,3 +1,9 @@
+## 0.1.168
+
+- Home Assistant 통합의 기본 Bridge 주소를 `http://local-smartthings-web-bridge:8100`으로 고정하고, 기존 `d55cafb9` 저장소 호스트가 저장된 구성 항목은 시작 시 자동으로 로컬 주소로 변환합니다.
+- 신규 페어링과 재인증도 검증된 로컬 Bridge 주소만 구성 항목에 저장합니다.
+- 실제 소스·통합 manifest·Bridge 앱·프로토콜·패키지 버전을 0.1.168로 동기화해 HACS와 앱 업데이트가 정상적으로 감지되도록 수정했습니다.
+
 ## 0.1.167
 
 - 재시작 직후 완전 스냅샷에서 특정 Location의 기기가 전부 누락되더라도, Consumer와 Advanced 양쪽에서 해당 Location이 확인되기 전에는 저장된 기기를 일괄 삭제하지 않습니다.

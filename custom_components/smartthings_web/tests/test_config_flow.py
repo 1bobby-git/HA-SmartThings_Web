@@ -91,6 +91,7 @@ from smartthings_web.config_flow import (  # noqa: E402
 )
 from smartthings_web.const import (  # noqa: E402
     CONF_BRIDGE_TOKEN,
+    CONF_BRIDGE_URL,
     CONF_COMMAND_CONFIRMATION_TIMEOUT,
     CONF_CONTROL_MODE,
     CONF_DEBUG_PROTOCOL_LOGGING,
@@ -111,6 +112,28 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow = SmartThingsWebConfigFlow.async_get_options_flow(SimpleNamespace())
 
         self.assertIsInstance(flow, SmartThingsWebOptionsFlow)
+
+    async def test_new_pairing_stores_local_hostname_for_legacy_repository_url(self) -> None:
+        original_client = config_flow.SmartThingsWebBridgeClient
+        config_flow.SmartThingsWebBridgeClient = FakeLegacyPairingClient  # type: ignore[assignment]
+        try:
+            flow = SmartThingsWebConfigFlow()
+            result = await flow.async_step_user(
+                {
+                    CONF_BRIDGE_URL: "http://d55cafb9-smartthings-web-bridge:8100",
+                    "pairing_code": "12345678",
+                }
+            )
+        finally:
+            config_flow.SmartThingsWebBridgeClient = original_client  # type: ignore[assignment]
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "location")
+        self.assertIsNotNone(flow._pending_pairing)
+        self.assertEqual(
+            flow._pending_pairing[0],
+            "http://local-smartthings-web-bridge:8100",
+        )
 
     async def test_new_entries_default_to_safe_control_options(self) -> None:
         flow = SmartThingsWebConfigFlow()
@@ -187,14 +210,43 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(form["data_schema"].schema), ["pairing_code"])
         self.assertEqual(result["type"], "abort")
         self.assertEqual(result["reason"], "reauth_successful")
-        self.assertEqual(result["data_updates"], {CONF_BRIDGE_TOKEN: "y" * 32})
+        self.assertEqual(
+            result["data_updates"],
+            {
+                CONF_BRIDGE_TOKEN: "y" * 32,
+                CONF_BRIDGE_URL: "http://bridge.local",
+            },
+        )
+
+
+class FakeLegacyPairingClient:
+    """Pair a legacy repository hostname but expose the canonical local URL."""
+
+    def __init__(self, _session: object, _bridge_url: str) -> None:
+        self.base_url = "http://local-smartthings-web-bridge:8100"
+
+    async def async_pair(self, code: str) -> str:
+        if code != "12345678":
+            raise AssertionError(code)
+        return "x" * 32
+
+    async def async_get_inventory(self) -> BridgeInventory:
+        return BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.168",
+            protocol_version="5",
+            locations={"loc_001": "Home"},
+            rooms={},
+            devices={},
+        )
 
 
 class FakePairingClient:
     """Minimal pairing client used by reauth tests."""
 
-    def __init__(self, _session: object, _bridge_url: str) -> None:
-        return None
+    def __init__(self, _session: object, bridge_url: str) -> None:
+        self.base_url = bridge_url.rstrip("/")
 
     async def async_pair(self, code: str) -> str:
         if code != "123456":

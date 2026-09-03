@@ -45,6 +45,17 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
                 client = SmartThingsWebBridgeClient(object(), base_url)  # type: ignore[arg-type]
                 self.assertTrue(client._base_url.startswith(("http://", "https://")))
 
+    def test_rewrites_repository_hostname_to_local_addon_hostname(self) -> None:
+        client = SmartThingsWebBridgeClient(
+            object(),
+            "http://d55cafb9-smartthings-web-bridge:8100/",
+        )  # type: ignore[arg-type]
+
+        self.assertEqual(
+            client.base_url,
+            "http://local-smartthings-web-bridge:8100",
+        )
+
     def test_rejects_public_or_ambiguous_bridge_addresses(self) -> None:
         rejected = (
             "https://example.com",

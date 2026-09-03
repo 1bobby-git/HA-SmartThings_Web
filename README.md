@@ -89,10 +89,10 @@ npm run package:addon
 
 1. SmartThings Web Bridge 웹 UI에서 **페어링 코드 생성**을 누릅니다.
 2. 아래 버튼을 눌러 `smartthings_web` 설정을 시작합니다.
-3. 설치 방식에 맞는 브리지 주소와 8자리 페어링 코드를 입력합니다.
-   - 위 저장소 버튼으로 설치: `http://d55cafb9-smartthings-web-bridge:8100`
-   - `/addons`에 수동 로컬 설치: `http://local-smartthings-web-bridge:8100`
+3. 브리지 주소는 기본값인 `http://local-smartthings-web-bridge:8100`을 그대로 사용하고 8자리 페어링 코드를 입력합니다.
 4. 연결할 SmartThings 위치를 선택합니다.
+
+기존 구성에 `http://d55cafb9-smartthings-web-bridge:8100`이 저장돼 있으면 0.1.168부터 시작 시 로컬 주소로 자동 변환됩니다.
 
 [![SmartThings Web 통합 설정 시작](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=smartthings_web)
 
