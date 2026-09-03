@@ -1,0 +1,74 @@
+name: Repair entity registry patch workflow quoting
+
+on:
+  push:
+    branches:
+      - fix/entity-registry-backpressure-0.1.171
+    paths:
+      - .github/workflows/fix-entity-registry-workflow.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/entity-registry-backpressure-0.1.171
+          fetch-depth: 0
+
+      - name: Repair embedded Python string delimiters
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/apply-entity-registry-backpressure-0.1.171.yml')
+          text = path.read_text(encoding='utf-8')
+
+          replacements = (
+              ('          helper = block("""\n', "          helper = block('''\n"),
+              (
+                  '          |    return (qualifier,) if qualifier else ()\n'
+                  '          |\n'
+                  '          |\n'
+                  '          """)\n'
+                  '          replace_once(init_path, helper_anchor, helper + helper_anchor)\n',
+                  '          |    return (qualifier,) if qualifier else ()\n'
+                  '          |\n'
+                  '          |\n'
+                  "          ''')\n"
+                  '          replace_once(init_path, helper_anchor, helper + helper_anchor)\n',
+              ),
+              ('          regression = block("""\n', "          regression = block('''\n"),
+              (
+                  '          |        self.assertEqual(registry.get_or_create_calls, 1)\n'
+                  '          |\n'
+                  '          """)\n'
+                  '          replace_once(test_init, test_anchor, regression + test_anchor)\n',
+                  '          |        self.assertEqual(registry.get_or_create_calls, 1)\n'
+                  '          |\n'
+                  "          ''')\n"
+                  '          replace_once(test_init, test_anchor, regression + test_anchor)\n',
+              ),
+          )
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one quoting match, found {count}: {old[:48]!r}')
+              text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/fix-entity-registry-workflow.yml
+          git add .github/workflows/apply-entity-registry-backpressure-0.1.171.yml
+          git commit -m "ci: repair registry patch workflow quoting"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
