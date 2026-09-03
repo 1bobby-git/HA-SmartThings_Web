@@ -1,1 +1,165 @@
-PLACEHOLDER
+name: Fix Home Monitor no-code arming 0.1.165
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+
+      - name: Apply Home Monitor arm-code fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          alarm = Path("custom_components/smartthings_web/alarm_control_panel.py")
+          source = alarm.read_text(encoding="utf-8")
+          needle = "    _attr_should_poll = False\n"
+          replacement = (
+              needle
+              + "    # SmartThings Web session authentication replaces a keypad code.\n"
+              + "    _attr_code_arm_required = False\n"
+              + "    _attr_code_format = None\n"
+          )
+          if needle not in source or "_attr_code_arm_required" in source:
+              raise SystemExit("unexpected alarm panel source")
+          alarm.write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+
+          test = Path("custom_components/smartthings_web/tests/test_alarm_control_panel.py")
+          source = test.read_text(encoding="utf-8")
+          old_stub = '''class AlarmControlPanelEntity:
+              """Minimal HA alarm panel entity stub."""
+          '''
+          new_stub = '''class AlarmControlPanelEntity:
+              """Minimal HA alarm panel entity stub with Core code validation."""
+
+              _attr_code_arm_required = True
+              _attr_code_format = None
+
+              @property
+              def code_arm_required(self) -> bool:
+                  return self._attr_code_arm_required
+
+              @property
+              def code_format(self) -> object | None:
+                  return self._attr_code_format
+
+              async def async_handle_alarm_arm_home(self, code: str | None = None) -> None:
+                  if not code and self.code_arm_required:
+                      raise ValueError("Arming requires a code")
+                  await self.async_alarm_arm_home(code)
+
+              async def async_handle_alarm_arm_away(self, code: str | None = None) -> None:
+                  if not code and self.code_arm_required:
+                      raise ValueError("Arming requires a code")
+                  await self.async_alarm_arm_away(code)
+          '''
+          if old_stub not in source:
+              raise SystemExit("alarm test stub not found")
+          source = source.replace(old_stub, new_stub, 1)
+
+          marker = "    async def test_arm_methods_send_exact_location_command_payloads(self) -> None:\n"
+          regression = '''    async def test_core_arm_service_allows_no_code(self) -> None:
+              client = SimpleNamespace(async_execute_command=AsyncMock())
+              runtime = _runtime(BridgeLocation("loc_001", "Sparkplus", None))
+              runtime.client = client
+              entity = SmartThingsWebHomeMonitor(runtime)
+
+              self.assertFalse(entity.code_arm_required)
+              self.assertIsNone(entity.code_format)
+              await entity.async_handle_alarm_arm_home()
+              await entity.async_handle_alarm_arm_away()
+
+              self.assertEqual(
+                  client.async_execute_command.await_args_list,
+                  [
+                      unittest.mock.call(
+                          target_type="location",
+                          target_id="loc_001",
+                          command="armStay",
+                          arguments=[],
+                      ),
+                      unittest.mock.call(
+                          target_type="location",
+                          target_id="loc_001",
+                          command="armAway",
+                          arguments=[],
+                      ),
+                  ],
+              )
+
+          '''
+          if marker not in source:
+              raise SystemExit("alarm regression insertion point not found")
+          test.write_text(source.replace(marker, regression + marker, 1), encoding="utf-8")
+
+          version_files = [
+              "package.json",
+              "package-lock.json",
+              "protocol/version.json",
+              "bridge/src/runtime.ts",
+              "addon/smartthings_web_bridge/config.yaml",
+              "custom_components/smartthings_web/manifest.json",
+              "tests/addon-config.test.ts",
+              "tests/protocol-version-contract.test.ts",
+          ]
+          for filename in version_files:
+              path = Path(filename)
+              text = path.read_text(encoding="utf-8")
+              if "0.1.164" not in text:
+                  raise SystemExit(f"version surface missing: {filename}")
+              path.write_text(text.replace("0.1.164", "0.1.165"), encoding="utf-8")
+
+          changelog = Path("addon/smartthings_web_bridge/CHANGELOG.md")
+          source = changelog.read_text(encoding="utf-8")
+          changelog.write_text(
+              "## 0.1.165\n\n"
+              "- Home Assistant의 기본 `code_arm_required=True`를 해제해 Home Monitor 무장 명령이 코드 없이 브리지까지 전달되도록 수정했습니다.\n"
+              "- Home과 Sparkplus를 포함한 모든 Location Home Monitor는 SmartThings 웹 세션으로 인증하며 HA 키패드 코드를 요구하지 않습니다.\n"
+              "- 회귀 테스트가 Home Assistant Core의 서비스 코드 검증 경로를 재현하도록 보강했습니다.\n\n"
+              + source,
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'aiohttp>=3.10,<4' 'yarl>=1.9,<2' 'voluptuous>=0.15,<1'
+          python -m compileall -q custom_components/smartthings_web
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/fix-home-monitor-no-code-0.1.165.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Fix Home Monitor arming without a keypad code'
+          git push origin HEAD:main
