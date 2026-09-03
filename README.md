@@ -1,6 +1,6 @@
 <!-- project-branding:start -->
 <p align="center">
-  <img src="https://raw.githubusercontent.com/1bobby-git/brands/master/custom_integrations/smartthings_web/icon@2x.png" alt="SmartThings Web 로고" width="128">
+  <img src="media/readme-logo.svg" alt="SmartThings Web 가로형 로고" width="480">
 </p>
 <p align="center">
   <a href="https://github.com/1bobby-git/HA-SmartThings_Web/stargazers">
