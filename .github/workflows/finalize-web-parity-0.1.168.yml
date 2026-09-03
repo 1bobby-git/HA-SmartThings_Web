@@ -1,0 +1,157 @@
+name: Finalize SmartThings Web 0.1.168
+
+on:
+  push:
+    branches:
+      - fix/web-parity-advanced-ui-0.1.168
+    paths:
+      - .github/workflows/finalize-web-parity-0.1.168.yml
+
+permissions:
+  actions: read
+  checks: read
+  contents: write
+  pull-requests: write
+
+jobs:
+  finalize:
+    name: Verify, merge, and await release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      WORK_BRANCH: fix/web-parity-advanced-ui-0.1.168
+      VERSION: 0.1.168
+    steps:
+      - name: Check out latest work branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/web-parity-advanced-ui-0.1.168
+          fetch-depth: 0
+
+      - name: Require completed source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f tests/web-parity-0.1.168.test.ts
+          test "$(python -c 'import json; print(json.load(open("custom_components/smartthings_web/manifest.json", encoding="utf-8"))["version"])')" = "${VERSION}"
+          grep -F 'canUseAdvanced: () => true' bridge/src/runtime.ts
+          grep -F 'normalizeSmartThingsWebPayload' bridge/src/runtime.ts
+          grep -F 'findCurrentLocationPicker' bridge/src/browser/command-page.ts
+          grep -F 'd55cafb9-smartthings-web-bridge' custom_components/smartthings_web/bridge_client.py
+          grep -F 'local-smartthings-web-bridge' custom_components/smartthings_web/bridge_client.py
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Install locked Node dependencies
+        run: npm ci
+
+      - name: Run full Node verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test
+          npm run typecheck
+          npm run build
+          npm run package:addon
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+
+      - name: Run full integration verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check aiohttp yarl
+          python -m compileall -q custom_components/smartthings_web
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+
+      - name: Remove finalization workflow and push clean branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/finalize-web-parity-0.1.168.yml
+          git commit -m "chore: remove temporary 0.1.168 finalizer"
+          git push origin "HEAD:${WORK_BRANCH}"
+
+      - name: Create or update pull request
+        id: pr
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr_number="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "${WORK_BRANCH}" --base main --state open --json number --jq '.[0].number // empty')"
+          if [[ -z "${pr_number}" ]]; then
+            pr_url="$(gh pr create \
+              --repo "${GITHUB_REPOSITORY}" \
+              --base main \
+              --head "${WORK_BRANCH}" \
+              --title 'fix: SmartThings Web parity 및 Bridge 자동 복구 0.1.168' \
+              --body $'## 수정 내용\n\n- 저장소형/로컬형 Bridge 호스트 자동 복구\n- raw Location 직접 이동과 실제 picker fallback으로 Home Monitor 제어 복구\n- Web device/metadata/data 기반 실제 기기명 및 아이콘 보강\n- NUMBER/RANGE, RADIO/OPTIONS, ACTION/BUTTON, SWITCH/TOGGLE Web 컨트롤 정규화\n- 일반 Web 엔티티의 안전한 Advanced 우선 실행 및 기존 fallback 유지\n- 카운터센서 Number와 SmartTag Select/Number/Button 생성 경로 회귀 테스트 추가\n\n## 검증\n\n- 전체 Node 테스트\n- TypeScript 타입 검사\n- Bridge 빌드 및 애드온 패키징\n- Python 컴파일 및 전체 HA 통합 테스트\n- HACS/Hassfest/보안 워크플로')"
+            pr_number="${pr_url##*/}"
+          fi
+          echo "number=${pr_number}" >> "${GITHUB_OUTPUT}"
+
+      - name: Wait for pull-request checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr_number="${{ steps.pr.outputs.number }}"
+          for attempt in $(seq 1 90); do
+            checks="$(gh pr checks "${pr_number}" --repo "${GITHUB_REPOSITORY}" --json name,state,bucket 2>/dev/null || true)"
+            if [[ -n "${checks}" ]]; then
+              failed="$(python -c 'import json,sys; d=json.load(sys.stdin); print(any(x.get("bucket") in {"fail","cancel"} for x in d))' <<<"${checks}")"
+              pending="$(python -c 'import json,sys; d=json.load(sys.stdin); print(any(x.get("bucket") in {"pending","skipping"} for x in d))' <<<"${checks}")"
+              [[ "${failed}" != "True" ]] || { gh pr checks "${pr_number}" --repo "${GITHUB_REPOSITORY}"; exit 1; }
+              if [[ "${pending}" == "False" ]]; then
+                gh pr checks "${pr_number}" --repo "${GITHUB_REPOSITORY}"
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          echo "Pull-request checks did not finish in time." >&2
+          exit 1
+
+      - name: Merge pull request
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr_number="${{ steps.pr.outputs.number }}"
+          gh pr merge "${pr_number}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --squash \
+            --subject 'fix: SmartThings Web parity 및 Bridge 자동 복구 0.1.168' \
+            --body 'Web 기준 장치 메타데이터와 컨트롤을 복구하고, Advanced를 검증된 실행 보강 경로로 사용하며, Bridge 호스트 및 Home Monitor Location 이동 회귀를 수정한다.'
+
+      - name: Wait for published release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          for attempt in $(seq 1 90); do
+            if release="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json isDraft,isPrerelease,targetCommitish,assets 2>/dev/null)"; then
+              RELEASE="${release}" VERSION="${VERSION}" python - <<'PY'
+          import json, os
+          data=json.loads(os.environ["RELEASE"])
+          version=os.environ["VERSION"]
+          if data.get("isDraft") or data.get("isPrerelease"):
+              raise SystemExit("release is not final")
+          names={item.get("name") for item in data.get("assets", [])}
+          expected={f"smartthings-web-bridge-{version}.tgz", f"smartthings-web-integration-{version}.tgz"}
+          if not expected.issubset(names):
+              raise SystemExit(f"missing assets: {sorted(expected-names)}")
+          PY
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Release v${VERSION} was not published in time." >&2
+          exit 1
