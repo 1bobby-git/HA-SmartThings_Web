@@ -18,12 +18,15 @@ curl -fsSL https://raw.githubusercontent.com/1bobby-git/HA-SmartThings_Web/main/
 
 스크립트는 다음 작업을 수행합니다.
 
-1. `/addons`에서 `slug: smartthings_web_bridge`인 실제 로컬 앱 폴더를 찾습니다.
-2. GitHub의 `smartthings-web-bridge-0.1.168.tgz`를 내려받습니다.
-3. 릴리스 SHA-256 `a1d6aadfc6dbe17105f527b9c25c7795aebb5c2885a0b701b6bd0144750375d5`를 검증합니다.
-4. 기존 소스를 `/share/smartthings-web-bridge-backups`에 백업합니다.
-5. 로컬 앱 소스를 0.1.168 패키지로 교체합니다.
-6. `ha addons reload`와 `ha addons update local_smartthings_web_bridge`를 실행합니다.
+1. `ha addons info local_smartthings_web_bridge`로 설치된 로컬 앱을 확인합니다.
+2. `/addons`에서 `slug: smartthings_web_bridge`인 실제 로컬 앱 폴더를 찾습니다.
+3. 설치 정보는 있지만 `/addons` 소스가 없으면 `/addons/smartthings_web_bridge`에 소스를 자동 복원합니다.
+4. GitHub의 `smartthings-web-bridge-0.1.168.tgz`를 내려받습니다.
+5. 릴리스 SHA-256 `a1d6aadfc6dbe17105f527b9c25c7795aebb5c2885a0b701b6bd0144750375d5`를 검증합니다.
+6. 기존 소스가 있으면 `/share/smartthings-web-bridge-backups`에 백업합니다.
+7. 로컬 앱 소스를 0.1.168 패키지로 교체합니다.
+8. `ha addons reload`, `ha addons update local_smartthings_web_bridge`, `ha addons start local_smartthings_web_bridge`를 실행합니다.
+9. `http://local-smartthings-web-bridge:8100/health/live` 응답을 확인합니다.
 
 완료 후 다음 명령으로 설치 버전을 확인합니다.
 
@@ -31,7 +34,16 @@ curl -fsSL https://raw.githubusercontent.com/1bobby-git/HA-SmartThings_Web/main/
 ha addons info local_smartthings_web_bridge
 ```
 
-출력의 `version`과 `version_latest`가 `0.1.168`인지 확인한 다음 Bridge 앱을 시작하고 Home Assistant를 재시작합니다.
+출력의 `version`과 `version_latest`가 `0.1.168`인지 확인한 다음 Home Assistant를 재시작합니다.
+
+## 첫 업데이트가 실패하는 경우
+
+Supervisor가 이미 사라진 이전 소스 위치를 기억하고 있으면 소스를 복원한 첫 업데이트가 실패할 수 있습니다. 스크립트가 아래 명령을 안내하면 순서대로 실행한 뒤 업데이트 명령을 다시 실행합니다.
+
+```bash
+ha supervisor repair
+ha addons reload
+```
 
 ## 주의사항
 
