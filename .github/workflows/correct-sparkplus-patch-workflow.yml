@@ -1,0 +1,67 @@
+name: Correct Sparkplus patch workflow
+
+on:
+  push:
+    branches:
+      - fix/sparkplus-home-monitor-0.1.166
+    paths:
+      - .github/workflows/correct-sparkplus-patch-workflow.yml
+
+permissions:
+  contents: write
+
+jobs:
+  correct:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/sparkplus-home-monitor-0.1.166
+          fetch-depth: 0
+      - name: Correct compatibility assertions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path(".github/workflows/apply-sparkplus-home-monitor-0.1.166.yml")
+          text = path.read_text(encoding="utf-8")
+
+          raw_string_shortcut = '              |    if (routeLocation === targetLocationId) return;\n'
+          if text.count(raw_string_shortcut) != 1:
+              raise SystemExit("raw string shortcut match changed")
+          text = text.replace(raw_string_shortcut, "", 1)
+
+          anchor = '''          test_path = "bridge/tests/browser/command-page.test.ts"
+          test_anchor = '  test("executes one exact scene card and one Home Monitor action", async () => {'
+'''
+          replacement = '''          test_path = "bridge/tests/browser/command-page.test.ts"
+          replace_once(
+              test_path,
+              block("""
+              |    const scene = new FakeLocator(1);
+              |    const disarm = new FakeLocator(1);
+              |    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+              """),
+              block("""
+              |    const scene = new FakeLocator(1);
+              |    const disarm = new FakeLocator(1);
+              |    page.getByText = vi.fn(() => new FakeLocator(0, true));
+              |    page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
+              """),
+          )
+          test_anchor = '  test("executes one exact scene card and one Home Monitor action", async () => {'
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit("test anchor changed")
+          path.write_text(text.replace(anchor, replacement, 1), encoding="utf-8")
+          PY
+
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/correct-sparkplus-patch-workflow.yml
+          git add .github/workflows/apply-sparkplus-home-monitor-0.1.166.yml
+          git commit -m "ci: correct Sparkplus patch compatibility checks"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
