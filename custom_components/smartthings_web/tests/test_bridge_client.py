@@ -9,6 +9,8 @@ from typing import Any
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock
 
+from aiohttp import ClientConnectionError
+
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 package = ModuleType("smartthings_web")
 package.__path__ = [str(PACKAGE_ROOT)]  # type: ignore[attr-defined]
@@ -45,7 +47,7 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
                 client = SmartThingsWebBridgeClient(object(), base_url)  # type: ignore[arg-type]
                 self.assertTrue(client._base_url.startswith(("http://", "https://")))
 
-    def test_rewrites_repository_hostname_to_local_addon_hostname(self) -> None:
+    def test_keeps_repository_hostname_and_orders_known_fallback(self) -> None:
         client = SmartThingsWebBridgeClient(
             object(),
             "http://d55cafb9-smartthings-web-bridge:8100/",
@@ -53,7 +55,59 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
 
         self.assertEqual(
             client.base_url,
+            "http://d55cafb9-smartthings-web-bridge:8100",
+        )
+        self.assertEqual(
+            client._base_urls,
+            (
+                "http://d55cafb9-smartthings-web-bridge:8100",
+                "http://local-smartthings-web-bridge:8100",
+            ),
+        )
+
+    async def test_inventory_falls_back_to_repository_addon_hostname(self) -> None:
+        class FallbackSession:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def request(self, _method: str, url: str, **_kwargs: object) -> object:
+                self.calls.append(url)
+                if url.startswith("http://local-smartthings-web-bridge:8100"):
+                    raise ClientConnectionError("local add-on hostname is absent")
+                return _FakeResponse(
+                    200,
+                    {
+                        "schemaVersion": 1,
+                        "ready": True,
+                        "bridgeVersion": "0.1.169",
+                        "protocolVersion": "5",
+                        "locations": [],
+                        "rooms": [],
+                        "scenes": [],
+                        "devices": [],
+                    },
+                )
+
+        session = FallbackSession()
+        client = SmartThingsWebBridgeClient(
+            session,  # type: ignore[arg-type]
             "http://local-smartthings-web-bridge:8100",
+            "x" * 32,
+        )
+
+        inventory = await client.async_get_inventory()
+
+        self.assertTrue(inventory.ready)
+        self.assertEqual(
+            session.calls,
+            [
+                "http://local-smartthings-web-bridge:8100/api/v1/inventory",
+                "http://d55cafb9-smartthings-web-bridge:8100/api/v1/inventory",
+            ],
+        )
+        self.assertEqual(
+            client.base_url,
+            "http://d55cafb9-smartthings-web-bridge:8100",
         )
 
     def test_rejects_public_or_ambiguous_bridge_addresses(self) -> None:

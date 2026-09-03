@@ -136,13 +136,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
         entry.data[CONF_BRIDGE_URL],
         entry.data[CONF_BRIDGE_TOKEN],
     )
-    _persist_canonical_bridge_url(hass, entry, client.base_url)
     try:
         inventory = await client.async_get_inventory()
     except BridgeAuthError as err:
         raise ConfigEntryAuthFailed from err
     except BridgeClientError as err:
         raise ConfigEntryNotReady from err
+    _persist_canonical_bridge_url(hass, entry, client.base_url)
     location_id = entry.data[CONF_LOCATION_ID]
     inventory = await _async_recover_empty_location_inventory(
         client,

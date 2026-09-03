@@ -12,22 +12,31 @@ CONF_DEBUG_PROTOCOL_LOGGING = "debug_protocol_logging"
 CONF_LOCATION_ID = "location_id"
 CONTROL_MODE_READ_ONLY = "read_only"
 CONTROL_MODE_SAFE_CONTROL = "safe_control"
-DEFAULT_BRIDGE_URL = "http://local-smartthings-web-bridge:8100"
-LEGACY_BRIDGE_URLS = frozenset(
-    {
-        "http://d55cafb9-smartthings-web-bridge:8100",
-    }
-)
+REPOSITORY_BRIDGE_URL = "http://d55cafb9-smartthings-web-bridge:8100"
+LOCAL_BRIDGE_URL = "http://local-smartthings-web-bridge:8100"
+KNOWN_BRIDGE_URLS = (REPOSITORY_BRIDGE_URL, LOCAL_BRIDGE_URL)
+DEFAULT_BRIDGE_URL = REPOSITORY_BRIDGE_URL
 
 
 def normalize_bridge_url(value: str) -> str:
-    """Return the canonical local Bridge URL for known legacy add-on hosts."""
+    """Normalize a configured local Bridge URL without changing its hostname."""
     if not isinstance(value, str):
         raise ValueError("invalid_bridge_url")
-    normalized = value.strip()
-    if normalized.rstrip("/").lower() in LEGACY_BRIDGE_URLS:
-        return DEFAULT_BRIDGE_URL
-    return normalized
+    normalized = value.strip().rstrip("/")
+    if not normalized:
+        raise ValueError("invalid_bridge_url")
+    known = {candidate.lower(): candidate for candidate in KNOWN_BRIDGE_URLS}
+    return known.get(normalized.lower(), normalized)
+
+
+def bridge_url_candidates(value: str) -> tuple[str, ...]:
+    """Return safe candidates for repository and manually installed local apps."""
+    normalized = normalize_bridge_url(value)
+    if normalized not in KNOWN_BRIDGE_URLS:
+        return (normalized,)
+    return (normalized,) + tuple(
+        candidate for candidate in KNOWN_BRIDGE_URLS if candidate != normalized
+    )
 
 
 DEFAULT_COMMAND_CONFIRMATION_TIMEOUT = 30

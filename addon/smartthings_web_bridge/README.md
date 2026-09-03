@@ -16,7 +16,7 @@ Home Assistant OS 또는 Supervised 환경에서 아래 버튼을 누르면 이 
 
 저장소 설치에서는 `config.yaml`의 버전과 같은 GitHub 릴리스 패키지를 자동으로 가져와 앱 이미지를 빌드합니다. 앱 설치가 끝나면 시작한 뒤 **웹 UI 열기**에서 Samsung 계정에 로그인합니다.
 
-Home Assistant 통합에 입력할 기본 브리지 주소는 `http://local-smartthings-web-bridge:8100`입니다. 기존 구성에 저장된 `d55cafb9` 저장소 호스트는 통합 0.1.168부터 시작 시 이 로컬 주소로 자동 변환됩니다.
+앱 저장소 설치의 내부 주소는 `http://d55cafb9-smartthings-web-bridge:8100`, `/addons` 수동 로컬 설치의 내부 주소는 `http://local-smartthings-web-bridge:8100`입니다. 통합 0.1.169부터 두 주소를 안전하게 확인하고 실제 응답한 주소를 구성 항목에 저장합니다.
 
 ## 수동 로컬 설치
 
