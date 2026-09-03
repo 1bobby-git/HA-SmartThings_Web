@@ -90,6 +90,30 @@ PLATFORMS = [
 SmartThingsWebConfigEntry = ConfigEntry[SmartThingsWebRuntime]
 
 
+async def _async_recover_empty_location_inventory(
+    client: SmartThingsWebBridgeClient,
+    inventory: BridgeInventory,
+    location_id: str,
+) -> BridgeInventory:
+    "Retry one complete Bridge inventory when a known location is empty."
+    if location_id not in inventory.locations or any(
+        device.location_id == location_id
+        for device in inventory.devices.values()
+    ):
+        return inventory
+    try:
+        await client.async_reload_inventory()
+        refreshed = await client.async_get_inventory()
+    except BridgeClientError:
+        return inventory
+    if any(
+        device.location_id == location_id
+        for device in refreshed.devices.values()
+    ):
+        return refreshed
+    return inventory
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntry) -> bool:
     """Set up one SmartThings Web location."""
     client = SmartThingsWebBridgeClient(
@@ -103,11 +127,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
         raise ConfigEntryAuthFailed from err
     except BridgeClientError as err:
         raise ConfigEntryNotReady from err
+    location_id = entry.data[CONF_LOCATION_ID]
+    inventory = await _async_recover_empty_location_inventory(
+        client,
+        inventory,
+        location_id,
+    )
     if not inventory.ready and not inventory.devices:
         raise ConfigEntryNotReady("SmartThings Web Bridge has no cached inventory")
     await _async_update_repairs(hass, entry, client)
-
-    location_id = entry.data[CONF_LOCATION_ID]
     runtime_client = ReadOnlyBridgeClient(client) if _control_mode(entry) == CONTROL_MODE_READ_ONLY else client
     runtime = SmartThingsWebRuntime(client=runtime_client, location_id=location_id, inventory=inventory)
     entry.runtime_data = runtime

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
@@ -126,6 +127,7 @@ def _install_homeassistant_stubs() -> None:
 _install_homeassistant_stubs()
 
 from smartthings_web.__init__ import (  # noqa: E402
+    _async_recover_empty_location_inventory,
     _async_update_repairs,
     _control_mode,
     _event_loop,
@@ -210,6 +212,74 @@ class FakeRegistry:
         if original_name is not None:
             entry.original_name = original_name
 
+
+class EmptyLocationInventoryRecoveryTests(unittest.TestCase):
+    "Recover a location omitted by one otherwise ready inventory epoch."
+
+    def test_reloads_once_and_uses_recovered_location_devices(self) -> None:
+        initial = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.166",
+            protocol_version="5",
+            locations={"loc_home": "Home", "loc_spark": "Sparkplus"},
+            rooms={},
+            devices={
+                "dev_home": BridgeDevice(
+                    "dev_home",
+                    "loc_home",
+                    None,
+                    "Home switch",
+                    "switch",
+                    True,
+                )
+            },
+        )
+        recovered = BridgeInventory(
+            sequence=2,
+            ready=True,
+            bridge_version="0.1.167",
+            protocol_version="5",
+            locations={"loc_home": "Home", "loc_spark": "Sparkplus"},
+            rooms={},
+            devices={
+                **initial.devices,
+                "dev_spark": BridgeDevice(
+                    "dev_spark",
+                    "loc_spark",
+                    None,
+                    "Sparkplus switch",
+                    "switch",
+                    True,
+                ),
+            },
+        )
+
+        class RecoveringClient:
+            def __init__(self) -> None:
+                self.reload_calls = 0
+                self.inventory_calls = 0
+
+            async def async_reload_inventory(self) -> None:
+                self.reload_calls += 1
+
+            async def async_get_inventory(self) -> BridgeInventory:
+                self.inventory_calls += 1
+                return recovered
+
+        client = RecoveringClient()
+        result = asyncio.run(
+            _async_recover_empty_location_inventory(
+                client,  # type: ignore[arg-type]
+                initial,
+                "loc_spark",
+            )
+        )
+
+        self.assertIs(result, recovered)
+        self.assertEqual(client.reload_calls, 1)
+        self.assertEqual(client.inventory_calls, 1)
+        self.assertIn("dev_spark", result.devices)
 
 class EntityRegistryMigrationTests(unittest.TestCase):
     """Keep stale fan cleanup tightly scoped to this config entry."""

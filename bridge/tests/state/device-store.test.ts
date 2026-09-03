@@ -889,6 +889,91 @@ describe("DeviceStore", () => {
     expect(store.snapshot().devices[0]).not.toHaveProperty("presentation");
   });
 
+  test("preserves a location omitted by both complete startup snapshots", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-location-preserve-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const first = new DeviceStore({ sqlitePath });
+      observeDeviceSnapshot(first, {
+        deviceId: "dev_home",
+        locationId: "loc_home",
+        deviceName: "Home switch",
+        deviceTypeData: { type: "switch" }
+      });
+      observeDeviceSnapshot(first, {
+        deviceId: "dev_sparka",
+        locationId: "loc_spark",
+        deviceName: "Sparkplus switch",
+        deviceTypeData: { type: "switch" }
+      });
+      observeDeviceSnapshot(first, {
+        deviceId: "dev_sparkb",
+        locationId: "loc_spark",
+        deviceName: "Sparkplus sensor",
+        deviceTypeData: { type: "contact_sensor" }
+      });
+      first.close();
+
+      const second = new DeviceStore({ sqlitePath });
+      observeDeviceSnapshot(second, {
+        deviceId: "dev_home",
+        locationId: "loc_home",
+        deviceName: "Home switch",
+        deviceTypeData: { type: "switch" }
+      });
+      second.observeAdvancedDeviceSnapshot(
+        {
+          items: [
+            {
+              deviceId: "dev_home",
+              locationId: "loc_home",
+              label: "Home switch",
+              deviceTypeName: "switch"
+            }
+          ]
+        },
+        { authoritativeWholeSnapshot: true }
+      );
+
+      expect(second.snapshot().devices.map((device) => device.id)).toEqual([
+        "dev_home",
+        "dev_sparka",
+        "dev_sparkb"
+      ]);
+
+      observeDeviceSnapshot(second, {
+        deviceId: "dev_sparka",
+        locationId: "loc_spark",
+        deviceName: "Sparkplus switch",
+        deviceTypeData: { type: "switch" }
+      });
+      second.observeAdvancedDeviceSnapshot(
+        {
+          items: [
+            {
+              deviceId: "dev_sparka",
+              locationId: "loc_spark",
+              label: "Sparkplus switch",
+              deviceTypeName: "switch"
+            }
+          ]
+        },
+        { authoritativeWholeSnapshot: true }
+      );
+
+      expect(second.snapshot().devices.map((device) => device.id)).toEqual([
+        "dev_home",
+        "dev_sparka"
+      ]);
+      second.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
   test("prunes restored devices the new browser session never refreshes", () => {
     const root = mkdtempSync(join(tmpdir(), "stw-device-store-prune-"));
     try {

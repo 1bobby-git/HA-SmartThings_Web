@@ -1,3 +1,10 @@
+## 0.1.167
+
+- 재시작 직후 완전 스냅샷에서 특정 Location의 기기가 전부 누락되더라도, Consumer와 Advanced 양쪽에서 해당 Location이 확인되기 전에는 저장된 기기를 일괄 삭제하지 않습니다.
+- Home Assistant가 재연결 중 선택된 Location은 존재하지만 기기 수만 0개인 의심스러운 ready 스냅샷을 받으면 기존 Location 기기와 방, 장면 정보를 보존합니다.
+- 구성 항목 시작 시 선택된 Location만 비어 있으면 Advanced 인벤토리를 한 번 자동 재조회하여 Sparkplus 기기를 복구하도록 보강했습니다.
+- 0.1.166의 Sparkplus Home Monitor 직접 제어 동작은 그대로 유지합니다.
+
 ## 0.1.166
 
 - 현재 브라우저 URL의 raw Location ID가 명령 대상과 일치하면 별칭 정규화나 Location picker 탐색 전에 즉시 현재 위치로 확정합니다.

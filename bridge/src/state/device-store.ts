@@ -245,6 +245,8 @@ export class DeviceStore {
   #persistPending = false;
   #sequence = 0;
   #sessionPendingDeviceIds: Set<string> | undefined;
+  readonly #sessionConsumerLocationIds = new Set<string>();
+  readonly #sessionAdvancedLocationIds = new Set<string>();
   #sessionConsumerDeviceSnapshotSeen = false;
   #sessionWholeAdvancedDeviceSnapshotSeen = false;
 
@@ -493,6 +495,8 @@ export class DeviceStore {
   }
 
   resetSnapshotSession(): void {
+    this.#sessionConsumerLocationIds.clear();
+    this.#sessionAdvancedLocationIds.clear();
     this.#sessionConsumerDeviceSnapshotSeen = false;
     this.#sessionWholeAdvancedDeviceSnapshotSeen = false;
   }
@@ -761,7 +765,9 @@ export class DeviceStore {
         this.#normalizeAdvancedAlias
       );
       if (!id || !locationId) continue;
-      if (observeRestoredPresence) this.#confirmRestoredDevice(id);
+      if (observeRestoredPresence) {
+        this.#confirmRestoredDevice(id, locationId, "advanced");
+      }
       const device = this.#ensureDevice(id, locationId);
       const observedAdvanced = advancedDeviceMetadata(row, this.#normalizeAdvancedAlias);
       const advanced = observeRestoredPresence
@@ -1103,14 +1109,34 @@ export class DeviceStore {
     if (!this.#sessionConsumerDeviceSnapshotSeen || !this.#sessionWholeAdvancedDeviceSnapshotSeen) {
       return false;
     }
-    this.#sessionPendingDeviceIds = undefined;
     if (pending.size === 0) {
+      this.#sessionPendingDeviceIds = undefined;
+      this.#sessionConsumerLocationIds.clear();
+      this.#sessionAdvancedLocationIds.clear();
       return false;
     }
+    const preserved = new Set<string>();
+    let changed = false;
     for (const id of pending) {
-      this.#devices.delete(id);
+      const device = this.#devices.get(id);
+      if (
+        device &&
+        !(
+          this.#sessionConsumerLocationIds.has(device.locationId) &&
+          this.#sessionAdvancedLocationIds.has(device.locationId)
+        )
+      ) {
+        preserved.add(id);
+        continue;
+      }
+      changed = this.#devices.delete(id) || changed;
     }
-    return true;
+    this.#sessionPendingDeviceIds = preserved.size > 0 ? preserved : undefined;
+    if (this.#sessionPendingDeviceIds === undefined) {
+      this.#sessionConsumerLocationIds.clear();
+      this.#sessionAdvancedLocationIds.clear();
+    }
+    return changed;
   }
 
   #observeConsumerDeviceSnapshotPresence(body: unknown): void {
@@ -1119,14 +1145,26 @@ export class DeviceStore {
     for (const card of rows) {
       const source = firstRecord(card.basic, card.cloud, card.camera);
       const id = safeId(source?.deviceId, "dev");
-      if (id) {
-        this.#confirmRestoredDevice(id);
+      const locationId = safeId(source?.locationId, "loc");
+      if (id && locationId) {
+        this.#confirmRestoredDevice(id, locationId, "consumer");
       }
     }
   }
 
-  #confirmRestoredDevice(id: string): void {
-    this.#sessionPendingDeviceIds?.delete(id);
+  #confirmRestoredDevice(
+    id: string,
+    locationId: string,
+    source: "consumer" | "advanced"
+  ): void {
+    const pending = this.#sessionPendingDeviceIds;
+    if (!pending) return;
+    if (source === "consumer") {
+      this.#sessionConsumerLocationIds.add(locationId);
+    } else {
+      this.#sessionAdvancedLocationIds.add(locationId);
+    }
+    pending.delete(id);
   }
 
   #loadPersistedInventory(): BridgeInventory | undefined {
