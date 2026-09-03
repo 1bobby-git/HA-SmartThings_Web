@@ -27,7 +27,7 @@ describe("text-only Home Monitor DOM control", () => {
 
     await expect(
       clickTextOnlyHomeMonitorAction(
-        page,
+        page as never,
         monitorLabels,
         actionLabels,
         modeLabelGroups
@@ -40,7 +40,7 @@ describe("text-only Home Monitor DOM control", () => {
   test("preserves fail-closed ambiguous and missing outcomes", async () => {
     await expect(
       clickTextOnlyHomeMonitorAction(
-        pageWithResult("ambiguous"),
+        pageWithResult("ambiguous") as never,
         monitorLabels,
         actionLabels,
         modeLabelGroups
@@ -48,7 +48,7 @@ describe("text-only Home Monitor DOM control", () => {
     ).resolves.toBe("ambiguous");
     await expect(
       clickTextOnlyHomeMonitorAction(
-        pageWithResult("not_found"),
+        pageWithResult("not_found") as never,
         monitorLabels,
         actionLabels,
         modeLabelGroups
@@ -56,7 +56,7 @@ describe("text-only Home Monitor DOM control", () => {
     ).resolves.toBe("not_found");
     await expect(
       clickTextOnlyHomeMonitorAction(
-        pageWithResult("unexpected"),
+        pageWithResult("unexpected") as never,
         monitorLabels,
         actionLabels,
         modeLabelGroups
