@@ -98,7 +98,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.165";
+const bridgeVersion = "0.1.166";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
@@ -346,6 +346,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       warmPageTtlMs: 24 * 60 * 60_000,
       onDiagnostic: (stage) => log.info(`command_diag:${stage}`),
       resolveRawDeviceId: (alias) => volatileIdentifiers.rawDeviceId(alias),
+      resolveRawLocationId: (alias) => volatileIdentifiers.rawLocationId(alias),
       resolveRawIdentifier: (alias) => volatileIdentifiers.rawIdentifier(alias)
     }
   );

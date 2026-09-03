@@ -1,3 +1,9 @@
+## 0.1.166
+
+- 현재 브라우저 URL의 raw Location ID가 명령 대상과 일치하면 별칭 정규화나 Location picker 탐색 전에 즉시 현재 위치로 확정합니다.
+- Sparkplus 실제 대시보드의 SmartThings Home Monitor 카드 안에 노출되는 `보안(외출)` 및 `보안(실내)` 버튼을 카드 범위에서 직접 찾아 제어합니다.
+- 기존 전역 버튼 및 Home Monitor 대화상자 경로는 하위 호환 fallback으로 유지합니다.
+
 ## 0.1.165
 
 - Home Assistant의 기본 `code_arm_required=True`를 해제해 Home Monitor 무장 명령이 코드 없이 브리지까지 전달되도록 수정했습니다.

@@ -3512,10 +3512,78 @@ describe("SmartThingsWebUiCommandExecutor", () => {
     expect(slider.fill).toHaveBeenCalledWith("45", { timeout: 15_000 });
   });
 
+  test("skips the matching Sparkplus URL picker and clicks both dashboard Home Monitor controls", async () => {
+    const rawLocationId = "11111111-2222-4333-8444-555555555555";
+    for (const expected of [
+      { action: "armAway", label: "보안(외출)" },
+      { action: "armStay", label: "보안(실내)" }
+    ] as const) {
+      const page = new FakeCommandPage();
+      page.currentUrl = `https://my.smartthings.com/location/${rawLocationId}`;
+      const missing = new FakeLocator(0, true);
+      const title = new FakeLocator(1);
+      const monitorCard = new FakeLocator(1);
+      const actionControl = new FakeLocator(1);
+      title.getByRole = vi.fn(() => missing);
+      title.locator = vi.fn((selector?: string) =>
+        selector === ".." ? monitorCard : missing
+      );
+      monitorCard.getByRole = vi.fn(
+        (role?: string, options?: { name?: string | RegExp }) =>
+          role === "button" &&
+          options?.name instanceof RegExp &&
+          options.name.test(expected.label)
+            ? actionControl
+            : missing
+      );
+      page.getByText = vi.fn((text?: string) =>
+        text === "SmartThings Home Monitor" ? title : missing
+      );
+      let pickerQueries = 0;
+      page.getByRole = vi.fn(
+        (role: string, options?: { name?: string | RegExp }) => {
+          if (
+            role === "button" &&
+            options?.name instanceof RegExp &&
+            options.name.test("Sparkplus")
+          ) {
+            pickerQueries += 1;
+          }
+          return missing;
+        }
+      );
+      let normalizeCalls = 0;
+      const manager = { openCommandPage: vi.fn(async () => page) };
+      const executor = new SmartThingsWebUiCommandExecutor(
+        () => manager,
+        () => {
+          normalizeCalls += 1;
+          return "loc_other";
+        },
+        {
+          resolveRawLocationId: (alias) =>
+            alias === "loc_spark" ? rawLocationId : undefined
+        }
+      );
+
+      await executor.executeLocationAction({
+        locationId: "loc_spark",
+        locationNames: { loc_spark: "Sparkplus" },
+        action: expected.action
+      });
+
+      expect(normalizeCalls).toBe(0);
+      expect(pickerQueries).toBe(0);
+      expect(title.locator).toHaveBeenCalledWith("..");
+      expect(actionControl.click).toHaveBeenCalledWith({ timeout: 15_000 });
+      expect(page.close).toHaveBeenCalledTimes(1);
+    }
+  });
   test("executes one exact scene card and one Home Monitor action", async () => {
     const page = new FakeCommandPage();
     const scene = new FakeLocator(1);
     const disarm = new FakeLocator(1);
+    page.getByText = vi.fn(() => new FakeLocator(0, true));
     page.getByRole = vi.fn((role: string, options?: { name?: string | RegExp }) => {
       if (role === "button" && options?.name instanceof RegExp) {
         if (options.name.test("Evening")) return scene;
