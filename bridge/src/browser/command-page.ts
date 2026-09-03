@@ -530,13 +530,24 @@ export class SmartThingsWebUiCommandExecutor {
       const actionName = locationActionName(input.action);
       const locationName = input.locationNames?.[input.locationId];
       const monitorName = homeMonitorName(locationName);
+      const monitorLabels = homeMonitorLabels(locationName);
       let action = await findHomeMonitorCardAction(
         page,
         monitorName,
-        homeMonitorLabels(locationName),
+        monitorLabels,
         actionName,
         15_000
       );
+      if (
+        !action &&
+        await clickHomeMonitorCardActionByText(
+          page,
+          monitorLabels,
+          locationActionLabels(input.action)
+        )
+      ) {
+        return;
+      }
       if (!action) {
         action = await findLocationActionControl(page, actionName, 250);
       }
@@ -1845,24 +1856,41 @@ async function clickExactlyOne(control: CommandLocatorLike): Promise<void> {
   await control.click({ timeout: 15_000 });
 }
 
+async function firstVisibleCandidate(
+  candidates: readonly CommandLocatorLike[],
+  timeoutMs: number
+): Promise<CommandLocatorLike | undefined> {
+  if (candidates.length === 0) return undefined;
+  try {
+    return await Promise.any(
+      candidates.map(async (candidate) => {
+        await candidate.first().waitFor({
+          state: "visible",
+          timeout: Math.max(1, timeoutMs)
+        });
+        return candidate;
+      })
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 async function findLocationActionControl(
   scope: CommandControlSurface,
   actionName: RegExp,
   timeoutMs: number
 ): Promise<CommandLocatorLike | undefined> {
-  for (const role of ["button", "radio", "tab"]) {
-    const candidate = scope.getByRole(role, { name: actionName });
-    const count = await candidate.count();
-    if (count > 1) throw new Error("command_control_ambiguous");
-    if (count !== 1) continue;
-    try {
-      await candidate.first().waitFor({ state: "visible", timeout: timeoutMs });
-      return candidate;
-    } catch {
-      continue;
-    }
-  }
-  return undefined;
+  const candidate = await firstVisibleCandidate(
+    ["button", "radio", "tab"].map((role) =>
+      scope.getByRole(role, { name: actionName })
+    ),
+    timeoutMs
+  );
+  if (!candidate) return undefined;
+  const count = await candidate.count();
+  if (count > 1) throw new Error("command_control_ambiguous");
+  return count === 1 ? candidate : undefined;
 }
 
 async function findHomeMonitorCardAction(
@@ -1872,66 +1900,108 @@ async function findHomeMonitorCardAction(
   actionName: RegExp,
   timeoutMs: number
 ): Promise<CommandLocatorLike | undefined> {
-  let title: CommandLocatorLike | undefined;
-  const heading = scope.getByRole("heading", { name: monitorName });
-  const headingCount = await heading.count();
-  if (headingCount > 1) throw new Error("command_control_ambiguous");
-  if (headingCount === 1) {
-    try {
-      await heading.first().waitFor({ state: "visible", timeout: timeoutMs });
-      title = heading.first();
-    } catch {
-      // Exact text variants below cover non-heading card titles.
-    }
-  }
-
-  if (!title) {
-    for (const label of monitorLabels) {
-      const candidate = scope.getByText(label, { exact: true });
-      const count = await candidate.count();
-      if (count > 1) throw new Error("command_control_ambiguous");
-      if (count !== 1) continue;
-      try {
-        await candidate.first().waitFor({ state: "visible", timeout: timeoutMs });
-        title = candidate.first();
-        break;
-      } catch {
-        continue;
-      }
-    }
-  }
+  const title = await firstVisibleCandidate(
+    [
+      scope.getByRole("heading", { name: monitorName }),
+      ...monitorLabels.map((label) => scope.getByText(label, { exact: true }))
+    ],
+    timeoutMs
+  );
   if (!title) return undefined;
+  const titleCount = await title.count();
+  if (titleCount > 1) throw new Error("command_control_ambiguous");
+  if (titleCount !== 1) return undefined;
 
   let cardScope = title;
   for (let depth = 0; depth < 8; depth += 1) {
     const action = await findLocationActionControl(
       cardScope,
       actionName,
-      Math.min(timeoutMs, 250)
+      Math.min(timeoutMs, 500)
     );
     if (action) return action;
     cardScope = cardScope.locator("..");
   }
   return undefined;
 }
+
 async function findHomeMonitorControl(
   scope: CommandControlSurface,
   monitorName: RegExp
 ): Promise<CommandLocatorLike | undefined> {
-  for (const role of ["button", "link"]) {
-    const candidate = scope.getByRole(role, { name: monitorName });
-    const count = await candidate.count();
-    if (count > 1) throw new Error("command_control_ambiguous");
-    if (count === 1) {
-      try {
-        await candidate.first().waitFor({ state: "visible", timeout: 15_000 });
-        return candidate;
-      } catch {
-        continue;
-      }
-    }
+  const candidate = await firstVisibleCandidate(
+    ["button", "link"].map((role) =>
+      scope.getByRole(role, { name: monitorName })
+    ),
+    15_000
+  );
+  if (!candidate) return undefined;
+  const count = await candidate.count();
+  if (count > 1) throw new Error("command_control_ambiguous");
+  return count === 1 ? candidate : undefined;
+}
+
+async function clickHomeMonitorCardActionByText(
+  page: CommandPageLike,
+  monitorLabels: readonly string[],
+  actionLabels: readonly string[]
+): Promise<boolean> {
+  if (!page.evaluate) return false;
+  try {
+    const clicked = await page.evaluate(
+      ({ monitorLabels, actionLabels }) => {
+        const normalize = (value: string | null | undefined) =>
+          (value ?? "").replace(/\s+/gu, " ").trim().toLocaleLowerCase();
+        const visible = (element: Element) => {
+          const style = getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return (
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            rect.width > 0 &&
+            rect.height > 0
+          );
+        };
+        const monitorNames = new Set(monitorLabels.map(normalize));
+        const actionNames = new Set(actionLabels.map(normalize));
+        const titles = [...document.querySelectorAll("h1,h2,h3,h4,h5,h6,div,span,p")]
+          .filter((element) => visible(element) && monitorNames.has(normalize(element.textContent)));
+        const matches = new Set<HTMLElement>();
+        for (const title of titles) {
+          let scope: Element | null = title;
+          for (let depth = 0; scope && depth < 8; depth += 1, scope = scope.parentElement) {
+            const controls = scope.matches("button,[role='button'],a,input[type='button'],input[type='submit']")
+              ? [scope]
+              : [...scope.querySelectorAll("button,[role='button'],a,input[type='button'],input[type='submit']")];
+            for (const control of controls) {
+              if (!(control instanceof HTMLElement) || !visible(control)) continue;
+              const inputValue = control instanceof HTMLInputElement ? control.value : undefined;
+              const label = control.getAttribute("aria-label") ?? inputValue ?? control.textContent;
+              if (actionNames.has(normalize(label))) matches.add(control);
+            }
+            if (matches.size > 0) break;
+          }
+        }
+        if (matches.size !== 1) return false;
+        [...matches][0]?.click();
+        return true;
+      },
+      { monitorLabels: [...monitorLabels], actionLabels: [...actionLabels] }
+    );
+    return clicked === true;
+  } catch {
+    return false;
   }
-  return undefined;
+}
+
+function locationActionLabels(action: "armAway" | "armStay" | "disarm"): string[] {
+  if (action === "armAway") {
+    return ["Arm away", "Away", "Away mode", "외출", "외출 모드", "외출 중", "외출중", "보안(외출)", "보안 외출"];
+  }
+  if (action === "armStay") {
+    return ["Arm stay", "Stay", "Stay mode", "실내", "실내 모드", "재실", "재실 모드", "재실 중", "재실중", "집에 있음", "귀가", "보안(실내)", "보안(재실)", "보안 실내", "보안 재실"];
+  }
+  return ["Disarm", "Disarmed", "Off", "해제", "해제됨", "보안 해제", "보안(해제)", "사용 안 함"];
 }
 
 function locationActionName(action: "armAway" | "armStay" | "disarm"): RegExp {

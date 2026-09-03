@@ -1123,7 +1123,7 @@ describe("createBridgeRuntime", () => {
     });
   });
 
-  test("immediately reloads the keeper and invalidates readiness when SmartThings Socket.IO closes", async () => {
+  test("ignores unscoped temporary socket closes but immediately recovers the keeper CDP socket", async () => {
     const root = createTempRoot();
     const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
     const context = new FakeContext([keeper]);
@@ -1145,9 +1145,25 @@ describe("createBridgeRuntime", () => {
     const socket = new FakeEmitter() as FakeEmitter & { url: () => string };
     socket.url = () => "wss://my.smartthings.com/socket.io/?EIO=4&transport=websocket";
     await context.emit("websocket", socket);
-    const advancedRequestsBeforeRecovery = keeper.advancedRequestCalls.length;
 
     await socket.emit("close", undefined);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(keeper.goto).not.toHaveBeenCalled();
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      pushConnected: true,
+      parserHealthy: true,
+      initialSnapshotComplete: true,
+      state: "CONNECTED"
+    });
+
+    const keeperCdp = context.cdpSessions[0];
+    expect(keeperCdp).toBeDefined();
+    const advancedRequestsBeforeRecovery = keeper.advancedRequestCalls.length;
+    await keeperCdp?.emit("Network.webSocketCreated", {
+      requestId: "keeper-socket",
+      url: "wss://my.smartthings.com/socket.io/?EIO=4&transport=websocket"
+    });
+    await keeperCdp?.emit("Network.webSocketClosed", { requestId: "keeper-socket" });
 
     await vi.waitFor(() => expect(keeper.goto).toHaveBeenCalledTimes(1));
     expect(runtime.status.getSnapshot()).toMatchObject({

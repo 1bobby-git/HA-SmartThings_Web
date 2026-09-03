@@ -1,3 +1,10 @@
+## 0.1.170
+
+- 임시 명령·상세 조회 페이지의 Socket.IO 종료를 영구 Location keeper 연결 종료로 오인하지 않도록 즉시 복구 신호를 page-scoped CDP keeper 연결에만 제한했습니다.
+- 수백 개 장치의 상세 페이지를 1초마다 연속으로 열던 자동 탐색을 15초 간격으로 완화해 Chromium CPU·메모리 급증과 Home Assistant 연결 끊김을 줄였습니다.
+- Sparkplus 대시보드의 React 렌더링이 끝날 때까지 `SmartThings Home Monitor` 카드와 `보안(외출)`·`보안(실내)` 컨트롤을 기다리고, 접근성 역할이 없는 경우에도 카드 내부의 정확한 표시 문자열만 제한적으로 클릭합니다.
+- 임시 Socket.IO 종료, keeper CDP 종료, 지연 렌더링 Home Monitor 및 상세 탐색 주기에 대한 회귀 테스트를 추가했습니다.
+
 ## 0.1.169
 
 - Home Assistant 앱 저장소 설치의 실제 내부 호스트(`d55cafb9-smartthings-web-bridge`)와 수동 로컬 설치 호스트(`local-smartthings-web-bridge`)를 구분하고, 네트워크 연결 실패 때만 다른 알려진 호스트를 안전하게 확인합니다.
