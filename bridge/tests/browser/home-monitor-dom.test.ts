@@ -5,7 +5,7 @@ import { clickTextOnlyHomeMonitorAction } from "../../src/browser/home-monitor-d
 
 function pageWithResult(result: unknown) {
   return {
-    url: () => "https://my.smartthings.com/location/raw-sparkplus",
+    url: () => "https://my.smartthings.com/location/raw-exampleoffice",
     isClosed: () => false,
     goto: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
