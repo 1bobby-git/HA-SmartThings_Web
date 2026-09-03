@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 REPOSITORY="1bobby-git/HA-SmartThings_Web"
-TARGET_VERSION="${1:-0.1.168}"
+TARGET_VERSION="${1:-0.1.169}"
 ADDON_SLUG="${SMARTTHINGS_WEB_ADDON_SLUG:-local_smartthings_web_bridge}"
 ADDONS_ROOT="${SMARTTHINGS_WEB_ADDONS_ROOT:-/addons}"
 BACKUP_ROOT="${SMARTTHINGS_WEB_BACKUP_ROOT:-/share/smartthings-web-bridge-backups}"
@@ -16,6 +16,9 @@ EXPECTED_SHA256="${SMARTTHINGS_WEB_BRIDGE_SHA256:-}"
 case "${TARGET_VERSION}" in
   0.1.168)
     EXPECTED_SHA256="${EXPECTED_SHA256:-a1d6aadfc6dbe17105f527b9c25c7795aebb5c2885a0b701b6bd0144750375d5}"
+    ;;
+  0.1.169)
+    EXPECTED_SHA256="${EXPECTED_SHA256:-164b571378bb36d6798fc2326b94db7ba59ba0f21bad43dc60d3da1fe5d5b629}"
     ;;
 esac
 
