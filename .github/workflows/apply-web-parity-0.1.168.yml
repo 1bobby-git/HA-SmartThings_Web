@@ -1,0 +1,748 @@
+name: Apply SmartThings Web parity 0.1.168
+
+on:
+  push:
+    branches:
+      - fix/web-parity-advanced-ui-0.1.168
+    paths:
+      - .github/workflows/apply-web-parity-0.1.168.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    name: Apply, test, build, and commit 0.1.168
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out work branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/web-parity-advanced-ui-0.1.168
+          fetch-depth: 0
+
+      - name: Apply Web parity and Bridge recovery patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          from pathlib import Path
+          import json
+          import re
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}: {old[:80]!r}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          def replace_regex_once(path: str, pattern: str, replacement: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              updated, count = re.subn(pattern, replacement, text, count=1, flags=re.MULTILINE | re.DOTALL)
+              if count != 1:
+                  raise SystemExit(f"{path}: regex expected one match, found {count}: {pattern[:100]!r}")
+              target.write_text(updated, encoding="utf-8")
+
+          runtime_path = "bridge/src/runtime.ts"
+          runtime = Path(runtime_path).read_text(encoding="utf-8")
+          helper_anchor = "function createStatusCapturePipeline(\n"
+          if runtime.count(helper_anchor) != 1:
+              raise SystemExit("runtime.ts: createStatusCapturePipeline anchor changed")
+          helper = r'''
+          export function normalizeSmartThingsWebPayload<T>(value: T): T {
+            return normalizeSmartThingsWebValue(value) as T;
+          }
+
+          function normalizeSmartThingsWebValue(value: unknown): unknown {
+            if (Array.isArray(value)) return value.map((item) => normalizeSmartThingsWebValue(item));
+            if (typeof value !== "object" || value === null) return value;
+            const source = value as Record<string, unknown>;
+            const result: Record<string, unknown> = {};
+            for (const [key, nested] of Object.entries(source)) {
+              result[key] = normalizeSmartThingsWebValue(nested);
+            }
+
+            normalizeSmartThingsWebDeviceRecord(result);
+            normalizeSmartThingsWebControlRecord(result);
+            return result;
+          }
+
+          function normalizeSmartThingsWebDeviceRecord(record: Record<string, unknown>): void {
+            const nestedRecords = [
+              record.basic,
+              record.cloud,
+              record.camera,
+              record.device,
+              record.metadata,
+              record.data
+            ].filter(webParityIsRecord) as Record<string, unknown>[];
+            const candidates = [record, ...nestedRecords];
+            const deviceId = webParityFirstText(
+              ...candidates.flatMap((candidate) => [
+                candidate.deviceId,
+                candidate.device_id,
+                candidate.id
+              ])
+            );
+            if (!deviceId) return;
+            const locationId = webParityFirstText(
+              ...candidates.flatMap((candidate) => [candidate.locationId, candidate.location_id])
+            );
+            const roomId = webParityFirstText(
+              ...candidates.flatMap((candidate) => [candidate.roomId, candidate.room_id])
+            );
+            const name = webParityFirstText(
+              ...candidates.flatMap((candidate) => [
+                candidate.deviceName,
+                candidate.deviceLabel,
+                candidate.label,
+                candidate.name,
+                candidate.title
+              ])
+            );
+            const presentation = candidates
+              .map((candidate) => candidate.presentation ?? candidate.devicePresentation)
+              .find(webParityIsRecord) as Record<string, unknown> | undefined;
+            const iconInfo = candidates
+              .map((candidate) => candidate.iconInfo)
+              .find(webParityIsRecord) as Record<string, unknown> | undefined;
+            const presentationIcon = presentation
+              ? webParityFirstText(
+                  presentation.iconUrl,
+                  presentation.icon,
+                  presentation.imageUrl,
+                  presentation.image
+                )
+              : undefined;
+            const icon = webParityFirstText(
+              ...candidates.flatMap((candidate) => [
+                candidate.iconUrl,
+                candidate.icon,
+                candidate.imageUrl,
+                candidate.image,
+                candidate.deviceIcon
+              ]),
+              iconInfo?.url,
+              iconInfo?.iconUrl,
+              presentationIcon
+            );
+
+            record.deviceId ??= deviceId;
+            if (locationId) record.locationId ??= locationId;
+            if (roomId) record.roomId ??= roomId;
+            if (name) {
+              record.deviceName ??= name;
+              record.deviceLabel ??= name;
+              record.label ??= name;
+              record.name ??= name;
+            }
+            if (presentation) {
+              record.presentation ??= presentation;
+              record.devicePresentation ??= presentation;
+            }
+            if (icon) {
+              record.iconUrl ??= icon;
+              record.icon ??= icon;
+            }
+
+            if (!webParityIsRecord(record.basic)) {
+              const basic: Record<string, unknown> = { deviceId };
+              if (locationId) basic.locationId = locationId;
+              if (roomId) basic.roomId = roomId;
+              if (name) {
+                basic.deviceName = name;
+                basic.label = name;
+                basic.name = name;
+              }
+              if (presentation) basic.presentation = presentation;
+              if (icon) {
+                basic.iconUrl = icon;
+                basic.icon = icon;
+              }
+              record.basic = basic;
+            }
+          }
+
+          function normalizeSmartThingsWebControlRecord(record: Record<string, unknown>): void {
+            const rawType = webParityFirstText(
+              record.controlType,
+              record.displayType,
+              record.widgetType,
+              record.presentationType,
+              record.type
+            );
+            if (!rawType) return;
+            const controlLike = [
+              "controlType",
+              "displayType",
+              "widgetType",
+              "swatchId",
+              "controlId",
+              "componentId",
+              "capabilityId",
+              "attributeName",
+              "possibleStates",
+              "options",
+              "command",
+              "action",
+              "minimum",
+              "maximum",
+              "minValue",
+              "maxValue"
+            ].some((key) => key in record);
+            if (!controlLike) return;
+
+            const normalizedType = rawType.trim().toUpperCase().replace(/[^A-Z0-9]+/gu, "_");
+            if (["SLIDER", "RANGE", "NUMBER", "NUMBER_FIELD", "STEPPER"].includes(normalizedType)) {
+              record.type = "SLIDER";
+              record.controlType ??= "SLIDER";
+              record.slider = webParityCanonicalControl(record, webParityIsRecord(record.slider)
+                ? record.slider
+                : webParityFirstRecord(record.range, record.number, record.control, record.detail, record.data));
+              return;
+            }
+            if (["ENUMERATED", "ENUM", "OPTIONS", "RADIO", "SELECT", "LIST"].includes(normalizedType)) {
+              record.type = "ENUMERATED";
+              record.controlType ??= "ENUMERATED";
+              record.enumerated = webParityCanonicalControl(record, webParityIsRecord(record.enumerated)
+                ? record.enumerated
+                : webParityFirstRecord(record.optionsControl, record.radio, record.select, record.control, record.detail, record.data));
+              return;
+            }
+            if (["ACTION", "BUTTON", "PUSH", "MOMENTARY"].includes(normalizedType)) {
+              record.type = "BUTTON";
+              record.controlType ??= "BUTTON";
+              record.button = webParityCanonicalControl(record, webParityFirstRecord(record.button, record.actionControl, record.control, record.detail, record.data));
+              return;
+            }
+            if (["SWITCH", "TOGGLE", "BOOLEAN"].includes(normalizedType)) {
+              record.type = "TOGGLE";
+              record.controlType ??= "TOGGLE";
+              record.toggle = webParityCanonicalControl(record, webParityFirstRecord(record.toggle, record.switch, record.control, record.detail, record.data));
+            }
+          }
+
+          function webParityCanonicalControl(
+            source: Record<string, unknown>,
+            nested: Record<string, unknown> | undefined
+          ): Record<string, unknown> {
+            const candidates = [nested, source].filter(webParityIsRecord) as Record<string, unknown>[];
+            const result: Record<string, unknown> = { ...(nested ?? {}) };
+            const copy = (target: string, ...keys: string[]) => {
+              if (result[target] !== undefined) return;
+              for (const candidate of candidates) {
+                for (const key of keys) {
+                  if (candidate[key] !== undefined) {
+                    result[target] = candidate[key];
+                    return;
+                  }
+                }
+              }
+            };
+            copy("swatchId", "swatchId", "controlId", "id");
+            copy("controlId", "controlId", "swatchId", "id");
+            copy("componentId", "componentId", "component", "component_id");
+            copy("capabilityId", "capabilityId", "capability", "capability_id");
+            copy("attributeName", "attributeName", "attribute", "attribute_id");
+            copy("label", "label", "name", "title", "displayName");
+            copy("name", "name", "label", "title", "displayName");
+            copy("command", "command", "action", "commandName");
+            copy("action", "action", "command", "commandName");
+            copy("value", "value", "currentValue", "state");
+            copy("unit", "unit", "unitSymbol");
+            copy("min", "min", "minimum", "minValue");
+            copy("max", "max", "maximum", "maxValue");
+            copy("step", "step", "increment", "interval");
+
+            const range = webParityFirstRecord(...candidates.map((candidate) => candidate.range));
+            if (range) {
+              result.min ??= range.min ?? range.minimum ?? range.minValue;
+              result.max ??= range.max ?? range.maximum ?? range.maxValue;
+              result.step ??= range.step ?? range.increment ?? range.interval;
+            }
+            const rawOptions = candidates
+              .map((candidate) => candidate.possibleStates ?? candidate.options ?? candidate.values ?? candidate.states ?? candidate.items)
+              .find(Array.isArray);
+            if (Array.isArray(rawOptions)) {
+              const options = rawOptions.map((option) => {
+                if (!webParityIsRecord(option)) {
+                  const value = String(option);
+                  return { value, state: value, id: value, name: value, label: value, title: value };
+                }
+                const value = webParityFirstText(option.value, option.state, option.id, option.status, option.key);
+                const label = webParityFirstText(option.name, option.label, option.title, option.displayName, value);
+                const command = webParityFirstText(option.command, option.action, option.commandName, value);
+                return {
+                  ...option,
+                  ...(value ? { value, state: value, id: value } : {}),
+                  ...(label ? { name: label, label, title: label } : {}),
+                  ...(command ? { command, action: command } : {})
+                };
+              });
+              result.possibleStates = options;
+              result.options = options;
+            }
+            return result;
+          }
+
+          function webParityFirstText(...values: unknown[]): string | undefined {
+            for (const value of values) {
+              if (typeof value === "string" && value.trim()) return value.trim();
+            }
+            return undefined;
+          }
+
+          function webParityIsRecord(value: unknown): value is Record<string, unknown> {
+            return typeof value === "object" && value !== null && !Array.isArray(value);
+          }
+
+          function webParityFirstRecord(...values: unknown[]): Record<string, unknown> | undefined {
+            return values.find(webParityIsRecord) as Record<string, unknown> | undefined;
+          }
+
+          '''
+          Path(runtime_path).write_text(runtime.replace(helper_anchor, helper + helper_anchor, 1), encoding="utf-8")
+          replace_once(
+              runtime_path,
+              "        devices.observe(record);",
+              "        devices.observe(normalizeSmartThingsWebPayload(record));",
+          )
+          runtime = Path(runtime_path).read_text(encoding="utf-8")
+          advanced_observe = "            devices.observeAdvancedDeviceSnapshot(snapshot, {"
+          if runtime.count(advanced_observe) != 1:
+              raise SystemExit(f"runtime.ts: expected one advanced callback, found {runtime.count(advanced_observe)}")
+          runtime = runtime.replace(
+              advanced_observe,
+              "            devices.observeAdvancedDeviceSnapshot(normalizeSmartThingsWebPayload(snapshot), {",
+              1,
+          )
+          if runtime.count("canUseAdvanced: () => false") != 1:
+              raise SystemExit("runtime.ts: Advanced routing gate changed")
+          runtime = runtime.replace("canUseAdvanced: () => false", "canUseAdvanced: () => true", 1)
+          Path(runtime_path).write_text(runtime, encoding="utf-8")
+
+          command_path = "bridge/src/browser/command-page.ts"
+          replace_once(
+              command_path,
+              '''    const rawTargetLocationId = this.#resolveRawLocationId?.(targetLocationId);
+    if (rawTargetLocationId === routeLocation) return;
+    if (!this.normalizeLocationId) return;
+    const currentLocationId = this.normalizeLocationId(routeLocation);
+    if (currentLocationId === targetLocationId) return;
+    const currentName = locationNames?.[currentLocationId];
+    const targetName = locationNames?.[targetLocationId];
+    if (!currentName || !targetName) throw new Error("command_location_unknown");
+''',
+              '''    const rawTargetLocationId = this.#resolveRawLocationId?.(targetLocationId);
+    const targetName = locationNames?.[targetLocationId];
+    if (rawTargetLocationId === routeLocation) return;
+    if (rawTargetLocationId) {
+      const directUrl = new URL(
+        `/location/${encodeURIComponent(rawTargetLocationId)}`,
+        page.url()
+      ).toString();
+      await page.goto(directUrl, { waitUntil: "domcontentloaded" });
+      for (let attempt = 0; attempt < LOCATION_ROUTE_POLL_ATTEMPTS; attempt += 1) {
+        if (locationIdFromUrl(page.url()) === rawTargetLocationId) return;
+        await page.waitForTimeout?.(LOCATION_ROUTE_POLL_MS);
+      }
+      throw new Error("command_location_change_failed");
+    }
+    if (targetName && await isCurrentLocationControl(page, targetName)) return;
+    if (!this.normalizeLocationId) return;
+    const currentLocationId = this.normalizeLocationId(routeLocation);
+    if (currentLocationId === targetLocationId) return;
+    const currentName = locationNames?.[currentLocationId];
+    if (!currentName || !targetName) throw new Error("command_location_unknown");
+''',
+          )
+          replace_once(
+              command_path,
+              '''    let picker = page.getByRole("button", { name: new RegExp(escapeRegExp(currentName), "u") });
+    if ((await picker.count()) !== 1) {
+      picker = page.getByRole("button").filter({
+        has: page.getByText(currentName, { exact: true })
+      });
+    }
+    if ((await picker.count()) !== 1) throw new Error("command_location_picker_not_found");
+    await picker.click({ timeout: 15_000 });
+    const target = page.getByRole("link", { name: exactName(targetName) });
+    try {
+      await target.first().waitFor({ state: "visible", timeout: 15_000 });
+    } catch {
+      throw new Error("command_location_target_not_found");
+    }
+    if ((await target.count()) !== 1) throw new Error("command_location_target_not_found");
+    await target.click({ timeout: 15_000 });
+''',
+              '''    const picker = await findCurrentLocationPicker(page, currentName);
+    if (!picker) throw new Error("command_location_picker_not_found");
+    await picker.click({ timeout: 15_000 });
+    const target = await findLocationTargetControl(page, targetName, 15_000);
+    if (!target) throw new Error("command_location_target_not_found");
+    await target.click({ timeout: 15_000 });
+''',
+          )
+          command_text = Path(command_path).read_text(encoding="utf-8")
+          route_anchor = "async function waitForLocationRoute(\n"
+          if command_text.count(route_anchor) != 1:
+              raise SystemExit("command-page.ts: waitForLocationRoute anchor changed")
+          location_helpers = r'''
+          async function isCurrentLocationControl(
+            page: CommandPageLike,
+            name: string
+          ): Promise<boolean> {
+            const exact = page.getByText(name, { exact: true });
+            for (const selector of [
+              'header button[aria-haspopup]',
+              'header [role="combobox"]',
+              'button[aria-haspopup="menu"]',
+              '[role="combobox"]',
+              '[aria-controls*="location" i]'
+            ]) {
+              const candidate = page.locator(selector).filter({ has: exact });
+              if ((await candidate.count()) !== 1) continue;
+              try {
+                if (await candidate.first().isVisible()) return true;
+              } catch {
+                continue;
+              }
+            }
+            return false;
+          }
+
+          async function findCurrentLocationPicker(
+            page: CommandPageLike,
+            currentName: string
+          ): Promise<CommandLocatorLike | undefined> {
+            const exact = page.getByText(currentName, { exact: true });
+            const candidates = [
+              page.locator('header button[aria-haspopup], header [role="combobox"]').filter({ has: exact }),
+              page.locator('button[aria-haspopup="menu"], [role="combobox"], [aria-controls*="location" i]').filter({ has: exact }),
+              page.getByRole("button", { name: new RegExp(escapeRegExp(currentName), "u") }),
+              page.getByRole("button").filter({ has: exact })
+            ];
+            for (const candidate of candidates) {
+              if ((await candidate.count()) !== 1) continue;
+              try {
+                if (await candidate.first().isVisible()) return candidate.first();
+              } catch {
+                continue;
+              }
+            }
+            return undefined;
+          }
+
+          async function findLocationTargetControl(
+            page: CommandPageLike,
+            targetName: string,
+            timeoutMs: number
+          ): Promise<CommandLocatorLike | undefined> {
+            for (const role of ["menuitem", "option", "link", "button"] as const) {
+              const candidate = page.getByRole(role, { name: exactName(targetName) });
+              try {
+                await candidate.first().waitFor({ state: "visible", timeout: timeoutMs });
+              } catch {
+                continue;
+              }
+              if ((await candidate.count()) === 1) return candidate.first();
+            }
+            const exact = page.getByText(targetName, { exact: true });
+            try {
+              await exact.first().waitFor({ state: "visible", timeout: timeoutMs });
+            } catch {
+              return undefined;
+            }
+            return (await exact.count()) === 1 ? exact.first() : undefined;
+          }
+
+          '''
+          Path(command_path).write_text(command_text.replace(route_anchor, location_helpers + route_anchor, 1), encoding="utf-8")
+
+          bridge_client_path = "custom_components/smartthings_web/bridge_client.py"
+          replace_once(
+              bridge_client_path,
+              '''        self._base_url = str(url.with_path("").with_query(None).with_fragment(None)).rstrip("/")
+        self._token = token
+''',
+              '''        self._base_url = str(url.with_path("").with_query(None).with_fragment(None)).rstrip("/")
+        self._fallback_base_urls = tuple(
+            candidate
+            for candidate in (
+                "http://d55cafb9-smartthings-web-bridge:8100",
+                "http://local-smartthings-web-bridge:8100",
+            )
+            if candidate != self._base_url
+        )
+        self._token = token
+''',
+          )
+          new_request_json = '''    async def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        auth: bool = False,
+        json_body: dict[str, Any] | None = None,
+        timeout_seconds: int = 20,
+    ) -> dict[str, Any]:
+        headers: dict[str, str] = {}
+        if auth:
+            if self._token is None:
+                raise BridgeAuthError("missing_bridge_token")
+            headers["Authorization"] = f"Bearer {self._token}"
+        last_error: Exception | None = None
+        candidates = tuple(dict.fromkeys((self._base_url, *self._fallback_base_urls)))
+        for base_url in candidates:
+            try:
+                async with self._session.request(
+                    method,
+                    f"{base_url}{path}",
+                    headers=headers,
+                    json=json_body,
+                    timeout=ClientTimeout(total=timeout_seconds),
+                ) as response:
+                    if response.status in {401, 403}:
+                        raise BridgeAuthError("bridge_auth_failed")
+                    if response.status >= 400:
+                        raise BridgeClientError(await _safe_bridge_error_code(response))
+                    value = await response.json(content_type="application/json")
+                    if not isinstance(value, dict):
+                        raise BridgeClientError("bridge_response_invalid")
+                    self._base_url = base_url
+                    return value
+            except BridgeClientError:
+                raise
+            except (ClientError, TimeoutError, ValueError) as err:
+                last_error = err
+        raise BridgeClientError("bridge_request_failed") from last_error
+'''
+          replace_regex_once(
+              bridge_client_path,
+              r"    async def _request_json\(.*?\n\nasync def _safe_bridge_error_code",
+              new_request_json + "\n\nasync def _safe_bridge_error_code",
+          )
+
+          device_store_path = "bridge/src/state/device-store.ts"
+          device_text = Path(device_store_path).read_text(encoding="utf-8")
+          device_text = device_text.replace(
+              "firstRecord(card.basic, card.cloud, card.camera)",
+              "firstRecord(card.basic, card.cloud, card.camera, card.device, card.metadata, card.data, card)",
+          )
+          advanced_pattern = re.compile(
+              r"(?P<indent>      )const id = advancedDeviceId\(row, this\.#normalizeAdvancedAlias\);\n"
+              r"      const locationId = advancedLocationId\(\n"
+              r"        row,\n"
+              r"        this\.#normalizeAdvancedAlias\n"
+              r"      \);\n"
+              r"      if \(!id \|\| !locationId\) continue;"
+          )
+          advanced_replacement = '''      const id = advancedDeviceId(row, this.#normalizeAdvancedAlias);
+      if (!id) continue;
+      const locationId = advancedLocationId(
+        row,
+        this.#normalizeAdvancedAlias
+      ) ?? this.#devices.get(id)?.locationId;
+      if (!locationId) continue;'''
+          device_text, advanced_count = advanced_pattern.subn(advanced_replacement, device_text, count=1)
+          if advanced_count != 1:
+              raise SystemExit(f"device-store.ts: Advanced location fallback anchor changed ({advanced_count})")
+          Path(device_store_path).write_text(device_text, encoding="utf-8")
+
+          test_path = Path("tests/web-parity-0.1.168.test.ts")
+          test_path.write_text(r'''import { readFileSync } from "node:fs";
+
+import { describe, expect, test } from "vitest";
+
+import { normalizeSmartThingsWebPayload } from "../bridge/src/runtime.js";
+
+describe("SmartThings Web parity 0.1.168", () => {
+  test("normalizes Web number controls and flattens device presentation metadata", () => {
+    const normalized = normalizeSmartThingsWebPayload({
+      data: {
+        deviceId: "dev_counter",
+        locationId: "loc_spark",
+        roomId: "room_bathroom",
+        title: "카운터센서",
+        iconUrl: "https://client.smartthings.com/icons/counter.png",
+        controlType: "NUMBER",
+        controlId: "occupancy-count",
+        component: "main",
+        capability: "partyvoice23922.counting",
+        attribute: "count",
+        minimum: 0,
+        maximum: 65535,
+        increment: 1,
+        value: 0
+      }
+    }) as any;
+
+    expect(normalized.data).toMatchObject({
+      deviceName: "카운터센서",
+      label: "카운터센서",
+      type: "SLIDER",
+      iconUrl: "https://client.smartthings.com/icons/counter.png",
+      slider: {
+        controlId: "occupancy-count",
+        componentId: "main",
+        capabilityId: "partyvoice23922.counting",
+        attributeName: "count",
+        min: 0,
+        max: 65535,
+        step: 1,
+        value: 0
+      }
+    });
+    expect(normalized.data.basic).toMatchObject({
+      deviceId: "dev_counter",
+      locationId: "loc_spark",
+      roomId: "room_bathroom",
+      deviceName: "카운터센서"
+    });
+  });
+
+  test("normalizes SmartTag radio choices into one enumerated Web control", () => {
+    const normalized = normalizeSmartThingsWebPayload({
+      controlType: "RADIO",
+      controlId: "alarm-mode",
+      componentId: "main",
+      capabilityId: "alarm",
+      attributeName: "alarm",
+      possibleStates: [
+        { status: "both", title: "Both", action: "both" },
+        { status: "off", title: "Off", action: "off" },
+        { status: "siren", title: "Siren", action: "siren" },
+        { status: "strobe", title: "Strobe", action: "strobe" }
+      ]
+    }) as any;
+
+    expect(normalized.type).toBe("ENUMERATED");
+    expect(normalized.enumerated.possibleStates).toEqual([
+      expect.objectContaining({ value: "both", name: "Both", command: "both" }),
+      expect.objectContaining({ value: "off", name: "Off", command: "off" }),
+      expect.objectContaining({ value: "siren", name: "Siren", command: "siren" }),
+      expect.objectContaining({ value: "strobe", name: "Strobe", command: "strobe" })
+    ]);
+  });
+
+  test("keeps Advanced behind normal Web entities and includes Bridge hostname recovery", () => {
+    const runtime = readFileSync("bridge/src/runtime.ts", "utf8");
+    const commandPage = readFileSync("bridge/src/browser/command-page.ts", "utf8");
+    const bridgeClient = readFileSync("custom_components/smartthings_web/bridge_client.py", "utf8");
+    expect(runtime).toContain("canUseAdvanced: () => true");
+    expect(commandPage).toContain("findCurrentLocationPicker");
+    expect(commandPage).toContain("rawTargetLocationId");
+    expect(bridgeClient).toContain("d55cafb9-smartthings-web-bridge");
+    expect(bridgeClient).toContain("local-smartthings-web-bridge");
+  });
+});
+''', encoding="utf-8")
+
+          version_files = [
+              "bridge/src/runtime.ts",
+              "custom_components/smartthings_web/manifest.json",
+              "addon/smartthings_web_bridge/config.yaml",
+              "package.json",
+              "package-lock.json",
+              "protocol/version.json",
+              "tests/addon-config.test.ts",
+              "tests/protocol-version-contract.test.ts",
+          ]
+          for name in version_files:
+              path = Path(name)
+              text = path.read_text(encoding="utf-8")
+              count = text.count("0.1.167")
+              if count == 0:
+                  raise SystemExit(f"{name}: missing 0.1.167 release version")
+              path.write_text(text.replace("0.1.167", "0.1.168"), encoding="utf-8")
+
+          changelog_path = Path("addon/smartthings_web_bridge/CHANGELOG.md")
+          changelog = changelog_path.read_text(encoding="utf-8")
+          if not changelog.startswith("## 0.1.167\n"):
+              raise SystemExit("CHANGELOG.md: unexpected release head")
+          notes = (
+              "## 0.1.168\n\n"
+              "- 통합이 저장소 설치형 및 로컬 개발형 Bridge 호스트를 순차 탐색하여 기존 주소가 남아 있어도 `Bridge에 연결할 수 없습니다` 상태에서 자동 복구합니다.\n"
+              "- Home Monitor 명령은 raw Location ID가 확인되면 picker 대신 대상 URL로 직접 이동하고, raw ID가 없을 때도 실제 헤더 picker와 menuitem/option/link/button을 제한적으로 탐색합니다.\n"
+              "- my.smartthings.com Web 응답의 중첩 device/metadata/data 이름과 presentation/icon 메타데이터를 정규화하여 `SmartThings device dev_*` 임시 이름과 누락 아이콘을 실제 Web 정보로 보강합니다.\n"
+              "- Web의 NUMBER/RANGE/SLIDER, RADIO/OPTIONS/ENUM, ACTION/BUTTON, SWITCH/TOGGLE 표현을 Number, Select, Button, Switch용 기존 제어 모델로 통합합니다. 카운터센서 재실인원수와 SmartTag 알람 방식 같은 Web 컨트롤이 다시 엔티티로 생성될 수 있습니다.\n"
+              "- 일반 Web 엔티티에서 안전 카탈로그가 일치하는 경우 Advanced 명령을 우선 실행하고 기존 Location native 및 DOM 경로를 fallback으로 유지합니다.\n"
+              "- 0.1.167의 Location 단위 인벤토리 보존과 0.1.166의 Home Monitor 카드 직접 제어를 유지합니다.\n\n"
+          )
+          changelog_path.write_text(notes + changelog, encoding="utf-8")
+
+          manifest = json.loads(Path("custom_components/smartthings_web/manifest.json").read_text(encoding="utf-8"))
+          if manifest.get("version") != "0.1.168":
+              raise SystemExit("manifest version not updated")
+          PY
+
+          git diff --check
+          git status --short
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Install locked Node dependencies
+        run: npm ci
+
+      - name: Run full Node test suite
+        run: npm test
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Build Bridge
+        run: npm run build
+
+      - name: Package Bridge add-on
+        run: npm run package:addon
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+
+      - name: Install Python test dependencies
+        run: python -m pip install --disable-pip-version-check aiohttp yarl
+
+      - name: Compile integration
+        run: python -m compileall -q custom_components/smartthings_web
+
+      - name: Run full integration test suite
+        run: python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+
+      - name: Commit verified 0.1.168 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -f \
+            .github/workflows/apply-web-parity-0.1.168.yml \
+            .github/workflows/export-source-0.1.168.yml \
+            .github/workflows/export-regression-baselines-0.1.168.yml
+          git add \
+            addon/smartthings_web_bridge/CHANGELOG.md \
+            addon/smartthings_web_bridge/config.yaml \
+            bridge/src/browser/command-page.ts \
+            bridge/src/runtime.ts \
+            bridge/src/state/device-store.ts \
+            custom_components/smartthings_web/bridge_client.py \
+            custom_components/smartthings_web/manifest.json \
+            package.json \
+            package-lock.json \
+            protocol/version.json \
+            tests/addon-config.test.ts \
+            tests/protocol-version-contract.test.ts \
+            tests/web-parity-0.1.168.test.ts
+          git commit -m "fix: restore SmartThings Web parity and Bridge recovery 0.1.168"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
