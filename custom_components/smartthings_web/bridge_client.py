@@ -14,6 +14,7 @@ from uuid import uuid4
 from aiohttp import ClientError, ClientSession, ClientTimeout
 from yarl import URL
 
+from .const import normalize_bridge_url
 from .device_identity import canonicalize_duplicate_devices
 from .models import (
     BridgeAdvancedDeviceMetadata,
@@ -163,7 +164,7 @@ class SmartThingsWebBridgeClient:
 
     def __init__(self, session: ClientSession, base_url: str, token: str | None = None) -> None:
         try:
-            url = URL(base_url)
+            url = URL(normalize_bridge_url(base_url))
         except (TypeError, ValueError) as err:
             raise BridgeClientError("invalid_bridge_url") from err
         if (
@@ -180,6 +181,11 @@ class SmartThingsWebBridgeClient:
         self._session = session
         self._base_url = str(url.with_path("").with_query(None).with_fragment(None)).rstrip("/")
         self._token = token
+
+    @property
+    def base_url(self) -> str:
+        """Return the validated canonical Bridge base URL."""
+        return self._base_url
 
     async def async_pair(self, code: str) -> str:
         """Exchange an Ingress pairing code for the local Bridge token."""

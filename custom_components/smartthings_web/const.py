@@ -13,6 +13,23 @@ CONF_LOCATION_ID = "location_id"
 CONTROL_MODE_READ_ONLY = "read_only"
 CONTROL_MODE_SAFE_CONTROL = "safe_control"
 DEFAULT_BRIDGE_URL = "http://local-smartthings-web-bridge:8100"
+LEGACY_BRIDGE_URLS = frozenset(
+    {
+        "http://d55cafb9-smartthings-web-bridge:8100",
+    }
+)
+
+
+def normalize_bridge_url(value: str) -> str:
+    """Return the canonical local Bridge URL for known legacy add-on hosts."""
+    if not isinstance(value, str):
+        raise ValueError("invalid_bridge_url")
+    normalized = value.strip()
+    if normalized.rstrip("/").lower() in LEGACY_BRIDGE_URLS:
+        return DEFAULT_BRIDGE_URL
+    return normalized
+
+
 DEFAULT_COMMAND_CONFIRMATION_TIMEOUT = 30
 DEFAULT_INVENTORY_RECONCILIATION_INTERVAL = 21600
 REPAIR_SAMSUNG_LOGIN_REQUIRED = "samsung_login_required"

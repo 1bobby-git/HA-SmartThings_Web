@@ -132,11 +132,14 @@ from smartthings_web.__init__ import (  # noqa: E402
     _control_mode,
     _event_loop,
     _migrate_entity_registry,
+    _persist_canonical_bridge_url,
     _repair_loop,
     _subscribe_entity_registry_migration,
 )
 from smartthings_web.bridge_client import BridgeAuthError, BridgeClientError  # noqa: E402
 from smartthings_web.const import (  # noqa: E402
+    CONF_BRIDGE_TOKEN,
+    CONF_BRIDGE_URL,
     CONF_CONTROL_MODE,
     CONF_LOCATION_ID,
     CONTROL_MODE_READ_ONLY,
@@ -211,6 +214,63 @@ class FakeRegistry:
             self.renamed.append((entity_id, new_entity_id))
         if original_name is not None:
             entry.original_name = original_name
+
+
+class BridgeUrlMigrationTests(unittest.TestCase):
+    """Persist the local Bridge hostname for legacy config entries."""
+
+    def test_persists_legacy_repository_hostname_as_local(self) -> None:
+        updates: list[dict[str, object]] = []
+        hass = SimpleNamespace(
+            config_entries=SimpleNamespace(
+                async_update_entry=lambda _entry, **kwargs: updates.append(kwargs)
+            )
+        )
+        entry = SimpleNamespace(
+            data={
+                CONF_BRIDGE_URL: "http://d55cafb9-smartthings-web-bridge:8100",
+                CONF_BRIDGE_TOKEN: "x" * 32,
+                CONF_LOCATION_ID: "loc_001",
+            }
+        )
+
+        integration._persist_canonical_bridge_url(
+            hass,
+            entry,
+            "http://local-smartthings-web-bridge:8100",
+        )
+
+        self.assertEqual(
+            updates,
+            [
+                {
+                    "data": {
+                        CONF_BRIDGE_URL: "http://local-smartthings-web-bridge:8100",
+                        CONF_BRIDGE_TOKEN: "x" * 32,
+                        CONF_LOCATION_ID: "loc_001",
+                    }
+                }
+            ],
+        )
+
+    def test_keeps_already_canonical_local_hostname(self) -> None:
+        updates: list[dict[str, object]] = []
+        hass = SimpleNamespace(
+            config_entries=SimpleNamespace(
+                async_update_entry=lambda _entry, **kwargs: updates.append(kwargs)
+            )
+        )
+        entry = SimpleNamespace(
+            data={CONF_BRIDGE_URL: "http://local-smartthings-web-bridge:8100/"}
+        )
+
+        integration._persist_canonical_bridge_url(
+            hass,
+            entry,
+            "http://local-smartthings-web-bridge:8100",
+        )
+
+        self.assertEqual(updates, [])
 
 
 class EmptyLocationInventoryRecoveryTests(unittest.TestCase):

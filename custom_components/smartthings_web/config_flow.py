@@ -71,7 +71,7 @@ class SmartThingsWebConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     errors["base"] = "no_devices"
                 else:
                     self._pending_pairing = (
-                        user_input[CONF_BRIDGE_URL].rstrip("/"),
+                        client.base_url,
                         token,
                         inventory,
                     )
@@ -161,7 +161,10 @@ class SmartThingsWebConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 return self.async_update_reload_and_abort(
                     self._get_reauth_entry(),
-                    data_updates={CONF_BRIDGE_TOKEN: token},
+                    data_updates={
+                        CONF_BRIDGE_TOKEN: token,
+                        CONF_BRIDGE_URL: client.base_url,
+                    },
                 )
 
         return self.async_show_form(

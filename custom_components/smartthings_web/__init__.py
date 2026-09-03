@@ -114,6 +114,21 @@ async def _async_recover_empty_location_inventory(
     return inventory
 
 
+def _persist_canonical_bridge_url(
+    hass: HomeAssistant,
+    entry: SmartThingsWebConfigEntry,
+    canonical_url: str,
+) -> None:
+    """Persist a validated canonical Bridge URL without touching other entry data."""
+    configured_url = entry.data.get(CONF_BRIDGE_URL)
+    if not isinstance(configured_url, str) or configured_url.rstrip("/") == canonical_url:
+        return
+    hass.config_entries.async_update_entry(
+        entry,
+        data={**entry.data, CONF_BRIDGE_URL: canonical_url},
+    )
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntry) -> bool:
     """Set up one SmartThings Web location."""
     client = SmartThingsWebBridgeClient(
@@ -121,6 +136,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
         entry.data[CONF_BRIDGE_URL],
         entry.data[CONF_BRIDGE_TOKEN],
     )
+    _persist_canonical_bridge_url(hass, entry, client.base_url)
     try:
         inventory = await client.async_get_inventory()
     except BridgeAuthError as err:
