@@ -21,7 +21,9 @@ jobs:
           fetch-depth: 0
 
       - name: Apply storage and write-amplification fixes
-        run: python tools/apply-storage-write-optimization-0.1.173.py
+        run: |
+          python tools/apply-storage-write-optimization-0.1.173.py
+          python tools/finalize-storage-write-optimization-0.1.173.py
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
@@ -39,6 +41,7 @@ jobs:
           npm run build
           npm run package:addon
           python -m compileall -q custom_components/smartthings_web
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
 
       - name: Commit verified changes
         shell: bash
