@@ -98,8 +98,9 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.169";
+const bridgeVersion = "0.1.170";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
+const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -485,7 +486,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           : "detail_discovery_failed"
       );
     });
-  }, 1_000);
+  }, DETAIL_DISCOVERY_INTERVAL_MS);
+  detailDiscoveryInterval.unref();
   const reconciliationInterval = setInterval(() => {
     if (stopped || !createHealthReport(status.getSnapshot()).ready) return;
     void reconciliation.request("interval").catch(() => {
@@ -881,8 +883,10 @@ async function attachContext(
     onRawWebSocketBinaryFrame: (direction, payload, connectionId) => {
       cameraImages.observeRawWebSocketBinaryFrame(direction, payload, connectionId);
     },
-    onSmartThingsWebSocketFrame: observeSmartThingsWebSocketFrame,
-    onSmartThingsWebSocketClose: recoverSmartThingsWebSocket
+    // Context-level Playwright websocket events do not identify their page.
+    // Keep received-frame freshness, but handle close recovery only through
+    // page-scoped CDP where the persistent keeper can be distinguished.
+    onSmartThingsWebSocketFrame: observeSmartThingsWebSocketFrame
   });
   context.on?.("page", (page) => {
     void installCdpForPage(
@@ -896,7 +900,8 @@ async function attachContext(
       volatileIdentifiers,
       observeSmartThingsWebSocketFrame,
       recoverSmartThingsWebSocket,
-      onAdvancedDeviceSnapshot
+      onAdvancedDeviceSnapshot,
+      () => keeperManager.currentKeeper() === page
     );
     onNewPage();
   });
@@ -910,7 +915,8 @@ async function attachContext(
     volatileIdentifiers,
     observeSmartThingsWebSocketFrame,
     recoverSmartThingsWebSocket,
-    onAdvancedDeviceSnapshot
+    onAdvancedDeviceSnapshot,
+    (page) => keeperManager.currentKeeper() === page
   );
 
   let keeper = await keeperManager.ensureKeeper();
@@ -978,7 +984,8 @@ async function installCdpForPages(
   volatileIdentifiers: VolatileIdentifierMap,
   onSmartThingsWebSocketFrame: (direction: "sent" | "received") => void,
   onSmartThingsWebSocketClose: () => void,
-  onAdvancedDeviceSnapshot: (snapshot: unknown, url: string) => void
+  onAdvancedDeviceSnapshot: (snapshot: unknown, url: string) => void,
+  isRealtimeKeeper: (page: BrowserPageLike) => boolean
 ): Promise<void> {
   await Promise.all(
     context.pages().map((page) =>
@@ -993,7 +1000,8 @@ async function installCdpForPages(
         volatileIdentifiers,
         onSmartThingsWebSocketFrame,
         onSmartThingsWebSocketClose,
-        onAdvancedDeviceSnapshot
+        onAdvancedDeviceSnapshot,
+        () => isRealtimeKeeper(page)
       )
     )
   );
@@ -1010,7 +1018,8 @@ async function installCdpForPage(
   volatileIdentifiers: VolatileIdentifierMap,
   onSmartThingsWebSocketFrame: (direction: "sent" | "received") => void,
   onSmartThingsWebSocketClose: () => void,
-  onAdvancedDeviceSnapshot: (snapshot: unknown, url: string) => void
+  onAdvancedDeviceSnapshot: (snapshot: unknown, url: string) => void,
+  isRealtimeKeeper: () => boolean
 ): Promise<void> {
   if (observedCdpPages.has(page) || !context.newCDPSession) {
     return;
@@ -1030,7 +1039,9 @@ async function installCdpForPage(
         cameraImages.observeRawWebSocketBinaryFrame(direction, payload, connectionId);
       },
       onSmartThingsWebSocketFrame,
-      onSmartThingsWebSocketClose,
+      onSmartThingsWebSocketClose: () => {
+        if (isRealtimeKeeper()) onSmartThingsWebSocketClose();
+      },
       onSmartThingsAdvancedDeviceSnapshot: (snapshot, url) => {
         onAdvancedDeviceSnapshot(snapshot, url);
       }
@@ -1079,7 +1090,8 @@ async function observeAdvancedSnapshotPage(
             wholeSnapshotSeen = true;
             resolveWholeSnapshot?.();
           }
-        }
+        },
+        () => false
       )
     );
     await Promise.race([
