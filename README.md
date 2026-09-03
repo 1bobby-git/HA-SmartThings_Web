@@ -43,24 +43,34 @@
 
 ### 1. SmartThings Web Bridge 앱 설치
 
-Home Assistant OS 또는 Supervised 환경에서 저장소를 내려받은 뒤 자체 포함형 앱 패키지를 생성합니다.
+Home Assistant OS 또는 Supervised 환경에서 아래 버튼을 누르면 이 저장소가 앱 저장소에 추가되고 **SmartThings Web Bridge** 앱 화면이 열립니다.
+
+[![Home Assistant에서 SmartThings Web Bridge 앱 열기](https://my.home-assistant.io/badges/supervisor_addon.svg)](https://my.home-assistant.io/redirect/supervisor_addon/?addon=d55cafb9_smartthings_web_bridge&repository_url=https%3A%2F%2Fgithub.com%2F1bobby-git%2FHA-SmartThings_Web)
+
+1. 열린 앱 화면에서 **설치**를 누릅니다.
+2. 설치가 끝나면 앱을 시작합니다.
+3. **웹 UI 열기**를 눌러 noVNC Chromium 화면에서 Samsung 계정에 로그인합니다.
+4. 브리지 상태가 `CONNECTED`이고 `ready=true`인지 확인합니다.
+
+버튼이 앱 화면까지 열지 못하면 아래 버튼으로 저장소만 먼저 추가한 뒤 **설정 → 앱 → 앱 스토어 → SmartThings Web Bridge**에서 설치합니다.
+
+[![Home Assistant에 SmartThings Web 앱 저장소 추가](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2F1bobby-git%2FHA-SmartThings_Web)
+
+<details>
+<summary>수동 로컬 설치</summary>
+
+저장소 루트에서 자체 포함형 앱 패키지를 생성합니다.
 
 ```bash
 npm ci
 npm run package:addon
 ```
 
-생성된 `dist-addon/smartthings_web_bridge` 폴더의 **내용 전체**를 Home Assistant 호스트의 `/addons/smartthings_web_bridge`에 복사합니다.
+생성된 `dist-addon/smartthings_web_bridge` 폴더의 **내용 전체**를 Home Assistant 호스트의 `/addons/smartthings_web_bridge`에 복사하고, 앱 스토어 우측 상단 메뉴에서 **업데이트 확인**을 실행합니다.
 
-Home Assistant에서 다음 순서로 설치합니다.
+> 원본 `addon/smartthings_web_bridge` 폴더만 `/addons`에 복사하면 안 됩니다. 모노레포 빌드 입력물이 빠져 있으므로 수동 로컬 설치에서는 반드시 `npm run package:addon`으로 생성한 패키지를 사용해야 합니다.
 
-1. **설정 → 앱 → 앱 설치**로 이동합니다.
-2. 우측 상단 메뉴에서 **업데이트 확인**을 실행합니다.
-3. **로컬 앱**의 **SmartThings Web Bridge**를 설치하고 시작합니다.
-4. 앱의 **웹 UI 열기**를 눌러 noVNC Chromium 화면에서 Samsung 계정에 로그인합니다.
-5. 브리지 상태가 `CONNECTED`이고 `ready=true`인지 확인합니다.
-
-> 원본 `addon/smartthings_web_bridge` 폴더를 그대로 복사하면 안 됩니다. 이 폴더에는 모노레포 루트의 빌드 입력물이 포함되지 않으므로 반드시 `npm run package:addon`으로 생성한 패키지를 사용해야 합니다.
+</details>
 
 ### 2. HACS에서 `smartthings_web` 통합 설치
 
@@ -79,7 +89,9 @@ Home Assistant에서 다음 순서로 설치합니다.
 
 1. SmartThings Web Bridge 웹 UI에서 **페어링 코드 생성**을 누릅니다.
 2. 아래 버튼을 눌러 `smartthings_web` 설정을 시작합니다.
-3. 기본 브리지 주소 `http://local-smartthings-web-bridge:8100`과 8자리 페어링 코드를 입력합니다.
+3. 설치 방식에 맞는 브리지 주소와 8자리 페어링 코드를 입력합니다.
+   - 위 저장소 버튼으로 설치: `http://d55cafb9-smartthings-web-bridge:8100`
+   - `/addons`에 수동 로컬 설치: `http://local-smartthings-web-bridge:8100`
 4. 연결할 SmartThings 위치를 선택합니다.
 
 [![SmartThings Web 통합 설정 시작](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=smartthings_web)
@@ -152,9 +164,11 @@ SmartThings Web이 호환되지 않는 ACK 또는 이벤트 구조를 반환하�
 
 ## 설치 경로 주의사항
 
-- 소스 폴더: `/addons/smartthings_web_bridge`
 - 앱 구성 slug: `smartthings_web_bridge`
-- Supervisor 설치 후 실제 런타임 slug: `local_smartthings_web_bridge`
+- 저장소 설치 앱 ID: `d55cafb9_smartthings_web_bridge`
+- 저장소 설치 내부 DNS: `d55cafb9-smartthings-web-bridge`
+- 수동 로컬 설치 소스 폴더: `/addons/smartthings_web_bridge`
+- 수동 로컬 설치 런타임 slug: `local_smartthings_web_bridge`
 
 `/addons` 아래에 동일한 `config.yaml`과 slug를 가진 백업 폴더를 두면 Supervisor가 최신 패키지를 잘못 인식할 수 있습니다. 백업은 `/addons` 외부에 보관합니다.
 

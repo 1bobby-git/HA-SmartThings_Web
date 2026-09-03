@@ -9,7 +9,14 @@ FROM ${PLAYWRIGHT_BASE_AMD64} AS amd64
 FROM ${PLAYWRIGHT_BASE_AARCH64} AS aarch64
 FROM ${BUILD_ARCH}
 
+ARG BUILD_ARCH
+ARG BUILD_VERSION
 ARG PLAYWRIGHT_VERSION
+LABEL \
+  io.hass.version="${BUILD_VERSION}" \
+  io.hass.type="app" \
+  io.hass.arch="${BUILD_ARCH}"
+
 ENV PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION}
 ENV DISPLAY=:99
 ENV STW_DATA_DIR=/data
@@ -64,17 +71,60 @@ RUN set -eux; \
   tar -C / -Jxpf /tmp/s6-overlay-arch.tar.xz; \
   rm -f /tmp/s6-overlay-noarch.tar.xz /tmp/s6-overlay-arch.tar.xz
 
+COPY . /tmp/smartthings-web-addon
+
 WORKDIR /app
-COPY package.json package-lock.json tsconfig.json ./
-COPY tsconfig.build.json ./
-COPY addon-package-manifest.json ./
+RUN set -eux; \
+  source_dir="/tmp/smartthings-web-addon"; \
+  addon_dir="${source_dir}"; \
+  if [ ! -f "${source_dir}/package.json" ] || [ ! -d "${source_dir}/bridge" ] || [ ! -d "${source_dir}/tools" ]; then \
+    test -n "${BUILD_VERSION}"; \
+    archive="/tmp/smartthings-web-bridge-${BUILD_VERSION}.tgz"; \
+    release_root="/tmp/smartthings-web-bridge-release"; \
+    curl -fsSL \
+      --retry 5 \
+      --retry-all-errors \
+      --connect-timeout 20 \
+      "https://github.com/1bobby-git/HA-SmartThings_Web/releases/download/v${BUILD_VERSION}/smartthings-web-bridge-${BUILD_VERSION}.tgz" \
+      -o "${archive}"; \
+    mkdir -p "${release_root}"; \
+    tar -xzf "${archive}" -C "${release_root}"; \
+    source_dir="${release_root}/smartthings_web_bridge"; \
+    addon_dir="${source_dir}"; \
+  elif [ -d "${source_dir}/addon/smartthings_web_bridge/rootfs" ]; then \
+    addon_dir="${source_dir}/addon/smartthings_web_bridge"; \
+  fi; \
+  test -f "${source_dir}/package.json"; \
+  test -f "${source_dir}/package-lock.json"; \
+  test -f "${source_dir}/tsconfig.json"; \
+  test -f "${source_dir}/tsconfig.build.json"; \
+  test -f "${source_dir}/addon-package-manifest.json"; \
+  test -d "${source_dir}/bridge"; \
+  test -d "${source_dir}/tools"; \
+  test -f "${addon_dir}/config.yaml"; \
+  test -d "${addon_dir}/rootfs"; \
+  if [ -n "${BUILD_VERSION}" ]; then \
+    grep -Fx "version: ${BUILD_VERSION}" "${addon_dir}/config.yaml"; \
+  fi; \
+  cp \
+    "${source_dir}/package.json" \
+    "${source_dir}/package-lock.json" \
+    "${source_dir}/tsconfig.json" \
+    "${source_dir}/tsconfig.build.json" \
+    "${source_dir}/addon-package-manifest.json" \
+    /app/; \
+  cp -a "${source_dir}/bridge" /app/bridge; \
+  cp -a "${source_dir}/tools" /app/tools; \
+  cp -a "${addon_dir}/rootfs/." /; \
+  rm -rf \
+    /tmp/smartthings-web-addon \
+    /tmp/smartthings-web-bridge-release \
+    /tmp/smartthings-web-bridge-*.tgz
+
 RUN npm ci
-COPY bridge ./bridge
-COPY tools ./tools
 RUN npm run build
 RUN npm prune --omit=dev
 
-COPY rootfs /
 RUN find /etc/s6-overlay/s6-rc.d -type f \( -name run -o -name up \) -exec chmod +x {} +
 RUN chmod +x /etc/s6-overlay/scripts/*
 
