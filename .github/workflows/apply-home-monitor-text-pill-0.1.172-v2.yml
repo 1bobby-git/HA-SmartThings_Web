@@ -32,80 +32,72 @@ jobs:
           old_version = "0.1.171"
           new_version = "0.1.172"
 
-          def replace_once(path: str, old: str, new: str) -> None:
-              target = Path(path)
-              text = target.read_text(encoding="utf-8")
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{path}: expected one match, found {count}")
-              target.write_text(text.replace(old, new, 1), encoding="utf-8")
-
           runtime_path = Path("bridge/src/runtime.ts")
           runtime = runtime_path.read_text(encoding="utf-8")
           if f'const bridgeVersion = "{new_version}";' in runtime:
               print(f"{new_version} source patch already applied")
               raise SystemExit(0)
 
-          command_path = "bridge/src/browser/command-page.ts"
-          replace_once(
-              command_path,
-              'import type { BrowserPageLike, KeeperPageManager } from "./keeper-page.js";\n',
-              'import type { BrowserPageLike, KeeperPageManager } from "./keeper-page.js";\n'
-              'import { clickTextOnlyHomeMonitorAction } from "./home-monitor-dom.js";\n',
+          command_path = Path("bridge/src/browser/command-page.ts")
+          command = command_path.read_text(encoding="utf-8")
+          import_marker = (
+              'import type { BrowserPageLike, KeeperPageManager } '
+              'from "./keeper-page.js";\n'
           )
-          replace_once(
-              command_path,
-              '''      let action = await findHomeMonitorCardAction(
-                page,
-                monitorName,
-                monitorLabels,
-                actionName,
-                15_000
-              );
-              if (
-                !action &&
-                await clickHomeMonitorCardActionByText(
-                  page,
-                  monitorLabels,
-                  locationActionLabels(input.action)
-                )
-              ) {
-                return;
-              }''',
-              '''      let action = await findHomeMonitorCardAction(
-                page,
-                monitorName,
-                monitorLabels,
-                actionName,
-                3_000
-              );
-              if (!action) {
-                const textResult = await clickTextOnlyHomeMonitorAction(
-                  page,
-                  monitorLabels,
-                  locationActionLabels(input.action),
-                  [
-                    locationActionLabels("armAway"),
-                    locationActionLabels("armStay"),
-                    locationActionLabels("disarm")
-                  ]
-                );
-                if (textResult === "clicked") return;
-                if (textResult === "ambiguous") {
-                  throw new Error("command_control_ambiguous");
-                }
-              }
-              if (
-                !action &&
-                await clickHomeMonitorCardActionByText(
-                  page,
-                  monitorLabels,
-                  locationActionLabels(input.action)
-                )
-              ) {
-                return;
-              }''',
+          if command.count(import_marker) != 1:
+              raise SystemExit("command-page.ts: keeper import anchor changed")
+          command = command.replace(
+              import_marker,
+              import_marker
+              + 'import { clickTextOnlyHomeMonitorAction } '
+              + 'from "./home-monitor-dom.js";\n',
+              1,
           )
+
+          start_marker = "      let action = await findHomeMonitorCardAction("
+          end_marker = (
+              "      if (!action) {\n"
+              "        action = await findLocationActionControl"
+          )
+          start = command.index(start_marker)
+          end = command.index(end_marker, start)
+          replacement = (
+              "      let action = await findHomeMonitorCardAction(\n"
+              "        page,\n"
+              "        monitorName,\n"
+              "        monitorLabels,\n"
+              "        actionName,\n"
+              "        3_000\n"
+              "      );\n"
+              "      if (!action) {\n"
+              "        const textResult = await clickTextOnlyHomeMonitorAction(\n"
+              "          page,\n"
+              "          monitorLabels,\n"
+              "          locationActionLabels(input.action),\n"
+              "          [\n"
+              "            locationActionLabels(\"armAway\"),\n"
+              "            locationActionLabels(\"armStay\"),\n"
+              "            locationActionLabels(\"disarm\")\n"
+              "          ]\n"
+              "        );\n"
+              "        if (textResult === \"clicked\") return;\n"
+              "        if (textResult === \"ambiguous\") {\n"
+              "          throw new Error(\"command_control_ambiguous\");\n"
+              "        }\n"
+              "      }\n"
+              "      if (\n"
+              "        !action &&\n"
+              "        await clickHomeMonitorCardActionByText(\n"
+              "          page,\n"
+              "          monitorLabels,\n"
+              "          locationActionLabels(input.action)\n"
+              "        )\n"
+              "      ) {\n"
+              "        return;\n"
+              "      }\n"
+          )
+          command = command[:start] + replacement + command[end:]
+          command_path.write_text(command, encoding="utf-8")
 
           version_files = (
               "bridge/src/runtime.ts",
