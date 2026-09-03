@@ -1,0 +1,660 @@
+name: Apply Sparkplus inventory preservation 0.1.167
+
+on:
+  push:
+    branches:
+      - fix/sparkplus-inventory-preservation-0.1.167
+    paths:
+      - .github/workflows/apply-sparkplus-inventory-0.1.167.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    name: Apply, test, and package fix
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out fix branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/sparkplus-inventory-preservation-0.1.167
+          fetch-depth: 0
+
+      - name: Apply source and regression-test changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          def block(value: str) -> str:
+              return dedent(value).strip("\n")
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          device_store = "bridge/src/state/device-store.ts"
+          replace_once(
+              device_store,
+              block('''
+              #sessionPendingDeviceIds: Set<string> | undefined;
+              #sessionConsumerDeviceSnapshotSeen = false;
+              #sessionWholeAdvancedDeviceSnapshotSeen = false;
+              '''),
+              block('''
+              #sessionPendingDeviceIds: Set<string> | undefined;
+              readonly #sessionConfirmedLocationIds = new Set<string>();
+              #sessionConsumerDeviceSnapshotSeen = false;
+              #sessionWholeAdvancedDeviceSnapshotSeen = false;
+              '''),
+          )
+          replace_once(
+              device_store,
+              block('''
+              resetSnapshotSession(): void {
+                this.#sessionConsumerDeviceSnapshotSeen = false;
+                this.#sessionWholeAdvancedDeviceSnapshotSeen = false;
+              }
+              '''),
+              block('''
+              resetSnapshotSession(): void {
+                this.#sessionConfirmedLocationIds.clear();
+                this.#sessionConsumerDeviceSnapshotSeen = false;
+                this.#sessionWholeAdvancedDeviceSnapshotSeen = false;
+              }
+              '''),
+          )
+          replace_once(
+              device_store,
+              "      if (observeRestoredPresence) this.#confirmRestoredDevice(id);",
+              "      if (observeRestoredPresence) this.#confirmRestoredDevice(id, locationId);",
+          )
+          replace_once(
+              device_store,
+              block('''
+                #pruneUnrefreshedDevicesIfReady(): boolean {
+                  const pending = this.#sessionPendingDeviceIds;
+                  if (pending === undefined) {
+                    return false;
+                  }
+                  if (!this.#sessionConsumerDeviceSnapshotSeen || !this.#sessionWholeAdvancedDeviceSnapshotSeen) {
+                    return false;
+                  }
+                  this.#sessionPendingDeviceIds = undefined;
+                  if (pending.size === 0) {
+                    return false;
+                  }
+                  for (const id of pending) {
+                    this.#devices.delete(id);
+                  }
+                  return true;
+                }
+
+                #observeConsumerDeviceSnapshotPresence(body: unknown): void {
+                  const rows = snapshotRows(body);
+                  if (!rows) return;
+                  for (const card of rows) {
+                    const source = firstRecord(card.basic, card.cloud, card.camera);
+                    const id = safeId(source?.deviceId, "dev");
+                    if (id) {
+                      this.#confirmRestoredDevice(id);
+                    }
+                  }
+                }
+
+                #confirmRestoredDevice(id: string): void {
+                  this.#sessionPendingDeviceIds?.delete(id);
+                }
+              '''),
+              block('''
+                #pruneUnrefreshedDevicesIfReady(): boolean {
+                  const pending = this.#sessionPendingDeviceIds;
+                  if (pending === undefined) {
+                    return false;
+                  }
+                  if (!this.#sessionConsumerDeviceSnapshotSeen || !this.#sessionWholeAdvancedDeviceSnapshotSeen) {
+                    return false;
+                  }
+                  if (pending.size === 0) {
+                    this.#sessionPendingDeviceIds = undefined;
+                    this.#sessionConfirmedLocationIds.clear();
+                    return false;
+                  }
+                  const preserved = new Set<string>();
+                  let changed = false;
+                  for (const id of pending) {
+                    const device = this.#devices.get(id);
+                    if (
+                      device &&
+                      !this.#sessionConfirmedLocationIds.has(device.locationId)
+                    ) {
+                      preserved.add(id);
+                      continue;
+                    }
+                    changed = this.#devices.delete(id) || changed;
+                  }
+                  this.#sessionPendingDeviceIds = preserved.size > 0 ? preserved : undefined;
+                  if (this.#sessionPendingDeviceIds === undefined) {
+                    this.#sessionConfirmedLocationIds.clear();
+                  }
+                  return changed;
+                }
+
+                #observeConsumerDeviceSnapshotPresence(body: unknown): void {
+                  const rows = snapshotRows(body);
+                  if (!rows) return;
+                  for (const card of rows) {
+                    const source = firstRecord(card.basic, card.cloud, card.camera);
+                    const id = safeId(source?.deviceId, "dev");
+                    const locationId = safeId(source?.locationId, "loc");
+                    if (id && locationId) {
+                      this.#confirmRestoredDevice(id, locationId);
+                    }
+                  }
+                }
+
+                #confirmRestoredDevice(id: string, locationId?: string): void {
+                  const pending = this.#sessionPendingDeviceIds;
+                  if (!pending) return;
+                  if (locationId) this.#sessionConfirmedLocationIds.add(locationId);
+                  pending.delete(id);
+                }
+              '''),
+          )
+
+          device_store_test = "bridge/tests/state/device-store.test.ts"
+          device_test_anchor = '  test("prunes restored devices the new browser session never refreshes", () => {'
+          device_test = block('''
+            test("preserves an entirely omitted location until that location is observed", () => {
+              const root = mkdtempSync(join(tmpdir(), "stw-device-store-location-preserve-"));
+              try {
+                const sqlitePath = join(root, "bridge.sqlite");
+                const first = new DeviceStore({ sqlitePath });
+                observeDeviceSnapshot(first, {
+                  deviceId: "dev_home",
+                  locationId: "loc_home",
+                  deviceName: "Home switch",
+                  deviceTypeData: { type: "switch" }
+                });
+                observeDeviceSnapshot(first, {
+                  deviceId: "dev_sparka",
+                  locationId: "loc_spark",
+                  deviceName: "Sparkplus switch",
+                  deviceTypeData: { type: "switch" }
+                });
+                observeDeviceSnapshot(first, {
+                  deviceId: "dev_sparkb",
+                  locationId: "loc_spark",
+                  deviceName: "Sparkplus sensor",
+                  deviceTypeData: { type: "contact_sensor" }
+                });
+                first.close();
+
+                const second = new DeviceStore({ sqlitePath });
+                observeDeviceSnapshot(second, {
+                  deviceId: "dev_home",
+                  locationId: "loc_home",
+                  deviceName: "Home switch",
+                  deviceTypeData: { type: "switch" }
+                });
+                second.observeAdvancedDeviceSnapshot(
+                  {
+                    items: [
+                      {
+                        deviceId: "dev_home",
+                        locationId: "loc_home",
+                        label: "Home switch",
+                        deviceTypeName: "switch"
+                      }
+                    ]
+                  },
+                  { authoritativeWholeSnapshot: true }
+                );
+
+                expect(second.snapshot().devices.map((device) => device.id)).toEqual([
+                  "dev_home",
+                  "dev_sparka",
+                  "dev_sparkb"
+                ]);
+
+                observeDeviceSnapshot(second, {
+                  deviceId: "dev_sparka",
+                  locationId: "loc_spark",
+                  deviceName: "Sparkplus switch",
+                  deviceTypeData: { type: "switch" }
+                });
+
+                expect(second.snapshot().devices.map((device) => device.id)).toEqual([
+                  "dev_home",
+                  "dev_sparka"
+                ]);
+                second.close();
+              } finally {
+                try {
+                  rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+                } catch {
+                  // Windows may release node:sqlite file handles after the assertion completes.
+                }
+              }
+            });
+
+          ''')
+          replace_once(device_store_test, device_test_anchor, device_test + device_test_anchor)
+
+          models = "custom_components/smartthings_web/models.py"
+          replace_once(
+              models,
+              "        devices = {} if authoritative else deepcopy(current.devices)",
+              block('''
+                      preserve_selected_location = (
+                          authoritative
+                          and self.location_id in latest.locations
+                          and any(
+                              device.location_id == self.location_id
+                              for device in current.devices.values()
+                          )
+                          and not any(
+                              device.location_id == self.location_id
+                              for device in latest.devices.values()
+                          )
+                      )
+                      if authoritative:
+                          devices = (
+                              {
+                                  device_id: deepcopy(device)
+                                  for device_id, device in current.devices.items()
+                                  if device.location_id == self.location_id
+                              }
+                              if preserve_selected_location
+                              else {}
+                          )
+                      else:
+                          devices = deepcopy(current.devices)
+              '''),
+          )
+          replace_once(
+              models,
+              block('''
+                          rooms=(
+                              deepcopy(latest.rooms)
+                              if authoritative
+                              else {**current.rooms, **latest.rooms}
+                          ),
+              '''),
+              block('''
+                          rooms=(
+                              {
+                                  **{
+                                      room_id: deepcopy(room)
+                                      for room_id, room in current.rooms.items()
+                                      if preserve_selected_location
+                                      and room[0] == self.location_id
+                                  },
+                                  **deepcopy(latest.rooms),
+                              }
+                              if authoritative
+                              else {**current.rooms, **latest.rooms}
+                          ),
+              '''),
+          )
+          replace_once(
+              models,
+              block('''
+                                  if scene_id in latest.scenes
+              '''),
+              block('''
+                                  if scene_id in latest.scenes
+                                  or (
+                                      preserve_selected_location
+                                      and scene.location_id == self.location_id
+                                  )
+              '''),
+          )
+
+          models_test = "custom_components/smartthings_web/tests/test_models.py"
+          models_anchor = "    def test_reconnect_inventory_snapshot_starts_new_epoch_with_lower_sequence(self) -> None:\n"
+          models_regression = block('''
+              def test_ready_reconnect_preserves_selected_location_when_snapshot_omits_every_device(self) -> None:
+                  spark_state = BridgeState(
+                      "main",
+                      "switch",
+                      "switch",
+                      "on",
+                      None,
+                      "2026-09-03T00:00:00Z",
+                  )
+                  current = BridgeInventory(
+                      sequence=50,
+                      ready=True,
+                      bridge_version="0.1.166",
+                      protocol_version="5",
+                      locations={"loc_home": "Home", "loc_spark": "Sparkplus"},
+                      rooms={
+                          "room_home": ("loc_home", "Living room"),
+                          "room_spark": ("loc_spark", "Office"),
+                      },
+                      devices={
+                          "dev_home": BridgeDevice(
+                              "dev_home",
+                              "loc_home",
+                              "room_home",
+                              "Home switch",
+                              "switch",
+                              True,
+                          ),
+                          "dev_spark": BridgeDevice(
+                              "dev_spark",
+                              "loc_spark",
+                              "room_spark",
+                              "Sparkplus switch",
+                              "switch",
+                              True,
+                              states={spark_state.key: spark_state},
+                          ),
+                      },
+                  )
+                  latest = BridgeInventory(
+                      sequence=1,
+                      ready=True,
+                      bridge_version="0.1.167",
+                      protocol_version="5",
+                      locations={"loc_home": "Home", "loc_spark": "Sparkplus"},
+                      rooms={"room_home": ("loc_home", "Living room")},
+                      devices={
+                          "dev_home": BridgeDevice(
+                              "dev_home",
+                              "loc_home",
+                              "room_home",
+                              "Home switch",
+                              "switch",
+                              True,
+                          )
+                      },
+                  )
+                  runtime = SmartThingsWebRuntime(FakeClient(), "loc_spark", current)
+
+                  changed = runtime.apply_reconnect_inventory(latest)
+
+                  self.assertTrue(changed)
+                  self.assertEqual(
+                      set(runtime.inventory.devices),
+                      {"dev_home", "dev_spark"},
+                  )
+                  self.assertEqual(
+                      runtime.inventory.devices["dev_spark"].states[spark_state.key].value,
+                      "on",
+                  )
+                  self.assertEqual(
+                      runtime.inventory.rooms["room_spark"],
+                      ("loc_spark", "Office"),
+                  )
+
+          ''')
+          replace_once(models_test, models_anchor, models_regression + models_anchor)
+
+          init_py = "custom_components/smartthings_web/__init__.py"
+          replace_once(
+              init_py,
+              block('''
+              SmartThingsWebConfigEntry = ConfigEntry[SmartThingsWebRuntime]
+
+
+              async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntry) -> bool:
+              '''),
+              block('''
+              SmartThingsWebConfigEntry = ConfigEntry[SmartThingsWebRuntime]
+
+
+              async def _async_recover_empty_location_inventory(
+                  client: SmartThingsWebBridgeClient,
+                  inventory: BridgeInventory,
+                  location_id: str,
+              ) -> BridgeInventory:
+                  """Retry one complete Bridge inventory when a known location is empty."""
+                  if location_id not in inventory.locations or any(
+                      device.location_id == location_id
+                      for device in inventory.devices.values()
+                  ):
+                      return inventory
+                  reload_inventory = getattr(client, "async_reload_inventory", None)
+                  if not callable(reload_inventory):
+                      return inventory
+                  try:
+                      await reload_inventory()
+                      refreshed = await client.async_get_inventory()
+                  except BridgeClientError:
+                      return inventory
+                  if any(
+                      device.location_id == location_id
+                      for device in refreshed.devices.values()
+                  ):
+                      return refreshed
+                  return inventory
+
+
+              async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntry) -> bool:
+              '''),
+          )
+          replace_once(
+              init_py,
+              block('''
+                  except BridgeClientError as err:
+                      raise ConfigEntryNotReady from err
+                  if not inventory.ready and not inventory.devices:
+                      raise ConfigEntryNotReady("SmartThings Web Bridge has no cached inventory")
+                  await _async_update_repairs(hass, entry, client)
+
+                  location_id = entry.data[CONF_LOCATION_ID]
+              '''),
+              block('''
+                  except BridgeClientError as err:
+                      raise ConfigEntryNotReady from err
+                  location_id = entry.data[CONF_LOCATION_ID]
+                  inventory = await _async_recover_empty_location_inventory(
+                      client,
+                      inventory,
+                      location_id,
+                  )
+                  if not inventory.ready and not inventory.devices:
+                      raise ConfigEntryNotReady("SmartThings Web Bridge has no cached inventory")
+                  await _async_update_repairs(hass, entry, client)
+
+              '''),
+          )
+
+          init_test = "custom_components/smartthings_web/tests/test_init.py"
+          replace_once(
+              init_test,
+              "from __future__ import annotations\n\n",
+              "from __future__ import annotations\n\nimport asyncio\n",
+          )
+          replace_once(
+              init_test,
+              block('''
+              from smartthings_web.__init__ import (  # noqa: E402
+                  _async_update_repairs,
+              '''),
+              block('''
+              from smartthings_web.__init__ import (  # noqa: E402
+                  _async_recover_empty_location_inventory,
+                  _async_update_repairs,
+              '''),
+          )
+          init_anchor = "class EntityRegistryMigrationTests(unittest.TestCase):\n"
+          init_regression = block('''
+              class EmptyLocationInventoryRecoveryTests(unittest.TestCase):
+                  """Recover a location omitted by one otherwise ready inventory epoch."""
+
+                  def test_reloads_once_and_uses_recovered_location_devices(self) -> None:
+                      initial = BridgeInventory(
+                          sequence=1,
+                          ready=True,
+                          bridge_version="0.1.166",
+                          protocol_version="5",
+                          locations={"loc_home": "Home", "loc_spark": "Sparkplus"},
+                          rooms={},
+                          devices={
+                              "dev_home": BridgeDevice(
+                                  "dev_home",
+                                  "loc_home",
+                                  None,
+                                  "Home switch",
+                                  "switch",
+                                  True,
+                              )
+                          },
+                      )
+                      recovered = BridgeInventory(
+                          sequence=2,
+                          ready=True,
+                          bridge_version="0.1.167",
+                          protocol_version="5",
+                          locations={"loc_home": "Home", "loc_spark": "Sparkplus"},
+                          rooms={},
+                          devices={
+                              **initial.devices,
+                              "dev_spark": BridgeDevice(
+                                  "dev_spark",
+                                  "loc_spark",
+                                  None,
+                                  "Sparkplus switch",
+                                  "switch",
+                                  True,
+                              ),
+                          },
+                      )
+
+                      class RecoveringClient:
+                          def __init__(self) -> None:
+                              self.reload_calls = 0
+                              self.inventory_calls = 0
+
+                          async def async_reload_inventory(self) -> None:
+                              self.reload_calls += 1
+
+                          async def async_get_inventory(self) -> BridgeInventory:
+                              self.inventory_calls += 1
+                              return recovered
+
+                      client = RecoveringClient()
+                      result = asyncio.run(
+                          _async_recover_empty_location_inventory(
+                              client,  # type: ignore[arg-type]
+                              initial,
+                              "loc_spark",
+                          )
+                      )
+
+                      self.assertIs(result, recovered)
+                      self.assertEqual(client.reload_calls, 1)
+                      self.assertEqual(client.inventory_calls, 1)
+                      self.assertIn("dev_spark", result.devices)
+
+
+          ''')
+          replace_once(init_test, init_anchor, init_regression + init_anchor)
+
+          version_files = {
+              "bridge/src/runtime.ts": 1,
+              "custom_components/smartthings_web/manifest.json": 1,
+              "addon/smartthings_web_bridge/config.yaml": 1,
+              "package.json": 1,
+              "package-lock.json": 2,
+              "protocol/version.json": 1,
+              "tests/addon-config.test.ts": 6,
+              "tests/protocol-version-contract.test.ts": 2,
+          }
+          for name, expected_count in version_files.items():
+              path = Path(name)
+              text = path.read_text(encoding="utf-8")
+              actual = text.count("0.1.166")
+              if actual != expected_count:
+                  raise SystemExit(
+                      f"{name}: expected {expected_count} release-version matches, found {actual}"
+                  )
+              path.write_text(text.replace("0.1.166", "0.1.167"), encoding="utf-8")
+
+          changelog_path = Path("addon/smartthings_web_bridge/CHANGELOG.md")
+          changelog = changelog_path.read_text(encoding="utf-8")
+          if not changelog.startswith("## 0.1.166\n"):
+              raise SystemExit("CHANGELOG.md: unexpected release head")
+          notes = (
+              "## 0.1.167\n\n"
+              "- 재시작 직후 완전 스냅샷에서 특정 Location의 기기가 전부 누락되더라도, 해당 Location이 현재 세션에서 실제 확인되기 전에는 저장된 기기를 일괄 삭제하지 않습니다.\n"
+              "- Home Assistant가 선택된 Location은 존재하지만 기기 수만 0개인 의심스러운 ready 스냅샷을 받으면 기존 Location 기기와 방 정보를 보존합니다.\n"
+              "- 구성 항목 시작 시 선택된 Location만 비어 있으면 Advanced 인벤토리를 한 번 자동 재조회하여 Sparkplus 기기를 즉시 복구하도록 보강했습니다.\n"
+              "- 0.1.166의 Sparkplus Home Monitor 직접 제어 동작은 그대로 유지합니다.\n\n"
+          )
+          changelog_path.write_text(notes + changelog, encoding="utf-8")
+          PY
+
+          git diff --check
+          git status --short
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run full Node test suite
+        run: npm test
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Build Bridge
+        run: npm run build
+
+      - name: Package Bridge add-on
+        run: npm run package:addon
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+
+      - name: Install Python test dependencies
+        run: python -m pip install --disable-pip-version-check "aiohttp>=3.10,<4" "yarl>=1.9,<2" "voluptuous>=0.15,<1"
+
+      - name: Compile integration
+        run: python -m compileall -q custom_components/smartthings_web
+
+      - name: Run full integration test suite
+        run: python -m unittest discover -s custom_components/smartthings_web/tests -p "test_*.py"
+
+      - name: Commit verified changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            bridge/src/state/device-store.ts \
+            bridge/src/runtime.ts \
+            bridge/tests/state/device-store.test.ts \
+            custom_components/smartthings_web/__init__.py \
+            custom_components/smartthings_web/models.py \
+            custom_components/smartthings_web/manifest.json \
+            custom_components/smartthings_web/tests/test_init.py \
+            custom_components/smartthings_web/tests/test_models.py \
+            addon/smartthings_web_bridge/config.yaml \
+            addon/smartthings_web_bridge/CHANGELOG.md \
+            package.json \
+            package-lock.json \
+            protocol/version.json \
+            tests/addon-config.test.ts \
+            tests/protocol-version-contract.test.ts
+          git commit -m "fix: preserve missing Sparkplus inventory across restart"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
