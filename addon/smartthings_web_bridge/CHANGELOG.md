@@ -1,3 +1,9 @@
+## 0.1.165
+
+- Home Assistant의 기본 `code_arm_required=True`를 해제해 Home Monitor 무장 명령이 코드 없이 브리지까지 전달되도록 수정했습니다.
+- Home과 Sparkplus를 포함한 모든 Location Home Monitor는 SmartThings 웹 세션으로 인증하며 HA 키패드 코드를 요구하지 않습니다.
+- 회귀 테스트가 Home Assistant Core의 서비스 코드 검증 경로를 재현하도록 보강했습니다.
+
 ## 0.1.164
 
 - Home Monitor 가용성을 armState 수집 여부와 분리했습니다. Location이 존재하면 초기 상태가 아직 없어도 alarm_control_panel을 제어할 수 있습니다.

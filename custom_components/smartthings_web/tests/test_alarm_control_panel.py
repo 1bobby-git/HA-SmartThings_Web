@@ -21,7 +21,28 @@ alarm_module = ModuleType("homeassistant.components.alarm_control_panel")
 
 
 class AlarmControlPanelEntity:
-    """Minimal HA alarm panel entity stub."""
+    """Minimal HA alarm panel entity stub with Core code validation."""
+
+    _attr_code_arm_required = True
+    _attr_code_format = None
+
+    @property
+    def code_arm_required(self) -> bool:
+        return self._attr_code_arm_required
+
+    @property
+    def code_format(self) -> object | None:
+        return self._attr_code_format
+
+    async def async_handle_alarm_arm_home(self, code: str | None = None) -> None:
+        if not code and self.code_arm_required:
+            raise ValueError("Arming requires a code")
+        await self.async_alarm_arm_home(code)
+
+    async def async_handle_alarm_arm_away(self, code: str | None = None) -> None:
+        if not code and self.code_arm_required:
+            raise ValueError("Arming requires a code")
+        await self.async_alarm_arm_away(code)
 
 
 class AlarmControlPanelEntityFeature(IntFlag):
@@ -188,6 +209,35 @@ class SmartThingsWebHomeMonitorTests(unittest.IsolatedAsyncioTestCase):
         runtime.inventory.locations.pop("loc_001")
         self.assertFalse(entity.available)
         self.assertIsNone(entity.state)
+
+    async def test_core_arm_service_allows_no_code(self) -> None:
+        client = SimpleNamespace(async_execute_command=AsyncMock())
+        runtime = _runtime(BridgeLocation("loc_001", "Sparkplus", None))
+        runtime.client = client
+        entity = SmartThingsWebHomeMonitor(runtime)
+
+        self.assertFalse(entity.code_arm_required)
+        self.assertIsNone(entity.code_format)
+        await entity.async_handle_alarm_arm_home()
+        await entity.async_handle_alarm_arm_away()
+
+        self.assertEqual(
+            client.async_execute_command.await_args_list,
+            [
+                unittest.mock.call(
+                    target_type="location",
+                    target_id="loc_001",
+                    command="armStay",
+                    arguments=[],
+                ),
+                unittest.mock.call(
+                    target_type="location",
+                    target_id="loc_001",
+                    command="armAway",
+                    arguments=[],
+                ),
+            ],
+        )
 
     async def test_arm_methods_send_exact_location_command_payloads(self) -> None:
         client = SimpleNamespace(async_execute_command=AsyncMock())

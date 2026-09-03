@@ -45,6 +45,9 @@ class SmartThingsWebHomeMonitor(AlarmControlPanelEntity):
     """SmartThings Home Monitor state for one location."""
 
     _attr_should_poll = False
+    # SmartThings Web session authentication replaces a keypad code.
+    _attr_code_arm_required = False
+    _attr_code_format = None
     _attr_supported_features = (
         AlarmControlPanelEntityFeature.ARM_AWAY
         | AlarmControlPanelEntityFeature.ARM_HOME
