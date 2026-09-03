@@ -1,0 +1,204 @@
+name: Apply Home Monitor text-pill 0.1.172 v2
+
+on:
+  push:
+    branches:
+      - fix/home-monitor-text-pill-0.1.172
+    paths:
+      - .github/workflows/apply-home-monitor-text-pill-0.1.172-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    name: Apply, test, build, and commit 0.1.172
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/home-monitor-text-pill-0.1.172
+          fetch-depth: 0
+
+      - name: Apply source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          old_version = "0.1.171"
+          new_version = "0.1.172"
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          runtime_path = Path("bridge/src/runtime.ts")
+          runtime = runtime_path.read_text(encoding="utf-8")
+          if f'const bridgeVersion = "{new_version}";' in runtime:
+              print(f"{new_version} source patch already applied")
+              raise SystemExit(0)
+
+          command_path = "bridge/src/browser/command-page.ts"
+          replace_once(
+              command_path,
+              'import type { BrowserPageLike, KeeperPageManager } from "./keeper-page.js";\n',
+              'import type { BrowserPageLike, KeeperPageManager } from "./keeper-page.js";\n'
+              'import { clickTextOnlyHomeMonitorAction } from "./home-monitor-dom.js";\n',
+          )
+          replace_once(
+              command_path,
+              '''      let action = await findHomeMonitorCardAction(
+                page,
+                monitorName,
+                monitorLabels,
+                actionName,
+                15_000
+              );
+              if (
+                !action &&
+                await clickHomeMonitorCardActionByText(
+                  page,
+                  monitorLabels,
+                  locationActionLabels(input.action)
+                )
+              ) {
+                return;
+              }''',
+              '''      let action = await findHomeMonitorCardAction(
+                page,
+                monitorName,
+                monitorLabels,
+                actionName,
+                3_000
+              );
+              if (!action) {
+                const textResult = await clickTextOnlyHomeMonitorAction(
+                  page,
+                  monitorLabels,
+                  locationActionLabels(input.action),
+                  [
+                    locationActionLabels("armAway"),
+                    locationActionLabels("armStay"),
+                    locationActionLabels("disarm")
+                  ]
+                );
+                if (textResult === "clicked") return;
+                if (textResult === "ambiguous") {
+                  throw new Error("command_control_ambiguous");
+                }
+              }
+              if (
+                !action &&
+                await clickHomeMonitorCardActionByText(
+                  page,
+                  monitorLabels,
+                  locationActionLabels(input.action)
+                )
+              ) {
+                return;
+              }''',
+          )
+
+          version_files = (
+              "bridge/src/runtime.ts",
+              "custom_components/smartthings_web/manifest.json",
+              "addon/smartthings_web_bridge/config.yaml",
+              "package.json",
+              "package-lock.json",
+              "protocol/version.json",
+              "tests/addon-config.test.ts",
+              "tests/protocol-version-contract.test.ts",
+          )
+          for name in version_files:
+              path = Path(name)
+              text = path.read_text(encoding="utf-8")
+              if old_version not in text:
+                  raise SystemExit(f"{name}: current version not found")
+              path.write_text(text.replace(old_version, new_version), encoding="utf-8")
+
+          changelog_path = Path("addon/smartthings_web_bridge/CHANGELOG.md")
+          changelog = changelog_path.read_text(encoding="utf-8")
+          if not changelog.startswith(f"## {old_version}\n"):
+              raise SystemExit("CHANGELOG.md: unexpected release head")
+          notes = (
+              f"## {new_version}\n\n"
+              "- SmartThings Home Monitor가 접근성 button 없이 React 텍스트 pill로 렌더링되는 경우에도 카드 내부의 정확한 `보안(외출)`·`보안(실내)`·`해제` 표시를 찾아 실행합니다.\n"
+              "- `aria-label`, `title`, 실제 텍스트, open shadow root와 React 상위 클릭 요소를 함께 확인하되 정확한 후보가 하나일 때만 클릭하도록 제한했습니다.\n"
+              "- 텍스트 전용 렌더링을 최대 15초 동안 재확인하고 중복 후보는 명시적인 `command_control_ambiguous`로 차단합니다.\n"
+              "- 텍스트 전용 제어의 성공·누락·중복 후보와 DOM 탐색 규칙에 대한 회귀 테스트를 추가했습니다.\n\n"
+          )
+          changelog_path.write_text(notes + changelog, encoding="utf-8")
+          PY
+
+          git diff --check
+          git status --short
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          python -m pip install --disable-pip-version-check "aiohttp>=3.10,<4" "yarl>=1.9,<2" "voluptuous>=0.15,<1"
+
+      - name: Run focused regressions
+        run: >-
+          npm test --
+          bridge/tests/browser/home-monitor-dom.test.ts
+          bridge/tests/browser/home-monitor-stability.test.ts
+          bridge/tests/browser/command-page.test.ts
+          bridge/tests/runtime.test.ts
+
+      - name: Run full Node tests
+        run: npm test
+
+      - name: Type-check and build
+        run: |
+          npm run typecheck
+          npm run build
+          npm run package:addon
+
+      - name: Run Home Assistant integration tests
+        run: |
+          python -m compileall -q custom_components/smartthings_web
+          python -m unittest discover -s custom_components/smartthings_web/tests -p "test_*.py"
+
+      - name: Commit verified patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "1bobby-git"
+          git config user.email "66291955+1bobby-git@users.noreply.github.com"
+          git add \
+            addon/smartthings_web_bridge/CHANGELOG.md \
+            addon/smartthings_web_bridge/config.yaml \
+            bridge/src/browser/command-page.ts \
+            bridge/src/runtime.ts \
+            custom_components/smartthings_web/manifest.json \
+            package-lock.json \
+            package.json \
+            protocol/version.json \
+            tests/addon-config.test.ts \
+            tests/protocol-version-contract.test.ts
+          if git diff --cached --quiet; then
+            echo "No source changes to commit"
+            exit 0
+          fi
+          git commit -m "fix: control text-only Home Monitor mode pills"
+          git push origin HEAD
