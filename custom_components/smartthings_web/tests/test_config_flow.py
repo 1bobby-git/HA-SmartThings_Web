@@ -113,14 +113,14 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsInstance(flow, SmartThingsWebOptionsFlow)
 
-    async def test_new_pairing_stores_local_hostname_for_legacy_repository_url(self) -> None:
+    async def test_new_pairing_stores_the_reachable_repository_hostname(self) -> None:
         original_client = config_flow.SmartThingsWebBridgeClient
-        config_flow.SmartThingsWebBridgeClient = FakeLegacyPairingClient  # type: ignore[assignment]
+        config_flow.SmartThingsWebBridgeClient = FakeResolvedPairingClient  # type: ignore[assignment]
         try:
             flow = SmartThingsWebConfigFlow()
             result = await flow.async_step_user(
                 {
-                    CONF_BRIDGE_URL: "http://d55cafb9-smartthings-web-bridge:8100",
+                    CONF_BRIDGE_URL: "http://local-smartthings-web-bridge:8100",
                     "pairing_code": "12345678",
                 }
             )
@@ -132,7 +132,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(flow._pending_pairing)
         self.assertEqual(
             flow._pending_pairing[0],
-            "http://local-smartthings-web-bridge:8100",
+            "http://d55cafb9-smartthings-web-bridge:8100",
         )
 
     async def test_new_entries_default_to_safe_control_options(self) -> None:
@@ -219,11 +219,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
-class FakeLegacyPairingClient:
-    """Pair a legacy repository hostname but expose the canonical local URL."""
+class FakeResolvedPairingClient:
+    """Expose the repository hostname selected after a safe fallback probe."""
 
     def __init__(self, _session: object, _bridge_url: str) -> None:
-        self.base_url = "http://local-smartthings-web-bridge:8100"
+        self.base_url = "http://d55cafb9-smartthings-web-bridge:8100"
 
     async def async_pair(self, code: str) -> str:
         if code != "12345678":
@@ -234,7 +234,7 @@ class FakeLegacyPairingClient:
         return BridgeInventory(
             sequence=1,
             ready=True,
-            bridge_version="0.1.168",
+            bridge_version="0.1.169",
             protocol_version="5",
             locations={"loc_001": "Home"},
             rooms={},

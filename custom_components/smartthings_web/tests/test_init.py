@@ -217,9 +217,9 @@ class FakeRegistry:
 
 
 class BridgeUrlMigrationTests(unittest.TestCase):
-    """Persist the local Bridge hostname for legacy config entries."""
+    """Persist only the hostname that answered a validated Bridge request."""
 
-    def test_persists_legacy_repository_hostname_as_local(self) -> None:
+    def test_persists_resolved_repository_hostname_after_fallback(self) -> None:
         updates: list[dict[str, object]] = []
         hass = SimpleNamespace(
             config_entries=SimpleNamespace(
@@ -228,7 +228,7 @@ class BridgeUrlMigrationTests(unittest.TestCase):
         )
         entry = SimpleNamespace(
             data={
-                CONF_BRIDGE_URL: "http://d55cafb9-smartthings-web-bridge:8100",
+                CONF_BRIDGE_URL: "http://local-smartthings-web-bridge:8100",
                 CONF_BRIDGE_TOKEN: "x" * 32,
                 CONF_LOCATION_ID: "loc_001",
             }
@@ -237,7 +237,7 @@ class BridgeUrlMigrationTests(unittest.TestCase):
         integration._persist_canonical_bridge_url(
             hass,
             entry,
-            "http://local-smartthings-web-bridge:8100",
+            "http://d55cafb9-smartthings-web-bridge:8100",
         )
 
         self.assertEqual(
@@ -245,7 +245,7 @@ class BridgeUrlMigrationTests(unittest.TestCase):
             [
                 {
                     "data": {
-                        CONF_BRIDGE_URL: "http://local-smartthings-web-bridge:8100",
+                        CONF_BRIDGE_URL: "http://d55cafb9-smartthings-web-bridge:8100",
                         CONF_BRIDGE_TOKEN: "x" * 32,
                         CONF_LOCATION_ID: "loc_001",
                     }
@@ -253,7 +253,7 @@ class BridgeUrlMigrationTests(unittest.TestCase):
             ],
         )
 
-    def test_keeps_already_canonical_local_hostname(self) -> None:
+    def test_keeps_already_selected_repository_hostname(self) -> None:
         updates: list[dict[str, object]] = []
         hass = SimpleNamespace(
             config_entries=SimpleNamespace(
@@ -261,13 +261,13 @@ class BridgeUrlMigrationTests(unittest.TestCase):
             )
         )
         entry = SimpleNamespace(
-            data={CONF_BRIDGE_URL: "http://local-smartthings-web-bridge:8100/"}
+            data={CONF_BRIDGE_URL: "http://d55cafb9-smartthings-web-bridge:8100/"}
         )
 
         integration._persist_canonical_bridge_url(
             hass,
             entry,
-            "http://local-smartthings-web-bridge:8100",
+            "http://d55cafb9-smartthings-web-bridge:8100",
         )
 
         self.assertEqual(updates, [])

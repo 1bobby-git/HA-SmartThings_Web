@@ -14,7 +14,7 @@ from uuid import uuid4
 from aiohttp import ClientError, ClientSession, ClientTimeout
 from yarl import URL
 
-from .const import normalize_bridge_url
+from .const import bridge_url_candidates, normalize_bridge_url
 from .device_identity import canonicalize_duplicate_devices
 from .models import (
     BridgeAdvancedDeviceMetadata,
@@ -159,33 +159,52 @@ def bridge_error_message(action: str, error: BridgeClientError) -> str:
     return f"SmartThings Web {action} failed: {code}"
 
 
+def _validated_bridge_base_url(base_url: str) -> str:
+    """Validate and canonicalize one local Bridge base URL."""
+    try:
+        url = URL(normalize_bridge_url(base_url))
+    except (TypeError, ValueError) as err:
+        raise BridgeClientError("invalid_bridge_url") from err
+    if (
+        url.scheme not in {"http", "https"}
+        or not url.host
+        or url.user
+        or url.password
+        or url.query_string
+        or url.fragment
+        or url.path not in {"", "/"}
+        or not _is_local_bridge_host(url.host)
+    ):
+        raise BridgeClientError("invalid_bridge_url")
+    return str(url.with_path("").with_query(None).with_fragment(None)).rstrip("/")
+
+
 class SmartThingsWebBridgeClient:
     """Client for the local Bridge HTTP/SSE API."""
 
     def __init__(self, session: ClientSession, base_url: str, token: str | None = None) -> None:
-        try:
-            url = URL(normalize_bridge_url(base_url))
-        except (TypeError, ValueError) as err:
-            raise BridgeClientError("invalid_bridge_url") from err
-        if (
-            url.scheme not in {"http", "https"}
-            or not url.host
-            or url.user
-            or url.password
-            or url.query_string
-            or url.fragment
-            or url.path not in {"", "/"}
-            or not _is_local_bridge_host(url.host)
-        ):
-            raise BridgeClientError("invalid_bridge_url")
         self._session = session
-        self._base_url = str(url.with_path("").with_query(None).with_fragment(None)).rstrip("/")
+        self._base_urls = tuple(
+            _validated_bridge_base_url(candidate)
+            for candidate in bridge_url_candidates(base_url)
+        )
+        self._base_url = self._base_urls[0]
         self._token = token
 
     @property
     def base_url(self) -> str:
-        """Return the validated canonical Bridge base URL."""
+        """Return the validated Bridge URL that most recently responded."""
         return self._base_url
+
+    def _ordered_base_urls(self) -> tuple[str, ...]:
+        """Try the active URL first, then the other known installation hostname."""
+        return (self._base_url,) + tuple(
+            candidate for candidate in self._base_urls if candidate != self._base_url
+        )
+
+    def _activate_base_url(self, base_url: str) -> None:
+        """Remember the reachable hostname for subsequent HTTP and SSE requests."""
+        self._base_url = base_url
 
     async def async_pair(self, code: str) -> str:
         """Exchange an Ingress pairing code for the local Bridge token."""
@@ -358,26 +377,33 @@ class SmartThingsWebBridgeClient:
             if self._token is None:
                 raise BridgeAuthError("missing_bridge_token")
             headers["Authorization"] = f"Bearer {self._token}"
-        try:
-            async with self._session.request(
-                method,
-                f"{self._base_url}{path}",
-                headers=headers,
-                json=json_body,
-                timeout=ClientTimeout(total=timeout_seconds),
-            ) as response:
-                if response.status in {401, 403}:
-                    raise BridgeAuthError("bridge_auth_failed")
-                if response.status >= 400:
-                    raise BridgeClientError(await _safe_bridge_error_code(response))
-                value = await response.json(content_type="application/json")
-                if not isinstance(value, dict):
-                    raise BridgeClientError("bridge_response_invalid")
-                return value
-        except BridgeClientError:
-            raise
-        except (ClientError, TimeoutError, ValueError) as err:
-            raise BridgeClientError("bridge_request_failed") from err
+        last_error: Exception | None = None
+        for base_url in self._ordered_base_urls():
+            try:
+                async with self._session.request(
+                    method,
+                    f"{base_url}{path}",
+                    headers=headers,
+                    json=json_body,
+                    timeout=ClientTimeout(
+                        total=timeout_seconds,
+                        connect=min(5, timeout_seconds),
+                    ),
+                ) as response:
+                    if response.status in {401, 403}:
+                        raise BridgeAuthError("bridge_auth_failed")
+                    if response.status >= 400:
+                        raise BridgeClientError(await _safe_bridge_error_code(response))
+                    value = await response.json(content_type="application/json")
+                    if not isinstance(value, dict):
+                        raise BridgeClientError("bridge_response_invalid")
+                    self._activate_base_url(base_url)
+                    return value
+            except BridgeClientError:
+                raise
+            except (ClientError, TimeoutError, ValueError) as err:
+                last_error = err
+        raise BridgeClientError("bridge_request_failed") from last_error
 
 
 async def _safe_bridge_error_code(response: Any) -> str:
