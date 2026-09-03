@@ -1,0 +1,116 @@
+name: Apply canonical local Bridge URL 0.1.168
+
+on:
+  push:
+    branches:
+      - fix/local-bridge-canonical-0.1.168
+    paths:
+      - .github/workflows/apply-local-bridge-canonical-0.1.168.yml
+      - .github/patches/local-bridge-0.1.168.patch.xz.b64
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    name: Apply, validate, and commit product source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out work branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/local-bridge-canonical-0.1.168
+          fetch-depth: 0
+
+      - name: Reconstruct and apply source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch_b64=.github/patches/local-bridge-0.1.168.patch.xz.b64
+          echo '5222e2ee318d1353b48c0690edc9e57d0f02a05865d89eb79bc7978a8eea23c4  '"${patch_b64}" | sha256sum -c -
+          base64 --decode "${patch_b64}" > /tmp/local-bridge-0.1.168.patch.xz
+          echo 'ca01c784961aa73d91232ce3bc1156f5f8814cf63471adc196b5b13b485aeb57  /tmp/local-bridge-0.1.168.patch.xz' | sha256sum -c -
+          xz --decompress --stdout /tmp/local-bridge-0.1.168.patch.xz > /tmp/local-bridge-0.1.168.patch
+          echo '3885ccac62a2ee38270404450d2d7245aa868511b8d9e7a2e11f89c8a5262de2  /tmp/local-bridge-0.1.168.patch' | sha256sum -c -
+          git apply --check --whitespace=error /tmp/local-bridge-0.1.168.patch
+          git apply --whitespace=error /tmp/local-bridge-0.1.168.patch
+          git diff --check
+
+      - name: Verify canonical URL and release contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          assert json.loads(Path('custom_components/smartthings_web/manifest.json').read_text(encoding='utf-8'))['version'] == '0.1.168'
+          assert json.loads(Path('package.json').read_text(encoding='utf-8'))['version'] == '0.1.168'
+          assert json.loads(Path('package-lock.json').read_text(encoding='utf-8'))['version'] == '0.1.168'
+          assert json.loads(Path('protocol/version.json').read_text(encoding='utf-8'))['bridge_version'] == '0.1.168'
+          const = Path('custom_components/smartthings_web/const.py').read_text(encoding='utf-8')
+          client = Path('custom_components/smartthings_web/bridge_client.py').read_text(encoding='utf-8')
+          flow = Path('custom_components/smartthings_web/config_flow.py').read_text(encoding='utf-8')
+          setup = Path('custom_components/smartthings_web/__init__.py').read_text(encoding='utf-8')
+          assert 'DEFAULT_BRIDGE_URL = "http://local-smartthings-web-bridge:8100"' in const
+          assert 'http://d55cafb9-smartthings-web-bridge:8100' in const
+          assert 'normalize_bridge_url(base_url)' in client
+          assert 'def base_url(self)' in client
+          assert 'client.base_url' in flow
+          assert '_persist_canonical_bridge_url' in setup
+          PY
+          grep -F 'version: 0.1.168' addon/smartthings_web_bridge/config.yaml
+          grep -F 'const bridgeVersion = "0.1.168"' bridge/src/runtime.ts
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+
+      - name: Validate Home Assistant integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'aiohttp>=3.10,<4' 'yarl>=1.9,<2' 'voluptuous>=0.15,<1'
+          python -m compileall -q custom_components/smartthings_web
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Validate and package Bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm test
+          npm run typecheck
+          npm run build
+          npm run package:addon
+
+      - name: Commit only verified product changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f --ignore-unmatch \
+            .github/patches/local-bridge-0.1.168.patch.xz.b64 \
+            .github/workflows/apply-local-bridge-canonical-0.1.168.yml \
+            .github/workflows/apply-real-web-parity-0.1.168.yml \
+            .github/workflows/apply-web-parity-0.1.168-v2.yml \
+            .github/workflows/apply-web-parity-0.1.168.yml \
+            .github/workflows/cleanup-0.1.168-marker.yml \
+            .github/workflows/export-regression-baselines-0.1.168.yml \
+            .github/workflows/export-source-0.1.168.yml \
+            .github/workflows/finalize-web-parity-0.1.168.yml \
+            .github/workflows/pr-gate-0.1.168.yml \
+            docs/0.1.168-release-marker.md
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix: canonicalize SmartThings Web Bridge to local URL in 0.1.168'
+          git push origin HEAD:fix/local-bridge-canonical-0.1.168
