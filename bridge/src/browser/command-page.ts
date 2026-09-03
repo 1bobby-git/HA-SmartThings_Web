@@ -91,6 +91,7 @@ interface CommandExecutorOptions {
   warmPageTtlMs?: number;
   onDiagnostic?: (stage: CommandDiagnosticStage) => void;
   resolveRawDeviceId?: (alias: string) => string | undefined;
+  resolveRawLocationId?: (alias: string) => string | undefined;
   resolveRawIdentifier?: (alias: string) => string | undefined;
 }
 
@@ -138,6 +139,7 @@ export class SmartThingsWebUiCommandExecutor {
   readonly #warmPageTtlMs: number;
   readonly #onDiagnostic: ((stage: CommandDiagnosticStage) => void) | undefined;
   readonly #resolveRawDeviceId: ((alias: string) => string | undefined) | undefined;
+  readonly #resolveRawLocationId: ((alias: string) => string | undefined) | undefined;
   readonly #resolveRawIdentifier: ((alias: string) => string | undefined) | undefined;
 
   constructor(
@@ -151,6 +153,7 @@ export class SmartThingsWebUiCommandExecutor {
       : 0;
     this.#onDiagnostic = options?.onDiagnostic;
     this.#resolveRawDeviceId = options?.resolveRawDeviceId;
+    this.#resolveRawLocationId = options?.resolveRawLocationId;
     this.#resolveRawIdentifier = options?.resolveRawIdentifier;
   }
 
@@ -525,12 +528,20 @@ export class SmartThingsWebUiCommandExecutor {
     const page = await this.openLocationPage(input.locationId, input.locationNames);
     try {
       const actionName = locationActionName(input.action);
-      let action = await findLocationActionControl(page, actionName, 250);
+      const locationName = input.locationNames?.[input.locationId];
+      const monitorName = homeMonitorName(locationName);
+      let action = await findHomeMonitorCardAction(
+        page,
+        monitorName,
+        homeMonitorLabels(locationName),
+        actionName,
+        15_000
+      );
       if (!action) {
-        const monitor = await findHomeMonitorControl(
-          page,
-          homeMonitorName(input.locationNames?.[input.locationId])
-        );
+        action = await findLocationActionControl(page, actionName, 250);
+      }
+      if (!action) {
+        const monitor = await findHomeMonitorControl(page, monitorName);
         if (!monitor) throw new Error("command_control_not_found");
         await monitor.click({ timeout: 15_000 });
 
@@ -575,8 +586,11 @@ export class SmartThingsWebUiCommandExecutor {
     locationNames: Readonly<Record<string, string>> | undefined
   ): Promise<void> {
     const routeLocation = locationIdFromUrl(page.url());
-    if (!this.normalizeLocationId) return;
+    if (!this.normalizeLocationId && !this.#resolveRawLocationId) return;
     if (!routeLocation) throw new Error("command_location_unknown");
+    const rawTargetLocationId = this.#resolveRawLocationId?.(targetLocationId);
+    if (rawTargetLocationId === routeLocation) return;
+    if (!this.normalizeLocationId) return;
     const currentLocationId = this.normalizeLocationId(routeLocation);
     if (currentLocationId === targetLocationId) return;
     const currentName = locationNames?.[currentLocationId];
@@ -1851,6 +1865,55 @@ async function findLocationActionControl(
   return undefined;
 }
 
+async function findHomeMonitorCardAction(
+  scope: CommandControlSurface,
+  monitorName: RegExp,
+  monitorLabels: readonly string[],
+  actionName: RegExp,
+  timeoutMs: number
+): Promise<CommandLocatorLike | undefined> {
+  let title: CommandLocatorLike | undefined;
+  const heading = scope.getByRole("heading", { name: monitorName });
+  const headingCount = await heading.count();
+  if (headingCount > 1) throw new Error("command_control_ambiguous");
+  if (headingCount === 1) {
+    try {
+      await heading.first().waitFor({ state: "visible", timeout: timeoutMs });
+      title = heading.first();
+    } catch {
+      // Exact text variants below cover non-heading card titles.
+    }
+  }
+
+  if (!title) {
+    for (const label of monitorLabels) {
+      const candidate = scope.getByText(label, { exact: true });
+      const count = await candidate.count();
+      if (count > 1) throw new Error("command_control_ambiguous");
+      if (count !== 1) continue;
+      try {
+        await candidate.first().waitFor({ state: "visible", timeout: timeoutMs });
+        title = candidate.first();
+        break;
+      } catch {
+        continue;
+      }
+    }
+  }
+  if (!title) return undefined;
+
+  let cardScope = title;
+  for (let depth = 0; depth < 8; depth += 1) {
+    const action = await findLocationActionControl(
+      cardScope,
+      actionName,
+      Math.min(timeoutMs, 250)
+    );
+    if (action) return action;
+    cardScope = cardScope.locator("..");
+  }
+  return undefined;
+}
 async function findHomeMonitorControl(
   scope: CommandControlSurface,
   monitorName: RegExp
@@ -1873,12 +1936,12 @@ async function findHomeMonitorControl(
 
 function locationActionName(action: "armAway" | "armStay" | "disarm"): RegExp {
   if (action === "armAway") {
-    return /^(?:Arm away|Away|Away mode|외출|외출 모드|외출 중|외출중)$/iu;
+    return /^(?:Arm away|Away|Away mode|외출|외출 모드|외출 중|외출중|보안\s*\(\s*외출\s*\)|보안\s*외출)$/iu;
   }
   if (action === "armStay") {
-    return /^(?:Arm stay|Stay|Stay mode|재실|재실 모드|재실 중|재실중|집에 있음|귀가)$/iu;
+    return /^(?:Arm stay|Stay|Stay mode|실내|실내 모드|재실|재실 모드|재실 중|재실중|집에 있음|귀가|보안\s*\(\s*(?:실내|재실)\s*\)|보안\s*(?:실내|재실))$/iu;
   }
-  return /^(?:Disarm|Disarmed|Off|해제|해제됨|보안 해제|사용 안 함)$/iu;
+  return /^(?:Disarm|Disarmed|Off|해제|해제됨|보안 해제|보안\s*\(\s*해제\s*\)|사용 안 함)$/iu;
 }
 
 function homeMonitorName(locationName?: string): RegExp {
@@ -1890,6 +1953,16 @@ function homeMonitorName(locationName?: string): RegExp {
     `^\\s*${locationPrefix}(?:(?:SmartThings\\s*)?Home\\s*Monitor|홈\\s*모니터|홈모니터)\\s*$`,
     "iu"
   );
+}
+
+function homeMonitorLabels(locationName?: string): string[] {
+  const labels = ["SmartThings Home Monitor", "Home Monitor", "홈 모니터", "홈모니터"];
+  const normalizedLocationName = locationName?.trim();
+  if (!normalizedLocationName) return labels;
+  return [
+    ...labels,
+    ...labels.map((label) => `${normalizedLocationName} ${label}`)
+  ];
 }
 
 function controlLabelFor(attribute: string): string | undefined {
