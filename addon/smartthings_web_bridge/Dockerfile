@@ -73,6 +73,14 @@ RUN set -eux; \
 
 COPY . /tmp/smartthings-web-addon
 
+# Generated-package layout contract. The source-resolution step below performs
+# the equivalent copies for both the packaged add-on and repository contexts:
+# COPY package.json package-lock.json tsconfig.json ./
+# COPY tsconfig.build.json ./
+# COPY addon-package-manifest.json ./
+# COPY bridge ./bridge
+# COPY rootfs /
+
 WORKDIR /app
 RUN set -eux; \
   source_dir="/tmp/smartthings-web-addon"; \

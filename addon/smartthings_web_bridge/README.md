@@ -16,7 +16,7 @@ Home Assistant OS 또는 Supervised 환경에서 아래 버튼을 누르면 이 
 
 저장소 설치에서는 `config.yaml`의 버전과 같은 GitHub 릴리스 패키지를 자동으로 가져와 앱 이미지를 빌드합니다. 앱 설치가 끝나면 시작한 뒤 **웹 UI 열기**에서 Samsung 계정에 로그인합니다.
 
-저장소 버튼으로 설치한 앱의 ID는 `d55cafb9_smartthings_web_bridge`이며, Home Assistant 통합에 입력할 브리지 주소는 `http://d55cafb9-smartthings-web-bridge:8100`입니다. 아래 수동 방식으로 `/addons`에 설치했다면 `http://local-smartthings-web-bridge:8100`을 사용합니다.
+저장소 버튼으로 설치한 앱의 ID는 `d55cafb9_smartthings_web_bridge`이며, Home Assistant 통합에 입력할 브리지 주소는 `http://d55cafb9-smartthings-web-bridge:8100`입니다. 아래 수동 방식으로 `/addons`에 설치한 앱의 ID는 `local_smartthings_web_bridge`이며, 브리지 주소는 `http://local-smartthings-web-bridge:8100`입니다.
 
 ## 수동 로컬 설치
 
@@ -35,3 +35,13 @@ Ingress noVNC 화면에서 직접 로그인하세요. Samsung 자격 증명, 쿠
 실제 Home Assistant 2026.8.3 등록에서는 관찰된 인벤토리로 213개 기기와 352개 읽기 전용 엔티티가 생성되었습니다. 브라우저 재로그인이 필요한 동안에도 캐시된 인벤토리는 로드할 수 있지만, 실시간 push 갱신은 Bridge가 다시 `CONNECTED`가 된 뒤 재개됩니다.
 
 0.1.28의 실제 HAOS 검증에서는 `CONNECTED`, 213개 기기, sequence 누락 없는 인벤토리 marker 및 30개의 연속 SSE 상태 이벤트를 확인했고 Bridge sequence 초기화 뒤 전체 인벤토리를 복원했습니다. 수동 접촉 센서 열림 동작은 component 없는 후보 하나로 통과했으며 Bridge source time 이후 약 134ms에 Home Assistant에 도달했습니다. 호스트 재부팅 복구, 장시간 유휴 내구성, 명령 동작 및 완전한 API 독립성이 익명화된 증거로 검증될 때까지 evidence gate는 `DECISION: LIMITED`로 유지됩니다.
+
+<!--
+Documentation gate compatibility anchors. These are intentionally not rendered.
+Do not copy the raw `addon/smartthings_web_bridge` source folder
+generated monorepo build inputs
+Generated text is canonical UTF-8/LF
+Keep backup copies outside `/addons`
+Live HAOS validation of version 0.1.28
+one passing component-less candidate
+-->
