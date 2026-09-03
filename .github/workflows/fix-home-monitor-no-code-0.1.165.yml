@@ -77,36 +77,37 @@ jobs:
           source = source.replace(old_stub, new_stub, 1)
 
           marker = "    async def test_arm_methods_send_exact_location_command_payloads(self) -> None:\n"
-          regression = '''    async def test_core_arm_service_allows_no_code(self) -> None:
-              client = SimpleNamespace(async_execute_command=AsyncMock())
-              runtime = _runtime(BridgeLocation("loc_001", "Sparkplus", None))
-              runtime.client = client
-              entity = SmartThingsWebHomeMonitor(runtime)
-
-              self.assertFalse(entity.code_arm_required)
-              self.assertIsNone(entity.code_format)
-              await entity.async_handle_alarm_arm_home()
-              await entity.async_handle_alarm_arm_away()
-
-              self.assertEqual(
-                  client.async_execute_command.await_args_list,
-                  [
-                      unittest.mock.call(
-                          target_type="location",
-                          target_id="loc_001",
-                          command="armStay",
-                          arguments=[],
-                      ),
-                      unittest.mock.call(
-                          target_type="location",
-                          target_id="loc_001",
-                          command="armAway",
-                          arguments=[],
-                      ),
-                  ],
-              )
-
-          '''
+          regression = (
+              "    async def test_core_arm_service_allows_no_code(self) -> None:\n"
+              "        client = SimpleNamespace(async_execute_command=AsyncMock())\n"
+              "        runtime = _runtime(BridgeLocation(\"loc_001\", \"Sparkplus\", None))\n"
+              "        runtime.client = client\n"
+              "        entity = SmartThingsWebHomeMonitor(runtime)\n"
+              "\n"
+              "        self.assertFalse(entity.code_arm_required)\n"
+              "        self.assertIsNone(entity.code_format)\n"
+              "        await entity.async_handle_alarm_arm_home()\n"
+              "        await entity.async_handle_alarm_arm_away()\n"
+              "\n"
+              "        self.assertEqual(\n"
+              "            client.async_execute_command.await_args_list,\n"
+              "            [\n"
+              "                unittest.mock.call(\n"
+              "                    target_type=\"location\",\n"
+              "                    target_id=\"loc_001\",\n"
+              "                    command=\"armStay\",\n"
+              "                    arguments=[],\n"
+              "                ),\n"
+              "                unittest.mock.call(\n"
+              "                    target_type=\"location\",\n"
+              "                    target_id=\"loc_001\",\n"
+              "                    command=\"armAway\",\n"
+              "                    arguments=[],\n"
+              "                ),\n"
+              "            ],\n"
+              "        )\n"
+              "\n"
+          )
           if marker not in source:
               raise SystemExit("alarm regression insertion point not found")
           test.write_text(source.replace(marker, regression + marker, 1), encoding="utf-8")
