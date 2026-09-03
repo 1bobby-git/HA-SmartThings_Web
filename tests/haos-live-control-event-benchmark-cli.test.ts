@@ -45,13 +45,13 @@ describe("HAOS live control event benchmark CLI", () => {
 
   test("rejects non-local HA and Bridge endpoints", () => {
     expect(() =>
-      parseCliOptions(["--ha-url", "https://homeassistant.toiss.kr/api"])
+      parseCliOptions(["--ha-url", "https://homeassistant.example.com/api"])
     ).toThrowError("live_control_event_benchmark_arguments_invalid");
     expect(() =>
       parseCliOptions(["--bridge-url", "http://example.com"])
     ).toThrowError("live_control_event_benchmark_arguments_invalid");
     expect(() =>
-      parseCliOptions(["--ha-ws-url", "wss://homeassistant.toiss.kr/api/websocket"])
+      parseCliOptions(["--ha-ws-url", "wss://homeassistant.example.com/api/websocket"])
     ).toThrowError("live_control_event_benchmark_arguments_invalid");
   });
 });
