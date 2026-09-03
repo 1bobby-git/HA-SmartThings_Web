@@ -1,0 +1,113 @@
+name: Apply real SmartThings Web 0.1.168 source patch
+
+on:
+  push:
+    branches:
+      - fix/real-web-parity-0.1.168
+    paths:
+      - .github/workflows/apply-real-web-parity-0.1.168.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    name: Apply source, test, package, and commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - name: Check out clean fix branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/real-web-parity-0.1.168
+          fetch-depth: 0
+
+      - name: Apply the prepared source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/apply-web-parity-0.1.168.yml')
+          if not workflow.is_file():
+              raise SystemExit('prepared patch workflow is missing')
+          lines = workflow.read_text(encoding='utf-8').splitlines()
+          start = next(i for i, line in enumerate(lines) if line.strip() == "python - <<'PY'") + 1
+          end = next(i for i in range(start, len(lines)) if lines[i].strip() == 'PY')
+          body = lines[start:end]
+          indent = min(len(line) - len(line.lstrip(' ')) for line in body if line.strip())
+          script = '\n'.join(line[indent:] if line.strip() else '' for line in body) + '\n'
+          compile(script, '/tmp/apply-smartthings-web-0.1.168.py', 'exec')
+          Path('/tmp/apply-smartthings-web-0.1.168.py').write_text(script, encoding='utf-8')
+          PY
+          python /tmp/apply-smartthings-web-0.1.168.py
+          git diff --check
+
+      - name: Verify required source changes exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F '"version": "0.1.168"' custom_components/smartthings_web/manifest.json
+          grep -F 'version: 0.1.168' addon/smartthings_web_bridge/config.yaml
+          grep -F 'const bridgeVersion = "0.1.168"' bridge/src/runtime.ts
+          grep -F 'normalizeSmartThingsWebPayload' bridge/src/runtime.ts
+          grep -F 'canUseAdvanced: () => true' bridge/src/runtime.ts
+          grep -F 'rawTargetLocationId' bridge/src/browser/command-page.ts
+          grep -F 'd55cafb9-smartthings-web-bridge' custom_components/smartthings_web/bridge_client.py
+          grep -F 'local-smartthings-web-bridge' custom_components/smartthings_web/bridge_client.py
+          test -f tests/web-parity-0.1.168.test.ts
+          if grep -Fq 'releases/download/v${BUILD_VERSION}/smartthings-web-bridge-${BUILD_VERSION}.tgz' addon/smartthings_web_bridge/Dockerfile; then
+            echo 'Dockerfile still depends on downloading its own release asset.' >&2
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Install and test Node source
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm test
+          npm run typecheck
+          npm run build
+          npm run package:addon
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+
+      - name: Test Home Assistant integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check aiohttp yarl
+          python -m compileall -q custom_components/smartthings_web
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+
+      - name: Remove temporary automation files and commit verified source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f --ignore-unmatch \
+            .github/workflows/apply-real-web-parity-0.1.168.yml \
+            .github/workflows/apply-web-parity-0.1.168.yml \
+            .github/workflows/apply-web-parity-0.1.168-v2.yml \
+            .github/workflows/finalize-web-parity-0.1.168.yml \
+            .github/workflows/export-source-0.1.168.yml \
+            .github/workflows/export-regression-baselines-0.1.168.yml \
+            .github/workflows/cleanup-0.1.168-marker.yml \
+            .github/workflows/pr-gate-0.1.168.yml \
+            docs/0.1.168-release-marker.md
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix: publish actual SmartThings Web 0.1.168 source changes'
+          git push origin 'HEAD:fix/real-web-parity-0.1.168'
