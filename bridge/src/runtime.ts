@@ -57,7 +57,10 @@ import {
 import { BridgeAuth } from "./server/bridge-auth.js";
 import { CaptureStore, type SanitizedCaptureRecord } from "./state/capture-store.js";
 import { CameraImageStore } from "./state/camera-image-store.js";
-import { DeviceStore } from "./state/device-store.js";
+import {
+  DeviceStore,
+  type BridgeAdvancedCommandCatalogUpdate
+} from "./state/device-store.js";
 import { StateReconciliationCoordinator } from "./state/reconciliation-coordinator.js";
 import { LocationRealtimeAdapter } from "./realtime/location-realtime-adapter.js";
 import {
@@ -98,7 +101,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.174";
+const bridgeVersion = "0.1.175";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 
@@ -212,6 +215,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       if (generation !== advancedCommandCatalogGeneration) return;
       const currentDevices = new Map(devices.snapshot().devices.map((device) => [device.id, device]));
       let preservedFailure = false;
+      const catalogUpdates: BridgeAdvancedCommandCatalogUpdate[] = [];
       for (const deviceId of [...authoritativeDeviceIds].sort()) {
         if (unresolvedDeviceIds.has(deviceId)) {
           preservedFailure = true;
@@ -230,12 +234,13 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           preservedFailure = true;
           continue;
         }
-        devices.observeAdvancedCommandCatalog(
+        catalogUpdates.push({
           deviceId,
-          nextCommands,
-          nextOmissions
-        );
+          commands: nextCommands,
+          omissions: nextOmissions
+        });
       }
+      devices.observeAdvancedCommandCatalogs(catalogUpdates);
       if (preservedFailure) {
         const current = status.getSnapshot();
         status.update({

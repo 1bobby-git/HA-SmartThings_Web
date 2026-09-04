@@ -94,7 +94,7 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertEqual(client.calls, 1)
         self.assertEqual(runtime.inventory.sequence, 11)
         self.assertEqual(sensor_value(runtime), 21)
-        self.assertEqual(observations, [21])
+        self.assertEqual(observations, [])
 
     def test_matching_inventory_marker_does_not_refetch_the_snapshot(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:00:00Z")
@@ -659,7 +659,7 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         changed = runtime.apply_inventory(latest)
 
         self.assertTrue(changed)
-        self.assertCountEqual(calls, ["global", "state_1", "device_1"])
+        self.assertCountEqual(calls, ["state_1", "device_1"])
 
     def test_alias_state_event_updates_the_canonical_device(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")

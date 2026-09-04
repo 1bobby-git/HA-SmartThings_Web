@@ -306,7 +306,6 @@ def _entity_registry_topology_fingerprint(
                     state.component_role,
                     state.capability_role,
                     state.value is not None,
-                    type(state.value).__name__,
                 )
                 for state in device.states.values()
             )
