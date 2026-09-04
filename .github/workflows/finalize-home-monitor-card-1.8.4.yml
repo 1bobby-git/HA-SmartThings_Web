@@ -1,0 +1,109 @@
+name: Finalize Home Monitor dashboard recovery 1.8.4
+
+on:
+  push:
+    branches:
+      - fix/home-monitor-dashboard-1.8.4
+    paths:
+      - .github/workflows/finalize-home-monitor-card-1.8.4.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Apply reviewed product transformation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          # Reuse the exact transformation whose tests and package startup passed.
+          source = subprocess.check_output([
+              'git', 'show',
+              '88a3a3a66aea207cc22696ad84c6e05ad5fac0eb:.github/workflows/apply-home-monitor-card-1.8.4.yml'
+          ], text=True)
+          opener = "          python - <<'PY'\n"
+          start = source.index(opener) + len(opener)
+          end = source.index('\n          PY\n', start)
+          code = '\n'.join(line[10:] if line.startswith('          ') else line
+                           for line in source[start:end].splitlines()) + '\n'
+          exec(compile(code, '<reviewed-1.8.4-transformer>', 'exec'), {})
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if text.count(old) != 1:
+                  raise SystemExit(f'{path}: expected one marker: {old!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          module = 'bridge/src/browser/home-monitor-card.ts'
+          replace(module,
+              '  // Do not widen an exact monitor card into the entire dashboard or another named widget.',
+              '  // The screenshot also includes a status caption inside the card, not a separate widget.\n'
+              '  const statusCaptions = new Set([normalize("System ready to arm")]);\n'
+              '  // Do not widen an exact monitor card into the entire dashboard or another named widget.')
+          replace(module,
+              '!within(element, titles[0]!) && !within(titles[0]!, element) && !modeMap.has(element));',
+              '!within(element, titles[0]!) && !within(titles[0]!, element) && !modeMap.has(element) &&\n'
+              '      !labels(element).some((label) => statusCaptions.has(label)));')
+          replace(module,
+              '      if (last.kind === "disabled" || last.kind === "scan_limit") { report(last.kind); return "blocked"; }',
+              '      if (last.kind === "disabled") { report(last.kind); return "blocked"; }\n'
+              '      // This is an additive probe. Large dashboards retain the existing bounded locator paths.\n'
+              '      if (last.kind === "scan_limit") { report(last.kind); return "unavailable"; }')
+          extra_tests = '''  await run("in-card status heading is not a foreign widget", htmlCard('<h3>System ready to arm</h3><button id="away">보안(외출)</button><button id="stay">보안(실내)</button>'), 0, "clicked", one("away"));
+            await run("oversized dashboard leaves legacy path available", '<div>' + '<span>x</span>'.repeat(6001) + '</div>' + svgCard, 0, "unavailable", none);
+
+            // Verify the actual production orchestration using intercepted local HTML only.'''
+          replace('tools/ci-home-monitor-card-smoke.mjs',
+              '  // Verify the actual production orchestration using intercepted local HTML only.', extra_tests)
+          PY
+          # Workflow changes were already made using the authorized connector.
+          # Do not ask the limited Actions token to rewrite any workflow file.
+          git restore --source=HEAD --worktree -- .github/workflows/validate.yml
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Validate product, browser fixtures, and Python integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm test
+          npm run typecheck
+          npm run build
+          npx playwright-core install --with-deps chromium
+          node tools/ci-home-monitor-card-smoke.mjs
+          node tools/ci-home-monitor-dialog-smoke.mjs
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.9,<4' 'voluptuous>=0.13,<1'
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+          python -m compileall -q custom_components/smartthings_web
+      - name: Verify packaged startup and audits
+        run: |
+          tools/ci-haos-runtime-smoke.sh
+          npm run audit:api-free
+          npm run audit:secrets
+          npm run audit:fixtures
+      - name: Commit only verified product changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code -- .github/workflows
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix: prioritize exact Home Monitor dashboard controls 1.8.4'
+          git push origin HEAD:fix/home-monitor-dashboard-1.8.4
