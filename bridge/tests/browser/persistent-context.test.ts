@@ -30,6 +30,11 @@ describe("persistent Chromium context", () => {
     expect(launch.options.args).toContain("--profile-directory=Default");
     expect(launch.options.args).toContain("--password-store=basic");
     expect(launch.options.args).toContain("--restore-last-session");
+    expect(launch.options.args).toContain("--disk-cache-dir=/tmp/smartthings-web-chromium-cache");
+    expect(launch.options.args).toContain("--disk-cache-size=67108864");
+    expect(launch.options.args).toContain("--media-cache-size=33554432");
+    expect(launch.options.args).toContain("--disable-breakpad");
+    expect(launch.options.args).toContain("--disable-crash-reporter");
     expect(launch.options.args).toContain("--hide-crash-restore-bubble");
     expect(launch.options.args).toContain("--disable-session-crashed-bubble");
     expect(launch.options.args).not.toContain("--no-sandbox");

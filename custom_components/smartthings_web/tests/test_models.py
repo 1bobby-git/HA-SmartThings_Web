@@ -385,6 +385,64 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         self.assertEqual(runtime.inventory.sequence, 12)
         self.assertEqual(sensor_value(runtime), 22)
 
+    def test_timestamp_only_scalar_update_advances_sequence_without_entity_write(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        runtime = SmartThingsWebRuntime(FakeClient(), "loc_001", current)
+        state = next(iter(current.devices["dev_001"].states.values()))
+        calls: list[str] = []
+        runtime.subscribe(lambda: calls.append("global"))
+        runtime.subscribe_state("dev_001", state.key, lambda: calls.append("state"))
+        runtime.subscribe_device("dev_001", lambda: calls.append("device"))
+
+        changed = runtime.apply_state(
+            state_event(11, state.value, "2026-08-24T21:11:00Z")
+        )
+
+        self.assertFalse(changed)
+        self.assertEqual(runtime.inventory.sequence, 11)
+        self.assertEqual(
+            runtime.inventory.devices["dev_001"].states[state.key].updated_at,
+            "2026-08-24T21:11:00Z",
+        )
+        self.assertEqual(calls, [])
+
+    def test_signal_metrics_timestamp_update_remains_visible(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:10:00Z")
+        signal = BridgeState(
+            "main",
+            "signalMetrics",
+            "signalMetrics",
+            {"lqi": 100, "rssi": -55},
+            None,
+            "2026-08-24T21:10:00Z",
+        )
+        current.devices["dev_001"].states = {signal.key: signal}
+        runtime = SmartThingsWebRuntime(FakeClient(), "loc_001", current)
+        calls: list[int] = []
+        runtime.subscribe_state(
+            "dev_001",
+            signal.key,
+            lambda: calls.append(runtime.inventory.sequence),
+        )
+
+        changed = runtime.apply_state(
+            {
+                "type": "state",
+                "sequence": 11,
+                "deviceId": "dev_001",
+                "state": {
+                    "component": "main",
+                    "capability": "signalMetrics",
+                    "attribute": "signalMetrics",
+                    "value": {"lqi": 100, "rssi": -55},
+                    "updatedAt": "2026-08-24T21:11:00Z",
+                },
+            }
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(calls, [11])
+
     def test_repeated_button_events_with_the_same_timestamp_keep_each_sequence(self) -> None:
         current = inventory(10, 20, "2026-08-24T21:10:00Z")
         button = BridgeState(
