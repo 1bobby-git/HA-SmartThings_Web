@@ -6,6 +6,7 @@ on:
       - fix/haos-live-control-discovery-naming-backpressure-0.1.182
     paths:
       - .github/workflows/apply-haos-live-fix-0.1.182.yml
+      - .github/scripts/0.1.182/**
 
 permissions:
   contents: write
