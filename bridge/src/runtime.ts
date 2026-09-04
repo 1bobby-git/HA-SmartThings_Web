@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import type { BrowserContextLike, BrowserPageLike } from "./browser/keeper-page.js";
 import { installCakeClientCapture } from "./browser/cake-client-capture.js";
@@ -101,9 +102,13 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.175";
+const bridgeVersion = "0.1.176";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
+const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
+const PROFILE_MAINTENANCE_FAILED_FILE = ".profile-maintenance-failed";
+const PROFILE_MAINTENANCE_WAIT_TIMEOUT_MS = 210_000;
+const PROFILE_MAINTENANCE_POLL_MS = 250;
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
@@ -765,9 +770,15 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     log.warn("session_touch_failed");
   };
 
-  const browserStartup = restartBrowser().catch(() => {
-    log.error("browser_startup_failed");
-  });
+  const browserStartup = waitForProfileMaintenance(
+    paths.dataDir,
+    log,
+    () => stopped
+  )
+    .then(restartBrowser)
+    .catch(() => {
+      log.error("browser_startup_failed");
+    });
 
   let stopPromise: Promise<void> | undefined;
   return {
@@ -792,6 +803,63 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       return stopPromise;
     }
   };
+}
+
+export type ProfileMaintenanceWaitResult =
+  | "not_required"
+  | "complete"
+  | "failed"
+  | "timeout"
+  | "stopped";
+
+export interface ProfileMaintenanceWaitOptions {
+  timeoutMs?: number;
+  pollMs?: number;
+}
+
+export async function waitForProfileMaintenance(
+  dataDir: string,
+  log: Pick<BridgeRuntimeLog, "info" | "warn">,
+  shouldStop: () => boolean = () => false,
+  options: ProfileMaintenanceWaitOptions = {}
+): Promise<ProfileMaintenanceWaitResult> {
+  const requiredPath = join(dataDir, PROFILE_MAINTENANCE_REQUIRED_FILE);
+  if (!existsSync(requiredPath)) return "not_required";
+
+  log.info("browser_startup:profile_maintenance_wait");
+  const timeoutMs = Math.max(
+    0,
+    options.timeoutMs ?? PROFILE_MAINTENANCE_WAIT_TIMEOUT_MS
+  );
+  const pollMs = Math.max(
+    1,
+    options.pollMs ?? PROFILE_MAINTENANCE_POLL_MS
+  );
+  const deadline = Date.now() + timeoutMs;
+
+  while (
+    existsSync(requiredPath) &&
+    !shouldStop() &&
+    Date.now() < deadline
+  ) {
+    await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+  }
+
+  if (shouldStop()) {
+    log.info("browser_startup:profile_maintenance_stopped");
+    return "stopped";
+  }
+  if (existsSync(requiredPath)) {
+    log.warn("browser_startup:profile_maintenance_timeout");
+    return "timeout";
+  }
+  if (existsSync(join(dataDir, PROFILE_MAINTENANCE_FAILED_FILE))) {
+    log.warn("browser_startup:profile_maintenance_failed");
+    return "failed";
+  }
+
+  log.info("browser_startup:profile_maintenance_complete");
+  return "complete";
 }
 
 export function classifySmartThingsUrl(value: string): UrlCategory {

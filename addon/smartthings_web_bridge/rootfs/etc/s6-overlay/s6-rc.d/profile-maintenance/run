@@ -1,0 +1,8 @@
+#!/command/with-contenv sh
+set -u
+
+if ! /etc/s6-overlay/scripts/maintain-profile; then
+  printf '%s\n' "profile_maintenance:wrapper_failed" >&2
+fi
+
+exec s6-pause

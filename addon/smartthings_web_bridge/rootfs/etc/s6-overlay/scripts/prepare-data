@@ -1,19 +1,34 @@
 #!/command/with-contenv sh
 set -eu
+umask 077
 
-test -d /data
-chown pwuser:pwuser /data
-OWNERSHIP_MARKER="/data/.ownership-migrated-v2"
+log() {
+  printf '%s\n' "$1" >&2
+}
+
+fail() {
+  log "data_prep:failed:$1"
+  exit 1
+}
+
+DATA_DIR=/data
+MIGRATED_MARKER="$DATA_DIR/.ownership-migrated-v2"
+MAINTENANCE_REQUIRED="$DATA_DIR/.profile-maintenance-required"
+MAINTENANCE_FAILED="$DATA_DIR/.profile-maintenance-failed"
+
+log "data_prep:start"
+
+[ -d "$DATA_DIR" ] || fail "missing_data_dir"
+chown pwuser:pwuser "$DATA_DIR" || fail "data_dir_chown"
 
 for directory in /data/chromium-profile /data/downloads /data/camera-images; do
-  mkdir -p "$directory"
-  chown pwuser:pwuser "$directory"
-  chmod 0700 "$directory"
+  [ ! -L "$directory" ] || fail "invalid_runtime_directory:${directory##*/}"
+  mkdir -p "$directory" || fail "runtime_directory_create:${directory##*/}"
+  [ -d "$directory" ] || fail "invalid_runtime_directory:${directory##*/}"
+  chown pwuser:pwuser "$directory" || fail "runtime_directory_chown:${directory##*/}"
+  chmod 0700 "$directory" || fail "runtime_directory_mode:${directory##*/}"
 done
 
-# Home Assistant Supervisor can replace options.json as root after an update,
-# and SQLite can recreate sidecar files. Repair only the small top-level files
-# on every start; never walk the Chromium profile during normal startup.
 for file in \
   /data/options.json \
   /data/bridge-secret \
@@ -23,38 +38,24 @@ for file in \
   /data/bridge.sqlite-journal \
   /data/settings.json \
   /data/protocol-fingerprint.json; do
-  if [ -f "$file" ] && [ ! -L "$file" ]; then
-    chown pwuser:pwuser "$file"
+  if [ -e "$file" ] || [ -L "$file" ]; then
+    [ -f "$file" ] && [ ! -L "$file" ] || fail "invalid_critical_file:${file##*/}"
+    chown pwuser:pwuser "$file" || fail "critical_file_chown:${file##*/}"
+    chmod 0600 "$file" || fail "critical_file_mode:${file##*/}"
   fi
 done
 
-if [ ! -f "$OWNERSHIP_MARKER" ]; then
-  migration_failed=0
-  for directory in /data/chromium-profile /data/downloads /data/camera-images; do
-    find "$directory" -xdev \( -type d -o -type f \) -exec chown pwuser:pwuser {} + || migration_failed=1
-  done
-  if [ "$migration_failed" -eq 0 ]; then
-    touch "$OWNERSHIP_MARKER"
-    chown pwuser:pwuser "$OWNERSHIP_MARKER"
-    chmod 0600 "$OWNERSHIP_MARKER"
-  else
-    echo "data_prep_recursive_ownership_retry_required" >&2
-  fi
+if [ -e "$MIGRATED_MARKER" ] || [ -L "$MIGRATED_MARKER" ]; then
+  [ -f "$MIGRATED_MARKER" ] && [ ! -L "$MIGRATED_MARKER" ] || fail "invalid_ownership_marker"
+  chown pwuser:pwuser "$MIGRATED_MARKER" || fail "ownership_marker_chown"
+  chmod 0600 "$MIGRATED_MARKER" || fail "ownership_marker_mode"
 fi
 
-for cache_path in \
-  "/data/chromium-profile/Default/Cache" \
-  "/data/chromium-profile/Default/Code Cache" \
-  "/data/chromium-profile/Default/GPUCache" \
-  "/data/chromium-profile/Default/Service Worker/CacheStorage" \
-  "/data/chromium-profile/Default/Service Worker/ScriptCache" \
-  "/data/chromium-profile/GrShaderCache" \
-  "/data/chromium-profile/ShaderCache" \
-  "/data/chromium-profile/GraphiteDawnCache" \
-  "/data/chromium-profile/DawnGraphiteCache" \
-  "/data/chromium-profile/DawnWebGPUCache" \
-  "/data/chromium-profile/Crashpad"; do
-  rm -rf -- "$cache_path" 2>/dev/null || true
-done
+rm -f -- "$MAINTENANCE_FAILED" || fail "maintenance_failure_cleanup"
+rm -f -- "$MAINTENANCE_REQUIRED" || fail "maintenance_request_cleanup"
+: > "$MAINTENANCE_REQUIRED" || fail "maintenance_request_create"
+chown pwuser:pwuser "$MAINTENANCE_REQUIRED" || fail "maintenance_request_chown"
+chmod 0600 "$MAINTENANCE_REQUIRED" || fail "maintenance_request_mode"
 
-find /data/downloads -mindepth 1 -type f -mtime +7 -delete 2>/dev/null || true
+log "data_prep:profile_maintenance_scheduled"
+log "data_prep:ready"

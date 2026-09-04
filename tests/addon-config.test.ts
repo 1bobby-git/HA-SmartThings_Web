@@ -10,19 +10,20 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("packages inventory backpressure and low-write safeguards as version 0.1.175", () => {
+  test("packages nonblocking startup recovery as version 0.1.176", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.175");
+    expect(config.version).toBe("0.1.176");
     expect(config.homeassistant_api).toBe(true);
-    expect(packageMetadata.version).toBe("0.1.175");
-    expect(protocolMetadata.bridge_version).toBe("0.1.175");
+    expect(packageMetadata.version).toBe("0.1.176");
+    expect(protocolMetadata.bridge_version).toBe("0.1.176");
     expect(protocolMetadata.protocol_version).toBe(5);
-    expect(runtime).toContain('const bridgeVersion = "0.1.175";');
+    expect(runtime).toContain('const bridgeVersion = "0.1.176";');
+    expect(changelog).toContain("## 0.1.176");
     expect(changelog).toContain("## 0.1.175");
     expect(changelog).toContain("## 0.1.174");
     expect(changelog).toContain("## 0.1.173");
@@ -347,6 +348,7 @@ describe("Home Assistant add-on metadata", () => {
     const dockerfile = addonDockerfile();
     const bridgeRun = readText(`${serviceRoot}/bridge/run`);
     const prepareData = readText("addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data");
+    const maintainProfile = readText("addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/maintain-profile");
 
     expect(bridgeRun).toMatch(/^#!\/command\/with-contenv sh/);
     expect(bridgeRun).toContain("export HOME=/data");
@@ -380,17 +382,27 @@ describe("Home Assistant add-on metadata", () => {
     expect(readText(`${serviceRoot}/data-prep/up`).trim()).toBe(
       "/etc/s6-overlay/scripts/prepare-data"
     );
-    expect(prepareData).toContain("test -d /data");
+    expect(readText(`${serviceRoot}/profile-maintenance/type`).trim()).toBe("longrun");
+    expect(
+      readText(`${serviceRoot}/profile-maintenance/dependencies.d/data-prep`).trim()
+    ).toBe("");
+    expect(readText(`${serviceRoot}/profile-maintenance/run`)).toContain(
+      "/etc/s6-overlay/scripts/maintain-profile"
+    );
+    expect(readText(`${serviceRoot}/profile-maintenance/run`)).toContain("exec s6-pause");
+    expect(existsSync(`${serviceRoot}/bridge/dependencies.d/profile-maintenance`)).toBe(false);
+    expect(prepareData).toContain('[ -d "$DATA_DIR" ] || fail "missing_data_dir"');
     expect(prepareData).not.toContain("chown -R pwuser:pwuser /data");
-    expect(prepareData).toContain("chown pwuser:pwuser /data");
-    expect(prepareData).toContain("Service Worker/CacheStorage");
+    expect(prepareData).toContain('chown pwuser:pwuser "$DATA_DIR"');
+    expect(maintainProfile).toContain("Service Worker/CacheStorage");
     expect(readText(`${bundleRoot}/type`).trim()).toBe("bundle");
-    for (const service of ["bridge", "data-prep", "nginx", "novnc", "openbox", "x11vnc", "xvfb", "xvfb-ready"]) {
+    for (const service of ["bridge", "data-prep", "nginx", "novnc", "openbox", "profile-maintenance", "x11vnc", "xvfb", "xvfb-ready"]) {
       expect(readText(`${bundleRoot}/contents.d/${service}`).trim()).toBe("");
     }
     expect(existsSync(`${serviceRoot}/user`)).toBe(false);
     expect(dockerfile).toContain("x11-utils");
     expect(dockerfile).toContain("-name up");
+    expect(dockerfile).toContain("-name finish");
     expect(dockerfile).toContain("chmod +x /etc/s6-overlay/scripts/*");
     expect(dockerfile).toContain('ENTRYPOINT ["/init"]');
     expect(dockerfile).not.toMatch(/--privileged|CAP_SYS_ADMIN|host\.docker\.internal/);
