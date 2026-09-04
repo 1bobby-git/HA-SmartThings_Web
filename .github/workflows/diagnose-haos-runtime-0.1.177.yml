@@ -1,0 +1,110 @@
+name: Diagnose HAOS runtime startup 0.1.177
+
+on:
+  push:
+    branches:
+      - fix/haos-runtime-startup-0.1.177
+    paths:
+      - .github/workflows/diagnose-haos-runtime-0.1.177.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnose-haos-runtime-0.1.177
+  cancel-in-progress: false
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Build the exact 0.1.176 packaged app path used by Supervisor
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --progress=plain \
+            --build-arg BUILD_ARCH=amd64 \
+            --build-arg BUILD_VERSION=0.1.176 \
+            -f addon/smartthings_web_bridge/Dockerfile \
+            -t smartthings-web:0.1.176-runtime-diagnostic \
+            addon/smartthings_web_bridge
+
+      - name: Exercise clean and damaged persistent-data scenarios
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          run_case() {
+            case_name="$1"
+            data_dir="$RUNNER_TEMP/stw-${case_name}"
+            container_name="stw-${case_name}"
+            rm -rf "$data_dir"
+            mkdir -p "$data_dir/chromium-profile/Default" "$data_dir/downloads" "$data_dir/camera-images"
+            printf '%s\n' '{"log_level":"info","dom_fallback_enabled":true,"command_confirmation_timeout":30,"status_recheck_enabled":true,"inventory_reconciliation_interval":21600,"debug_protocol_logging":false}' > "$data_dir/options.json"
+
+            case "$case_name" in
+              clean)
+                ;;
+              root-owned-profile)
+                mkdir -p "$data_dir/chromium-profile/Default/Service Worker/CacheStorage/nested"
+                printf x > "$data_dir/chromium-profile/Default/Service Worker/CacheStorage/nested/cache"
+                ;;
+              invalid-sqlite-directory)
+                mkdir -p "$data_dir/bridge.sqlite/unexpected"
+                printf x > "$data_dir/bridge.sqlite/unexpected/file"
+                ;;
+              empty-secret)
+                : > "$data_dir/bridge-secret"
+                ;;
+              *)
+                echo "Unknown case: $case_name" >&2
+                return 2
+                ;;
+            esac
+
+            chmod 0700 "$data_dir" "$data_dir/chromium-profile" "$data_dir/downloads" "$data_dir/camera-images"
+            chmod 0600 "$data_dir/options.json"
+
+            docker run -d \
+              --name "$container_name" \
+              --shm-size=1g \
+              -v "$data_dir:/data" \
+              smartthings-web:0.1.176-runtime-diagnostic >/dev/null
+
+            ready=0
+            for attempt in $(seq 1 120); do
+              if docker exec "$container_name" sh -c 'curl -fsS --max-time 2 http://127.0.0.1:8098/ >/dev/null'; then
+                ready=1
+                break
+              fi
+              sleep 1
+            done
+
+            echo "===== CASE ${case_name}: ready=${ready} ====="
+            docker logs "$container_name" 2>&1 || true
+            echo "===== PROCESS LIST ====="
+            docker exec "$container_name" sh -c 'ps -eo user,pid,ppid,stat,comm,args --sort=pid' || true
+            echo "===== DATA STATE ====="
+            docker exec "$container_name" sh -c 'find /data -maxdepth 2 -printf "%M %u:%g %p -> %l\n" | sort' || true
+            echo "===== LISTENERS ====="
+            docker exec "$container_name" sh -c 'ss -lntp 2>/dev/null || netstat -lntp 2>/dev/null || true' || true
+
+            docker rm -f "$container_name" >/dev/null 2>&1 || true
+            printf '%s=%s\n' "$case_name" "$ready" >> "$RUNNER_TEMP/runtime-results"
+          }
+
+          : > "$RUNNER_TEMP/runtime-results"
+          run_case clean
+          run_case root-owned-profile
+          run_case invalid-sqlite-directory
+          run_case empty-secret
+
+          echo "===== SUMMARY ====="
+          cat "$RUNNER_TEMP/runtime-results"
+
+          grep -qx 'clean=1' "$RUNNER_TEMP/runtime-results"
+          grep -qx 'root-owned-profile=1' "$RUNNER_TEMP/runtime-results"
