@@ -26,7 +26,9 @@ jobs:
           fetch-depth: 0
 
       - name: Apply reviewed Bridge discovery changes
-        run: python .github/scripts/apply_bridge_autodiscovery_0_1_179.py
+        run: |
+          python .github/scripts/apply_bridge_autodiscovery_0_1_179.py
+          python .github/scripts/fix_bridge_autodiscovery_contract_0_1_179.py
 
       - name: Validate shell syntax
         run: |
@@ -72,6 +74,7 @@ jobs:
         run: |
           rm -f .github/workflows/apply-bridge-autodiscovery-0.1.179.yml
           rm -f .github/scripts/apply_bridge_autodiscovery_0_1_179.py
+          rm -f .github/scripts/fix_bridge_autodiscovery_contract_0_1_179.py
 
       - name: Commit verified changes
         shell: bash
