@@ -1,3 +1,10 @@
+## 1.8.3
+
+- 요청한 버전 표기에 맞춰 0.1.183의 최신 Home Monitor 수정본을 1.8.3으로 배포합니다. 병행 반영된 main 변경과 Chromium 전체 명령 경로 회귀 테스트를 그대로 보존합니다.
+- 열린 Home Monitor 팝업의 native select/option, 라디오, 분리된 aria-labelledby, 연결된 combobox/listbox 및 적용/저장 버튼을 처리합니다. 팝업 밖의 버튼이나 중복 후보는 임의로 실행하지 않습니다.
+- 실제 보안 상태 이벤트를 통한 성공 확인과 이미 동작한 Scene 실행 경로, 로그인 프로필, 이벤트 폭주 억제, 엔티티 ID 처리를 유지합니다. Scene 완료 확인 타임아웃과 별도 자동화의 잘못된 entity ID는 이번 수정 범위가 아닙니다.
+- 진단은 home_monitor_diag:dialog_* 형식의 구조 개수만 기록합니다. 합성 HTML의 Chromium 테스트와 패키지 실행 검증은 사용자 Samsung 계정의 Home Monitor 실동작 확인을 대신하지 않습니다.
+
 ## 0.1.183
 
 - 0.1.182 실환경 로그의 `current_mode_opened`, `dialogs_1`, `action_0` 경로를 대상으로 Home Monitor의 열린 팝업을 별도로 처리합니다. 닫힌 native `select`의 화면 크기 0인 `option`, 설명이 붙은 라디오/모드 항목, `aria-labelledby`, 팝업에 연결된 combobox/listbox를 지원합니다.
