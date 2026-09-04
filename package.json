@@ -1,6 +1,6 @@
 {
   "name": "ha-smartthings-web",
-  "version": "0.1.178",
+  "version": "0.1.179",
   "private": true,
   "type": "module",
   "packageManager": "npm@11.12.1",

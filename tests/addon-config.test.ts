@@ -10,19 +10,22 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("packages HAOS chmod ownership recovery as version 0.1.178", () => {
+  test("packages Bridge URL autodiscovery as version 0.1.179", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.178");
+    expect(config.version).toBe("0.1.179");
     expect(config.homeassistant_api).toBe(true);
-    expect(packageMetadata.version).toBe("0.1.178");
-    expect(protocolMetadata.bridge_version).toBe("0.1.178");
+    expect(config.hassio_api).toBe(true);
+    expect(config.discovery).toEqual(["smartthings_web"]);
+    expect(packageMetadata.version).toBe("0.1.179");
+    expect(protocolMetadata.bridge_version).toBe("0.1.179");
     expect(protocolMetadata.protocol_version).toBe(5);
-    expect(runtime).toContain('const bridgeVersion = "0.1.178";');
+    expect(runtime).toContain('const bridgeVersion = "0.1.179";');
+    expect(changelog).toContain("## 0.1.179");
     expect(changelog).toContain("## 0.1.178");
     expect(changelog).toContain("## 0.1.177");
     expect(changelog).toContain("## 0.1.176");
@@ -380,6 +383,12 @@ describe("Home Assistant add-on metadata", () => {
     expect(readText(`${serviceRoot}/openbox/dependencies.d/xvfb-ready`).trim()).toBe("");
     expect(readText(`${serviceRoot}/bridge/dependencies.d/xvfb-ready`).trim()).toBe("");
     expect(readText(`${serviceRoot}/bridge/dependencies.d/data-prep`).trim()).toBe("");
+    expect(readText(`${serviceRoot}/bridge-discovery/type`).trim()).toBe("oneshot");
+    expect(readText(`${serviceRoot}/bridge-discovery/dependencies.d/bridge`).trim()).toBe("");
+    expect(readText(`${serviceRoot}/bridge-discovery/dependencies.d/nginx`).trim()).toBe("");
+    expect(readText(`${serviceRoot}/bridge-discovery/up`).trim()).toBe(
+      "/etc/s6-overlay/scripts/publish-discovery"
+    );
     expect(readText(`${serviceRoot}/data-prep/type`).trim()).toBe("oneshot");
     expect(readText(`${serviceRoot}/data-prep/up`).trim()).toBe(
       "/etc/s6-overlay/scripts/prepare-data"
@@ -398,7 +407,7 @@ describe("Home Assistant add-on metadata", () => {
     expect(prepareData).toContain('chown pwuser:pwuser "$DATA_DIR"');
     expect(maintainProfile).toContain("Service Worker/CacheStorage");
     expect(readText(`${bundleRoot}/type`).trim()).toBe("bundle");
-    for (const service of ["bridge", "data-prep", "nginx", "novnc", "openbox", "profile-maintenance", "x11vnc", "xvfb", "xvfb-ready"]) {
+    for (const service of ["bridge", "bridge-discovery", "data-prep", "nginx", "novnc", "openbox", "profile-maintenance", "x11vnc", "xvfb", "xvfb-ready"]) {
       expect(readText(`${bundleRoot}/contents.d/${service}`).trim()).toBe("");
     }
     expect(existsSync(`${serviceRoot}/user`)).toBe(false);

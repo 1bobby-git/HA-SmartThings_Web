@@ -33,6 +33,7 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
 
     def test_accepts_only_local_bridge_addresses(self) -> None:
         accepted = (
+            "http://8a97f131-smartthings-web-bridge:8100",
             "http://local-smartthings-web-bridge:8100",
             "http://localhost:8099",
             "http://127.0.0.1:8099",
@@ -50,17 +51,33 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
     def test_keeps_repository_hostname_and_orders_known_fallback(self) -> None:
         client = SmartThingsWebBridgeClient(
             object(),
-            "http://d55cafb9-smartthings-web-bridge:8100/",
+            "http://8a97f131-smartthings-web-bridge:8100/",
         )  # type: ignore[arg-type]
 
         self.assertEqual(
             client.base_url,
-            "http://d55cafb9-smartthings-web-bridge:8100",
+            "http://8a97f131-smartthings-web-bridge:8100",
         )
         self.assertEqual(
             client._base_urls,
             (
+                "http://8a97f131-smartthings-web-bridge:8100",
+                "http://local-smartthings-web-bridge:8100",
                 "http://d55cafb9-smartthings-web-bridge:8100",
+            ),
+        )
+
+    def test_keeps_legacy_repository_hostname_as_migration_fallback(self) -> None:
+        client = SmartThingsWebBridgeClient(
+            object(),
+            "http://d55cafb9-smartthings-web-bridge:8100/",
+        )  # type: ignore[arg-type]
+
+        self.assertEqual(
+            client._base_urls,
+            (
+                "http://d55cafb9-smartthings-web-bridge:8100",
+                "http://8a97f131-smartthings-web-bridge:8100",
                 "http://local-smartthings-web-bridge:8100",
             ),
         )
@@ -102,12 +119,12 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
             session.calls,
             [
                 "http://local-smartthings-web-bridge:8100/api/v1/inventory",
-                "http://d55cafb9-smartthings-web-bridge:8100/api/v1/inventory",
+                "http://8a97f131-smartthings-web-bridge:8100/api/v1/inventory",
             ],
         )
         self.assertEqual(
             client.base_url,
-            "http://d55cafb9-smartthings-web-bridge:8100",
+            "http://8a97f131-smartthings-web-bridge:8100",
         )
 
     def test_rejects_public_or_ambiguous_bridge_addresses(self) -> None:

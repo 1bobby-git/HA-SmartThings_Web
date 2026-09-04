@@ -8,9 +8,12 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.service_info.hassio import HassioServiceInfo
 
 from .bridge_client import BridgeAuthError, BridgeClientError, SmartThingsWebBridgeClient
 from .const import (
+    BRIDGE_ADDON_SLUG,
+    BRIDGE_INTERNAL_PORT,
     CONF_BRIDGE_TOKEN,
     CONF_BRIDGE_URL,
     CONF_COMMAND_CONFIRMATION_TIMEOUT,
@@ -42,6 +45,7 @@ class SmartThingsWebConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
     _pending_pairing: tuple[str, str, BridgeInventory] | None = None
     _reauth_data: dict[str, Any] | None = None
+    _discovered_bridge_url: str | None = None
 
     @staticmethod
     def async_get_options_flow(
@@ -49,6 +53,30 @@ class SmartThingsWebConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> config_entries.OptionsFlow:
         """Return the options flow for this entry."""
         return SmartThingsWebOptionsFlow()
+
+    async def async_step_hassio(self, discovery_info: HassioServiceInfo):
+        """Use the exact internal Bridge address published by its Supervisor app."""
+        slug = discovery_info.slug
+        if not isinstance(slug, str) or (
+            slug != BRIDGE_ADDON_SLUG
+            and not slug.endswith(f"_{BRIDGE_ADDON_SLUG}")
+        ):
+            return self.async_abort(reason="not_smartthings_web_bridge")
+
+        host = discovery_info.config.get("host")
+        port = discovery_info.config.get("port")
+        expected_host = slug.replace("_", "-")
+        if (
+            not isinstance(host, str)
+            or host != expected_host
+            or isinstance(port, bool)
+            or not isinstance(port, int)
+            or port != BRIDGE_INTERNAL_PORT
+        ):
+            return self.async_abort(reason="invalid_discovery")
+
+        self._discovered_bridge_url = f"http://{host}:{port}"
+        return await self.async_step_user()
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         """Pair with the Bridge and select its main device location."""
@@ -77,11 +105,17 @@ class SmartThingsWebConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )
                     return await self.async_step_location()
 
+        bridge_url_default = self._discovered_bridge_url or DEFAULT_BRIDGE_URL
+        if user_input is not None and isinstance(
+            user_input.get(CONF_BRIDGE_URL), str
+        ):
+            bridge_url_default = user_input[CONF_BRIDGE_URL]
+
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_BRIDGE_URL, default=DEFAULT_BRIDGE_URL): str,
+                    vol.Required(CONF_BRIDGE_URL, default=bridge_url_default): str,
                     vol.Required("pairing_code"): str,
                 }
             ),

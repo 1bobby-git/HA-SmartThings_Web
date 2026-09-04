@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "SmartThings Web Bridge 연결",
-        "description": "Bridge 애드온에서 페어링 코드를 생성한 뒤 입력하세요.",
+        "description": "앱에서 자동 감지한 Bridge 주소가 입력됩니다. Bridge 앱에서 페어링 코드를 생성한 뒤 입력하세요.",
         "data": {
           "bridge_url": "Bridge 주소",
           "pairing_code": "페어링 코드"
@@ -32,7 +32,9 @@
     },
     "abort": {
       "already_configured": "이 SmartThings 위치는 이미 구성되어 있습니다",
-      "invalid_flow": "설정을 다시 시작하고 Bridge와 다시 페어링하세요"
+      "invalid_flow": "설정을 다시 시작하고 Bridge와 다시 페어링하세요",
+      "not_smartthings_web_bridge": "SmartThings Web Bridge 앱에서 전달된 검색 정보가 아닙니다",
+      "invalid_discovery": "Bridge 앱이 잘못된 내부 주소를 전달했습니다"
     }
   },
   "options": {

@@ -82,6 +82,13 @@ def _install_homeassistant_stubs() -> None:
     aiohttp_client.async_get_clientsession = lambda _hass: object()  # type: ignore[attr-defined]
     sys.modules["homeassistant.helpers.aiohttp_client"] = aiohttp_client
 
+    service_info = ModuleType("homeassistant.helpers.service_info")
+    service_info.__path__ = []  # type: ignore[attr-defined]
+    sys.modules["homeassistant.helpers.service_info"] = service_info
+    hassio_service_info = ModuleType("homeassistant.helpers.service_info.hassio")
+    hassio_service_info.HassioServiceInfo = SimpleNamespace  # type: ignore[attr-defined]
+    sys.modules["homeassistant.helpers.service_info.hassio"] = hassio_service_info
+
 
 _install_homeassistant_stubs()
 
@@ -100,6 +107,7 @@ from smartthings_web.const import (  # noqa: E402
     CONF_STATUS_RECHECK_ENABLED,
     CONTROL_MODE_READ_ONLY,
     CONTROL_MODE_SAFE_CONTROL,
+    DEFAULT_BRIDGE_URL,
 )
 from smartthings_web.models import BridgeInventory  # noqa: E402
 import smartthings_web.config_flow as config_flow  # noqa: E402
@@ -112,6 +120,50 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow = SmartThingsWebConfigFlow.async_get_options_flow(SimpleNamespace())
 
         self.assertIsInstance(flow, SmartThingsWebOptionsFlow)
+
+    async def test_manual_flow_defaults_to_current_repository_hostname(self) -> None:
+        flow = SmartThingsWebConfigFlow()
+
+        result = await flow.async_step_user()
+        values = result["data_schema"]({"pairing_code": "12345678"})
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(values[CONF_BRIDGE_URL], DEFAULT_BRIDGE_URL)
+
+    async def test_hassio_discovery_prefills_exact_runtime_hostname(self) -> None:
+        flow = SmartThingsWebConfigFlow()
+
+        result = await flow.async_step_hassio(
+            SimpleNamespace(
+                slug="8a97f131_smartthings_web_bridge",
+                config={
+                    "host": "8a97f131-smartthings-web-bridge",
+                    "port": 8100,
+                },
+            )
+        )
+        values = result["data_schema"]({"pairing_code": "12345678"})
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(
+            values[CONF_BRIDGE_URL],
+            "http://8a97f131-smartthings-web-bridge:8100",
+        )
+
+    async def test_hassio_discovery_rejects_mismatched_hostname(self) -> None:
+        flow = SmartThingsWebConfigFlow()
+
+        result = await flow.async_step_hassio(
+            SimpleNamespace(
+                slug="8a97f131_smartthings_web_bridge",
+                config={
+                    "host": "d55cafb9-smartthings-web-bridge",
+                    "port": 8100,
+                },
+            )
+        )
+
+        self.assertEqual(result, {"type": "abort", "reason": "invalid_discovery"})
 
     async def test_new_pairing_stores_the_reachable_repository_hostname(self) -> None:
         original_client = config_flow.SmartThingsWebBridgeClient
@@ -132,7 +184,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(flow._pending_pairing)
         self.assertEqual(
             flow._pending_pairing[0],
-            "http://d55cafb9-smartthings-web-bridge:8100",
+            "http://8a97f131-smartthings-web-bridge:8100",
         )
 
     async def test_new_entries_default_to_safe_control_options(self) -> None:
@@ -223,7 +275,7 @@ class FakeResolvedPairingClient:
     """Expose the repository hostname selected after a safe fallback probe."""
 
     def __init__(self, _session: object, _bridge_url: str) -> None:
-        self.base_url = "http://d55cafb9-smartthings-web-bridge:8100"
+        self.base_url = "http://8a97f131-smartthings-web-bridge:8100"
 
     async def async_pair(self, code: str) -> str:
         if code != "12345678":

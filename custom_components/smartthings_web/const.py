@@ -12,9 +12,16 @@ CONF_DEBUG_PROTOCOL_LOGGING = "debug_protocol_logging"
 CONF_LOCATION_ID = "location_id"
 CONTROL_MODE_READ_ONLY = "read_only"
 CONTROL_MODE_SAFE_CONTROL = "safe_control"
-REPOSITORY_BRIDGE_URL = "http://d55cafb9-smartthings-web-bridge:8100"
+BRIDGE_ADDON_SLUG = "smartthings_web_bridge"
+BRIDGE_INTERNAL_PORT = 8100
+REPOSITORY_BRIDGE_URL = "http://8a97f131-smartthings-web-bridge:8100"
 LOCAL_BRIDGE_URL = "http://local-smartthings-web-bridge:8100"
-KNOWN_BRIDGE_URLS = (REPOSITORY_BRIDGE_URL, LOCAL_BRIDGE_URL)
+LEGACY_REPOSITORY_BRIDGE_URL = "http://d55cafb9-smartthings-web-bridge:8100"
+KNOWN_BRIDGE_URLS = (
+    REPOSITORY_BRIDGE_URL,
+    LOCAL_BRIDGE_URL,
+    LEGACY_REPOSITORY_BRIDGE_URL,
+)
 DEFAULT_BRIDGE_URL = REPOSITORY_BRIDGE_URL
 
 
@@ -30,7 +37,7 @@ def normalize_bridge_url(value: str) -> str:
 
 
 def bridge_url_candidates(value: str) -> tuple[str, ...]:
-    """Return safe candidates for repository and manually installed local apps."""
+    """Return current, local, and legacy Supervisor app URL candidates."""
     normalized = normalize_bridge_url(value)
     if normalized not in KNOWN_BRIDGE_URLS:
         return (normalized,)

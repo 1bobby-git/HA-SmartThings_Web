@@ -1,3 +1,10 @@
+## 0.1.179
+
+- 실제 Home Assistant OS가 보고한 설치 slug `8a97f131_smartthings_web_bridge`와 런타임 hostname `8a97f131-smartthings-web-bridge`를 기준으로, 통합 화면에 남아 있던 이전 `d55cafb9` 고정 주소를 수정했습니다.
+- Bridge가 준비되면 Supervisor app discovery로 실제 런타임 hostname과 Core 전용 `8100` 포트를 게시하고, `smartthings_web` 구성 흐름이 그 주소를 자동 입력합니다. 수동 입력은 계속 허용합니다.
+- 현재 저장소 주소, `/addons` 로컬 주소, 이전 저장소 주소를 사설 Bridge 후보로 유지해 기존 구성과 재인증도 실제 응답한 주소로 복구·저장합니다.
+- `8100`은 계속 Home Assistant Core에서만 접근할 수 있고 외부 포트나 host network를 추가하지 않습니다. Supervisor 토큰은 discovery 요청에만 사용하고 로그에 기록하지 않습니다.
+
 ## 0.1.178
 
 - 실제 Home Assistant OS AppArmor 환경에서 `data-prep`가 `/data` 또는 `chromium-profile`의 소유권을 `pwuser`로 변경한 직후 root 권한으로 `chmod`를 실행해 `Operation not permitted`로 종료되던 회귀를 수정했습니다. 이 실패가 Bridge 서비스 시작을 막아 `127.0.0.1:8098` 연결 거부와 빈 noVNC 화면을 발생시켰습니다.
