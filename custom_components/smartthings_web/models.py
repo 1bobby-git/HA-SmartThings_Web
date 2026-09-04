@@ -838,6 +838,18 @@ def switch_name_overrides(
             is_primary or _main_power_switch_state(device, state)
         ):
             label = None
+        if (
+            label is None
+            and is_primary
+            and control is not None
+            and control.transport != "advanced"
+            and isinstance(control.label, str)
+            and bool(control.label.strip())
+            and _web_control_label(control.label) is None
+        ):
+            label = _readable_state_token(
+                state.component_role or state.component, "component"
+            )
         if label is None and is_primary:
             label = "전원"
         if label is None and not primary_switch_state(device, state):
