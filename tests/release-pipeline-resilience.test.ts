@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 
 const readText = (path: string) => readFileSync(path, "utf8");
@@ -23,10 +23,7 @@ describe("release pipeline resilience", () => {
     expect(release).toContain("within 15 minutes");
   });
 
-  test("removes the temporary release-gate branch after the release is published", () => {
-    const cleanup = readText(".github/workflows/cleanup-0.1.177.yml");
-
-    expect(cleanup).toContain("'fix/release-gate-0.1.177'");
-    expect(cleanup).toContain("git rm .github/workflows/cleanup-0.1.177.yml");
+  test("does not retain the one-shot 0.1.177 cleanup workflow", () => {
+    expect(existsSync(".github/workflows/cleanup-0.1.177.yml")).toBe(false);
   });
 });

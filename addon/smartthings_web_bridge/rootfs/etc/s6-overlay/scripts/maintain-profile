@@ -10,8 +10,8 @@ write_marker() {
   marker="$1"
   rm -f -- "$marker" || return 1
   : > "$marker" || return 1
-  chown pwuser:pwuser "$marker" || return 1
   chmod 0600 "$marker" || return 1
+  chown pwuser:pwuser "$marker" || return 1
 }
 
 DATA_DIR=/data

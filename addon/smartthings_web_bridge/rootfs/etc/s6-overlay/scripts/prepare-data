@@ -62,6 +62,15 @@ quarantine_path() {
   log "data_prep:quarantined:$qp_label"
 }
 
+set_pwuser_mode() {
+  pm_mode="$1"
+  pm_path="$2"
+  pm_failure="$3"
+  # The HAOS AppArmor profile intentionally does not grant CAP_FOWNER.
+  # Run chmod as the final owner instead of changing mode as root after chown.
+  s6-setuidgid pwuser chmod "$pm_mode" "$pm_path" || fail "$pm_failure"
+}
+
 ensure_runtime_directory() {
   rd_path="$1"
   rd_label="$2"
@@ -71,7 +80,7 @@ ensure_runtime_directory() {
   mkdir -p "$rd_path" || fail "runtime_directory_create:$rd_label"
   [ -d "$rd_path" ] && [ ! -L "$rd_path" ] || fail "invalid_runtime_directory:$rd_label"
   chown pwuser:pwuser "$rd_path" || fail "runtime_directory_chown:$rd_label"
-  chmod 0700 "$rd_path" || fail "runtime_directory_mode:$rd_label"
+  set_pwuser_mode 0700 "$rd_path" "runtime_directory_mode:$rd_label"
 }
 
 repair_private_file() {
@@ -88,7 +97,7 @@ repair_private_file() {
     return 0
   fi
   chown pwuser:pwuser "$pf_path" || fail "critical_file_chown:$pf_label"
-  chmod 0600 "$pf_path" || fail "critical_file_mode:$pf_label"
+  set_pwuser_mode 0600 "$pf_path" "critical_file_mode:$pf_label"
 }
 
 remove_runtime_marker() {
@@ -124,7 +133,7 @@ log "data_prep:start"
 [ -d "$DATA_DIR" ] || fail "missing_data_dir"
 [ ! -L "$DATA_DIR" ] || fail "invalid_data_dir"
 chown pwuser:pwuser "$DATA_DIR" || fail "data_dir_chown"
-chmod 0700 "$DATA_DIR" || fail "data_dir_mode"
+set_pwuser_mode 0700 "$DATA_DIR" "data_dir_mode"
 
 ensure_runtime_directory /data/chromium-profile chromium-profile
 ensure_runtime_directory /data/downloads downloads
@@ -159,7 +168,7 @@ fi
 if path_exists "$MIGRATED_MARKER"; then
   if [ -f "$MIGRATED_MARKER" ] && [ ! -L "$MIGRATED_MARKER" ]; then
     chown pwuser:pwuser "$MIGRATED_MARKER" || fail "ownership_marker_chown"
-    chmod 0600 "$MIGRATED_MARKER" || fail "ownership_marker_mode"
+    set_pwuser_mode 0600 "$MIGRATED_MARKER" "ownership_marker_mode"
   else
     quarantine_path "$MIGRATED_MARKER" ownership-marker
   fi
@@ -169,7 +178,7 @@ remove_runtime_marker "$MAINTENANCE_FAILED" profile-maintenance-failed
 remove_runtime_marker "$MAINTENANCE_REQUIRED" profile-maintenance-required
 : > "$MAINTENANCE_REQUIRED" || fail "maintenance_request_create"
 chown pwuser:pwuser "$MAINTENANCE_REQUIRED" || fail "maintenance_request_chown"
-chmod 0600 "$MAINTENANCE_REQUIRED" || fail "maintenance_request_mode"
+set_pwuser_mode 0600 "$MAINTENANCE_REQUIRED" "maintenance_request_mode"
 
 log "data_prep:profile_maintenance_scheduled"
 log "data_prep:ready"

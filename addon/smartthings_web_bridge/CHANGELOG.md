@@ -1,3 +1,9 @@
+## 0.1.178
+
+- 실제 Home Assistant OS AppArmor 환경에서 `data-prep`가 `/data` 또는 `chromium-profile`의 소유권을 `pwuser`로 변경한 직후 root 권한으로 `chmod`를 실행해 `Operation not permitted`로 종료되던 회귀를 수정했습니다. 이 실패가 Bridge 서비스 시작을 막아 `127.0.0.1:8098` 연결 거부와 빈 noVNC 화면을 발생시켰습니다.
+- 권한 변경은 최종 소유자인 `pwuser`로 전환한 프로세스에서 실행해 `CAP_FOWNER` 권한을 추가하지 않고도 `/data`, Chromium 프로필, SQLite·설정 파일의 보안 모드를 유지합니다. 프로필 유지보수 marker도 mode를 먼저 설정한 뒤 소유권을 넘깁니다.
+- 배포 패키지 런타임 smoke test는 모든 복구 시나리오에서 `FOWNER` capability를 제거한 상태로 8098 응답, Chromium 프로세스, X11 창과 `data_prep:ready`를 확인하여 동일한 HAOS 회귀를 차단합니다.
+
 ## 0.1.177
 
 - Chromium을 기존처럼 sandbox 활성 상태로 먼저 실행하되, HAOS/AppArmor 또는 컨테이너 런타임이 SUID·user namespace sandbox를 차단한 것으로 확인된 경우에만 sandbox 비활성 상태로 정확히 한 번 재시도합니다. 관련 없는 브라우저 오류에는 fallback하지 않으며, 검은 noVNC 화면 대신 실제 Chromium 창이 열리도록 복구합니다.
