@@ -22,12 +22,80 @@
 
 # HA SmartThings Web
 
-`HA SmartThings Web`은 Home Assistant에서 `my.smartthings.com` 웹 세션을 이용해 SmartThings 기기 상태와 안전하게 허용된 제어를 연결하는 비공식 프로젝트입니다.
+`HA SmartThings Web`은 Home Assistant에서 `my.smartthings.com` 웹 세션을 이용해 SmartThings 기기 상태, 일반 제어, **Scene**과 **SmartThings Advanced의 안전한 command**를 연결하는 비공식 프로젝트입니다. `speechSynthesis.speak`를 제공하는 **Galaxy Home Mini의 TTS를 Home Assistant 자동화에서 사용할 수 있도록 전용 `smartthings_web.speak` 서비스**도 제공합니다.
 
 브라우저 로그인을 담당하는 **SmartThings Web Bridge 앱**과 Home Assistant 엔티티를 생성하는 **`smartthings_web` 커스텀 통합**으로 구성됩니다. Samsung 비밀번호·MFA·CAPTCHA를 소스나 설정 파일에 입력하지 않고, 사용자가 앱의 noVNC 브라우저에서 직접 로그인합니다.
 
 > **현재 상태: LIMITED ALPHA**  
 > 현재 게이트는 `DECISION: LIMITED`입니다. 실제 HAOS 환경에서 연결·재시작 복구·푸시 상태 반영이 검증되었지만, 장시간 유휴 상태·호스트 재부팅 복구·모든 기기 유형의 제어·완전한 API 독립성은 아직 검증 범위 밖입니다.
+
+## Scene·Advanced Commands·Galaxy Home Mini TTS
+
+이 프로젝트는 센서 상태를 읽거나 일반 스위치를 켜고 끄는 수준에만 머물지 않습니다. SmartThings Web에서 발견한 **Scene을 Home Assistant의 표준 `scene` 엔티티로 등록**하고, SmartThings Advanced가 장치별로 실제 공개한 **safe command catalog를 Home Assistant 서비스로 연결**합니다.
+
+| 기능 | Home Assistant에서 사용하는 방법 |
+| --- | --- |
+| SmartThings Scene | 생성된 `scene.*` 엔티티를 표준 `scene.turn_on`으로 실행 |
+| Advanced command 목록 확인 | `smartthings_web.list_commands` |
+| Advanced command 실행 | `smartthings_web.execute_command` |
+| Galaxy Home Mini TTS | 전용 `smartthings_web.speak` |
+
+### SmartThings Scene
+
+선택한 SmartThings 위치에서 발견한 Scene은 원래 이름을 유지한 Home Assistant `scene` 엔티티로 등록됩니다. 대시보드, 자동화와 스크립트에서 다른 Home Assistant Scene과 같은 방식으로 실행할 수 있습니다.
+
+```yaml
+action: scene.turn_on
+target:
+  entity_id: scene.good_night
+```
+
+`scene.good_night`는 예시입니다. 실제로 생성된 Scene 엔티티 ID를 선택합니다.
+
+### SmartThings Advanced commands
+
+Advanced command를 이름만 추측해서 보내지 않습니다. 먼저 `smartthings_web.list_commands`로 선택한 장치의 현재 safe command catalog를 확인한 뒤, 응답에 나온 `component`, `capability`, `command`와 인자 schema를 그대로 `smartthings_web.execute_command`에 사용합니다.
+
+```yaml
+action: smartthings_web.list_commands
+data:
+  device_id: dev_001
+```
+
+예를 들어 `list_commands` 응답에 `main` / `switch` / `on` 조합이 실제로 포함된 장치라면 다음처럼 실행할 수 있습니다.
+
+```yaml
+action: smartthings_web.execute_command
+data:
+  device_id: dev_001
+  component: main
+  capability: switch
+  command: on
+  arguments: []
+  confirm: true
+  timeout: 30
+```
+
+`dev_001`은 설명용 Bridge 장치 alias입니다. Home Assistant 작업 화면에서는 SmartThings Web 장치 선택기를 사용하는 것이 가장 안전합니다. 잠금장치·차고문·밸브·보안·경보·사이렌 계열, 민감한 인자를 요구하는 command와 안전하게 검증할 수 없는 schema는 실행 대상에서 제외됩니다.
+
+### Galaxy Home Mini TTS 전용 `speak`
+
+Galaxy Home Mini처럼 Advanced catalog에 `speechSynthesis.speak`를 제공하는 장치는 raw component나 capability 값을 직접 찾지 않고 전용 `smartthings_web.speak` 서비스로 안내 문구를 재생할 수 있습니다. 이 서비스는 **안전한 `speechSynthesis.speak` descriptor가 정확히 하나일 때만** 실행하므로, 후보가 없거나 여러 개이면 임의의 command를 선택하지 않고 중단합니다.
+
+```yaml
+action: smartthings_web.speak
+data:
+  device_id: dev_001
+  phrase: 현관문이 열렸습니다.
+  timeout: 30
+```
+
+통합 서비스 입력은 제어 문자가 없는 1~1024자 문구를 허용합니다. Galaxy Home Mini에서 관찰된 live descriptor는 최대 1000자이므로 실제 사용에서는 1000자 이하를 권장하며, 장치가 더 짧은 `maxLength`를 제공하면 그 제한을 따릅니다.
+
+> [!IMPORTANT]
+> Scene, Advanced command와 TTS의 실제 지원 범위는 로그인한 Samsung 계정, 선택한 위치와 SmartThings Web이 현재 노출한 catalog에 따라 달라집니다. 읽기 전용 모드에서는 `list_commands`로 목록을 확인할 수 있지만 Scene 실행, `execute_command`와 `speak` 같은 쓰기 작업은 차단됩니다.
+
+더 자세한 화면 입력 방법과 응답 형식은 [SmartThings Web 서비스 UI 사용법](docs/smartthings-web-services-ui-guide.md)을 참고합니다.
 
 ## Advanced 주 데이터·명령 구조
 
