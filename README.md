@@ -293,6 +293,7 @@ npm run deploy:haos:candidate
 | Galaxy Home Mini TTS | 안전한 `speechSynthesis.speak` descriptor가 정확히 하나일 때 사용하는 `smartthings_web.speak` 구현 | 구현·자동 검증 완료, Galaxy Home Mini 실기기 재검증 필요 |
 
 `0.1.180` 변경 검증에서는 Vitest 89개 파일·1,054개 Node 테스트, TypeScript typecheck/build, Python 통합 테스트, HACS, Hassfest, 보안 검사와 패키지형 HAOS 런타임 smoke가 통과했습니다. 실제 사용자 환경에서 아직 다시 확인하지 않은 Home Monitor, Scene, Web 표시명과 Galaxy Home Mini TTS는 완료로 과장하지 않고 재검증 필요 상태로 표시합니다.
+
 ## 제한 사항
 
 - Samsung의 비공식 Web 화면과 내부 요청 구조를 기반으로 하므로 UI·프로토콜 변경 시 일부 기능이 중단될 수 있습니다.
@@ -301,6 +302,7 @@ npm run deploy:haos:candidate
 - 잠금장치·차고문·밸브·보안·경보·사이렌 등 위험도가 높은 command와 민감 인자를 요구하는 command는 실행 대상에서 제외합니다.
 - 72시간 장기 soak, 장시간 유휴 뒤 세션 복구, 모든 호스트 재부팅 조합과 전체 기기 유형은 아직 완전 검증되지 않았습니다.
 - 여기서 API-free는 SmartThings 공개 API, PAT, OAuth, SmartApp 자격 증명을 사용하지 않는다는 뜻입니다. 로그인된 SmartThings Web이 사용하는 내부 Web 요청까지 없다는 의미는 아닙니다.
+
 ## 라이선스
 
 MIT License. 자세한 내용은 `LICENSE`와 `NOTICE`를 확인하세요.
