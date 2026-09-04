@@ -10,21 +10,22 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("packages live Home Monitor DOM recovery as version 0.1.181", () => {
+  test("packages HAOS live-control recovery as version 0.1.182", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("0.1.181");
+    expect(config.version).toBe("0.1.182");
     expect(config.homeassistant_api).toBe(true);
     expect(config.hassio_api).toBe(true);
     expect(config.discovery).toEqual(["smartthings_web"]);
-    expect(packageMetadata.version).toBe("0.1.181");
-    expect(protocolMetadata.bridge_version).toBe("0.1.181");
+    expect(packageMetadata.version).toBe("0.1.182");
+    expect(protocolMetadata.bridge_version).toBe("0.1.182");
     expect(protocolMetadata.protocol_version).toBe(5);
-    expect(runtime).toContain('const bridgeVersion = "0.1.181";');
+    expect(runtime).toContain('const bridgeVersion = "0.1.182";');
+    expect(changelog).toContain("## 0.1.182");
     expect(changelog).toContain("## 0.1.181");
     expect(changelog).toContain("## 0.1.179");
     expect(changelog).toContain("## 0.1.178");

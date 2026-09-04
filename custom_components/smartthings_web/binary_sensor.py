@@ -159,7 +159,22 @@ class SmartThingsWebBinarySensor(SmartThingsWebEntity, BinarySensorEntity):
         description: BinaryDescription,
         name_override: str | None = None,
     ) -> None:
-        super().__init__(runtime, device, state, name_override)
+        super().__init__(
+            runtime,
+            device,
+            state,
+            name_override,
+            object_id_name=(
+                "presence"
+                if state.attribute == "presence"
+                and sum(
+                    candidate.attribute == "presence"
+                    for candidate in device.states.values()
+                )
+                == 1
+                else None
+            ),
+        )
         self.description = description
         self._attr_translation_key = (
             None if name_override is not None else description.translation_key

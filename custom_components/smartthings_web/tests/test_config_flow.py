@@ -32,6 +32,10 @@ def _install_homeassistant_stubs() -> None:
 
         def __init__(self) -> None:
             self.hass = object()
+            self.current_entries: list[object] = []
+
+        def _async_current_entries(self) -> list[object]:
+            return self.current_entries
 
         def async_show_form(self, **kwargs: object) -> dict[str, object]:
             return {"type": "form", **kwargs}
@@ -149,6 +153,32 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             values[CONF_BRIDGE_URL],
             "http://8a97f131-smartthings-web-bridge:8100",
         )
+
+    async def test_hassio_discovery_aborts_when_bridge_is_already_configured(self) -> None:
+        flow = SmartThingsWebConfigFlow()
+        flow.current_entries = [
+            SimpleNamespace(data={CONF_BRIDGE_URL: "http://8a97f131-smartthings-web-bridge:8100"})
+        ]
+        result = await flow.async_step_hassio(
+            SimpleNamespace(
+                slug="8a97f131_smartthings_web_bridge",
+                config={"host": "8a97f131-smartthings-web-bridge", "port": 8100},
+            )
+        )
+        self.assertEqual(result, {"type": "abort", "reason": "already_configured"})
+
+    async def test_hassio_discovery_matches_legacy_bridge_alias(self) -> None:
+        flow = SmartThingsWebConfigFlow()
+        flow.current_entries = [
+            SimpleNamespace(data={CONF_BRIDGE_URL: "http://d55cafb9-smartthings-web-bridge:8100"})
+        ]
+        result = await flow.async_step_hassio(
+            SimpleNamespace(
+                slug="8a97f131_smartthings_web_bridge",
+                config={"host": "8a97f131-smartthings-web-bridge", "port": 8100},
+            )
+        )
+        self.assertEqual(result, {"type": "abort", "reason": "already_configured"})
 
     async def test_hassio_discovery_rejects_mismatched_hostname(self) -> None:
         flow = SmartThingsWebConfigFlow()

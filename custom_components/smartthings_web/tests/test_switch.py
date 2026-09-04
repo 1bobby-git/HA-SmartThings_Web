@@ -59,6 +59,7 @@ class SmartThingsWebEntity:
         self.state_key = state.key  # type: ignore[attr-defined]
         if _name is not None:
             self._attr_name = _name
+        self.primary_control = _kwargs.get("primary_control")
         self._attr_unique_id = "_".join((self.device_id, *self.state_key))
 
     @property
@@ -478,6 +479,30 @@ class SmartThingsWebSwitchTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(added), 1)
         self.assertEqual(getattr(added[0], "_attr_name", None), "전원")
+
+    async def test_single_advanced_generic_switch_is_device_primary(self) -> None:
+        state = BridgeState(
+            "identifier_cd4f3cfbf2aa", "identifier_74292182f118", "switch",
+            "off", None, "2026-09-05T00:00:00Z",
+        )
+        control_id = "advanced:identifier_cd4f3cfbf2aa:identifier_74292182f118:switch"
+        device = BridgeDevice(
+            "dev_ha_switch", "loc_001", "room_001",
+            "Home Assistant 연동 스위치", "signage", True,
+            states={state.key: state},
+            controls={control_id: BridgeControl(
+                control_id, "toggle", "on",
+                component=state.component, capability=state.capability,
+                attribute=state.attribute, commands=("on", "off"), transport="advanced",
+            )},
+        )
+        runtime = _runtime(device, object())
+        entry = SimpleNamespace(runtime_data=runtime, async_on_unload=lambda _callback: None)
+        added: list[SmartThingsWebSwitch] = []
+        await async_setup_entry(object(), entry, added.extend)
+        self.assertEqual(len(added), 1)
+        self.assertEqual(getattr(added[0], "_attr_name", None), "전원")
+        self.assertTrue(added[0].primary_control)
 
     async def test_state_backed_switch_rejects_unobserved_commands(self) -> None:
         device, state = _device(with_control=False)

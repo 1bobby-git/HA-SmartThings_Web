@@ -17,9 +17,9 @@
 
 브라우저 로그인을 담당하는 **SmartThings Web Bridge 앱**과 Home Assistant 엔티티를 생성하는 **`smartthings_web` 커스텀 통합**으로 구성됩니다. Samsung 비밀번호·MFA·CAPTCHA를 소스나 설정 파일에 입력하지 않고, 사용자가 앱의 noVNC 브라우저에서 직접 로그인합니다.
 
-> **현재 상태: `0.1.181` · 실환경 부분 검증**
+> **현재 상태: `0.1.182` · 실환경 부분 검증**
 >
-> 실제 Home Assistant OS에서 앱 기동, Ingress/noVNC Samsung 로그인, Bridge 연결, 인벤토리 수신과 Home Assistant 엔티티 생성까지 확인했습니다. `0.1.180`의 Home Monitor·Scene·Web 표시명 수정과 Advanced command·Galaxy Home Mini TTS는 구현 및 자동 검증을 통과했지만, 모든 계정과 기기에서 실기기 재검증이 끝난 상태는 아닙니다.
+> 실제 Home Assistant OS에서 앱 기동, Ingress/noVNC Samsung 로그인, Bridge 연결, 인벤토리 수신과 Home Assistant 엔티티 생성까지 확인했습니다. `0.1.182`는 `0.1.181` 실환경 진단으로 확인된 Home Monitor 현재 모드 pill, 중복 Supervisor discovery, `..._on`·`..._jaesil` ID와 상태 이벤트 폭주 경로를 수정했으며, 모든 계정과 기기에서 실기기 재검증이 끝난 상태는 아닙니다.
 
 ## Scene·Advanced Commands·Galaxy Home Mini TTS
 

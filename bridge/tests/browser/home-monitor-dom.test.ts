@@ -78,7 +78,7 @@ describe("text-only Home Monitor DOM control", () => {
       'getComputedStyle(current).cursor === "pointer"'
     );
     expect(source).toContain("containsCompetingAction");
-    expect(source).toContain("Date.now() + 15_000");
+    expect(source).toContain("Date.now() + Math.max(1, timeoutMs)");
     expect(source).toContain('return ambiguousSeen ? "ambiguous" : "not_found"');
   });
 });

@@ -237,6 +237,7 @@ export class DeviceStore {
   readonly #scenes = new Map<string, BridgeScene>();
   readonly #pending = new Map<string, PendingSnapshot>();
   readonly #listeners = new Set<Listener>();
+  readonly #confirmationListeners = new Set<Listener>();
   readonly #eventDeduplicator = new EventDeduplicator({
     ttlMs: 5 * 60_000,
     maxEntries: 100_000
@@ -486,6 +487,11 @@ export class DeviceStore {
   subscribe(listener: Listener): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
+  }
+
+  subscribeConfirmation(listener: Listener): () => void {
+    this.#confirmationListeners.add(listener);
+    return () => this.#confirmationListeners.delete(listener);
   }
 
   observeOnlineEvidence(deviceId: string, observedAtMs: number): void {
@@ -938,9 +944,7 @@ export class DeviceStore {
     const event = asRecord(data?.device_event ?? data?.deviceEvent);
     const deviceId = safeId(event?.device_id ?? event?.deviceId, "dev");
     const locationId = safeId(event?.location_id ?? event?.locationId, "loc");
-    if (!data || !event || !deviceId || !locationId) {
-      return;
-    }
+    if (!data || !event || !deviceId || !locationId) return;
     const device = this.#ensureDevice(deviceId, locationId);
     const state = stateFromEvent(
       event,
@@ -949,38 +953,48 @@ export class DeviceStore {
       this.#normalizeStateToken,
       this.#identifierRole
     );
-    if (!state) {
-      return;
-    }
+    if (!state) return;
     const previousState = device.states.get(stateKey(state));
-    const durableStateChanged =
+    const semanticStateChanged =
       previousState === undefined || !sameStatePayload(previousState, state);
-    const stateChanged = this.#setState(device, state);
-    if (!stateChanged) {
-      return;
-    }
+    const momentaryEvent = state.attribute === "button";
+    const eventId = safeEventMetadata(
+      event.event_id ?? event.eventId ?? data.event_id ?? data.eventId
+    );
+    const commandId = safeEventMetadata(
+      event.command_id ?? event.commandId ?? data.command_id ?? data.commandId
+    );
+    if (!this.#setState(device, state)) return;
     const wasOnline = device.online;
     this.#setDeviceHealth(device, true, state.updatedAt);
     if (!wasOnline) {
       const sequence = this.#nextSequence();
       this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
     }
-    const sequence = this.#nextSequence();
-    const eventId = safeEventMetadata(event.event_id ?? event.eventId ?? data.event_id ?? data.eventId);
-    const commandId = safeEventMetadata(
-      event.command_id ?? event.commandId ?? data.command_id ?? data.commandId
-    );
-    this.#publish({
-      schemaVersion: 1,
-      sequence,
-      type: "state",
-      deviceId,
-      state: cloneState(state),
-      ...(eventId ? { eventId } : {}),
-      ...(state.updatedAt ? { eventTime: state.updatedAt } : {}),
-      ...(commandId ? { commandId } : {})
-    });
-    if (durableStateChanged || !wasOnline) {
+    if (semanticStateChanged || momentaryEvent || commandId) {
+      const sequence = this.#nextSequence();
+      this.#publish({
+        schemaVersion: 1,
+        sequence,
+        type: "state",
+        deviceId,
+        state: cloneState(state),
+        ...(eventId ? { eventId } : {}),
+        ...(state.updatedAt ? { eventTime: state.updatedAt } : {}),
+        ...(commandId ? { commandId } : {})
+      });
+    } else {
+      this.#publishConfirmation({
+        schemaVersion: 1,
+        sequence: this.#sequence + 1,
+        type: "state",
+        deviceId,
+        state: cloneState(state),
+        ...(eventId ? { eventId } : {}),
+        ...(state.updatedAt ? { eventTime: state.updatedAt } : {})
+      });
+    }
+    if (semanticStateChanged || momentaryEvent || !wasOnline) {
       this.#schedulePersist();
     }
   }
@@ -1148,7 +1162,22 @@ export class DeviceStore {
   }
 
   #publish(event: BridgeDeviceStoreEvent): void {
-    for (const listener of this.#listeners) {
+    const listeners = new Set([
+      ...this.#listeners,
+      ...this.#confirmationListeners
+    ]);
+    this.#notifyListeners(listeners, event);
+  }
+
+  #publishConfirmation(event: BridgeDeviceStoreEvent): void {
+    this.#notifyListeners(this.#confirmationListeners, event);
+  }
+
+  #notifyListeners(
+    listeners: ReadonlySet<Listener>,
+    event: BridgeDeviceStoreEvent
+  ): void {
+    for (const listener of listeners) {
       try {
         listener(event);
       } catch {

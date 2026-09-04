@@ -228,6 +228,7 @@ class SmartThingsWebEntity(Entity):
         device: object,
         state: object,
         name: str | None,
+        **_kwargs: object,
     ) -> None:
         self.runtime = runtime
         self.device_id = device.device_id  # type: ignore[attr-defined]

@@ -1,5 +1,6 @@
 import type { BrowserPageLike, KeeperPageManager } from "./keeper-page.js";
 import {
+  clickCurrentHomeMonitorMode,
   clickTextOnlyHomeMonitorAction,
   clickTextOnlyHomeMonitorCard,
   inspectHomeMonitorDom,
@@ -47,6 +48,8 @@ type CommandPageManagerLike = Pick<KeeperPageManager, "openCommandPage"> &
 type CommandDiagnosticStage =
   | "foreground_requested"
   | "foreground_ready"
+  | "home_monitor_current_mode_opened"
+  | "home_monitor_current_mode_missing"
   | "native_identifier_missing"
   | "native_device_identifier_missing"
   | "native_component_identifier_missing"
@@ -583,6 +586,14 @@ export class SmartThingsWebUiCommandExecutor {
           // Diagnostics must never change command behavior.
         }
       };
+      const clickRequestedText = async (timeoutMs: number) =>
+        clickTextOnlyHomeMonitorAction(
+          page,
+          monitorLabels,
+          actionLabels,
+          modeLabelGroups,
+          timeoutMs
+        );
 
       let action = await findHomeMonitorCardAction(
         page,
@@ -595,28 +606,10 @@ export class SmartThingsWebUiCommandExecutor {
         await action.click({ timeout: 15_000 });
         return;
       }
-
-      let textResult = await clickTextOnlyHomeMonitorAction(
-        page,
-        monitorLabels,
-        actionLabels,
-        modeLabelGroups
-      );
+      let textResult = await clickRequestedText(1_200);
       if (textResult === "clicked") return;
-      if (textResult === "ambiguous") {
-        throw new Error("command_control_ambiguous");
-      }
-
-      if (
-        await clickHomeMonitorCardActionByText(
-          page,
-          monitorLabels,
-          actionLabels
-        )
-      ) {
-        return;
-      }
-
+      if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
+      if (await clickHomeMonitorCardActionByText(page, monitorLabels, actionLabels)) return;
       action = await findLocationActionControl(page, actionName, 250);
       if (action) {
         await action.click({ timeout: 15_000 });
@@ -624,74 +617,71 @@ export class SmartThingsWebUiCommandExecutor {
       }
 
       await emitDomDiagnostic("before_card_open");
-      let cardOpened = false;
-      const cardResult = await clickTextOnlyHomeMonitorCard(
+      const currentModeResult = await clickCurrentHomeMonitorMode(
         page,
         monitorLabels,
-        3_000
+        modeLabelGroups,
+        3_500
       );
-      if (cardResult === "ambiguous") {
+      if (currentModeResult === "ambiguous") {
         throw new Error("command_control_ambiguous");
       }
-      if (cardResult === "clicked") {
-        cardOpened = true;
-        textResult = await clickTextOnlyHomeMonitorAction(
-          page,
-          monitorLabels,
-          actionLabels,
-          modeLabelGroups
-        );
+      if (currentModeResult === "clicked") {
+        this.#onDiagnostic?.("home_monitor_current_mode_opened");
+        textResult = await clickRequestedText(10_000);
         if (textResult === "clicked") return;
-        if (textResult === "ambiguous") {
-          throw new Error("command_control_ambiguous");
-        }
-        action = await findLocationActionControl(page, actionName, 1_000);
+        if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
+        action = await findLocationActionControl(page, actionName, 1_500);
         if (action) {
           await action.click({ timeout: 15_000 });
           return;
         }
-      }
-
-      if (!cardOpened) {
-        const monitor = await findHomeMonitorControl(page, monitorName);
-        if (monitor) {
-          await monitor.click({ timeout: 15_000 });
+        await emitDomDiagnostic("after_card_open");
+      } else {
+        this.#onDiagnostic?.("home_monitor_current_mode_missing");
+        let cardOpened = false;
+        const cardResult = await clickTextOnlyHomeMonitorCard(page, monitorLabels, 3_000);
+        if (cardResult === "ambiguous") throw new Error("command_control_ambiguous");
+        if (cardResult === "clicked") {
           cardOpened = true;
-          textResult = await clickTextOnlyHomeMonitorAction(
-            page,
-            monitorLabels,
-            actionLabels,
-            modeLabelGroups
-          );
+          textResult = await clickRequestedText(8_000);
           if (textResult === "clicked") return;
-          if (textResult === "ambiguous") {
-            throw new Error("command_control_ambiguous");
-          }
-        }
-      }
-
-      if (cardOpened) {
-        const dialog = page.getByRole("dialog");
-        try {
-          await dialog.first().waitFor({ state: "visible", timeout: 1_000 });
-        } catch {
-          // Cake may render a drawer or roleless overlay. The DOM scan above
-          // already checked the whole visible page without assuming a dialog.
-        }
-        const dialogCount = await dialog.count();
-        if (dialogCount > 1) {
-          throw new Error("command_control_ambiguous");
-        }
-        if (dialogCount === 1) {
-          action = await findLocationActionControl(dialog, actionName, 1_000);
+          if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
+          action = await findLocationActionControl(page, actionName, 1_000);
           if (action) {
             await action.click({ timeout: 15_000 });
             return;
           }
         }
-        await emitDomDiagnostic("after_card_open");
+        if (!cardOpened) {
+          const monitor = await findHomeMonitorControl(page, monitorName);
+          if (monitor) {
+            await monitor.click({ timeout: 15_000 });
+            cardOpened = true;
+            textResult = await clickRequestedText(8_000);
+            if (textResult === "clicked") return;
+            if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
+          }
+        }
+        if (cardOpened) {
+          const dialog = page.getByRole("dialog");
+          try {
+            await dialog.first().waitFor({ state: "visible", timeout: 1_000 });
+          } catch {
+            // Cake may render a drawer or roleless overlay.
+          }
+          const dialogCount = await dialog.count();
+          if (dialogCount > 1) throw new Error("command_control_ambiguous");
+          if (dialogCount === 1) {
+            action = await findLocationActionControl(dialog, actionName, 1_000);
+            if (action) {
+              await action.click({ timeout: 15_000 });
+              return;
+            }
+          }
+          await emitDomDiagnostic("after_card_open");
+        }
       }
-
       await emitDomDiagnostic("final_failure");
       throw new Error("command_control_not_found");
     } finally {
@@ -2165,22 +2155,22 @@ async function clickHomeMonitorCardActionByText(
 
 function locationActionLabels(action: "armAway" | "armStay" | "disarm"): string[] {
   if (action === "armAway") {
-    return ["Arm away", "Away", "Away mode", "외출", "외출 모드", "외출 중", "외출중", "보안(외출)", "보안 외출"];
+    return ["Arm away", "Armed away", "Armed (Away)", "Away", "Away mode", "외출", "외출 모드", "외출 중", "외출중", "집 밖에 있음", "집 밖에 있어요", "집을 비움", "외출 보안", "보안(외출)", "보안 외출"];
   }
   if (action === "armStay") {
-    return ["Arm stay", "Stay", "Stay mode", "실내", "실내 모드", "재실", "재실 모드", "재실 중", "재실중", "집에 있음", "귀가", "보안(실내)", "보안(재실)", "보안 실내", "보안 재실"];
+    return ["Arm stay", "Armed stay", "Armed (Stay)", "Stay", "Stay mode", "실내", "실내 모드", "재실", "재실 모드", "재실 중", "재실중", "집에 있음", "집 안에 있음", "집 안에 있어요", "귀가", "실내 보안", "보안(실내)", "보안(재실)", "보안 실내", "보안 재실"];
   }
-  return ["Disarm", "Disarmed", "Off", "해제", "해제됨", "보안 해제", "보안(해제)", "사용 안 함"];
+  return ["Disarm", "Disarmed", "Not armed", "Security off", "Off", "해제", "해제됨", "보안 해제", "보안(해제)", "사용 안 함"];
 }
 
 function locationActionName(action: "armAway" | "armStay" | "disarm"): RegExp {
   if (action === "armAway") {
-    return /^(?:Arm away|Away|Away mode|외출|외출 모드|외출 중|외출중|보안\s*\(\s*외출\s*\)|보안\s*외출)$/iu;
+    return /^(?:Arm away|Armed away|Armed\s*\(\s*Away\s*\)|Away|Away mode|외출|외출 모드|외출 중|외출중|집 밖에 있음|집 밖에 있어요|집을 비움|외출 보안|보안\s*\(\s*외출\s*\)|보안\s*외출)$/iu;
   }
   if (action === "armStay") {
-    return /^(?:Arm stay|Stay|Stay mode|실내|실내 모드|재실|재실 모드|재실 중|재실중|집에 있음|귀가|보안\s*\(\s*(?:실내|재실)\s*\)|보안\s*(?:실내|재실))$/iu;
+    return /^(?:Arm stay|Armed stay|Armed\s*\(\s*Stay\s*\)|Stay|Stay mode|실내|실내 모드|재실|재실 모드|재실 중|재실중|집에 있음|집 안에 있음|집 안에 있어요|귀가|실내 보안|보안\s*\(\s*(?:실내|재실)\s*\)|보안\s*(?:실내|재실))$/iu;
   }
-  return /^(?:Disarm|Disarmed|Off|해제|해제됨|보안 해제|보안\s*\(\s*해제\s*\)|사용 안 함)$/iu;
+  return /^(?:Disarm|Disarmed|Not armed|Security off|Off|해제|해제됨|보안 해제|보안\s*\(\s*해제\s*\)|사용 안 함)$/iu;
 }
 
 function homeMonitorName(locationName?: string): RegExp {

@@ -2469,6 +2469,60 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             ],
         )
 
+    def test_localized_single_presence_id_migrates_back_to_presence(self) -> None:
+        state = BridgeState("main", "presenceSensor", "presence", "present", None, "2026-09-05T00:00:00Z")
+        device = BridgeDevice(
+            "dev_iphone", "loc_001", None, "iPhone", "mobile", True,
+            states={state.key: state},
+        )
+        row = SimpleNamespace(
+            entity_id="binary_sensor.iphone_jaesil", domain="binary_sensor",
+            platform=DOMAIN, unique_id="dev_iphone_main_presenceSensor_presence",
+            device_id="uuid_iphone", name=None, disabled_by=None,
+            original_name="재실", object_id_base="jaesil",
+            suggested_object_id="iphone_jaesil",
+        )
+        registry = FakeRegistry([row])
+        self.patch_registry(registry)
+        inventory = BridgeInventory(
+            1, True, "0.1.182", "5", {"loc_001": "Home"}, {}, {device.device_id: device}
+        )
+        _migrate_entity_registry(
+            object(), SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}), inventory
+        )
+        self.assertEqual(row.entity_id, "binary_sensor.iphone_presence")
+        self.assertEqual(row.object_id_base, "presence")
+        self.assertEqual(row.suggested_object_id, "iphone_presence")
+
+    def test_generated_advanced_on_suffix_migrates_to_device_name(self) -> None:
+        state = BridgeState("opaque_main", "opaque_switch", "switch", "off", None, "2026-09-05T00:00:00Z")
+        control_id = "advanced:opaque_main:opaque_switch:switch"
+        device = BridgeDevice(
+            "dev_ha_switch", "loc_001", None, "Home Assistant integration switch",
+            "signage", True, states={state.key: state},
+            controls={control_id: BridgeControl(
+                control_id, "toggle", "on", component=state.component,
+                capability=state.capability, attribute=state.attribute,
+                commands=("on", "off"), transport="advanced",
+            )},
+        )
+        row = SimpleNamespace(
+            entity_id="switch.home_assistant_integration_switch_on", domain="switch",
+            platform=DOMAIN, unique_id="dev_ha_switch_opaque_main_opaque_switch_switch",
+            device_id="uuid_switch", name=None, disabled_by=None,
+            original_name="On", object_id_base="on",
+            suggested_object_id="home_assistant_integration_switch_on",
+        )
+        registry = FakeRegistry([row])
+        self.patch_registry(registry)
+        inventory = BridgeInventory(
+            1, True, "0.1.182", "5", {"loc_001": "Home"}, {}, {device.device_id: device}
+        )
+        _migrate_entity_registry(
+            object(), SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}), inventory
+        )
+        self.assertEqual(row.entity_id, "switch.home_assistant_integration_switch")
+
     def test_rebased_role_metadata_repairs_accumulated_restore_hints(self) -> None:
         """Collapse role suffixes already accumulated by earlier restore passes."""
         parent_state = BridgeState(

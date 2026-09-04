@@ -29,6 +29,7 @@ from .const import (
     DEFAULT_COMMAND_CONFIRMATION_TIMEOUT,
     DEFAULT_INVENTORY_RECONCILIATION_INTERVAL,
     DOMAIN,
+    bridge_url_candidates,
 )
 from .models import BridgeInventory, location_name
 
@@ -76,6 +77,17 @@ class SmartThingsWebConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="invalid_discovery")
 
         self._discovered_bridge_url = f"http://{host}:{port}"
+        discovered_candidates = set(bridge_url_candidates(self._discovered_bridge_url))
+        for entry in self._async_current_entries():
+            configured_url = entry.data.get(CONF_BRIDGE_URL)
+            if not isinstance(configured_url, str):
+                continue
+            try:
+                configured_candidates = set(bridge_url_candidates(configured_url))
+            except ValueError:
+                continue
+            if discovered_candidates & configured_candidates:
+                return self.async_abort(reason="already_configured")
         return await self.async_step_user()
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):

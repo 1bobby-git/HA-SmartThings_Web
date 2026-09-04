@@ -188,6 +188,7 @@ class SmartThingsWebEntity(Entity):
         name: str | None,
         *,
         primary_control: bool = False,
+        object_id_name: str | None = None,
     ) -> None:
         self.runtime = runtime
         self.device_id = device.device_id
@@ -198,7 +199,9 @@ class SmartThingsWebEntity(Entity):
         self._attr_suggested_object_id = (
             suggested_primary_control_object_id(runtime, device)
             if primary_control
-            else suggested_entity_object_id(runtime, device, name or state.attribute)
+            else suggested_entity_object_id(
+                runtime, device, object_id_name or name or state.attribute
+            )
         )
         _set_initial_entity_id(self, self._attr_suggested_object_id)
         self._attr_device_info = device_info_for(

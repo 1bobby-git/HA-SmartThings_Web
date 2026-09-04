@@ -65,12 +65,20 @@ class SmartThingsWebEntity:
     """Minimal pushed entity base."""
 
     def __init__(
-        self, runtime: object, device: object, state: object, name: str | None
+        self,
+        runtime: object,
+        device: object,
+        state: object,
+        name: str | None,
+        *,
+        object_id_name: str | None = None,
+        **_kwargs: object,
     ) -> None:
         self.runtime = runtime
         self.device_id = device.device_id  # type: ignore[attr-defined]
         self.state_key = state.key  # type: ignore[attr-defined]
         self._attr_name = name
+        self.object_id_name = object_id_name
 
     @property
     def bridge_state(self) -> object | None:
@@ -133,6 +141,22 @@ class SmartThingsWebBinarySensorTests(unittest.TestCase):
 
         self.assertEqual(sensor._attr_name, "Presence (Room A)")
         self.assertIsNone(sensor._attr_translation_key)
+
+    def test_localized_presence_name_keeps_presence_object_id(self) -> None:
+        state = BridgeState("main", "presenceSensor", "presence", "present", None, "2026-09-05T00:00:00Z")
+        device = BridgeDevice(
+            "dev_iphone", "loc_001", None, "iPhone", "mobile", True,
+            states={state.key: state},
+        )
+        runtime = SmartThingsWebRuntime(
+            object(), "loc_001",
+            BridgeInventory(1, True, "0.1.182", "5", {"loc_001": "Home"}, {}, {device.device_id: device}),
+        )
+        sensor = SmartThingsWebBinarySensor(
+            runtime, device, state, BINARY_STATES["presence"], name_override="재실"
+        )
+        self.assertEqual(sensor._attr_name, "재실")
+        self.assertEqual(sensor.object_id_name, "presence")
 
     def test_appliance_switch_state_is_exposed_as_read_only_power_binary_sensor(self) -> None:
         power = BridgeState(

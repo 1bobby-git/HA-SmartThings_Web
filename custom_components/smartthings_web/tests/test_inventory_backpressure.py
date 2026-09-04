@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 from pathlib import Path
 import sys
@@ -167,6 +168,36 @@ class InventoryBackpressureTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertNotIn("type(state.value).__name__", source)
+
+
+class RuntimeListenerCoalescingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_burst_updates_write_one_latest_entity_state(self) -> None:
+        inventory = make_inventory(1)
+        runtime = SmartThingsWebRuntime(
+            object(), "loc_001", inventory, listener_coalesce_ms=25
+        )
+        key = ("main", "temperatureMeasurement", "temperature")
+        callbacks: list[float] = []
+        runtime.subscribe_state(
+            "dev_000", key,
+            lambda: callbacks.append(runtime.inventory.devices["dev_000"].states[key].value),
+        )
+        for sequence, value in ((2, 21), (3, 22)):
+            runtime.apply_state({
+                "sequence": sequence,
+                "deviceId": "dev_000",
+                "state": {
+                    "component": "main",
+                    "capability": "temperatureMeasurement",
+                    "attribute": "temperature",
+                    "value": value,
+                    "unit": "C",
+                    "updatedAt": f"2026-09-05T00:00:0{sequence - 1}Z",
+                },
+            })
+        self.assertEqual(callbacks, [])
+        await asyncio.sleep(0.06)
+        self.assertEqual(callbacks, [22])
 
 
 if __name__ == "__main__":

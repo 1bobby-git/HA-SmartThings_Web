@@ -1,3 +1,11 @@
+## 0.1.182
+
+- 실제 HAOS `0.1.181` 진단에서 Home Monitor 제목 1개, 요청 액션 0개, 현재 모드 그룹 1개였던 경로를 수정했습니다. 카드 제목 대신 같은 카드 안에 유일하게 표시된 현재 모드 pill을 먼저 클릭한 뒤 `외출`·`재실`·`해제`를 다시 찾습니다.
+- 이미 같은 Bridge가 구성된 경우 Supervisor discovery를 `already_configured`로 즉시 종료합니다. 현재·로컬·이전 저장소 hostname은 같은 Bridge 별칭으로 처리합니다.
+- 단일 안전 스위치는 Advanced가 불투명 component와 일반 `on` 라벨만 제공해도 primary control로 유지합니다. 일반 `on`/`off`를 이름 suffix로 사용하지 않고 기존 `..._on` 생성 ID를 장치명 ID로 복구합니다.
+- 재실 표시명은 유지하되 단일 presence 엔티티 ID는 다시 `..._presence`를 사용하고 기존 `..._jaesil` 생성 ID도 마이그레이션합니다.
+- 값은 같고 timestamp만 새로 들어온 Location 이벤트는 SSE/HA 상태 이벤트로 재발행하지 않습니다. command 상관 ID와 button 이벤트는 보존하며 HA 콜백은 50ms 창에서 엔티티별 최신 상태로 병합합니다.
+
 ## 0.1.181
 
 - 실제 `0.1.180` 환경에서 위치 라우팅 이후에도 Home Monitor가 `command_control_not_found`로 실패한 경로를 보강했습니다. 접근성 role이 없는 React Home Monitor 카드의 정확한 제목을 찾아 카드를 먼저 열고, 그 뒤 전체 화면·drawer·dialog 안의 정확한 `외출`·`재실`·`해제` 제어를 다시 탐색합니다.
