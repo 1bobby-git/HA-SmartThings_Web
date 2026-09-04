@@ -60,6 +60,9 @@ try {
   await run("multiple monitor cards are ambiguous", svgCard + htmlCard('<button>외출</button><button>재실</button>'), 0, "ambiguous", none);
   await run("open shadow root SVG controls", '<div id="host"></div><script>host.attachShadow({mode:"open"}).innerHTML=' + JSON.stringify(css + svgCard) + ';window.shadowActions=[];host.shadowRoot.getElementById("away").onclick=e=>window.shadowActions.push(e.isTrusted)</script>', 0, "clicked", async(page)=>assert.deepEqual(await page.evaluate(()=>window.shadowActions),[true]));
 
+  await run("in-card status heading is not a foreign widget", htmlCard('<h3>System ready to arm</h3><button id="away">보안(외출)</button><button id="stay">보안(실내)</button>'), 0, "clicked", one("away"));
+  await run("oversized dashboard leaves legacy path available", '<div>' + '<span>x</span>'.repeat(6001) + '</div>' + svgCard, 0, "unavailable", none);
+
   // Verify the actual production orchestration using intercepted local HTML only.
   const { SmartThingsWebUiCommandExecutor } = await import("../dist/bridge/src/browser/command-page.js");
   const { clickTextOnlyHomeMonitorAction } = await import("../dist/bridge/src/browser/home-monitor-dom.js");

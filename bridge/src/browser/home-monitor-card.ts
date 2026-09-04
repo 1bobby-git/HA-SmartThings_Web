@@ -118,6 +118,8 @@ export function probeHomeMonitorCard(input: CardProbeInput): CardProbeResult {
   result.pseudoModes = modes.filter((element) => pseudoMatches.has(element)).length;
   if (titles.length === 0) return result;
   if (titles.length > 1) return { ...result, kind: "ambiguous" };
+  // The screenshot also includes a status caption inside the card, not a separate widget.
+  const statusCaptions = new Set([normalize("System ready to arm")]);
   // Do not widen an exact monitor card into the entire dashboard or another named widget.
   let scope: Element | null = parent(titles[0]!);
   let card: Element | undefined;
@@ -125,7 +127,8 @@ export function probeHomeMonitorCard(input: CardProbeInput): CardProbeResult {
     if (scope.matches("html,body,main")) break;
     const foreignHeadings = elements.some((element) => within(element, scope!) && visible(element) &&
       element.matches('h1,h2,h3,h4,h5,h6,[role="heading"]') &&
-      !within(element, titles[0]!) && !within(titles[0]!, element) && !modeMap.has(element));
+      !within(element, titles[0]!) && !within(titles[0]!, element) && !modeMap.has(element) &&
+      !labels(element).some((label) => statusCaptions.has(label)));
     if (foreignHeadings) break;
     const localModes = modes.filter((element) => within(element, scope!));
     if (new Set(localModes.map((element) => modeMap.get(element))).size >= 2) {
@@ -195,7 +198,9 @@ export async function clickHomeMonitorCardAction(
       last = await page.evaluate(probeHomeMonitorCard, input);
       if (!last || typeof last !== "object" || typeof last.kind !== "string") return "unavailable";
       if (last.kind === "ambiguous") { report(last.kind); return "ambiguous"; }
-      if (last.kind === "disabled" || last.kind === "scan_limit") { report(last.kind); return "blocked"; }
+      if (last.kind === "disabled") { report(last.kind); return "blocked"; }
+      // This is an additive probe. Large dashboards retain the existing bounded locator paths.
+      if (last.kind === "scan_limit") { report(last.kind); return "unavailable"; }
       if (last.kind === "dialog") { report(last.kind); return "dialog"; }
       if (last.kind === "target") {
         await controls.locator(`[data-stw-hm-card-action="${input.marker}"]`).click({ timeout: 3_000 });
