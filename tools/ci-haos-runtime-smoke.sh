@@ -96,6 +96,7 @@ run_case() {
 
   docker run -d \
     --name "$container_name" \
+    --cap-drop=FOWNER \
     --shm-size=1g \
     -v "$data_dir:/data" \
     "$image" >/dev/null
@@ -108,7 +109,12 @@ run_case() {
   fi
 
   docker logs "$container_name" > "$log_file" 2>&1 || true
+  grep -q 'data_prep:ready' "$log_file"
   grep -q 'bridge_init:http_server_ready:8098' "$log_file"
+  if grep -q 'data_prep:failed:' "$log_file"; then
+    cat "$log_file" >&2
+    return 1
+  fi
   if grep -q 'browser_launch_failed:' "$log_file"; then
     cat "$log_file" >&2
     return 1
