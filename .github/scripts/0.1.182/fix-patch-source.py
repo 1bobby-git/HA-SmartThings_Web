@@ -3,75 +3,83 @@ from pathlib import Path
 path = Path("/tmp/apply-0.1.182.py")
 text = path.read_text(encoding="utf-8")
 
-replacements = (
-    (
-        '''        """    image_listeners: set[Callable[[], None]] = field(default_factory=set)
-    latest_images: dict[str, BridgeImageUpdate] = field(default_factory=dict)
-""",
-        """    image_listeners: set[Callable[[], None]] = field(default_factory=set)
-    latest_images: dict[str, BridgeImageUpdate] = field(default_factory=dict)
-    listener_coalesce_ms: int = 0
-''',
-        '''        """    image_updates: dict[str, BridgeImageUpdate] = field(default_factory=dict)
+start = text.index(
+    '    text = replace_once(\n        text,\n        """    image_listeners:'
+)
+end = text.index(
+    '    text = replace_once(\n        text,\n        """    def subscribe(',
+    start,
+)
+field_call = '''    text = replace_once(
+        text,
+        """    image_updates: dict[str, BridgeImageUpdate] = field(default_factory=dict)
 """,
         """    image_updates: dict[str, BridgeImageUpdate] = field(default_factory=dict)
     listener_coalesce_ms: int = 0
-''',
-        "runtime field marker",
-    ),
-    (
-        '''        """    def subscribe(self, listener: Callable[[], None]) -> Callable[[], None]:
-        \\\"\\\"\\\"Subscribe to inventory changes.\\\"\\\"\\\"
-        self.listeners.add(listener)
-        return lambda: self.listeners.discard(listener)
+    _pending_listeners: set[Callable[[], None]] = field(
+        default_factory=set, init=False, repr=False
+    )
+    _listener_flush_handle: Any = field(default=None, init=False, repr=False)
 """,
-        """    def subscribe(self, listener: Callable[[], None]) -> Callable[[], None]:
-        \\\"\\\"\\\"Subscribe to inventory changes.\\\"\\\"\\\"
-''',
-        '''        """    def subscribe(self, listener: Callable[[], None]) -> Callable[[], None]:
-        \\\"\\\"\\\"Subscribe to state changes.\\\"\\\"\\\"
-        self.listeners.add(listener)
-        return lambda: self.listeners.discard(listener)
-""",
-        """    def subscribe(self, listener: Callable[[], None]) -> Callable[[], None]:
-        \\\"\\\"\\\"Subscribe to state changes.\\\"\\\"\\\"
-''',
-        "subscribe marker",
-    ),
-    (
-        '''        """    main_power_states = [
-        candidate
-        for candidate in safe_switch_states
-        if _main_power_switch_state(device, candidate)
-    ]
-    return len(main_power_states) == 1 and main_power_states[0].key == state.key
-""",
-        """    main_power_states = [
-        candidate
-        for candidate in safe_switch_states
-        if _main_power_switch_state(device, candidate)
-    ]
-''',
-        '''        """    main_power_states = [
-        item
-        for item in safe_switch_states
-        if _main_power_switch_state(device, item, allow_identifier_component=True)
-    ]
-    return len(main_power_states) == 1 and main_power_states[0].key == state.key
-""",
-        """    main_power_states = [
-        item
-        for item in safe_switch_states
-        if _main_power_switch_state(device, item, allow_identifier_component=True)
-    ]
-''',
-        "primary switch marker",
-    ),
-)
+        "listener coalescing fields",
+    )
+'''
+text = text[:start] + field_call + text[end:]
 
-for old_head, new_head, old_tail, new_tail, label in replacements:
-    if text.count(old_head) != 1 or text.count(old_tail) != 1:
-        raise SystemExit(f"{label}: source patch marker mismatch")
-    text = text.replace(old_head, new_head, 1).replace(old_tail, new_tail, 1)
+start = text.index(
+    '    text = replace_once(\n        text,\n        """    def subscribe('
+)
+end = text.index(
+    '    text = replace_once(\n        text,\n        """        self._notify_listeners(',
+    start,
+)
+subscribe_call = '''    text = replace_once(
+        text,
+        """    def subscribe(self, listener: Callable[[], None]) -> Callable[[], None]:
+        \\\"\\\"\\\"Subscribe to state changes.\\\"\\\"\\\"
+        self.listeners.add(listener)
+        return lambda: self.listeners.discard(listener)
+""",
+        """    def subscribe(self, listener: Callable[[], None]) -> Callable[[], None]:
+        \\\"\\\"\\\"Subscribe to state changes.\\\"\\\"\\\"
+        self.listeners.add(listener)
+
+        def unsubscribe() -> None:
+            self.listeners.discard(listener)
+            self._pending_listeners.discard(listener)
+
+        return unsubscribe
+""",
+        "global unsubscribe",
+    )
+'''
+text = text[:start] + subscribe_call + text[end:]
+
+start = text.index(
+    '    text = replace_once(\n        text,\n        """    main_power_states = ['
+)
+end = text.index("    write(path, text)", start)
+primary_call = '''    text = replace_once(
+        text,
+        """    main_power_states = [
+        item
+        for item in safe_switch_states
+        if _main_power_switch_state(device, item, allow_identifier_component=True)
+    ]
+    return len(main_power_states) == 1 and main_power_states[0].key == state.key
+""",
+        """    main_power_states = [
+        item
+        for item in safe_switch_states
+        if _main_power_switch_state(device, item, allow_identifier_component=True)
+    ]
+    if len(main_power_states) == 1:
+        return main_power_states[0].key == state.key
+    return len(safe_switch_states) == 1 and safe_switch_states[0].key == state.key
+""",
+        "single safe switch primary",
+    )
+'''
+text = text[:start] + primary_call + text[end:]
 
 path.write_text(text, encoding="utf-8")
