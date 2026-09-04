@@ -7,6 +7,7 @@ import {
   type HomeMonitorDomDiagnostics
 } from "./home-monitor-dom.js";
 import { clickExactSceneCard } from "./scene-dom.js";
+import { clickHomeMonitorDialogAction, type HomeMonitorDialogDiagnostics } from "./home-monitor-dialog.js";
 import { safeCameraImageUrl } from "../state/camera-image-store.js";
 
 interface CommandLocatorLike {
@@ -101,6 +102,7 @@ interface CommandExecutorOptions {
   warmPageTtlMs?: number;
   onDiagnostic?: (stage: CommandDiagnosticStage) => void;
   onHomeMonitorDiagnostic?: (diagnostics: HomeMonitorDomDiagnostics) => void;
+  onHomeMonitorDialogDiagnostic?: (diagnostics: HomeMonitorDialogDiagnostics) => void;
   resolveRawDeviceId?: (alias: string) => string | undefined;
   resolveRawLocationId?: (alias: string) => string | undefined;
   resolveRawIdentifier?: (alias: string) => string | undefined;
@@ -152,6 +154,7 @@ export class SmartThingsWebUiCommandExecutor {
   readonly #onHomeMonitorDiagnostic:
     | ((diagnostics: HomeMonitorDomDiagnostics) => void)
     | undefined;
+  readonly #onHomeMonitorDialogDiagnostic: ((diagnostics: HomeMonitorDialogDiagnostics) => void) | undefined;
   readonly #resolveRawDeviceId: ((alias: string) => string | undefined) | undefined;
   readonly #resolveRawLocationId: ((alias: string) => string | undefined) | undefined;
   readonly #resolveRawIdentifier: ((alias: string) => string | undefined) | undefined;
@@ -167,6 +170,7 @@ export class SmartThingsWebUiCommandExecutor {
       : 0;
     this.#onDiagnostic = options?.onDiagnostic;
     this.#onHomeMonitorDiagnostic = options?.onHomeMonitorDiagnostic;
+    this.#onHomeMonitorDialogDiagnostic = options?.onHomeMonitorDialogDiagnostic;
     this.#resolveRawDeviceId = options?.resolveRawDeviceId;
     this.#resolveRawLocationId = options?.resolveRawLocationId;
     this.#resolveRawIdentifier = options?.resolveRawIdentifier;
@@ -586,14 +590,22 @@ export class SmartThingsWebUiCommandExecutor {
           // Diagnostics must never change command behavior.
         }
       };
-      const clickRequestedText = async (timeoutMs: number) =>
-        clickTextOnlyHomeMonitorAction(
-          page,
-          monitorLabels,
-          actionLabels,
-          modeLabelGroups,
-          timeoutMs
+      let monitorOpened = false;
+      const clickRequestedText = async (timeoutMs: number) => {
+        const dialogResult = await clickHomeMonitorDialogAction(
+          page, monitorLabels, actionLabels, modeLabelGroups, timeoutMs,
+          monitorOpened, this.#onHomeMonitorDialogDiagnostic
         );
+        if (dialogResult === "not_found") {
+          // Never fall back to dashboard buttons behind an unrecognized modal.
+          await emitDomDiagnostic("final_failure");
+          throw new Error("command_control_not_found");
+        }
+        if (dialogResult !== "unavailable") return dialogResult;
+        return clickTextOnlyHomeMonitorAction(
+          page, monitorLabels, actionLabels, modeLabelGroups, timeoutMs
+        );
+      };
 
       let action = await findHomeMonitorCardAction(
         page,
@@ -627,6 +639,7 @@ export class SmartThingsWebUiCommandExecutor {
         throw new Error("command_control_ambiguous");
       }
       if (currentModeResult === "clicked") {
+        monitorOpened = true;
         this.#onDiagnostic?.("home_monitor_current_mode_opened");
         textResult = await clickRequestedText(10_000);
         if (textResult === "clicked") return;
@@ -644,6 +657,7 @@ export class SmartThingsWebUiCommandExecutor {
         if (cardResult === "ambiguous") throw new Error("command_control_ambiguous");
         if (cardResult === "clicked") {
           cardOpened = true;
+          monitorOpened = true;
           textResult = await clickRequestedText(8_000);
           if (textResult === "clicked") return;
           if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
@@ -658,6 +672,7 @@ export class SmartThingsWebUiCommandExecutor {
           if (monitor) {
             await monitor.click({ timeout: 15_000 });
             cardOpened = true;
+          monitorOpened = true;
             textResult = await clickRequestedText(8_000);
             if (textResult === "clicked") return;
             if (textResult === "ambiguous") throw new Error("command_control_ambiguous");

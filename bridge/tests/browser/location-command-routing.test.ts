@@ -51,7 +51,12 @@ class RoutingPage {
   readonly goto = vi.fn(async (url: string) => {
     this.currentUrl = url;
   });
-  readonly evaluate = vi.fn(async () => "clicked");
+  readonly evaluate = vi.fn(async (_pageFunction: unknown, argument?: Record<string, unknown>) => {
+    if (argument?.phase === "select" || argument?.phase === "cleanup") {
+      return { kind: "missing", dialogs: 0, selects: 0, options: 0, modeGroups: 0, targets: 0 };
+    }
+    return "clicked";
+  });
 
   constructor(url: string, private readonly sceneName?: string) {
     this.currentUrl = url;
@@ -129,6 +134,14 @@ describe("location-aware Home Monitor and scene commands", () => {
     });
 
     expect(page.goto).not.toHaveBeenCalled();
-    expect(page.evaluate).toHaveBeenCalledTimes(1);
+    // Inspection/cleanup evaluations do not dispatch actions. The legacy
+    // card action must still execute exactly once when there is no dialog.
+    const actionCalls = page.evaluate.mock.calls.filter(([, argument]) =>
+      argument?.phase === undefined && Array.isArray(argument?.actionLabels)
+    );
+    expect(actionCalls).toHaveLength(1);
+    expect(actionCalls[0]?.[1]?.actionLabels).toContain("Disarm");
+    expect(page.empty.click).not.toHaveBeenCalled();
+    expect(page.close).toHaveBeenCalledTimes(1);
   });
 });
