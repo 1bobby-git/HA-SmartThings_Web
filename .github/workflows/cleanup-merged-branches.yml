@@ -1,0 +1,44 @@
+name: Cleanup merged documentation and fix branches
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/cleanup-merged-branches.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Delete merged work branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          for branch in \
+            docs/current-status-actual-data \
+            docs/readme-scenes-advanced-speak \
+            fix/bridge-autodiscovery-0.1.179 \
+            fix/home-monitor-scene-web-labels-0.1.180; do
+            git push origin --delete "$branch" || true
+          done
+
+      - name: Remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/cleanup-merged-branches.yml
+          git commit -m 'chore: finish merged branch cleanup'
+          git push origin HEAD:main
