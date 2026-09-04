@@ -82,4 +82,16 @@ primary_call = '''    text = replace_once(
 '''
 text = text[:start] + primary_call + text[end:]
 
+old = '''        '    expect(changelog).toContain("## 0.1.181");',
+        '    expect(changelog).toContain("## 0.1.182");\\n    expect(changelog).toContain("## 0.1.181");',
+'''
+new = '''        '    expect(changelog).toContain("## 0.1.182");',
+        '    expect(changelog).toContain("## 0.1.182");\\n    expect(changelog).toContain("## 0.1.181");',
+'''
+if text.count(old) != 1:
+    raise SystemExit(
+        f"changelog assertion source marker: expected one, found {text.count(old)}"
+    )
+text = text.replace(old, new, 1)
+
 path.write_text(text, encoding="utf-8")
