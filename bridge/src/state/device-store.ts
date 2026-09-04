@@ -214,8 +214,8 @@ const ADVANCED_COMMAND_MAX_ENUM_VALUES = 128;
 const ADVANCED_COMMAND_MAX_ENUM_STRING_LENGTH = 1024;
 const ADVANCED_COMMAND_MAX_STRING_LENGTH = 2048;
 const ADVANCED_COMMAND_CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/u;
-const INVENTORY_PERSIST_COALESCE_MS = 25;
-const INVENTORY_PERSIST_RETRY_MS = 250;
+const INVENTORY_PERSIST_COALESCE_MS = 5_000;
+const INVENTORY_PERSIST_RETRY_MS = 5_000;
 const CAMERA_IMAGE_ATTRIBUTES = new Set([
   "captureTime",
   "clip",
@@ -243,6 +243,7 @@ export class DeviceStore {
   readonly #onPersistenceError: (() => void) | undefined;
   #persistTimer: ReturnType<typeof setTimeout> | undefined;
   #persistPending = false;
+  #lastPersistedInventoryJson: string | undefined;
   #sequence = 0;
   #sessionPendingDeviceIds: Set<string> | undefined;
   readonly #sessionConsumerLocationIds = new Set<string>();
@@ -265,6 +266,11 @@ export class DeviceStore {
       mkdirSync(dirname(options.sqlitePath), { recursive: true, mode: 0o700 });
       this.#db = new DatabaseSync(options.sqlitePath);
       this.#db.exec(`
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
+        PRAGMA wal_autocheckpoint = 64;
+        PRAGMA journal_size_limit = 1048576;
+
         CREATE TABLE IF NOT EXISTS normalized_inventory (
           schema_version INTEGER PRIMARY KEY,
           inventory_json TEXT NOT NULL,
@@ -486,7 +492,9 @@ export class DeviceStore {
       const sequence = this.#nextSequence();
       this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
     }
-    this.#schedulePersist();
+    if (!wasOnline) {
+      this.#schedulePersist();
+    }
   }
 
   reset(): void {
@@ -922,6 +930,9 @@ export class DeviceStore {
     if (!state) {
       return;
     }
+    const previousState = device.states.get(stateKey(state));
+    const durableStateChanged =
+      previousState === undefined || !sameStatePayload(previousState, state);
     const stateChanged = this.#setState(device, state);
     if (!stateChanged) {
       return;
@@ -947,7 +958,9 @@ export class DeviceStore {
       ...(state.updatedAt ? { eventTime: state.updatedAt } : {}),
       ...(commandId ? { commandId } : {})
     });
-    this.#schedulePersist();
+    if (durableStateChanged || !wasOnline) {
+      this.#schedulePersist();
+    }
   }
 
   #applyDeviceHealthEvent(input: unknown): void {
@@ -968,7 +981,11 @@ export class DeviceStore {
       return;
     }
     const device = current ?? this.#ensureDevice(deviceId, locationId as string);
+    const onlineChanged = device.online !== online;
     if (!this.#setDeviceHealth(device, online, updatedAt)) {
+      return;
+    }
+    if (!onlineChanged) {
       return;
     }
     const sequence = this.#nextSequence();
@@ -1173,7 +1190,9 @@ export class DeviceStore {
       .get() as { inventoryJson?: unknown } | undefined;
     if (typeof row?.inventoryJson !== "string") return undefined;
     try {
-      return parsePersistedInventory(JSON.parse(row.inventoryJson));
+      const parsed = parsePersistedInventory(JSON.parse(row.inventoryJson));
+      if (parsed) this.#lastPersistedInventoryJson = row.inventoryJson;
+      return parsed;
     } catch {
       return undefined;
     }
@@ -1270,6 +1289,11 @@ export class DeviceStore {
 
   #flushPersist(): void {
     if (!this.#db || !this.#persistPending) return;
+    const inventoryJson = JSON.stringify(this.snapshot());
+    if (inventoryJson === this.#lastPersistedInventoryJson) {
+      this.#persistPending = false;
+      return;
+    }
     this.#db
       .prepare(`
         INSERT INTO normalized_inventory (schema_version, inventory_json, persisted_at)
@@ -1278,9 +1302,22 @@ export class DeviceStore {
           inventory_json = excluded.inventory_json,
           persisted_at = excluded.persisted_at
       `)
-      .run(JSON.stringify(this.snapshot()), new Date().toISOString());
+      .run(inventoryJson, new Date().toISOString());
+    this.#lastPersistedInventoryJson = inventoryJson;
     this.#persistPending = false;
   }
+}
+
+function sameStatePayload(left: BridgeDeviceState, right: BridgeDeviceState): boolean {
+  return (
+    left.component === right.component &&
+    left.capability === right.capability &&
+    left.attribute === right.attribute &&
+    left.unit === right.unit &&
+    left.componentRole === right.componentRole &&
+    left.capabilityRole === right.capabilityRole &&
+    JSON.stringify(left.value) === JSON.stringify(right.value)
+  );
 }
 
 function snapshotDeviceStates(device: MutableDevice): BridgeDeviceState[] {

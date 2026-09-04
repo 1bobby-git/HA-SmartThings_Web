@@ -55,7 +55,7 @@ import {
   type HealthReport
 } from "./server/health.js";
 import { BridgeAuth } from "./server/bridge-auth.js";
-import { CaptureStore } from "./state/capture-store.js";
+import { CaptureStore, type SanitizedCaptureRecord } from "./state/capture-store.js";
 import { CameraImageStore } from "./state/camera-image-store.js";
 import { DeviceStore } from "./state/device-store.js";
 import { StateReconciliationCoordinator } from "./state/reconciliation-coordinator.js";
@@ -98,7 +98,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.172";
+const bridgeVersion = "0.1.173";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 
@@ -439,6 +439,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   let restarting = false;
   const capturePipeline = createStatusCapturePipeline(
     captures,
+    deps.config.debugProtocolLogging === true,
     status,
     protocolIntegrity,
     log,
@@ -1244,6 +1245,7 @@ function runtimeRecord(value: unknown): Record<string, unknown> | undefined {
 
 function createStatusCapturePipeline(
   captures: CaptureStore,
+  persistDebugCaptures: boolean,
   status: RuntimeStatusStore,
   protocolIntegrity: ProtocolIntegrityStore | undefined,
   log: BridgeRuntimeLog,
@@ -1256,6 +1258,9 @@ function createStatusCapturePipeline(
   let analyzer = new ProtocolAnalyzer({ ttlMs: 300_000, maxEntries: 100_000 });
   let protocolFingerprintObserved = false;
   let protocolBlocked = initiallyProtocolBlocked;
+  const persistCapture = (record: SanitizedCaptureRecord, force = false): void => {
+    if (persistDebugCaptures || force) captures.write(record);
+  };
   return {
     resetSnapshotSession: () => {
       physicalActionProbe.fail("runtime_restarted");
@@ -1280,7 +1285,9 @@ function createStatusCapturePipeline(
         if (record.source === "playwright-websocket-frame" || record.source === "cdp-websocket-frame") {
           const analysis = analyzer.observe(record);
           // Count every delivery in memory, but persist only the first copy of one logical event.
-          if (analysis?.kind !== "duplicate") captures.write(record);
+          if (analysis?.kind !== "duplicate") {
+            persistCapture(record, analysis?.kind === "protocol_changed");
+          }
           const protocol = analyzer.snapshot();
           const current = status.getSnapshot();
           const basePatch: RuntimeStatusPatch = {
@@ -1363,7 +1370,7 @@ function createStatusCapturePipeline(
           status.update(basePatch);
           return;
         }
-        captures.write(record);
+        persistCapture(record);
         if (record.source === "cdp-eventsource") {
           status.update({ lastEventAtMs: now });
         }

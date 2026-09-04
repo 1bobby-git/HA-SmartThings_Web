@@ -444,6 +444,42 @@ describe("CameraImageStore", () => {
     ]);
     expect(JSON.stringify(events)).not.toMatch(/secret|media\.st-av\.net|token/i);
   });
+
+  test("does not rewrite or publish identical camera image bytes", async () => {
+    const fetchImage = vi.fn(async () =>
+      new Response(Uint8Array.from([0xff, 0xd8, 0xff, 0x01]), {
+        status: 200,
+        headers: { "content-type": "image/jpeg", "content-length": "4" }
+      })
+    );
+    const store = createStore(fetchImage);
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    store.observeRawWebSocketFrame(
+      "sent",
+      '421["get","api/camera/thumbnail","raw-camera-uuid",{}]'
+    );
+    store.observeRawWebSocketFrame(
+      "received",
+      '431[null,{"url":"https://media.st-av.net/camera/image.jpg?token=one"}]'
+    );
+    await store.whenIdle();
+    store.observeRawWebSocketFrame(
+      "sent",
+      '422["get","api/camera/thumbnail","raw-camera-uuid",{}]'
+    );
+    store.observeRawWebSocketFrame(
+      "received",
+      '432[null,{"url":"https://media.st-av.net/camera/image.jpg?token=two"}]'
+    );
+    await store.whenIdle();
+
+    expect(fetchImage).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenCalledOnce();
+    expect(store.get("dev_001")?.body).toEqual(Buffer.from([0xff, 0xd8, 0xff, 0x01]));
+  });
+
 });
 
 function createStore(

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -33,6 +34,7 @@ interface PersistedMetadata {
   schemaVersion: 1;
   contentType: BridgeCameraImage["contentType"];
   capturedAt: string;
+  sha256?: string;
 }
 
 type CameraImageListener = (event: BridgeCameraImageEvent) => void;
@@ -275,12 +277,26 @@ export class CameraImageStore {
   ): void {
     const bodyPath = join(this.#root, `${deviceId}.bin`);
     const metadataPath = join(this.#root, `${deviceId}.json`);
+    const sha256 = createHash("sha256").update(body).digest("hex");
+    try {
+      const current = parseMetadata(JSON.parse(readFileSync(metadataPath, "utf8")));
+      if (current?.contentType === contentType && current.sha256 === sha256) {
+        return;
+      }
+    } catch {
+      // Missing or legacy metadata is replaced atomically below.
+    }
     const tempBody = `${bodyPath}.tmp`;
     const tempMetadata = `${metadataPath}.tmp`;
     writeFileSync(tempBody, body, { mode: 0o600 });
     writeFileSync(
       tempMetadata,
-      JSON.stringify({ schemaVersion: 1, contentType, capturedAt } satisfies PersistedMetadata),
+      JSON.stringify({
+        schemaVersion: 1,
+        contentType,
+        capturedAt,
+        sha256
+      } satisfies PersistedMetadata),
       { encoding: "utf8", mode: 0o600 }
     );
     if (statSync(tempBody).size !== body.length) return;
@@ -387,15 +403,22 @@ function parseMetadata(value: unknown): PersistedMetadata | undefined {
   const record = asRecord(value);
   const contentType = safeContentType(readString(record?.contentType));
   const capturedAt = readString(record?.capturedAt);
+  const sha256 = readString(record?.sha256);
   if (
     record?.schemaVersion !== 1 ||
     !contentType ||
     !capturedAt ||
-    !Number.isFinite(Date.parse(capturedAt))
+    !Number.isFinite(Date.parse(capturedAt)) ||
+    (sha256 !== undefined && !/^[a-f0-9]{64}$/u.test(sha256))
   ) {
     return undefined;
   }
-  return { schemaVersion: 1, contentType, capturedAt };
+  return {
+    schemaVersion: 1,
+    contentType,
+    capturedAt,
+    ...(sha256 ? { sha256 } : {})
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

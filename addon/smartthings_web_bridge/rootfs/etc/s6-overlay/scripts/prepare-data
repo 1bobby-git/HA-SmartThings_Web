@@ -1,4 +1,28 @@
 #!/command/with-contenv sh
 set -eu
+
 test -d /data
-exec chown -R pwuser:pwuser /data
+chown pwuser:pwuser /data
+
+for directory in /data/chromium-profile /data/downloads /data/camera-images; do
+  mkdir -p "$directory"
+  chown pwuser:pwuser "$directory"
+  chmod 0700 "$directory"
+done
+
+for cache_path in \
+  "/data/chromium-profile/Default/Cache" \
+  "/data/chromium-profile/Default/Code Cache" \
+  "/data/chromium-profile/Default/GPUCache" \
+  "/data/chromium-profile/Default/Service Worker/CacheStorage" \
+  "/data/chromium-profile/Default/Service Worker/ScriptCache" \
+  "/data/chromium-profile/GrShaderCache" \
+  "/data/chromium-profile/ShaderCache" \
+  "/data/chromium-profile/GraphiteDawnCache" \
+  "/data/chromium-profile/DawnGraphiteCache" \
+  "/data/chromium-profile/DawnWebGPUCache" \
+  "/data/chromium-profile/Crashpad"; do
+  rm -rf -- "$cache_path" 2>/dev/null || true
+done
+
+find /data/downloads -mindepth 1 -type f -mtime +7 -delete 2>/dev/null || true

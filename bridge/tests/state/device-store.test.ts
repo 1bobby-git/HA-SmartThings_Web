@@ -739,12 +739,12 @@ describe("DeviceStore", () => {
       );
       expect(listener).toHaveBeenCalledOnce();
 
-      await vi.advanceTimersByTimeAsync(30);
+      await vi.advanceTimersByTimeAsync(5_100);
       expect(onPersistenceError).toHaveBeenCalledOnce();
 
       locker.exec("COMMIT");
       locker.close();
-      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(5_100);
       live.close();
 
       const observer = new DatabaseSync(sqlitePath, { readOnly: true });
