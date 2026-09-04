@@ -45,6 +45,7 @@ jobs:
             'fix/low-write-storage-guard-0.1.173'
             'fix/nonblocking-data-prep-0.1.176-final'
             'fix/nonblocking-data-prep-0.1.176'
+            'fix/release-gate-0.1.177'
             'fix/storage-write-amplification-0.1.173'
             'fix/web-ui-startup-0.1.175'
           )
