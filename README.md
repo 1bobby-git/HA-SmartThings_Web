@@ -63,7 +63,7 @@ Home Assistant OS 또는 Supervised 환경에서 아래 버튼을 누르면 이 
 
 버튼이 앱 화면까지 열지 못하면 아래 버튼으로 저장소만 먼저 추가한 뒤 **설정 → 앱 → 앱 스토어 → SmartThings Web Bridge**에서 설치합니다.
 
-[![Home Assistant에 SmartThings Web 앱 저장소 추가](https://my.home-assistant.io/badges/supervisor_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2F1bobby-git%2FHA-SmartThings_Web)
+[![Home Assistant에 SmartThings Web 앱 저장소 추가](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2F1bobby-git%2FHA-SmartThings_Web)
 
 <details>
 <summary>수동 로컬 설치</summary>
