@@ -55,7 +55,20 @@ jobs:
         run: npm run audit:fixtures
 
       - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if timeout 180s npm audit --omit=dev --audit-level=high; then
+              exit 0
+            fi
+            if [ "${attempt}" -eq 3 ]; then
+              echo "npm audit failed after 3 attempts." >&2
+              exit 1
+            fi
+            echo "npm audit attempt ${attempt} failed; retrying after a bounded delay." >&2
+            sleep $((attempt * 15))
+          done
 
   python-tests:
     name: Home Assistant integration tests
