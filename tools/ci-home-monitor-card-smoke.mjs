@@ -65,8 +65,11 @@ try {
   const { clickTextOnlyHomeMonitorAction } = await import("../dist/bridge/src/browser/home-monitor-dom.js");
   const page = await browser.newPage();
   try {
-    await page.route("**/*", (route) => route.fulfill({ status: 200, contentType: "text/html", body: css + svgCard + capture }));
+    await page.route("**/*", (route) => route.fulfill({ status: 200,
+      contentType: "text/html; charset=utf-8", body: '<meta charset="utf-8">' + css + svgCard + capture }));
     await page.goto("https://my.smartthings.com/location/test-office");
+    assert.equal(await page.evaluate(() => document.characterSet), "UTF-8", "fixture navigation encoding");
+    assert.equal(await page.locator("#away text").textContent(), "보안(외출)", "fixture preserves Korean mode label");
     // This fixture reproduces the HTMLElement-only omission in the old dashboard helper.
     assert.equal(await clickTextOnlyHomeMonitorAction(page, monitor, groups[0], groups, 100), "not_found");
     await none(page);
@@ -80,7 +83,12 @@ try {
       () => ({ openCommandPage: async () => wrapped }), (id) => id,
       { onHomeMonitorCardDiagnostic: (entry) => diagnostics.push(entry) }
     );
-    await executor.executeLocationAction({ locationId: "test-office", action: "armAway" });
+    try {
+      await executor.executeLocationAction({ locationId: "test-office", action: "armAway" });
+    } catch (error) {
+      console.error("Synthetic dashboard diagnostics:", JSON.stringify(diagnostics));
+      throw error;
+    }
     await one("away")(page);
     assert.equal(diagnostics.at(-1).outcome, "clicked");
     passed++;
