@@ -1,0 +1,108 @@
+name: Rerun nonblocking startup recovery 0.1.176
+
+on:
+  push:
+    branches:
+      - fix/nonblocking-data-prep-0.1.176
+    paths:
+      - .github/workflows/rerun-nonblocking-data-prep-0.1.176.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rerun-nonblocking-data-prep-0.1.176
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out work branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Extract and run corrected transformer
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/apply-nonblocking-data-prep-0.1.176.yml')
+          text = workflow.read_text(encoding='utf-8')
+          opener = "          python - <<'PY'\n"
+          closer = "\n          PY\n"
+          start = text.index(opener) + len(opener)
+          end = text.index(closer, start)
+          script = text[start:end]
+          script = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in script.splitlines()
+          ) + "\n"
+          old = 'packages capability stability and storage-write optimization as version 0.1.175'
+          new = 'packages inventory backpressure and low-write safeguards as version 0.1.175'
+          if script.count(old) != 1:
+              raise SystemExit(f'expected one stale title anchor, found {script.count(old)}')
+          script = script.replace(old, new, 1)
+          compiled = compile(script, '<nonblocking-startup-transformer>', 'exec')
+          exec(compiled, {'__name__': '__main__'})
+          PY
+
+      - name: Validate shell scripts
+        run: |
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/maintain-profile
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/profile-maintenance/run
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/bridge/run
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/bridge/finish
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run Node validation
+        run: |
+          npm test
+          npm run typecheck
+          npm run build
+
+      - name: Run Python validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.9,<4' 'voluptuous>=0.13,<1'
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+          python -m compileall -q custom_components/smartthings_web
+
+      - name: Run repository audits
+        run: |
+          npm run audit:api-free
+          npm run audit:secrets
+          npm run audit:fixtures
+
+      - name: Remove one-time workflows
+        run: |
+          rm -f .github/workflows/apply-nonblocking-data-prep-0.1.176.yml
+          rm -f .github/workflows/rerun-nonblocking-data-prep-0.1.176.yml
+
+      - name: Commit verified changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix: make Bridge startup data preparation nonblocking 0.1.176'
+          git push origin HEAD:fix/nonblocking-data-prep-0.1.176
