@@ -57,3 +57,5 @@ jobs:
           git diff --cached --check
           git commit -m 'docs: replace caution with evidence-based component status'
           git push origin HEAD:docs/current-status-actual-data
+
+# Retry after replacing Markdown trailing spaces with an explicit blockquote paragraph.
