@@ -133,7 +133,7 @@ RUN npm ci
 RUN npm run build
 RUN npm prune --omit=dev
 
-RUN find /etc/s6-overlay/s6-rc.d -type f \( -name run -o -name up \) -exec chmod +x {} +
+RUN find /etc/s6-overlay/s6-rc.d -type f \( -name run -o -name up -o -name finish \) -exec chmod +x {} +
 RUN chmod +x /etc/s6-overlay/scripts/*
 
 EXPOSE 8099

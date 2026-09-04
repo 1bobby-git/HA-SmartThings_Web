@@ -1,0 +1,5 @@
+#!/command/with-contenv sh
+set -u
+
+printf '%s\n' "bridge_service:exit:code=${1:-unknown}:signal=${2:-unknown}" >&2
+exit 0

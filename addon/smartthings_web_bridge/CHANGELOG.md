@@ -1,3 +1,11 @@
+## 0.1.176
+
+- 0.1.175에서 Bridge의 선행 조건으로 남아 있던 Chromium 프로필 전체 소유권 검사를 분리했습니다. 이전 프로필이 크거나 손상된 경우 `data-prep`가 끝나지 않아 Node 프로세스와 `127.0.0.1:8098`이 아예 시작되지 않던 문제를 수정합니다.
+- 부팅 차단 경로에는 `/data` 디렉터리와 `options.json`, Bridge secret, SQLite 및 sidecar, 설정 파일의 빠른 검증·권한 복구만 남기고, 캐시 정리와 레거시 프로필 소유권 마이그레이션은 독립 `profile-maintenance` 서비스에서 수행합니다.
+- Bridge HTTP 서버를 먼저 연 뒤 브라우저 시작만 profile maintenance 완료를 기다립니다. 유지보수는 180초로 제한하며 실패·시간 초과 시에도 HTTP 상태 화면과 noVNC 진단 경로는 유지됩니다.
+- `data_prep:start/ready`, `profile_maintenance:*`, `bridge_service:start/exit` 로그를 추가해 s6 선행 단계, Node 실행 전 실패, 프로세스 종료를 구분할 수 있게 했습니다.
+- 비차단 서비스 의존성, 브라우저 시작 대기, 유지보수 시간 제한, 저장소 보존, 셸 구문을 검증하는 회귀 테스트를 추가했습니다.
+
 ## 0.1.175
 
 - Advanced capability command catalog을 장치별로 즉시 발행하지 않고 한 세대당 하나의 인벤토리 이벤트로 묶어 수백 장치 환경의 전체 인벤토리 재조회 폭주를 차단합니다.

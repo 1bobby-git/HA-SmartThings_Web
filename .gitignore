@@ -13,3 +13,5 @@ __pycache__/
 *.pyc
 .worktrees/
 /stw-smartthings-web-*.tar.gz
+
+.venv/

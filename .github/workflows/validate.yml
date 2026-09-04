@@ -41,7 +41,12 @@ jobs:
           python -m compileall -q custom_components/smartthings_web
 
       - name: Validate add-on shell syntax
-        run: sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data
+        run: |
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/maintain-profile
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/profile-maintenance/run
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/bridge/run
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/bridge/finish
 
   hacs:
     name: HACS
