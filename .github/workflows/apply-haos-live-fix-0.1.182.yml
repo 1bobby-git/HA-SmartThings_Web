@@ -24,19 +24,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply reviewed source and version changes
+      - name: Reassemble and apply reviewed source changes
+        shell: bash
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('.github/scripts/apply_haos_live_fix_0_1_182.py')
-          text = path.read_text(encoding='utf-8')
-          old = 'base64.b64decode(PAYLOAD)'
-          new = 'base64.b64decode(PAYLOAD + "=" * (-len(PAYLOAD) % 4))'
-          if text.count(old) != 1:
-              raise SystemExit('bootstrap decoder marker mismatch')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
-          PY
-          python .github/scripts/apply_haos_live_fix_0_1_182.py
+          set -euo pipefail
+          cat .github/scripts/0.1.182/payload-*.b64 > /tmp/apply-0.1.182.b64
+          base64 --decode /tmp/apply-0.1.182.b64 | gzip --decompress > /tmp/apply-0.1.182.py
+          printf '%s  %s\n' \
+            'ea6d33d30c0d1875c85545846d43462cb63cac71a748cf7b82ddeb7be10bc96e' \
+            '/tmp/apply-0.1.182.py' | sha256sum --check --strict
+          python /tmp/apply-0.1.182.py
+          rm -rf .github/scripts/0.1.182
           rm -f .github/scripts/apply_haos_live_fix_0_1_182.py
 
       - name: Validate shell syntax
