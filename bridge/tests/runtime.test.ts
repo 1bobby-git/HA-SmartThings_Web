@@ -1053,6 +1053,15 @@ describe("createBridgeRuntime", () => {
     const context = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
     const runtime = await createBridgeRuntime(
       createDeps(root, {
+        config: {
+          dataDir: root,
+          host: "127.0.0.1",
+          port: 0,
+          heartbeatIntervalMs: 10_000,
+          browserMaxRestarts: 2,
+          browserRetryDelayMs: 0,
+          debugProtocolLogging: true
+        },
         chromium: { launchPersistentContext: vi.fn(async () => context) }
       })
     );

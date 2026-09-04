@@ -128,6 +128,21 @@ describe("CaptureStore", () => {
     }
   });
 
+  test("skips consecutive records with the same source and sanitized payload hash", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-capture-dedupe-"));
+    let store: CaptureStore | undefined;
+    try {
+      store = new CaptureStore(join(root, "capture.sqlite"));
+      store.write(sanitizeCaptureRecord("unit", { value: "same" }, (value) => value));
+      store.write(sanitizeCaptureRecord("unit", { value: "same" }, (value) => value));
+
+      expect(store.listRecent(5)).toHaveLength(1);
+    } finally {
+      store?.close();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   test("retains only the newest bounded diagnostic capture window on startup", () => {
     const root = mkdtempSync(join(tmpdir(), "stw-capture-retention-"));
     const sqlitePath = join(root, "capture.sqlite");
@@ -146,7 +161,7 @@ describe("CaptureStore", () => {
         WITH RECURSIVE rows(value) AS (
           VALUES(1)
           UNION ALL
-          SELECT value + 1 FROM rows WHERE value < 50010
+          SELECT value + 1 FROM rows WHERE value < 2010
         )
         INSERT INTO captures (source, received_at, payload_json, payload_hash)
         SELECT 'unit', '2026-08-25T00:00:00Z', '{}', printf('%064d', value)
@@ -162,7 +177,7 @@ describe("CaptureStore", () => {
         .prepare("SELECT COUNT(*) AS count, MIN(id) AS minId, MAX(id) AS maxId FROM captures")
         .get() as { count: number; minId: number; maxId: number };
 
-      expect(aggregate).toEqual({ count: 50000, minId: 11, maxId: 50010 });
+      expect(aggregate).toEqual({ count: 2000, minId: 11, maxId: 2010 });
     } finally {
       inspector?.close();
       store?.close();
@@ -188,7 +203,7 @@ describe("CaptureStore", () => {
         WITH RECURSIVE rows(value) AS (
           VALUES(1)
           UNION ALL
-          SELECT value + 1 FROM rows WHERE value < 50000
+          SELECT value + 1 FROM rows WHERE value < 2000
         )
         INSERT INTO captures (source, received_at, payload_json, payload_hash)
         SELECT 'unit', '2026-08-25T00:00:00Z', '{}', printf('%064d', value)
@@ -207,7 +222,7 @@ describe("CaptureStore", () => {
         .prepare("SELECT COUNT(*) AS count, MIN(id) AS minId, MAX(id) AS maxId FROM captures")
         .get() as { count: number; minId: number; maxId: number };
 
-      expect(aggregate).toEqual({ count: 50000, minId: 1001, maxId: 51000 });
+      expect(aggregate).toEqual({ count: 2000, minId: 1001, maxId: 3000 });
     } finally {
       inspector?.close();
       store?.close();

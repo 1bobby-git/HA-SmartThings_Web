@@ -465,8 +465,15 @@ class SmartThingsWebRuntime:
         )
         if current is not None and not _state_is_newer(state, current) and not repeated_event:
             return False
+        semantic_duplicate = (
+            current is not None
+            and state.attribute not in EVENT_ATTRIBUTES | {"signalMetrics"}
+            and _state_payload_equal(current, state)
+        )
         self.inventory.sequence = sequence
         device.states[state.key] = state
+        if semantic_duplicate:
+            return False
         self._notify_listeners(
             device_ids={device_id},
             state_keys={(device_id, state.key)},
@@ -2173,6 +2180,16 @@ def _state_is_newer(candidate: BridgeState, current: BridgeState) -> bool:
     if candidate_time is None:
         return False
     return candidate_time > current_time
+
+
+def _state_payload_equal(left: BridgeState, right: BridgeState) -> bool:
+    """Return whether an update changes anything visible in Home Assistant."""
+    return (
+        left.value == right.value
+        and left.unit == right.unit
+        and left.component_role == right.component_role
+        and left.capability_role == right.capability_role
+    )
 
 
 def _merge_device_aliases(
