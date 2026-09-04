@@ -20,6 +20,25 @@ jobs:
       - name: Wire reviewed dialog handler and release metadata
         run: |
           python .github/scripts/prepare_0_1_183.py
+          # The permanent workflow change is committed separately with workflow permission.
+          git restore .github/workflows/validate.yml
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('bridge/src/browser/home-monitor-dialog.ts')
+          text = path.read_text(encoding='utf-8')
+          changes = [
+              ('  optionIndex?: number;', '  optionValue?: string;'),
+              ('/** Runs inside Chromium. Never returns page text, IDs, URLs, or option values. */', '/** Runs inside Chromium. Form values stay private; diagnostics contain counters only. */'),
+              ('    const { select, option } = nativeTargets[0]!;\n', '    const { select, option } = nativeTargets[0]!;\n    if (Array.from(select.options).filter((item) => item.value === option.value).length !== 1) {\n      return { ...result, kind: "ambiguous" };\n    }\n'),
+              ('optionIndex: option.index', 'optionValue: option.value'),
+              ('selectOption(option: { index: number }', 'selectOption(option: { value: string }'),
+              ('target.selectOption({ index: last.optionIndex! }', 'target.selectOption({ value: last.optionValue! }'),
+          ]
+          for old, new in changes:
+              assert text.count(old) == 1, old
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
           rm .github/scripts/prepare_0_1_183.py
           rm .github/workflows/prepare-home-monitor-dialog-0.1.183.yml
           git diff --check
