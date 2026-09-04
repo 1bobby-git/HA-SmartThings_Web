@@ -37,7 +37,8 @@ def main() -> None:
     > 현재 게이트는 `DECISION: LIMITED`입니다. 실제 HAOS 환경에서 연결·재시작 복구·푸시 상태 반영이 검증되었지만, 장시간 유휴 상태·호스트 재부팅 복구·모든 기기 유형의 제어·완전한 API 독립성은 아직 검증 범위 밖입니다."""
     )
     new_status = dedent_embedded(
-        """> **현재 상태: `0.1.180` · 실환경 부분 검증**  
+        """> **현재 상태: `0.1.180` · 실환경 부분 검증**
+    >
     > 실제 Home Assistant OS에서 앱 기동, Ingress/noVNC Samsung 로그인, Bridge 연결, 인벤토리 수신과 Home Assistant 엔티티 생성까지 확인했습니다. `0.1.180`의 Home Monitor·Scene·Web 표시명 수정과 Advanced command·Galaxy Home Mini TTS는 구현 및 자동 검증을 통과했지만, 모든 계정과 기기에서 실기기 재검증이 끝난 상태는 아닙니다."""
     )
     text = replace_once(text, old_status, new_status, "README visible status")
