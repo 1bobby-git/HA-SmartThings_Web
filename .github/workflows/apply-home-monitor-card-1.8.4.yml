@@ -6,6 +6,8 @@ on:
       - fix/home-monitor-dashboard-1.8.4
     paths:
       - .github/workflows/apply-home-monitor-card-1.8.4.yml
+      - tools/ci-home-monitor-card-smoke.mjs
+      - bridge/src/browser/home-monitor-card.ts
 
 permissions:
   contents: write
