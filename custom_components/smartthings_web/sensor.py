@@ -303,28 +303,11 @@ class SmartThingsWebSensor(SmartThingsWebEntity, SensorEntity):
         )
         self._attr_entity_category = description.entity_category
         self._attr_entity_registry_enabled_default = description.enabled_default
+        numeric_value = type(state.value) in (int, float)
+        self._attr_device_class = description.device_class if numeric_value else None
+        self._attr_state_class = description.state_class if numeric_value else None
         if description.device_class is None and (icon := device_icon_for(device)) is not None:
             self._attr_icon = icon
-
-    @property
-    def device_class(self) -> SensorDeviceClass | None:
-        """Use a numeric device class only while the pushed value is numeric."""
-        state = self.bridge_state
-        if state is None or isinstance(state.value, bool) or not isinstance(
-            state.value, (int, float)
-        ):
-            return None
-        return self.description.device_class
-
-    @property
-    def state_class(self) -> SensorStateClass | None:
-        """Use a numeric state class only while the pushed value is numeric."""
-        state = self.bridge_state
-        if state is None or isinstance(state.value, bool) or not isinstance(
-            state.value, (int, float)
-        ):
-            return None
-        return self.description.state_class
 
     @property
     def native_value(self) -> Any:
@@ -334,6 +317,10 @@ class SmartThingsWebSensor(SmartThingsWebEntity, SensorEntity):
             return None
         if state.attribute == "signalMetrics":
             return signal_metrics_native_value(state.value, state.updated_at)
+        if (
+            self._attr_device_class is not None or self._attr_state_class is not None
+        ) and type(state.value) not in (int, float):
+            return None
         return sensor_native_value(state.value)
 
     @property

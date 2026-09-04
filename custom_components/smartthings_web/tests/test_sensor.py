@@ -129,7 +129,7 @@ from smartthings_web.sensor import (  # noqa: E402
 class SmartThingsWebSensorTests(unittest.TestCase):
     """Keep string status content without violating HA numeric sensor contracts."""
 
-    def test_known_numeric_attribute_tracks_the_live_value_type(self) -> None:
+    def test_known_numeric_attribute_keeps_capabilities_stable(self) -> None:
         state = BridgeState(
             "main",
             "batteryHealth",
@@ -166,9 +166,48 @@ class SmartThingsWebSensorTests(unittest.TestCase):
         )
 
         self.assertEqual(sensor.native_value, 93)
+        self.assertIsNone(sensor.device_class)
+        self.assertIsNone(sensor.state_class)
+        self.assertEqual(sensor.native_unit_of_measurement, "%")
+
+    def test_numeric_sensor_keeps_capabilities_and_hides_invalid_value(self) -> None:
+        state = BridgeState(
+            "main",
+            "battery",
+            "battery",
+            93,
+            "%",
+            "2026-08-26T03:32:13Z",
+        )
+        device = BridgeDevice(
+            "dev_001",
+            "loc_001",
+            None,
+            "Safe",
+            None,
+            True,
+            states={state.key: state},
+        )
+        inventory = BridgeInventory(1, True, "0.1.66", "4:test", {}, {}, {device.device_id: device})
+        runtime = SmartThingsWebRuntime(object(), "loc_001", inventory)
+        sensor = SmartThingsWebSensor(runtime, device, state, SENSOR_STATES["battery"])
+
+        self.assertEqual(sensor.native_value, 93)
         self.assertEqual(sensor.device_class, SensorDeviceClass.BATTERY)
         self.assertEqual(sensor.state_class, SensorStateClass.MEASUREMENT)
-        self.assertEqual(sensor.native_unit_of_measurement, "%")
+
+        device.states[state.key] = BridgeState(
+            "main",
+            "battery",
+            "battery",
+            "normal",
+            None,
+            "2026-08-26T03:33:13Z",
+        )
+
+        self.assertIsNone(sensor.native_value)
+        self.assertEqual(sensor.device_class, SensorDeviceClass.BATTERY)
+        self.assertEqual(sensor.state_class, SensorStateClass.MEASUREMENT)
 
     def test_explicit_duplicate_name_overrides_translation_key(self) -> None:
         state = BridgeState(

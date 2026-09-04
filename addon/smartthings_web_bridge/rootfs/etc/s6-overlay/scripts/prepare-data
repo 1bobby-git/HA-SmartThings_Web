@@ -3,12 +3,22 @@ set -eu
 
 test -d /data
 chown pwuser:pwuser /data
+OWNERSHIP_MARKER="/data/.ownership-migrated-v2"
 
 for directory in /data/chromium-profile /data/downloads /data/camera-images; do
   mkdir -p "$directory"
   chown pwuser:pwuser "$directory"
   chmod 0700 "$directory"
 done
+
+if [ ! -f "$OWNERSHIP_MARKER" ]; then
+  find /data -maxdepth 1 -type f -exec chown pwuser:pwuser {} +
+  for directory in /data/chromium-profile /data/downloads /data/camera-images; do
+    find "$directory" -xdev \( -type d -o -type f \) -exec chown pwuser:pwuser {} +
+  done
+  touch "$OWNERSHIP_MARKER"
+  chmod 0600 "$OWNERSHIP_MARKER"
+fi
 
 for cache_path in \
   "/data/chromium-profile/Default/Cache" \

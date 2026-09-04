@@ -23,4 +23,17 @@ describe("HAOS storage hygiene", () => {
     expect(script).not.toContain("/data/chromium-profile/Default/Local Storage");
     expect(script).not.toContain("/data/chromium-profile/Default/IndexedDB");
   });
+
+  test("repairs durable data ownership once without scanning all of /data every boot", () => {
+    const script = readFileSync(
+      "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data",
+      "utf8"
+    );
+    expect(script).toContain('OWNERSHIP_MARKER="/data/.ownership-migrated-v2"');
+    expect(script).toContain('if [ ! -f "$OWNERSHIP_MARKER" ]; then');
+    expect(script).toContain("find /data -maxdepth 1 -type f");
+    expect(script).toContain('find "$directory" -xdev');
+    expect(script).toContain('touch "$OWNERSHIP_MARKER"');
+    expect(script).not.toContain("find /data -xdev");
+  });
 });
