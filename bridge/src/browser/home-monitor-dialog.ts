@@ -10,7 +10,7 @@ export interface HomeMonitorDialogDiagnostics {
 }
 
 type ProbeInput = {
-  token: string;
+  markerId: string;
   monitorLabels: string[];
   modeLabelGroups: string[][];
   requestedGroup: number;
@@ -39,8 +39,8 @@ export function probeHomeMonitorDialog(input: ProbeInput): ProbeResult {
   const targetAttribute = "data-stw-hm-target";
   const dialogAttribute = "data-stw-hm-dialog";
   for (const element of elements) {
-    if (element.getAttribute(targetAttribute) === input.token) element.removeAttribute(targetAttribute);
-    if (input.phase === "cleanup" && element.getAttribute(dialogAttribute) === input.token) {
+    if (element.getAttribute(targetAttribute) === input.markerId) element.removeAttribute(targetAttribute);
+    if (input.phase === "cleanup" && element.getAttribute(dialogAttribute) === input.markerId) {
       element.removeAttribute(dialogAttribute);
     }
   }
@@ -100,7 +100,7 @@ export function probeHomeMonitorDialog(input: ProbeInput): ProbeResult {
   if (dialogs.length === 0) return result;
   if (dialogs.length !== 1) return { ...result, kind: "ambiguous" };
   const dialog = dialogs[0]!;
-  if (input.phase === "commit" && dialog.getAttribute(dialogAttribute) !== input.token) {
+  if (input.phase === "commit" && dialog.getAttribute(dialogAttribute) !== input.markerId) {
     return { ...result, kind: "unrecognized" };
   }
   let scoped = elements.filter((element) => within(element, dialog));
@@ -147,11 +147,15 @@ export function probeHomeMonitorDialog(input: ProbeInput): ProbeResult {
     if (buttons.length > 1) return { ...result, kind: "ambiguous" };
     if (buttons.length === 0) return { ...result, kind: "missing" };
     if (disabled(buttons[0]!)) return { ...result, kind: "disabled" };
-    buttons[0]!.setAttribute(targetAttribute, input.token);
+    buttons[0]!.setAttribute(targetAttribute, input.markerId);
     return { ...result, kind: "commit" };
   }
   const nativeTargets: { select: HTMLSelectElement; option: HTMLOptionElement }[] = [];
   for (const select of selects) {
+    const selectGroups = new Set(Array.from(select.options)
+      .map((option) => groupOf(option, option.value)).filter((group) => group >= 0));
+    // An unrelated On/Off setting in a monitor dialog is not a security-mode selector.
+    if (selectGroups.size < 2) continue;
     for (const option of select.options) {
       if (groupOf(option, option.value) === input.requestedGroup) nativeTargets.push({ select, option });
     }
@@ -188,21 +192,21 @@ export function probeHomeMonitorDialog(input: ProbeInput): ProbeResult {
     if (disabled(select) || option.disabled || option.parentElement?.matches("optgroup:disabled")) {
       return { ...result, kind: "disabled" };
     }
-    dialog.setAttribute(dialogAttribute, input.token);
-    select.setAttribute(targetAttribute, input.token);
+    dialog.setAttribute(dialogAttribute, input.markerId);
+    select.setAttribute(targetAttribute, input.markerId);
     return { ...result, kind: "select", optionValue: option.value };
   }
   if (targets.length === 1) {
     if (disabled(targets[0]!)) return { ...result, kind: "disabled" };
-    dialog.setAttribute(dialogAttribute, input.token);
-    targets[0]!.setAttribute(targetAttribute, input.token);
+    dialog.setAttribute(dialogAttribute, input.markerId);
+    targets[0]!.setAttribute(targetAttribute, input.markerId);
     return { ...result, kind: "click" };
   }
   const combos = scoped.filter((element) => within(element, dialog) && visible(element) &&
     element.getAttribute("role") === "combobox" && element.getAttribute("aria-expanded") !== "true" &&
     Boolean(element.getAttribute("aria-controls")) && !disabled(element));
   if (identified && combos.length === 1) {
-    combos[0]!.setAttribute(targetAttribute, input.token);
+    combos[0]!.setAttribute(targetAttribute, input.markerId);
     return { ...result, kind: "expand" };
   }
   return { ...result, kind: combos.length > 1 ? "ambiguous" : "unrecognized" };
@@ -224,8 +228,8 @@ export async function clickHomeMonitorDialogAction(
   if (!page.evaluate || !controls.locator) return "unavailable";
   const requestedGroup = modeLabelGroups.findIndex((group) => actionLabels.some((label) => group.includes(label)));
   if (requestedGroup < 0) return "not_found";
-  const token = `stw-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-  const input: ProbeInput = { token, monitorLabels: [...monitorLabels],
+  const markerId = `stw-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const input: ProbeInput = { markerId, monitorLabels: [...monitorLabels],
     modeLabelGroups: modeLabelGroups.map((group) => [...group]), requestedGroup, phase: "select" };
   const deadline = Date.now() + Math.max(1, Math.min(timeoutMs, 10_000));
   let last: ProbeResult | undefined;
@@ -244,7 +248,7 @@ export async function clickHomeMonitorDialogAction(
       if (last.kind === "ambiguous") { report("ambiguous"); return "ambiguous"; }
       if (last.kind === "select" || last.kind === "click") {
         report(last.kind);
-        const target = controls.locator(`[data-stw-hm-target="${token}"]`);
+        const target = controls.locator(`[data-stw-hm-target="${markerId}"]`);
         if (last.kind === "select") {
           await target.selectOption({ value: last.optionValue! }, { timeout: 3_000 });
         } else {
@@ -256,7 +260,7 @@ export async function clickHomeMonitorDialogAction(
           last = await page.evaluate(probeHomeMonitorDialog, { ...input, phase: "commit" });
           if (last.kind === "ambiguous") { report("ambiguous_apply"); return "ambiguous"; }
           if (last.kind === "commit") {
-            await controls.locator(`[data-stw-hm-target="${token}"]`).click({ timeout: 3_000 });
+            await controls.locator(`[data-stw-hm-target="${markerId}"]`).click({ timeout: 3_000 });
             report("submitted");
             return "clicked";
           }
@@ -267,7 +271,7 @@ export async function clickHomeMonitorDialogAction(
         return "clicked"; // Existing security-arm-state confirmation still decides success.
       }
       if (last.kind === "expand" && !expanded) {
-        await controls.locator(`[data-stw-hm-target="${token}"]`).click({ timeout: 3_000 });
+        await controls.locator(`[data-stw-hm-target="${markerId}"]`).click({ timeout: 3_000 });
         expanded = true;
       }
       await pause();
