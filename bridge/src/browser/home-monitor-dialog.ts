@@ -19,10 +19,10 @@ type ProbeInput = {
 
 type ProbeResult = Omit<HomeMonitorDialogDiagnostics, "outcome"> & {
   kind: "missing" | "unrecognized" | "ambiguous" | "disabled" | "select" | "click" | "expand" | "commit";
-  optionIndex?: number;
+  optionValue?: string;
 };
 
-/** Runs inside Chromium. Never returns page text, IDs, URLs, or option values. */
+/** Runs inside Chromium. Form values stay private; diagnostics contain counters only. */
 export function probeHomeMonitorDialog(input: ProbeInput): ProbeResult {
   const result: ProbeResult = { kind: "missing", dialogs: 0, selects: 0, options: 0, modeGroups: 0, targets: 0 };
   const normalize = (text: string | null | undefined) => (text ?? "").normalize("NFKC")
@@ -182,12 +182,15 @@ export function probeHomeMonitorDialog(input: ProbeInput): ProbeResult {
   if (result.targets > 1) return { ...result, kind: "ambiguous" };
   if (nativeTargets.length === 1) {
     const { select, option } = nativeTargets[0]!;
+    if (Array.from(select.options).filter((item) => item.value === option.value).length !== 1) {
+      return { ...result, kind: "ambiguous" };
+    }
     if (disabled(select) || option.disabled || option.parentElement?.matches("optgroup:disabled")) {
       return { ...result, kind: "disabled" };
     }
     dialog.setAttribute(dialogAttribute, input.token);
     select.setAttribute(targetAttribute, input.token);
-    return { ...result, kind: "select", optionIndex: option.index };
+    return { ...result, kind: "select", optionValue: option.value };
   }
   if (targets.length === 1) {
     if (disabled(targets[0]!)) return { ...result, kind: "disabled" };
@@ -216,7 +219,7 @@ export async function clickHomeMonitorDialogAction(
 ): Promise<"clicked" | "not_found" | "ambiguous" | "unavailable"> {
   const controls = page as BrowserPageLike & { locator?: (selector: string) => {
     click(options: { timeout: number }): Promise<unknown>;
-    selectOption(option: { index: number }, options: { timeout: number }): Promise<unknown>;
+    selectOption(option: { value: string }, options: { timeout: number }): Promise<unknown>;
   } };
   if (!page.evaluate || !controls.locator) return "unavailable";
   const requestedGroup = modeLabelGroups.findIndex((group) => actionLabels.some((label) => group.includes(label)));
@@ -243,7 +246,7 @@ export async function clickHomeMonitorDialogAction(
         report(last.kind);
         const target = controls.locator(`[data-stw-hm-target="${token}"]`);
         if (last.kind === "select") {
-          await target.selectOption({ index: last.optionIndex! }, { timeout: 3_000 });
+          await target.selectOption({ value: last.optionValue! }, { timeout: 3_000 });
         } else {
           await target.click({ timeout: 3_000 });
         }
