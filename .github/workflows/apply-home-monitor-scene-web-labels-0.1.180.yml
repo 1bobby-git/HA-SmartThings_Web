@@ -1,0 +1,83 @@
+name: Apply Home Monitor, scene and Web-label fixes 0.1.180
+
+on:
+  push:
+    branches:
+      - fix/home-monitor-scene-web-labels-0.1.180
+    paths:
+      - .github/workflows/apply-home-monitor-scene-web-labels-0.1.180.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-home-monitor-scene-web-labels-0.1.180
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out fix branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Apply reviewed fixes
+        run: |
+          python .github/scripts/apply_home_monitor_scene_web_labels_0_1_180.py
+          rm -f .github/scripts/apply_home_monitor_scene_web_labels_0_1_180.py
+
+      - name: Validate shell syntax
+        run: |
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/publish-discovery
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/maintain-profile
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/bridge/run
+          bash -n tools/ci-haos-runtime-smoke.sh
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run complete Node and packaged-runtime validation
+        run: |
+          npm test
+          npm run typecheck
+          npm run build
+          tools/ci-haos-runtime-smoke.sh
+
+      - name: Run Python integration validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.9,<4' 'voluptuous>=0.13,<1'
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+          python -m compileall -q custom_components/smartthings_web
+
+      - name: Run repository audits
+        run: |
+          npm run audit:api-free
+          npm run audit:secrets
+          npm run audit:fixtures
+
+      - name: Commit verified changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/apply-home-monitor-scene-web-labels-0.1.180.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix: restore Home Monitor scenes and Web labels 0.1.180'
+          git push origin HEAD:fix/home-monitor-scene-web-labels-0.1.180
