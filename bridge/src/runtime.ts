@@ -102,7 +102,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.180";
+const bridgeVersion = "0.1.181";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -356,6 +356,17 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     {
       warmPageTtlMs: 24 * 60 * 60_000,
       onDiagnostic: (stage) => log.info(`command_diag:${stage}`),
+      onHomeMonitorDiagnostic: (diagnostics) =>
+        log.info(
+          `home_monitor_diag:${diagnostics.phase}` +
+          `:monitor_${diagnostics.monitorExactCount}` +
+          `:action_${diagnostics.actionExactCount}` +
+          `:clickable_${diagnostics.actionClickableCount}` +
+          `:mode_groups_${diagnostics.modeGroupCount}` +
+          `:dialogs_${diagnostics.visibleDialogCount}` +
+          `:iframes_${diagnostics.visibleIframeCount}` +
+          `:shadow_roots_${diagnostics.openShadowRootCount}`
+        ),
       resolveRawDeviceId: (alias) => volatileIdentifiers.rawDeviceId(alias),
       resolveRawLocationId: (alias) => volatileIdentifiers.rawLocationId(alias),
       resolveRawIdentifier: (alias) => volatileIdentifiers.rawIdentifier(alias)

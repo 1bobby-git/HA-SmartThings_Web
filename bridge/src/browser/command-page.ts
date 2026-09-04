@@ -1,5 +1,10 @@
 import type { BrowserPageLike, KeeperPageManager } from "./keeper-page.js";
-import { clickTextOnlyHomeMonitorAction } from "./home-monitor-dom.js";
+import {
+  clickTextOnlyHomeMonitorAction,
+  clickTextOnlyHomeMonitorCard,
+  inspectHomeMonitorDom,
+  type HomeMonitorDomDiagnostics
+} from "./home-monitor-dom.js";
 import { clickExactSceneCard } from "./scene-dom.js";
 import { safeCameraImageUrl } from "../state/camera-image-store.js";
 
@@ -92,6 +97,7 @@ type CommandDiagnosticStage =
 interface CommandExecutorOptions {
   warmPageTtlMs?: number;
   onDiagnostic?: (stage: CommandDiagnosticStage) => void;
+  onHomeMonitorDiagnostic?: (diagnostics: HomeMonitorDomDiagnostics) => void;
   resolveRawDeviceId?: (alias: string) => string | undefined;
   resolveRawLocationId?: (alias: string) => string | undefined;
   resolveRawIdentifier?: (alias: string) => string | undefined;
@@ -140,6 +146,9 @@ export class SmartThingsWebUiCommandExecutor {
   readonly #verifiedDetailRoutes = new Map<string, { detailUrl: string; verifiedAt: number }>();
   readonly #warmPageTtlMs: number;
   readonly #onDiagnostic: ((stage: CommandDiagnosticStage) => void) | undefined;
+  readonly #onHomeMonitorDiagnostic:
+    | ((diagnostics: HomeMonitorDomDiagnostics) => void)
+    | undefined;
   readonly #resolveRawDeviceId: ((alias: string) => string | undefined) | undefined;
   readonly #resolveRawLocationId: ((alias: string) => string | undefined) | undefined;
   readonly #resolveRawIdentifier: ((alias: string) => string | undefined) | undefined;
@@ -154,6 +163,7 @@ export class SmartThingsWebUiCommandExecutor {
       ? Math.max(0, Math.min(MAX_WARM_PAGE_TTL_MS, ttl))
       : 0;
     this.#onDiagnostic = options?.onDiagnostic;
+    this.#onHomeMonitorDiagnostic = options?.onHomeMonitorDiagnostic;
     this.#resolveRawDeviceId = options?.resolveRawDeviceId;
     this.#resolveRawLocationId = options?.resolveRawLocationId;
     this.#resolveRawIdentifier = options?.resolveRawIdentifier;
@@ -547,9 +557,33 @@ export class SmartThingsWebUiCommandExecutor {
     const page = await this.openLocationPage(input.locationId, input.locationNames);
     try {
       const actionName = locationActionName(input.action);
+      const actionLabels = locationActionLabels(input.action);
+      const modeLabelGroups = [
+        locationActionLabels("armAway"),
+        locationActionLabels("armStay"),
+        locationActionLabels("disarm")
+      ];
       const locationName = input.locationNames?.[input.locationId];
       const monitorName = homeMonitorName(locationName);
       const monitorLabels = homeMonitorLabels(locationName);
+      const emitDomDiagnostic = async (
+        phase: HomeMonitorDomDiagnostics["phase"]
+      ): Promise<void> => {
+        const diagnostics = await inspectHomeMonitorDom(
+          page,
+          monitorLabels,
+          actionLabels,
+          modeLabelGroups,
+          phase
+        );
+        if (!diagnostics) return;
+        try {
+          this.#onHomeMonitorDiagnostic?.(diagnostics);
+        } catch {
+          // Diagnostics must never change command behavior.
+        }
+      };
+
       let action = await findHomeMonitorCardAction(
         page,
         monitorName,
@@ -557,53 +591,109 @@ export class SmartThingsWebUiCommandExecutor {
         actionName,
         3_000
       );
-      if (!action) {
-        const textResult = await clickTextOnlyHomeMonitorAction(
+      if (action) {
+        await action.click({ timeout: 15_000 });
+        return;
+      }
+
+      let textResult = await clickTextOnlyHomeMonitorAction(
+        page,
+        monitorLabels,
+        actionLabels,
+        modeLabelGroups
+      );
+      if (textResult === "clicked") return;
+      if (textResult === "ambiguous") {
+        throw new Error("command_control_ambiguous");
+      }
+
+      if (
+        await clickHomeMonitorCardActionByText(
           page,
           monitorLabels,
-          locationActionLabels(input.action),
-          [
-            locationActionLabels("armAway"),
-            locationActionLabels("armStay"),
-            locationActionLabels("disarm")
-          ]
+          actionLabels
+        )
+      ) {
+        return;
+      }
+
+      action = await findLocationActionControl(page, actionName, 250);
+      if (action) {
+        await action.click({ timeout: 15_000 });
+        return;
+      }
+
+      await emitDomDiagnostic("before_card_open");
+      let cardOpened = false;
+      const cardResult = await clickTextOnlyHomeMonitorCard(
+        page,
+        monitorLabels,
+        3_000
+      );
+      if (cardResult === "ambiguous") {
+        throw new Error("command_control_ambiguous");
+      }
+      if (cardResult === "clicked") {
+        cardOpened = true;
+        textResult = await clickTextOnlyHomeMonitorAction(
+          page,
+          monitorLabels,
+          actionLabels,
+          modeLabelGroups
         );
         if (textResult === "clicked") return;
         if (textResult === "ambiguous") {
           throw new Error("command_control_ambiguous");
         }
+        action = await findLocationActionControl(page, actionName, 1_000);
+        if (action) {
+          await action.click({ timeout: 15_000 });
+          return;
+        }
       }
-      if (
-        !action &&
-        await clickHomeMonitorCardActionByText(
-          page,
-          monitorLabels,
-          locationActionLabels(input.action)
-        )
-      ) {
-        return;
-      }
-      if (!action) {
-        action = await findLocationActionControl(page, actionName, 250);
-      }
-      if (!action) {
-        const monitor = await findHomeMonitorControl(page, monitorName);
-        if (!monitor) throw new Error("command_control_not_found");
-        await monitor.click({ timeout: 15_000 });
 
+      if (!cardOpened) {
+        const monitor = await findHomeMonitorControl(page, monitorName);
+        if (monitor) {
+          await monitor.click({ timeout: 15_000 });
+          cardOpened = true;
+          textResult = await clickTextOnlyHomeMonitorAction(
+            page,
+            monitorLabels,
+            actionLabels,
+            modeLabelGroups
+          );
+          if (textResult === "clicked") return;
+          if (textResult === "ambiguous") {
+            throw new Error("command_control_ambiguous");
+          }
+        }
+      }
+
+      if (cardOpened) {
         const dialog = page.getByRole("dialog");
         try {
-          await dialog.first().waitFor({ state: "visible", timeout: 15_000 });
+          await dialog.first().waitFor({ state: "visible", timeout: 1_000 });
         } catch {
-          throw new Error("command_control_not_found");
+          // Cake may render a drawer or roleless overlay. The DOM scan above
+          // already checked the whole visible page without assuming a dialog.
         }
-        if ((await dialog.count()) !== 1) {
+        const dialogCount = await dialog.count();
+        if (dialogCount > 1) {
           throw new Error("command_control_ambiguous");
         }
-        action = await findLocationActionControl(dialog, actionName, 15_000);
+        if (dialogCount === 1) {
+          action = await findLocationActionControl(dialog, actionName, 1_000);
+          if (action) {
+            await action.click({ timeout: 15_000 });
+            return;
+          }
+        }
+        await emitDomDiagnostic("after_card_open");
       }
-      if (!action) throw new Error("command_control_not_found");
-      await action.click({ timeout: 15_000 });
+
+      await emitDomDiagnostic("final_failure");
+      throw new Error("command_control_not_found");
     } finally {
       await page.close().catch(() => undefined);
     }
@@ -1961,7 +2051,7 @@ async function findLocationActionControl(
   timeoutMs: number
 ): Promise<CommandLocatorLike | undefined> {
   const candidate = await firstVisibleCandidate(
-    ["button", "radio", "tab"].map((role) =>
+    ["button", "radio", "tab", "menuitem", "menuitemradio", "option", "switch"].map((role) =>
       scope.getByRole(role, { name: actionName })
     ),
     timeoutMs
@@ -2009,7 +2099,7 @@ async function findHomeMonitorControl(
   monitorName: RegExp
 ): Promise<CommandLocatorLike | undefined> {
   const candidate = await firstVisibleCandidate(
-    ["button", "link"].map((role) =>
+    ["button", "link", "menuitem", "tab"].map((role) =>
       scope.getByRole(role, { name: monitorName })
     ),
     15_000
