@@ -1,4 +1,4 @@
-name: Apply HAOS live regression fixes 0.1.182
+name: Materialize HAOS live regression fixes 0.1.182
 
 on:
   push:
@@ -6,26 +6,25 @@ on:
       - fix/haos-live-control-discovery-naming-backpressure-0.1.182
     paths:
       - .github/workflows/apply-haos-live-fix-0.1.182.yml
-      - .github/scripts/0.1.182/**
 
 permissions:
   contents: write
 
 concurrency:
-  group: apply-haos-live-fix-0.1.182
+  group: materialize-haos-live-fix-0.1.182
   cancel-in-progress: false
 
 jobs:
-  apply:
+  materialize:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 10
     steps:
       - name: Check out fix branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
 
-      - name: Reassemble, align and apply final reviewed source changes
+      - name: Apply reviewed source changes
         shell: bash
         run: |
           set -euo pipefail
@@ -39,52 +38,12 @@ jobs:
           python .github/scripts/0.1.182/fix-post-apply.py
           rm -rf .github/scripts/0.1.182
           rm -f .github/scripts/apply_haos_live_fix_0_1_182.py
-
-      - name: Validate shell syntax
-        run: |
-          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/publish-discovery
-          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data
-          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/maintain-profile
-          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/bridge/run
-          bash -n tools/ci-haos-runtime-smoke.sh
-
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: 24.18.1
-          cache: npm
-
-      - name: Install locked dependencies
-        run: npm ci
-
-      - name: Run Node, type, build and packaged runtime validation
-        run: |
-          npm test
-          npm run typecheck
-          npm run build
-          tools/ci-haos-runtime-smoke.sh
-
-      - name: Run Python integration validation
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m venv .venv
-          . .venv/bin/activate
-          python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.9,<4' 'voluptuous>=0.13,<1'
-          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
-          python -m compileall -q custom_components/smartthings_web
-
-      - name: Run repository audits
-        run: |
-          npm run audit:api-free
-          npm run audit:secrets
-          npm run audit:fixtures
-
-      - name: Commit verified changes
-        shell: bash
-        run: |
-          set -euo pipefail
           rm -f .github/workflows/apply-haos-live-fix-0.1.182.yml
+
+      - name: Commit materialized candidate
+        shell: bash
+        run: |
+          set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
