@@ -427,13 +427,18 @@ class SmartThingsWebRuntime:
         )
         if merged == current:
             return False
-        changed_device_ids = {
-            device_id
-            for device_id in current.devices.keys() | merged.devices.keys()
-            if current.devices.get(device_id) != merged.devices.get(device_id)
-        }
+        changed_device_ids, changed_state_keys = _inventory_visible_changes(
+            current, merged
+        )
+        notify_global = not _inventory_discovery_payload_equal(current, merged)
         self.inventory = merged
-        self._notify_listeners(device_ids=changed_device_ids)
+        if not changed_device_ids and not changed_state_keys and not notify_global:
+            return False
+        self._notify_listeners(
+            device_ids=changed_device_ids,
+            state_keys=changed_state_keys,
+            notify_global=notify_global,
+        )
         return True
 
     def apply_state(self, event: dict[str, Any]) -> bool:
@@ -2180,6 +2185,142 @@ def _state_is_newer(candidate: BridgeState, current: BridgeState) -> bool:
     if candidate_time is None:
         return False
     return candidate_time > current_time
+
+
+def _inventory_visible_changes(
+    current: BridgeInventory,
+    merged: BridgeInventory,
+) -> tuple[
+    set[str],
+    set[tuple[str, tuple[str, str, str]]],
+]:
+    """Return exact device/state listeners affected by a full snapshot."""
+    changed_device_ids: set[str] = set()
+    changed_state_keys: set[tuple[str, tuple[str, str, str]]] = set()
+    for device_id in current.devices.keys() | merged.devices.keys():
+        before = current.devices.get(device_id)
+        after = merged.devices.get(device_id)
+        if before is None or after is None:
+            changed_device_ids.add(device_id)
+            states = before.states if before is not None else after.states
+            changed_state_keys.update((device_id, key) for key in states)
+            continue
+        all_state_keys = before.states.keys() | after.states.keys()
+        for state_key in all_state_keys:
+            left = before.states.get(state_key)
+            right = after.states.get(state_key)
+            if left is None or right is None or not _inventory_state_equal(left, right):
+                changed_device_ids.add(device_id)
+                changed_state_keys.add((device_id, state_key))
+        if before.online != after.online:
+            changed_device_ids.add(device_id)
+            changed_state_keys.update((device_id, key) for key in all_state_keys)
+        if _device_visible_payload(before) != _device_visible_payload(after):
+            changed_device_ids.add(device_id)
+    return changed_device_ids, changed_state_keys
+
+
+def _inventory_state_equal(left: BridgeState, right: BridgeState) -> bool:
+    """Ignore timestamp churn except where time is part of entity semantics."""
+    if not _state_payload_equal(left, right):
+        return False
+    if left.attribute in EVENT_ATTRIBUTES | {"signalMetrics"}:
+        return _timestamp(left.updated_at) == _timestamp(right.updated_at)
+    return True
+
+
+def _device_visible_payload(device: BridgeDevice) -> tuple[Any, ...]:
+    """Return device data that changes HA state outside individual states."""
+    return (
+        device.location_id,
+        device.room_id,
+        device.name,
+        device.device_type,
+        device.online,
+        device.presentation,
+        tuple((key, device.controls[key]) for key in sorted(device.controls)),
+        device.commands,
+        device.command_omissions,
+        device.advanced,
+    )
+
+
+def _inventory_discovery_payload_equal(
+    left: BridgeInventory,
+    right: BridgeInventory,
+) -> bool:
+    """Compare only structure and metadata consumed by global discovery."""
+    return _inventory_discovery_payload(left) == _inventory_discovery_payload(right)
+
+
+def _inventory_discovery_payload(inventory: BridgeInventory) -> tuple[Any, ...]:
+    locations = tuple(
+        (location_id, *_location_discovery_payload(location))
+        for location_id, location in sorted(inventory.locations.items())
+    )
+    rooms = tuple(sorted(inventory.rooms.items()))
+    scenes = tuple(
+        (
+            scene_id,
+            scene.location_id,
+            scene.name,
+        )
+        for scene_id, scene in sorted(inventory.scenes.items())
+    )
+    devices = tuple(
+        (device_id, _device_discovery_payload(device))
+        for device_id, device in sorted(inventory.devices.items())
+    )
+    return (
+        inventory.ready,
+        inventory.bridge_version,
+        inventory.protocol_version,
+        locations,
+        rooms,
+        scenes,
+        devices,
+        tuple(sorted(inventory.device_aliases.items())),
+    )
+
+
+def _location_discovery_payload(
+    location: BridgeLocation | str,
+) -> tuple[str, str | None]:
+    if isinstance(location, BridgeLocation):
+        return location.name, location.arm_state
+    return location, None
+
+
+def _device_discovery_payload(device: BridgeDevice) -> tuple[Any, ...]:
+    states = tuple(
+        sorted(
+            (
+                state.component,
+                state.capability,
+                state.attribute,
+                state.unit,
+                state.component_role,
+                state.capability_role,
+                state_has_entity_value(state),
+            )
+            for state in device.states.values()
+        )
+    )
+    controls = tuple(
+        (key, device.controls[key]) for key in sorted(device.controls)
+    )
+    return (
+        device.location_id,
+        device.room_id,
+        device.name,
+        device.device_type,
+        device.presentation,
+        states,
+        controls,
+        device.commands,
+        device.command_omissions,
+        device.advanced,
+    )
 
 
 def _state_payload_equal(left: BridgeState, right: BridgeState) -> bool:

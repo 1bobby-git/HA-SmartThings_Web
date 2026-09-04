@@ -11,7 +11,7 @@ import {
   type ProbeArmRequest,
   type ProbeRuntimeEvidence
 } from "../inspector/physical-action-correlation-probe.js";
-import type { DeviceStore } from "../state/device-store.js";
+import type { BridgeDeviceStoreEvent, DeviceStore } from "../state/device-store.js";
 import type { BridgeCameraImageEvent, CameraImageStore } from "../state/camera-image-store.js";
 import { createHealthReport } from "./health.js";
 import type { BridgeAuth } from "./bridge-auth.js";
@@ -268,6 +268,186 @@ function commandErrorStatus(code: SafeCommandError["code"]): number {
   return 400;
 }
 
+type SseWritableResponse = Pick<
+  ServerResponse,
+  "destroyed" | "write" | "once" | "removeListener"
+>;
+
+export interface SseEventWriterOptions {
+  inventoryCoalesceMs?: number;
+  maxPendingEvents?: number;
+}
+
+const DEFAULT_SSE_INVENTORY_COALESCE_MS = 75;
+const DEFAULT_SSE_MAX_PENDING_EVENTS = 128;
+
+export class SseEventWriter {
+  readonly #response: SseWritableResponse;
+  readonly #currentSequence: () => number;
+  readonly #inventoryCoalesceMs: number;
+  readonly #maxPendingEvents: number;
+  readonly #drainListener = () => this.#handleDrain();
+  #blocked = false;
+  #closed = false;
+  #pendingChunks: string[] = [];
+  #pendingInventory: (BridgeDeviceStoreEvent & { type: "inventory" }) | undefined;
+  #inventoryTimer: ReturnType<typeof setTimeout> | undefined;
+
+  constructor(
+    response: SseWritableResponse,
+    currentSequence: () => number,
+    options: SseEventWriterOptions = {}
+  ) {
+    this.#response = response;
+    this.#currentSequence = currentSequence;
+    this.#inventoryCoalesceMs = Math.max(
+      0,
+      options.inventoryCoalesceMs ?? DEFAULT_SSE_INVENTORY_COALESCE_MS
+    );
+    this.#maxPendingEvents = Math.max(
+      1,
+      options.maxPendingEvents ?? DEFAULT_SSE_MAX_PENDING_EVENTS
+    );
+  }
+
+  write(value: unknown, options: { immediateInventory?: boolean } = {}): void {
+    if (this.#closed || this.#response.destroyed) return;
+    const inventory = asInventoryEvent(value);
+    if (inventory && options.immediateInventory !== true) {
+      if (
+        this.#pendingInventory === undefined ||
+        inventory.sequence > this.#pendingInventory.sequence
+      ) {
+        this.#pendingInventory = inventory;
+      }
+      if (this.#inventoryCoalesceMs === 0) {
+        this.#flushPendingInventory();
+      } else if (this.#inventoryTimer === undefined) {
+        this.#inventoryTimer = setTimeout(() => {
+          this.#inventoryTimer = undefined;
+          this.#flushPendingInventory();
+        }, this.#inventoryCoalesceMs);
+        this.#inventoryTimer.unref();
+      }
+      return;
+    }
+    this.#flushPendingInventory();
+    this.#enqueue(formatSseData(value));
+  }
+
+  writeComment(comment: string): void {
+    if (
+      this.#closed ||
+      this.#response.destroyed ||
+      this.#blocked ||
+      this.#pendingChunks.length > 0 ||
+      this.#pendingInventory !== undefined
+    ) {
+      return;
+    }
+    this.#enqueue(`: ${comment}
+
+`);
+  }
+
+  close(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    if (this.#inventoryTimer !== undefined) {
+      clearTimeout(this.#inventoryTimer);
+      this.#inventoryTimer = undefined;
+    }
+    this.#pendingInventory = undefined;
+    this.#pendingChunks = [];
+    this.#response.removeListener("drain", this.#drainListener);
+  }
+
+  #flushPendingInventory(): void {
+    const inventory = this.#pendingInventory;
+    if (inventory === undefined || this.#closed) return;
+    if (this.#inventoryTimer !== undefined) {
+      clearTimeout(this.#inventoryTimer);
+      this.#inventoryTimer = undefined;
+    }
+    this.#pendingInventory = undefined;
+    this.#enqueue(formatSseData(inventory));
+  }
+
+  #enqueue(chunk: string): void {
+    if (this.#closed || this.#response.destroyed) return;
+    if (this.#blocked) {
+      if (this.#pendingChunks.length >= this.#maxPendingEvents) {
+        this.#collapsePendingToInventory();
+        return;
+      }
+      this.#pendingChunks.push(chunk);
+      return;
+    }
+    if (!this.#response.write(chunk)) {
+      this.#blocked = true;
+      this.#armDrain();
+    }
+  }
+
+  #handleDrain(): void {
+    if (this.#closed || this.#response.destroyed) return;
+    this.#blocked = false;
+    while (!this.#blocked && this.#pendingChunks.length > 0) {
+      const chunk = this.#pendingChunks.shift();
+      if (chunk === undefined) break;
+      if (!this.#response.write(chunk)) {
+        this.#blocked = true;
+        this.#armDrain();
+      }
+    }
+  }
+
+  #armDrain(): void {
+    this.#response.once("drain", this.#drainListener);
+  }
+
+  #collapsePendingToInventory(): void {
+    if (this.#inventoryTimer !== undefined) {
+      clearTimeout(this.#inventoryTimer);
+      this.#inventoryTimer = undefined;
+    }
+    this.#pendingInventory = undefined;
+    this.#pendingChunks = [
+      formatSseData({
+        schemaVersion: 1,
+        sequence: this.#currentSequence(),
+        type: "inventory"
+      })
+    ];
+  }
+}
+
+function asInventoryEvent(
+  value: unknown
+): (BridgeDeviceStoreEvent & { type: "inventory" }) | undefined {
+  if (!isRecord(value)) return undefined;
+  const sequence = value.sequence;
+  if (
+    value.schemaVersion !== 1 ||
+    value.type !== "inventory" ||
+    !Number.isSafeInteger(sequence) ||
+    (sequence as number) < 0
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    sequence: sequence as number,
+    type: "inventory"
+  };
+}
+
+function formatSseData(value: unknown): string {
+  return `data: ${JSON.stringify(value)}
+
+`;
+}
+
 function openEventStream(
   request: IncomingMessage,
   response: ServerResponse,
@@ -283,19 +463,18 @@ function openEventStream(
     "x-accel-buffering": "no",
     "x-content-type-options": "nosniff"
   });
-  const writeEvent = (value: unknown) => {
-    if (!response.destroyed) response.write(`data: ${JSON.stringify(value)}\n\n`);
-  };
+  const writer = new SseEventWriter(response, () => devices.currentSequence());
   const activeConnections = store.getSnapshot().activeConnections;
   store.update({ activeConnections: activeConnections + 1 });
-  writeEvent({ schemaVersion: 1, sequence: devices.currentSequence(), type: "inventory" });
-  const unsubscribe = devices.subscribe(writeEvent);
+  writer.write(
+    { schemaVersion: 1, sequence: devices.currentSequence(), type: "inventory" },
+    { immediateInventory: true }
+  );
+  const unsubscribe = devices.subscribe((event) => writer.write(event));
   const unsubscribeImages = images?.subscribe
-    ? images.subscribe((event: BridgeCameraImageEvent) => writeEvent(event))
+    ? images.subscribe((event: BridgeCameraImageEvent) => writer.write(event))
     : undefined;
-  const keepalive = setInterval(() => {
-    if (!response.destroyed) response.write(": keepalive\n\n");
-  }, 15_000);
+  const keepalive = setInterval(() => writer.writeComment("keepalive"), 15_000);
   let closed = false;
   request.once("close", () => {
     if (closed) return;
@@ -303,6 +482,7 @@ function openEventStream(
     clearInterval(keepalive);
     unsubscribe();
     unsubscribeImages?.();
+    writer.close();
     const currentConnections = store.getSnapshot().activeConnections;
     store.update({ activeConnections: Math.max(0, currentConnections - 1) });
     response.end();

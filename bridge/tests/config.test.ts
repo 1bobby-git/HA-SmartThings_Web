@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -101,6 +101,24 @@ describe("readBridgeConfig", () => {
         inventoryReconciliationIntervalMs: 7_200_000,
         debugProtocolLogging: true
       });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("preserves filesystem errors so startup logs expose the real cause", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-options-error-"));
+    const optionsPath = join(root, "options.json");
+    mkdirSync(optionsPath);
+    try {
+      let caught: unknown;
+      try {
+        readBridgeConfig({}, optionsPath);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as NodeJS.ErrnoException).code).toBe("EISDIR");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

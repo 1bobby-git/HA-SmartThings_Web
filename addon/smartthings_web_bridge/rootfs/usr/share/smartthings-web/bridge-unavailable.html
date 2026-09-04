@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="5">
+  <title>SmartThings Web Bridge 시작 중</title>
+  <style>
+    body { margin: 0; font: 15px/1.6 system-ui, sans-serif; background: #101418; color: #e8eef2; }
+    main { max-width: 720px; margin: 0 auto; padding: 32px 24px; }
+    section { border: 1px solid #34414c; border-left: 6px solid #fbbf24; border-radius: 8px; background: #161d24; padding: 18px 20px; }
+    h1 { margin: 0 0 12px; font-size: 23px; }
+    p { margin: 8px 0; }
+    a { color: #80c7ff; }
+    code { color: #f7d794; }
+  </style>
+</head>
+<body>
+  <main>
+    <section role="status" aria-live="polite">
+      <h1>SmartThings Web Bridge를 시작하는 중입니다</h1>
+      <p>Ingress는 실행 중이지만 내부 Bridge HTTP 서비스(<code>127.0.0.1:8098</code>)가 아직 준비되지 않았습니다.</p>
+      <p>이 페이지는 5초마다 자동으로 다시 확인합니다. 계속 표시되면 앱 로그의 <code>bridge_start_failed:</code>, <code>bridge_init:</code>, <code>data_prep_</code> 항목을 확인하세요.</p>
+      <p><a id="login-link" href="novnc-ui/vnc.html?autoconnect=1&amp;resize=scale&amp;path=websockify">브라우저 로그인 화면 열기</a></p>
+    </section>
+  </main>
+  <script>
+    const link = document.getElementById("login-link");
+    const base = window.location.pathname.endsWith("/")
+      ? window.location.pathname
+      : `${window.location.pathname}/`;
+    link.href = `${base}novnc-ui/vnc.html?autoconnect=1&resize=scale&path=websockify`;
+  </script>
+</body>
+</html>

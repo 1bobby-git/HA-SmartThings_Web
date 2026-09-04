@@ -141,6 +141,12 @@ export type BridgeDeviceStoreEvent =
       commandId?: string;
     };
 
+export interface BridgeAdvancedCommandCatalogUpdate {
+  deviceId: string;
+  commands: readonly AdvancedCommandDescriptor[];
+  omissions: readonly AdvancedCommandOmission[];
+}
+
 type Listener = (event: BridgeDeviceStoreEvent) => void;
 type StateTokenNormalizer = (value: string) => string;
 type IdentifierRoleResolver = (alias: string) => string | undefined;
@@ -556,11 +562,28 @@ export class DeviceStore {
     commands: readonly AdvancedCommandDescriptor[],
     omissions: readonly AdvancedCommandOmission[]
   ): void {
-    const device = this.#devices.get(deviceId);
-    if (!device) return;
-    const parsedCommands = parseAdvancedCommandDescriptors(commands, { dropInvalid: true });
-    const parsedOmissions = parseAdvancedCommandOmissions(omissions);
-    if (!parsedCommands || !parsedOmissions) return;
+    this.observeAdvancedCommandCatalogs([{ deviceId, commands, omissions }]);
+  }
+
+  observeAdvancedCommandCatalogs(
+    updates: readonly BridgeAdvancedCommandCatalogUpdate[]
+  ): void {
+    let changed = false;
+    for (const update of updates) {
+      changed = this.#applyAdvancedCommandCatalog(update) || changed;
+    }
+    if (!changed) return;
+    const sequence = this.#nextSequence();
+    this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
+    this.#schedulePersist();
+  }
+
+  #applyAdvancedCommandCatalog(update: BridgeAdvancedCommandCatalogUpdate): boolean {
+    const device = this.#devices.get(update.deviceId);
+    if (!device) return false;
+    const parsedCommands = parseAdvancedCommandDescriptors(update.commands, { dropInvalid: true });
+    const parsedOmissions = parseAdvancedCommandOmissions(update.omissions);
+    if (!parsedCommands || !parsedOmissions) return false;
     const nextControls = new Map(
       [...device.controls.entries()].filter(([id]) => !id.startsWith("advanced:"))
     );
@@ -571,17 +594,16 @@ export class DeviceStore {
       JSON.stringify(device.commandOmissions) === JSON.stringify(parsedOmissions) &&
       JSON.stringify([...device.controls.entries()]) === JSON.stringify([...nextControls.entries()])
     ) {
-      return;
+      return false;
     }
     device.advancedCommands = parsedCommands.map(cloneAdvancedCommandDescriptor);
     device.commandOmissions = parsedOmissions.map(cloneAdvancedCommandOmission);
     device.controls = nextControls;
-    const sequence = this.#nextSequence();
-    this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
-    this.#schedulePersist();
+    return true;
   }
 
   close(): void {
+
     if (this.#persistTimer !== undefined) {
       clearTimeout(this.#persistTimer);
       this.#persistTimer = undefined;
@@ -708,7 +730,7 @@ export class DeviceStore {
             unit: nested?.unit,
             updatedAt: nested?.updatedAt ?? nested?.timestamp
           }, this.#identifierRole);
-          if (detailState) changed = this.#setState(device, detailState) || changed;
+          if (detailState) changed = this.#setSnapshotState(device, detailState) || changed;
         }
       }
       return changed;
@@ -721,7 +743,7 @@ export class DeviceStore {
         const controls = actionControls(row.actions ?? row.action);
         if ((!state && controls.length === 0) || !deviceId || !locationId) continue;
         const device = this.#ensureDevice(deviceId, locationId);
-        if (state) changed = this.#setState(device, state) || changed;
+        if (state) changed = this.#setSnapshotState(device, state) || changed;
         for (const control of controls) {
           changed = setActionControlIfChanged(device.controls, control) || changed;
         }
@@ -734,7 +756,7 @@ export class DeviceStore {
       const online = healthOnlineState(row.state ?? row.status);
       if (!deviceId || !locationId || online === undefined) continue;
       const device = this.#ensureDevice(deviceId, locationId);
-      changed = this.#setDeviceHealth(
+      changed = this.#setSnapshotDeviceHealth(
         device,
         online,
         validTimestamp(
@@ -848,7 +870,7 @@ export class DeviceStore {
       const online = advancedOnlineState(row);
       const healthUpdatedAt = advancedHealthUpdatedAt(row);
       if (online !== undefined && (online || healthUpdatedAt !== null)) {
-        changed = this.#setDeviceHealth(device, online, healthUpdatedAt) || changed;
+        changed = this.#setSnapshotDeviceHealth(device, online, healthUpdatedAt) || changed;
       }
       for (const state of advancedDeviceStates(
         row,
@@ -858,7 +880,7 @@ export class DeviceStore {
         source
       )) {
         changed = this.#mergeStateRoles(device, state) || changed;
-        changed = this.#setState(device, state) || changed;
+        changed = this.#setSnapshotState(device, state) || changed;
       }
       for (const control of advancedDeviceControls(
         row.components,
@@ -1050,6 +1072,23 @@ export class DeviceStore {
     };
     this.#devices.set(id, created);
     return created;
+  }
+
+  #setSnapshotDeviceHealth(
+    device: MutableDevice,
+    online: boolean,
+    updatedAt: string | null
+  ): boolean {
+    const visibleChanged = device.online !== online;
+    const stored = this.#setDeviceHealth(device, online, updatedAt);
+    return stored && visibleChanged;
+  }
+
+  #setSnapshotState(device: MutableDevice, state: BridgeDeviceState): boolean {
+    const current = device.states.get(stateKey(state));
+    const visibleChanged = current === undefined || !sameStatePayload(current, state);
+    const stored = this.#setState(device, state);
+    return stored && visibleChanged;
   }
 
   #setDeviceHealth(device: MutableDevice, online: boolean, updatedAt: string | null): boolean {
