@@ -11,13 +11,35 @@ for directory in /data/chromium-profile /data/downloads /data/camera-images; do
   chmod 0700 "$directory"
 done
 
+# Home Assistant Supervisor can replace options.json as root after an update,
+# and SQLite can recreate sidecar files. Repair only the small top-level files
+# on every start; never walk the Chromium profile during normal startup.
+for file in \
+  /data/options.json \
+  /data/bridge-secret \
+  /data/bridge.sqlite \
+  /data/bridge.sqlite-wal \
+  /data/bridge.sqlite-shm \
+  /data/bridge.sqlite-journal \
+  /data/settings.json \
+  /data/protocol-fingerprint.json; do
+  if [ -f "$file" ] && [ ! -L "$file" ]; then
+    chown pwuser:pwuser "$file"
+  fi
+done
+
 if [ ! -f "$OWNERSHIP_MARKER" ]; then
-  find /data -maxdepth 1 -type f -exec chown pwuser:pwuser {} +
+  migration_failed=0
   for directory in /data/chromium-profile /data/downloads /data/camera-images; do
-    find "$directory" -xdev \( -type d -o -type f \) -exec chown pwuser:pwuser {} +
+    find "$directory" -xdev \( -type d -o -type f \) -exec chown pwuser:pwuser {} + || migration_failed=1
   done
-  touch "$OWNERSHIP_MARKER"
-  chmod 0600 "$OWNERSHIP_MARKER"
+  if [ "$migration_failed" -eq 0 ]; then
+    touch "$OWNERSHIP_MARKER"
+    chown pwuser:pwuser "$OWNERSHIP_MARKER"
+    chmod 0600 "$OWNERSHIP_MARKER"
+  else
+    echo "data_prep_recursive_ownership_retry_required" >&2
+  fi
 fi
 
 for cache_path in \

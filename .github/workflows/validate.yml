@@ -10,6 +10,39 @@ permissions:
   contents: read
 
 jobs:
+  tests:
+    name: Tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run Node tests, typecheck, and build
+        run: |
+          npm test
+          npm run typecheck
+          npm run build
+
+      - name: Run Python tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.9,<4' 'voluptuous>=0.13,<1'
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+          python -m compileall -q custom_components/smartthings_web
+
+      - name: Validate add-on shell syntax
+        run: sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data
+
   hacs:
     name: HACS
     runs-on: ubuntu-latest

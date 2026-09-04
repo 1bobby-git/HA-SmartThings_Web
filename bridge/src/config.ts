@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 
 export interface BridgeConfig {
   dataDir: string;
@@ -58,15 +58,31 @@ export function readBridgeConfig(
 }
 
 function readAddonOptions(path: string): Record<string, unknown> {
-  if (!existsSync(path)) return {};
+  let source: string;
   try {
-    const value = JSON.parse(readFileSync(path, "utf8"));
+    source = readFileSync(path, "utf8");
+  } catch (error) {
+    if (isNodeErrorCode(error, "ENOENT")) return {};
+    throw error;
+  }
+
+  try {
+    const value = JSON.parse(source);
     return typeof value === "object" && value !== null && !Array.isArray(value)
       ? value as Record<string, unknown>
       : {};
   } catch {
     throw new Error("invalid bridge config: options.json must contain valid JSON");
   }
+}
+
+function isNodeErrorCode(error: unknown, code: string): error is NodeJS.ErrnoException {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === code
+  );
 }
 
 function parseBoolean(value: string, name: string): boolean {
