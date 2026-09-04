@@ -1,3 +1,12 @@
+> [!CAUTION]
+> **⚠️ 설치 전 반드시 확인해 주세요**
+>
+> 이 저장소는 아직 **개발 중인 비공식 ALPHA 프로젝트**입니다. 기능이 불안정하며 예기치 않은 오류, 로그인 세션 해제, 엔티티 누락·오작동, 기기 제어 실패 또는 Home Assistant 환경 문제가 발생할 수 있습니다.
+>
+> **현재는 일반 사용자 및 실제 운영 환경에서의 설치를 권장하지 않습니다. 안정화 전까지 설치를 자제해 주세요.**
+>
+> 테스트 목적으로 설치·사용하는 경우 반드시 Home Assistant 전체 백업을 먼저 생성하고, 모든 위험과 결과는 설치·사용자가 부담해야 합니다. 이 프로젝트의 개발자와 기여자는 설치 또는 사용으로 발생하는 데이터 손실, 설정 손상, 기기 오작동, 서비스 중단 및 기타 직·간접적인 손해에 대해 책임지지 않습니다.
+
 <!-- project-branding:start -->
 <p align="center">
   <img src="custom_components/smartthings_web/brand/logo@2x.png" alt="SmartThings Web 로고" width="520">
@@ -54,7 +63,7 @@ Home Assistant OS 또는 Supervised 환경에서 아래 버튼을 누르면 이 
 
 버튼이 앱 화면까지 열지 못하면 아래 버튼으로 저장소만 먼저 추가한 뒤 **설정 → 앱 → 앱 스토어 → SmartThings Web Bridge**에서 설치합니다.
 
-[![Home Assistant에 SmartThings Web 앱 저장소 추가](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2F1bobby-git%2FHA-SmartThings_Web)
+[![Home Assistant에 SmartThings Web 앱 저장소 추가](https://my.home-assistant.io/badges/supervisor_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2F1bobby-git%2FHA-SmartThings_Web)
 
 <details>
 <summary>수동 로컬 설치</summary>
