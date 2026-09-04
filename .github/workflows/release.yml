@@ -43,7 +43,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 30); do
+          for attempt in $(seq 1 90); do
             run_json="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${RELEASE_SHA}&event=push&per_page=100")"
             read -r status conclusion < <(python -c '
           import json, sys
@@ -55,7 +55,7 @@ jobs:
               [[ "${conclusion}" == "success" ]]
               break
             fi
-            [[ "${attempt}" != "30" ]] || { echo "Security checks did not complete successfully." >&2; exit 1; }
+            [[ "${attempt}" != "90" ]] || { echo "Security checks did not complete successfully within 15 minutes." >&2; exit 1; }
             sleep 10
           done
 
