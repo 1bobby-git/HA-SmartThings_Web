@@ -26,6 +26,16 @@ jobs:
 
       - name: Apply reviewed source and version changes
         run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/apply_haos_live_fix_0_1_182.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'base64.b64decode(PAYLOAD)'
+          new = 'base64.b64decode(PAYLOAD + "=" * (-len(PAYLOAD) % 4))'
+          if text.count(old) != 1:
+              raise SystemExit('bootstrap decoder marker mismatch')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
           python .github/scripts/apply_haos_live_fix_0_1_182.py
           rm -f .github/scripts/apply_haos_live_fix_0_1_182.py
 
