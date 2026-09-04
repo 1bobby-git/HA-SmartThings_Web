@@ -1,12 +1,3 @@
-> [!CAUTION]
-> **⚠️ 설치 전 반드시 확인해 주세요**
->
-> 이 저장소는 아직 **개발 중인 비공식 ALPHA 프로젝트**입니다. 기능이 불안정하며 예기치 않은 오류, 로그인 세션 해제, 엔티티 누락·오작동, 기기 제어 실패 또는 Home Assistant 환경 문제가 발생할 수 있습니다.
->
-> **현재는 일반 사용자 및 실제 운영 환경에서의 설치를 권장하지 않습니다. 안정화 전까지 설치를 자제해 주세요.**
->
-> 테스트 목적으로 설치·사용하는 경우 반드시 Home Assistant 전체 백업을 먼저 생성하고, 모든 위험과 결과는 설치·사용자가 부담해야 합니다. 이 프로젝트의 개발자와 기여자는 설치 또는 사용으로 발생하는 데이터 손실, 설정 손상, 기기 오작동, 서비스 중단 및 기타 직·간접적인 손해에 대해 책임지지 않습니다.
-
 <!-- project-branding:start -->
 <p align="center">
   <img src="custom_components/smartthings_web/brand/logo@2x.png" alt="SmartThings Web 로고" width="520">
@@ -26,8 +17,9 @@
 
 브라우저 로그인을 담당하는 **SmartThings Web Bridge 앱**과 Home Assistant 엔티티를 생성하는 **`smartthings_web` 커스텀 통합**으로 구성됩니다. Samsung 비밀번호·MFA·CAPTCHA를 소스나 설정 파일에 입력하지 않고, 사용자가 앱의 noVNC 브라우저에서 직접 로그인합니다.
 
-> **현재 상태: LIMITED ALPHA**  
-> 현재 게이트는 `DECISION: LIMITED`입니다. 실제 HAOS 환경에서 연결·재시작 복구·푸시 상태 반영이 검증되었지만, 장시간 유휴 상태·호스트 재부팅 복구·모든 기기 유형의 제어·완전한 API 독립성은 아직 검증 범위 밖입니다.
+> **현재 상태: `0.1.180` · 실환경 부분 검증**
+>
+> 실제 Home Assistant OS에서 앱 기동, Ingress/noVNC Samsung 로그인, Bridge 연결, 인벤토리 수신과 Home Assistant 엔티티 생성까지 확인했습니다. `0.1.180`의 Home Monitor·Scene·Web 표시명 수정과 Advanced command·Galaxy Home Mini TTS는 구현 및 자동 검증을 통과했지만, 모든 계정과 기기에서 실기기 재검증이 끝난 상태는 아닙니다.
 
 ## Scene·Advanced Commands·Galaxy Home Mini TTS
 
@@ -99,7 +91,7 @@ data:
 
 ## Advanced 주 데이터·명령 구조
 
-버전 0.1.160은 로그인된 동일 Chromium context에서 SmartThings Advanced 내부 경로를 장치·location·room·상태·health·capability·safe command catalog의 주 데이터 소스로 사용합니다. 200개를 넘는 장치는 next link 또는 `isNext/max/page` 규칙으로 끝까지 읽고 `deviceId`로 병합합니다. 단일 component 장치는 관찰된 `/location` native control을 유지하고, 안전하고 되돌릴 수 있는 Advanced `on`/`off` 조합은 native switch/light 엔티티로 추가 투영합니다. Advanced command POST는 페이지 내부 CSRF 토큰을 same-origin fetch 헤더에만 붙이고 토큰을 로그·응답·진단에 반환하지 않습니다. composite parent의 main이 직접 command endpoint가 아닌 aggregate 상태이면 secondary component와 child main 상태의 동일 값·900ms 이내 timestamp에 대한 전체 일대일 조합이 정확히 하나일 때만 child device들을 직렬 제어하고, 그 검증된 component-child 매핑을 Bridge 재시작 뒤에도 재사용하도록 별도 저장합니다. 실제 child 제어는 direct Advanced endpoint가 404인 실증에 따라 관찰된 Location-native child control만 직렬 사용하고 DOM fallback은 허용하지 않으며, bounded confirmation window의 parent+child Advanced `/status` 전체 벡터가 일치할 때만 성공합니다. status-only Advanced 응답은 전체 topology가 아니므로 기존 parent-child 관계를 지우지 않습니다. 부분 실패나 최종 확인 실패는 완료된 child를 원래 값으로 되돌리고 Advanced status로 원래 parent/child vector를 확인합니다. 매핑 실패는 parent fallback 없이 닫습니다. 실패 진단은 raw 식별자 없이 component one-based ordinal, dispatch/rollback phase, outcome과 fixed transport error code만 기록합니다. 실행할 수 없는 secondary switch와 중복 Refresh는 Home Assistant 제어 엔티티로 노출하지 않으며, generated entity ID와 restore metadata가 기존 canonical slug를 다시 입력으로 삼아 길어지는 경우는 한 번의 bounded canonical ID로 되돌립니다. 같은 이름의 primary switch가 여러 location에 있으면 `_switch`나 숫자 suffix 대신 location/room-qualified ID를 사용합니다.
+현재 구현은 로그인된 동일 Chromium context에서 SmartThings Advanced 내부 경로를 장치·location·room·상태·health·capability·safe command catalog의 주 데이터 소스로 사용합니다. 200개를 넘는 장치는 next link 또는 `isNext/max/page` 규칙으로 끝까지 읽고 `deviceId`로 병합합니다. 단일 component 장치는 관찰된 `/location` native control을 유지하고, 안전하고 되돌릴 수 있는 Advanced `on`/`off` 조합은 native switch/light 엔티티로 추가 투영합니다. Advanced command POST는 페이지 내부 CSRF 토큰을 same-origin fetch 헤더에만 붙이고 토큰을 로그·응답·진단에 반환하지 않습니다. composite parent의 main이 직접 command endpoint가 아닌 aggregate 상태이면 secondary component와 child main 상태의 동일 값·900ms 이내 timestamp에 대한 전체 일대일 조합이 정확히 하나일 때만 child device들을 직렬 제어하고, 그 검증된 component-child 매핑을 Bridge 재시작 뒤에도 재사용하도록 별도 저장합니다. 실제 child 제어는 direct Advanced endpoint가 404인 실증에 따라 관찰된 Location-native child control만 직렬 사용하고 DOM fallback은 허용하지 않으며, bounded confirmation window의 parent+child Advanced `/status` 전체 벡터가 일치할 때만 성공합니다. status-only Advanced 응답은 전체 topology가 아니므로 기존 parent-child 관계를 지우지 않습니다. 부분 실패나 최종 확인 실패는 완료된 child를 원래 값으로 되돌리고 Advanced status로 원래 parent/child vector를 확인합니다. 매핑 실패는 parent fallback 없이 닫습니다. 실패 진단은 raw 식별자 없이 component one-based ordinal, dispatch/rollback phase, outcome과 fixed transport error code만 기록합니다. 실행할 수 없는 secondary switch와 중복 Refresh는 Home Assistant 제어 엔티티로 노출하지 않으며, generated entity ID와 restore metadata가 기존 canonical slug를 다시 입력으로 삼아 길어지는 경우는 한 번의 bounded canonical ID로 되돌립니다. 같은 이름의 primary switch가 여러 location에 있으면 `_switch`나 숫자 suffix 대신 location/room-qualified ID를 사용합니다.
 
 `lastUpdatedDate`를 포함한 timestamp가 없는 Advanced `OFFLINE`은 장치를 unavailable로 만들지 않습니다. 더 새로운 Location 상태 이벤트나 성공한 Advanced `/status` 조회는 online 증거가 되고, 그보다 새로운 timestamp가 있는 명시적 health `OFFLINE`은 계속 우선합니다. Bridge 재시작 때도 offline으로 저장된 장치는 persisted Location/status evidence를 다시 비교해 더 최신의 정상 상태가 있으면 online으로 복구하되, 값 자체가 `offline`, `unavailable`, `disconnected`인 상태는 positive evidence로 사용하지 않습니다.
 
@@ -284,59 +276,38 @@ npx tsx tools/haos-core-restart-continuity.ts
 npm run deploy:haos:candidate
 ```
 
-## 현재 검증 결과
+## 현재 검증 상태
 
-- `0.1.91`은 상세 페이지에서 로드된 인증 native client를 최대 24시간 검증·재사용하여, 최초 UI 탐색 뒤의 반복 제어가 다시 DOM 탐색 대기열로 내려가지 않게 합니다.
-- `0.1.90`은 인증된 in-page native 기기 명령을 느린 DOM 탐색 대기열 밖에서 즉시 전송하고, 응답 타이머 대신 기존 push/snapshot 확인을 권위로 사용합니다. 허용된 SmartThings presentation 아이콘은 HA 엔티티에 노출하며, 새로고침 버튼은 실제 관측된 refresh control에서만 생성합니다.
-- `0.1.89`는 my.smartthings.com Socket.IO 종료를 Playwright와 CDP 양쪽에서 즉시 감지해 keeper를 재로드하고 새 전체 snapshot이 끝날 때까지 readiness를 차단합니다. 송신 프레임은 push freshness를 연장하지 않으며, reconnect 때 같은 sequence inventory를 중복 fetch하지 않고 SSE marker도 O(1) sequence 조회로 전송합니다.
-- `0.1.88`은 현재 fingerprint가 호환되고 Bridge가 `ready+CONNECTED`라면 과거 protocol change 횟수를 현재 오류로 오판하지 않습니다. 물리 probe·Core continuity·72시간 소크는 시작 baseline보다 횟수가 증가할 때만 즉시 실패하므로 실제 규격 변경 보호는 유지됩니다.
-- `0.1.87`은 HAOS Chromium 실행 인자에서 Playwright가 이미 백그라운드 타이머·occlusion·renderer throttling을 모두 해제하고 있음을 확인해 중복 사용자 인자를 제거합니다. 0.1.86의 로컬 SSE Nagle 지연 제거와 50ms 첫 재연결은 그대로 유지합니다.
-- `0.1.86`은 로컬 SSE의 Nagle 지연을 끄고, 일시적인 Bridge 스트림 장애의 첫 재연결을 1초에서 50ms로 단축합니다. 반복 장애만 최대 1초까지 완만하게 backoff하고 SmartThings 상태 polling은 추가하지 않습니다.
-- `0.1.85`는 실제 Cake 캡처에서 확인된 토글 명령 규격에 따라, 안전한 toggle swatch가 명령 메타데이터를 생략해도 표준 `on`/`off`를 인증된 웹 직접 명령으로 전송해 상세 화면 탐색을 건너뜁니다.
-- `0.1.84`는 캡처 경계에서 두 번 익명화된 device ID와 DeviceStore까지 거친 component/capability의 모든 실제 별칭 단계를 원본 식별자의 휘발성 메모리 매핑에 연결합니다.
-- `0.1.83`은 1MB를 넘는 실제 전체 device snapshot도 최대 8MB의 메모리 전용 한도 안에서만 원본 식별자 매핑에 사용하고, 저장되는 진단 캡처의 더 작은 한도는 그대로 유지합니다.
-- `0.1.82`는 익명화된 component/capability가 DeviceStore에서 다시 정규화되는 3단계 별칭을 원본 식별자의 휘발성 메모리 매핑에 포함해, 전체 snapshot 직후에도 인증된 웹 직접 명령 경로를 사용할 수 있게 합니다.
-- `0.1.81`은 관찰된 안전 제어를 인증된 my.smartthings.com 페이지의 기존 Feathers/Socket.IO 클라이언트로 직접 전송하고, 이 경로를 사용할 수 없을 때만 기존의 정확한 UI 제어 경로를 사용합니다. 원본 기기·컴포넌트·capability 식별자는 브라우저 세션 동안 메모리에만 보관하며, 성공 판정은 계속 최신 push 상태로만 수행합니다.
-- `0.1.80`은 SmartThings Web push를 진단 캡처와 전체 인벤토리 SQLite 저장보다 먼저 Bridge SSE로 전달합니다. 동일 논리 이벤트의 다중 WebSocket 전달은 프로토콜 카운터에는 유지하되 한 번만 저장하고, 큰 인벤토리 스냅샷은 짧은 이벤트 묶음 단위로 합쳐 저장하며 일시적 잠금은 재시도합니다.
-- `0.1.79`는 각 SmartThings push마다 모든 HA 엔티티를 다시 쓰던 전역 listener 병목을 제거합니다. 기존 속성 변화는 정확히 일치하는 상태 엔티티와 같은 기기의 복합 엔티티만 갱신하고, 새 속성이나 inventory 변화에만 discovery/registry 검사를 실행하며, inventory 재동기화도 실제 변경된 기기로 제한합니다.
-- 같은 릴리스에서 공식 SmartThings 통합의 구성 원칙에 맞춰 접촉·동작·측정값은 올바른 센서 클래스로, 물리 버튼은 `event`, 펌웨어는 하나의 읽기 전용 `update`, 스피커는 `media_player`, 팬·공기청정기는 `fan`으로 정리했습니다. 관찰되지 않은 합성 Refresh는 제거하고 실제 웹 버튼만 만들며, 공식 통합에 없는 SmartThings Web 고유 상태도 삭제하거나 숨기지 않고 진단 센서로 계속 노출합니다. 한 기능에 속한 값만 해당 통합 엔티티의 속성으로 모아 중복을 줄입니다.
-- 실제 웹의 range 입력을 네이티브 값 변경 이벤트로 구동해 감지 주기·팬 속도·볼륨·밝기·색온도를 포함한 관찰된 모든 숫자 슬라이더를 처리합니다. 스피커의 재생·일시정지·정지·빨리감기·되감기 선택 명령은 정확한 상세 swatch 안에서만 실행하고, 빨리감기/되감기는 Home Assistant의 다음/이전 트랙 기능으로 연결합니다.
-- 상태값만 있고 대응하는 웹 제어가 관찰되지 않은 경우에는 읽기 값은 유지하되 동작하지 않는 쓰기 엔티티나 서비스 기능을 만들지 않습니다. 스위치·조명·팬·미디어·숫자·선택·버튼 제어는 component/capability/attribute와 control ID가 일치하는 실제 웹 제어에만 연결됩니다.
-- `0.1.78`은 Bridge 재시작이나 로그인 만료 중에도 SQLite에서 복원된 cached inventory 기기 수를 health에 정확히 표시합니다. 이 값은 진단·soak의 잘못된 `0 devices` 판정을 막지만, 로그인과 새 snapshot/push 증거가 없으면 `ready=false`를 그대로 유지합니다.
-- `0.1.77`은 `/rooms` 진입 직후 정확한 Cake 방 카드 제목의 렌더링을 먼저 기다려 느린 전역 접근성 탐색을 피하고, 한 HA 엔티티 listener 실패가 SSE push 루프와 다른 센서 갱신을 중단하지 않도록 격리합니다. Bridge SSE 전달, HA SSE 파싱, runtime에서 엔티티 상태 쓰기까지의 직접 회귀 테스트도 포함합니다.
-- `0.1.76`은 Cake의 닫히는 overlay 뒤에 남은 정확한 same-page 기기 래퍼에서 일반 클릭의 동작 가능 상태를 최대 15초 기다리지 않고, 탐색용 click 이벤트만 래퍼 자체에 전달합니다. 이후 상세 URL과 정확한 기기 dialog, dialog 내부 제어, push 상태 확인을 모두 다시 거치므로 인라인 제어나 다른 기기를 대체 대상으로 사용하지 않습니다.
-- `0.1.75`는 제어 뒤 상세창이 닫혀도 현재 페이지 뒤에 이미 렌더링된 정확히 하나의 동일 기기 카드를 먼저 즉시 다시 엽니다. 상세 URL과 정확한 기기 dialog를 다시 확인한 뒤에만 제어하며, 카드가 없거나 복구 검증이 실패하면 엄격한 방 경로로 돌아갑니다. 실측에서 느렸던 SmartThings 전체 애플리케이션 상세 URL 재로딩은 사용하지 않습니다.
-- `0.1.74`는 실제 Cake `draggable-room`의 보이는 heading을 CSS로 먼저 정확히 하나만 찾고, inventory에 방 정보가 있으면 overview 전체 탐색을 생략해 바로 그 방으로 이동합니다. 닫힌 warm 상세창은 직전에 검증된 동일 상세 URL을 다시 열어 정확한 URL과 기기 dialog를 재검증한 뒤에만 제어하며, 실패할 때만 엄격한 방 경로로 돌아갑니다. 포그라운드 명령은 별도 백그라운드 분석 페이지의 느린 종료를 기다리지 않고 사전 중단된 직렬 대기열을 인계받습니다.
-- `0.1.73`은 실제 Cake `draggable-room` 구조에서 유일한 정확한 방 heading과 그 부모를 먼저 선택해 213개 기기 전체가 포함된 page-wide button 접근성 트리 탐색을 피합니다. warm page의 상세 dialog 복구가 실패해도 직전에 성공하며 저장한 상세 경로를 즉시 폐기하지 않고, 새 페이지에서 정확한 상세 URL과 기기 dialog를 독립적으로 재검증한 뒤에만 제어합니다.
-- `0.1.72`는 Playwright가 방 대상을 보이게 만들기 위해 반복 대기하는 구간을 제거하고 현재 가시성만 즉시 검사합니다. 정확한 방 대상이 지금 보이지 않으면 아무 이벤트도 보내지 않고 실패하며, 보이는 유일한 탐색 전용 대상에만 click 이벤트를 전달한 뒤 정확한 기기 카드·상세 URL·dialog·제어와 push 상태를 재검증합니다.
-- `0.1.71`은 실기기 단계 로그에서 확인된 Cake 방 탐색 완료 대기를 제거합니다. 정확히 하나이며 이미 보이는 탐색 전용 방 대상에만 click 이벤트를 전달하고, 실제 이동 성공은 이후 정확한 기기 카드와 상세 dialog로 재검증합니다. warm page 복구가 실패한 명령에서는 이미 실패가 확인된 직접 상세 경로를 다시 열지 않습니다.
-- `0.1.70`은 실측된 제어 병목을 줄입니다. 포그라운드 제어가 들어오면 백그라운드 상세 분석이 즉시 직렬 대기열을 양보하고, 토글 뒤 상세창이 닫힌 경우 새 브라우저 페이지와 실패하는 직접 경로를 만들지 않고 같은 warm page에서 정확한 방과 기기를 다시 열어 정체성을 재검증합니다. 방 선택은 정확히 하나의 보이는 탐색 전용 버튼에만 제한된 클릭을 사용하며, 기기 카드·상세 dialog·제어의 정확한 일치와 push 상태 확인은 그대로 유지합니다.
-- `0.1.69`는 제어 지연을 값·기기명·식별자·URL 노출 없이 분해하기 위해 warm page, verified route, location, room, device, detail dialog, toggle click 경계에 고정 단계 진단을 추가합니다. 이 릴리스는 계측 후보이며, 실제 속도 개선은 측정된 병목에만 적용합니다.
-- SmartThings Web Bridge 앱과 Home Assistant 통합 `0.1.68`은 일시적 SmartThings 500 snapshot 오류를 프로토콜 변경으로 오판하지 않고, 정확히 하나의 보이는 `data-testid="device"` 카드 래퍼만 눌러 상세 화면을 엽니다. 카드 클릭 뒤에는 정확한 SmartThings 상세 경로뿐 아니라 방을 아는 경우 정확한 `기기명 + 방 이름`, 방을 모르는 경우 정확한 `기기명` 접근성 제목을 가진 보이는 `role="dialog"` 상세 모달까지 기다립니다. 최초의 방 탐색이 차가운 SmartThings 페이지 로딩 때문에 `command_room_not_found`로 끝나면, 어떤 제어도 탐색하기 전 실패한 페이지를 닫고 새 페이지에서 정확히 한 번만 같은 엄격한 탐색을 반복합니다. 제어 탐색이 시작되거나 상태 변경 가능성이 생긴 뒤에는 재시도하지 않습니다. 모든 제어 탐색은 그 정확한 상세 모달 내부로 제한되며, 관찰된 Power 라벨이 접근성 이름이나 텍스트로 주소화되지 않을 때도 상세창 안의 유일한 `switch` 또는 `checkbox`만 허용합니다. 배경 카드의 제어는 절대 대체 대상으로 사용하지 않습니다. Cake가 모달 제목의 시각 텍스트에 뒤로가기 기호와 방 이름을 붙여도 접근성 제목으로 정확히 검증하며, 접두어가 같은 다른 기기, 뒤쪽 방 목록에 남아 있는 동일 기기 카드, 부분 이름은 상세 준비 증거로 인정하지 않습니다. 전환이 완료되지 않으면 어떤 제어도 누르지 않고 실패합니다. 카드 내부의 인라인 전원 버튼, 페이지 전체의 이름 기반 버튼, 단순 텍스트는 장치 상세 열기 대체 경로로 절대 누르지 않습니다. 동일한 실제 토글이 접근성 `switch`와 내부 `checkbox`로 함께 노출되면 그 순서로 우선하고, Cake가 토글을 `button`으로 렌더링한 경우에도 관찰된 정확한 Power swatch 안의 단 하나만 허용합니다. 새 상세 페이지에서는 관찰된 정확한 토글 swatch가 최대 15초 안에 늦게 나타나는 것을 허용하고, swatch가 공용 탐색 시간을 소진해도 그 안의 유일한 제어에는 별도의 제한된 가시성 확인 시간을 부여합니다. 따뜻한 재사용 페이지의 짧은 탐색과 다른 제어의 기존 제한은 유지합니다. 제어 진단 로그는 기기명·ID·URL 없이 이름 기반 제어, 정확한 swatch 범위, 접근성 역할 개수의 고정 단계만 남깁니다. 검증된 상세 경로와 정확한 방 카드의 탐색 대기 시간을 줄이고 동일 기기 상세 페이지를 5분간 재검증해 재사용합니다. 0.1.94부터는 브라우저 동작이 끝난 뒤 요청 상태의 새 권위 push가 도착하는 즉시 제어를 확정해 고정 500ms 대기와 같은 기기의 후속 명령 직렬 지연을 제거합니다. Home Assistant의 SSE 작업은 연결 또는 일시적 인증 실패 뒤에도 다시 연결하며, 매 연결 전에 Bridge의 로컬 전체 snapshot을 원자적으로 병합합니다. 이는 SmartThings 상태 polling이 아닙니다. 숫자가 아닌 배터리 상태 같은 push 값은 원문을 보존하되 HA 숫자 센서 클래스를 적용하지 않고, 이후 숫자 측정값이 들어오면 자동으로 숫자 클래스를 다시 적용합니다. 허용된 SmartThings 아이콘/Lottie 메타데이터는 상태와 분리해 보존하며 Cake가 타입을 `NONE`으로 보낼 때 기기 모델 분류에 사용하고, 최신 inventory에서 제거된 메타데이터는 HA에서도 원자적으로 제거합니다. 애드온과 통합 구성요소 모두 SmartThings 브랜드 아이콘을 사용합니다.
-- Bridge 재시작 뒤 SmartThings Web 재로그인이 필요한 상태에서도 저장된 213개 inventory와 sequence 47을 즉시 복원했습니다. 실제 push/제어 재검증은 전용 Chromium 재인증 뒤 `ready=true`, `CONNECTED`로 돌아온 후 진행해야 합니다.
-- Home Assistant에는 215개 기기와 1,724개 활성 엔티티가 로드됐습니다. 14개 플랫폼에는 16개 `media_player`, 66개 `number`, 6개 `select`, 4개 `scene`, 1개 Home Monitor `alarm_control_panel`, 2개 `image`가 포함됩니다.
-- 안전한 무드등 연속 제어와 후속 실제 상태 변화에서 Bridge `updatedAt` 이후 Home Assistant `last_updated`가 스위치는 0.327초, 전력 0 W는 1.12초 뒤 갱신됐습니다. SmartThings 상태 폴링이나 낙관적 상태 변경은 사용하지 않았습니다.
-- 정확한 보이는 기기 래퍼가 식별되면 명령 탐색은 그 내부에서만 진행되며, 검토된 Feathers 400·일시적 GeneralError 500은 스냅샷 요청 실패로 처리하고 404 등 미검토 구조는 프로토콜 변경으로 노출합니다.
-- 감지주기 중복 엔티티와 활성 `smartthings_web` 수리 경고는 모두 0이었고, 제어 모드 옵션 창도 Core 재시작 뒤 정상적으로 열렸습니다.
-- 72시간 수동 HAOS soak는 사용자가 다시 요청할 때까지 보류되어 있습니다.
+아래 표는 **기능 구현**, **자동 검증**, **실제 HAOS 확인**을 구분합니다. 테스트 통과만으로 실기기 동작까지 확인됐다고 표시하지 않습니다.
 
-이 결과는 해당 시점과 환경의 검증 기록입니다. SmartThings Web 변경, Samsung 세션 만료, 계정 구성, 기기 종류에 따라 결과가 달라질 수 있습니다.
+| 영역 | 현재 확인 상태 | 검증 수준 |
+| --- | --- | --- |
+| 최신 배포 | `v0.1.180` Bridge 앱과 Home Assistant 통합 패키지가 GitHub Release에 게시됨 | 배포 확인 |
+| HAOS 앱·브라우저 | 실제 사용자 HAOS에서 `0.1.178` 이후 앱 기동, Ingress/noVNC 접속과 Samsung 계정 로그인 확인 | 실환경 확인 |
+| Bridge·통합 연결 | 페어링, 내부 Bridge 연결, 인벤토리 수신과 Home Assistant 기기·엔티티 생성 확인 | 실환경 확인 |
+| 상태 동기화·부하 억제 | push/SSE 상태 반영, 동일 인벤토리 억제, 유한 큐·백프레셔, 무변경 상태 및 registry 쓰기 억제 구현 | 자동 검증 통과, 장시간 실환경 soak 필요 |
+| Home Monitor | 실제 발생한 `command_location_picker_not_found` 경로를 `0.1.180`에서 위치 직접 라우팅 방식으로 수정 | 자동 검증 통과, 사용자 환경 재검증 필요 |
+| SmartThings Scene | 실제 발생한 `command_control_not_found` 경로를 정확한 Scene 카드 탐색 방식으로 수정 | 자동 검증 통과, 사용자 환경 재검증 필요 |
+| Web 표시명 | `On 1`, `On 2` 같은 근거 없는 숫자 이름 대신 관찰된 SmartThings Web 라벨을 우선하도록 수정 | 자동 검증 통과, 실제 인벤토리 재확인 필요 |
+| Advanced commands | `smartthings_web.list_commands`와 `smartthings_web.execute_command` 구현. 장치의 live safe command catalog에 실제로 존재하는 명령만 실행 | 구현·자동 검증 완료, 장치별 지원 범위는 실환경 의존 |
+| Galaxy Home Mini TTS | 안전한 `speechSynthesis.speak` descriptor가 정확히 하나일 때 사용하는 `smartthings_web.speak` 구현 | 구현·자동 검증 완료, Galaxy Home Mini 실기기 재검증 필요 |
 
+`0.1.180` 변경 검증에서는 Vitest 89개 파일·1,054개 Node 테스트, TypeScript typecheck/build, Python 통합 테스트, HACS, Hassfest, 보안 검사와 패키지형 HAOS 런타임 smoke가 통과했습니다. 실제 사용자 환경에서 아직 다시 확인하지 않은 Home Monitor, Scene, Web 표시명과 Galaxy Home Mini TTS는 완료로 과장하지 않고 재검증 필요 상태로 표시합니다.
 ## 제한 사항
 
-- 비공식 통합이므로 Samsung 웹 구조 변경으로 동작이 중단될 수 있습니다.
-- DOM이나 픽셀을 기기 상태의 권위 있는 값으로 사용하지 않습니다.
-- SmartThings 상태 반복 폴링, 영구 원본 이벤트 저널, 카메라 실시간 스트리밍은 포함하지 않습니다.
-- 호스트 재부팅 복구, 장시간 유휴 내구성, 위험도가 높은 액추에이터 제어는 아직 완전 검증되지 않았습니다.
-- Phase 2는 익명화된 실제 트래픽으로 전체 인벤토리·초기 스냅샷·위치 전체 푸시·재연결·공개 SmartThings API 비의존성이 입증될 때까지 닫혀 있습니다.
-
+- Samsung의 비공식 Web 화면과 내부 요청 구조를 기반으로 하므로 UI·프로토콜 변경 시 일부 기능이 중단될 수 있습니다.
+- 기기·Scene·Home Monitor·Advanced command·TTS 지원 범위는 로그인한 계정, 위치, 지역과 현재 Web catalog가 실제로 노출한 항목에 따라 달라집니다.
+- 제어 대상이 정확히 하나로 검증되지 않거나 안전한 command descriptor가 없으면 임의의 대체 제어를 실행하지 않고 실패합니다.
+- 잠금장치·차고문·밸브·보안·경보·사이렌 등 위험도가 높은 command와 민감 인자를 요구하는 command는 실행 대상에서 제외합니다.
+- 72시간 장기 soak, 장시간 유휴 뒤 세션 복구, 모든 호스트 재부팅 조합과 전체 기기 유형은 아직 완전 검증되지 않았습니다.
+- 여기서 API-free는 SmartThings 공개 API, PAT, OAuth, SmartApp 자격 증명을 사용하지 않는다는 뜻입니다. 로그인된 SmartThings Web이 사용하는 내부 Web 요청까지 없다는 의미는 아닙니다.
 ## 라이선스
 
 MIT License. 자세한 내용은 `LICENSE`와 `NOTICE`를 확인하세요.
 
 <!--
 Documentation gate compatibility anchors. These are intentionally not rendered.
-Current gate: `DECISION: LIMITED`
+Current status is documented as live HAOS partially verified
 do not install or manage Docker yourself
 Settings → Apps → Install app
 The folder path and add-on slug are different
