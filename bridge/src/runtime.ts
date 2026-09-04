@@ -102,7 +102,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "0.1.176";
+const bridgeVersion = "0.1.177";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -443,6 +443,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     physicalActionProbe,
     getProbeEvidence
   });
+  log.info(`bridge_init:http_server_ready:${server.port}`);
 
   let activeContextGeneration = 0;
   let stopped = false;
@@ -552,7 +553,9 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     launch: async () => {
       let context: ObservableContext | undefined;
       let assigned = false;
-      context = (await launchSmartThingsPersistentContext(deps.chromium, paths)) as ObservableContext;
+      context = (await launchSmartThingsPersistentContext(deps.chromium, paths, {
+        onSandboxFallback: () => log.warn("browser_launch:sandbox_fallback")
+      })) as ObservableContext;
       if (stopped) {
         await closeContextQuietly(context);
         return context;
