@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -211,11 +212,21 @@ class SmartThingsWebRuntime:
     ] = field(default_factory=dict)
     device_listeners: dict[str, set[Callable[[], None]]] = field(default_factory=dict)
     image_updates: dict[str, BridgeImageUpdate] = field(default_factory=dict)
+    listener_coalesce_ms: int = 0
+    _pending_listeners: set[Callable[[], None]] = field(
+        default_factory=set, init=False, repr=False
+    )
+    _listener_flush_handle: Any = field(default=None, init=False, repr=False)
 
     def subscribe(self, listener: Callable[[], None]) -> Callable[[], None]:
         """Subscribe to state changes."""
         self.listeners.add(listener)
-        return lambda: self.listeners.discard(listener)
+
+        def unsubscribe() -> None:
+            self.listeners.discard(listener)
+            self._pending_listeners.discard(listener)
+
+        return unsubscribe
 
     def subscribe_state(
         self,
@@ -487,6 +498,7 @@ class SmartThingsWebRuntime:
                 or value_became_available
                 or state.attribute in DEVICE_REGISTRY_ATTRIBUTES
             ),
+            immediate=state.attribute in EVENT_ATTRIBUTES,
         )
         return True
 
@@ -496,6 +508,7 @@ class SmartThingsWebRuntime:
         device_ids: set[str] | None = None,
         state_keys: set[tuple[str, tuple[str, str, str]]] | None = None,
         notify_global: bool = True,
+        immediate: bool = False,
     ) -> None:
         listeners = set(self.listeners) if notify_global else set()
         if device_ids is None:
@@ -513,6 +526,31 @@ class SmartThingsWebRuntime:
             else:
                 for key in state_keys:
                     listeners.update(self.state_listeners.get(key, ()))
+        if not listeners:
+            return
+        if immediate or self.listener_coalesce_ms <= 0:
+            self._dispatch_listeners(listeners)
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._dispatch_listeners(listeners)
+            return
+        self._pending_listeners.update(listeners)
+        if self._listener_flush_handle is None:
+            self._listener_flush_handle = loop.call_later(
+                max(1, self.listener_coalesce_ms) / 1000,
+                self._flush_pending_listeners,
+            )
+
+    def _flush_pending_listeners(self) -> None:
+        self._listener_flush_handle = None
+        listeners = set(self._pending_listeners)
+        self._pending_listeners.clear()
+        self._dispatch_listeners(listeners)
+
+    @staticmethod
+    def _dispatch_listeners(listeners: set[Callable[[], None]]) -> None:
         for listener in tuple(listeners):
             try:
                 listener()
@@ -794,7 +832,7 @@ def switch_name_overrides(
         control = toggle_control_for_state(device, state)
         label = _web_control_label_for_switch_state(device, state)
         if label is None:
-            label = _web_control_label(control.label if control else None)
+            label = web_state_label(device, state)
         is_primary = primary_switch_state(device, state)
         if label == "전원" and not (
             is_primary or _main_power_switch_state(device, state)
@@ -966,7 +1004,9 @@ def primary_switch_state(device: BridgeDevice, state: BridgeState) -> bool:
         for item in safe_switch_states
         if _main_power_switch_state(device, item, allow_identifier_component=True)
     ]
-    return len(main_power_states) == 1 and main_power_states[0].key == state.key
+    if len(main_power_states) == 1:
+        return main_power_states[0].key == state.key
+    return len(safe_switch_states) == 1 and safe_switch_states[0].key == state.key
 
 
 def _main_power_switch_state(

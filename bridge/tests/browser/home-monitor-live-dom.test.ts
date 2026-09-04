@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 
 import { SmartThingsWebUiCommandExecutor } from "../../src/browser/command-page.js";
 import {
+  clickCurrentHomeMonitorMode,
   clickTextOnlyHomeMonitorCard,
   inspectHomeMonitorDom
 } from "../../src/browser/home-monitor-dom.js";
@@ -51,9 +52,12 @@ class RolelessHomeMonitorPage {
         openShadowRootCount: 1
       } as Result;
     }
-    if ("timeoutMs" in input && !("actionLabels" in input)) {
+    if (input.currentModeProbe === true) {
       this.cardOpened = true;
       return "clicked" as Result;
+    }
+    if ("timeoutMs" in input && !("actionLabels" in input)) {
+      return "not_found" as Result;
     }
     if ("modeLabelGroups" in input) {
       return (this.cardOpened ? "clicked" : "not_found") as Result;
@@ -74,9 +78,16 @@ describe("live Home Monitor DOM recovery", () => {
     await expect(
       clickTextOnlyHomeMonitorCard(pageWithoutEvaluate, ["SmartThings Home Monitor"])
     ).resolves.toBe("unavailable");
+    await expect(
+      clickCurrentHomeMonitorMode(
+        pageWithoutEvaluate,
+        ["SmartThings Home Monitor"],
+        [["해제"], ["보안(외출)"], ["보안(실내)"]]
+      )
+    ).resolves.toBe("unavailable");
   });
 
-  test("opens a roleless card and then executes the exact mode", async () => {
+  test("opens the current-mode pill and then executes the exact mode", async () => {
     const page = new RolelessHomeMonitorPage();
     const diagnostics: string[] = [];
     const executor = new SmartThingsWebUiCommandExecutor(
@@ -127,6 +138,8 @@ describe("live Home Monitor DOM recovery", () => {
     const runtimeSource = readFileSync("bridge/src/runtime.ts", "utf8");
 
     expect(domSource).toContain("root instanceof ShadowRoot");
+    expect(domSource).toContain("clickCurrentHomeMonitorMode");
+    expect(domSource).toContain("currentModeProbe: true");
     expect(domSource).toContain("root.host instanceof HTMLElement");
     expect(domSource).toContain('"menuitemradio"');
     expect(commandSource).toContain("clickTextOnlyHomeMonitorCard");

@@ -48,6 +48,69 @@ describe("DeviceStore", () => {
     expect(listener).toHaveBeenCalledOnce();
   });
 
+  test("stores timestamp-only repeats without publishing another state event", () => {
+    const store = new DeviceStore();
+    const listener = vi.fn();
+    store.subscribe(listener);
+    const frame = (eventId: string, eventTime: string) =>
+      receivedFrame(
+        `42${JSON.stringify([
+          "api/subscription DEVICE_EVENT",
+          { data: { event_type: "DEVICE_EVENT", device_event: {
+            event_id: eventId,
+            event_time: eventTime,
+            device_id: "dev_001",
+            location_id: "loc_001",
+            component: "main",
+            capability: "switch",
+            attribute: "switch",
+            value: "off",
+            state_change: true
+          } } }
+        ])}`
+      );
+    store.observe(frame("event_timestamp_001", "2026-09-04T00:00:01Z"));
+    listener.mockClear();
+    const sequence = store.currentSequence();
+    store.observe(frame("event_timestamp_002", "2026-09-04T00:00:02Z"));
+    expect(store.currentSequence()).toBe(sequence);
+    expect(listener).not.toHaveBeenCalled();
+    expect(store.snapshot().devices[0]?.states[0]?.updatedAt).toBe(
+      "2026-09-04T00:00:02Z"
+    );
+  });
+
+  test("keeps command-correlated repeats for confirmation", () => {
+    const store = new DeviceStore();
+    const listener = vi.fn();
+    store.subscribe(listener);
+    const frame = (eventId: string, eventTime: string, commandId?: string) =>
+      receivedFrame(
+        `42${JSON.stringify([
+          "api/subscription DEVICE_EVENT",
+          { data: { event_type: "DEVICE_EVENT", device_event: {
+            event_id: eventId,
+            event_time: eventTime,
+            device_id: "dev_001",
+            location_id: "loc_001",
+            component: "main",
+            capability: "switch",
+            attribute: "switch",
+            value: "off",
+            state_change: true,
+            ...(commandId ? { command_id: commandId } : {})
+          } } }
+        ])}`
+      );
+    store.observe(frame("event_command_001", "2026-09-04T00:00:01Z"));
+    listener.mockClear();
+    store.observe(frame("event_command_002", "2026-09-04T00:00:02Z", "command_confirm_002"));
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "state", commandId: "command_confirm_002" })
+    );
+  });
+
   test("applies a live event with an omitted component and epoch-millisecond timestamp", () => {
     const store = new DeviceStore();
     observeSnapshotState(store, {

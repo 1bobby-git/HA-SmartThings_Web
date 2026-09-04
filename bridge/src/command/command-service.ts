@@ -1097,7 +1097,7 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
   const result = new Promise<ConfirmationEvidence>((resolve, reject) => {
     resolveResult = resolve;
     rejectResult = reject;
-    unsubscribe = options.devices.subscribe((event) => {
+    unsubscribe = options.devices.subscribeConfirmation((event) => {
       if (event.sequence <= options.afterSequence) return;
       if (options.invalidates?.(event)) {
         pendingEvidence = undefined;

@@ -35,12 +35,13 @@ export async function clickTextOnlyHomeMonitorAction(
   page: BrowserPageLike,
   monitorLabels: readonly string[],
   actionLabels: readonly string[],
-  modeLabelGroups: readonly (readonly string[])[]
+  modeLabelGroups: readonly (readonly string[])[],
+  timeoutMs = 15_000
 ): Promise<HomeMonitorDomResult> {
   if (!page.evaluate) return "unavailable";
   try {
     const result = await page.evaluate(
-      async ({ monitorLabels, actionLabels, modeLabelGroups }) => {
+      async ({ monitorLabels, actionLabels, modeLabelGroups, timeoutMs }) => {
         const normalize = (value: string | null | undefined) =>
           (value ?? "")
             .normalize("NFKC")
@@ -154,7 +155,7 @@ export async function clickTextOnlyHomeMonitorAction(
         const modeGroups = modeLabelGroups.map(
           (labels) => new Set(labels.map(normalize))
         );
-        const deadline = Date.now() + 15_000;
+        const deadline = Date.now() + Math.max(1, timeoutMs);
         let ambiguousSeen = false;
 
         while (Date.now() < deadline) {
@@ -213,7 +214,157 @@ export async function clickTextOnlyHomeMonitorAction(
       {
         monitorLabels: [...monitorLabels],
         actionLabels: [...actionLabels],
-        modeLabelGroups: modeLabelGroups.map((labels) => [...labels])
+        modeLabelGroups: modeLabelGroups.map((labels) => [...labels]),
+        timeoutMs: Math.max(1, timeoutMs)
+      }
+    );
+    return result === "clicked" ||
+      result === "not_found" ||
+      result === "ambiguous"
+      ? result
+      : "not_found";
+  } catch {
+    return "not_found";
+  }
+}
+
+/**
+ * Click the one current Home Monitor mode shown beside the exact card title.
+ *
+ * The live SmartThings layout initially exposes only the current mode pill.
+ * Clicking the title does not open its selector, so the exact current-mode
+ * text inside that card is clicked and allowed to bubble to React.
+ */
+export async function clickCurrentHomeMonitorMode(
+  page: BrowserPageLike,
+  monitorLabels: readonly string[],
+  modeLabelGroups: readonly (readonly string[])[],
+  timeoutMs = 3_000
+): Promise<HomeMonitorDomResult> {
+  if (!page.evaluate) return "unavailable";
+  try {
+    const result = await page.evaluate(
+      async ({ monitorLabels, modeLabelGroups, timeoutMs }) => {
+        const normalize = (value: string | null | undefined) =>
+          (value ?? "")
+            .normalize("NFKC")
+            .replace(/[\u200b-\u200d\u2060\ufeff]/gu, "")
+            .replace(/\s+/gu, " ")
+            .trim()
+            .toLocaleLowerCase();
+        const visible = (element: Element) => {
+          const style = getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return (
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            style.opacity !== "0" &&
+            rect.width > 0 &&
+            rect.height > 0
+          );
+        };
+        const labels = (element: Element) => {
+          const values = [
+            element.getAttribute("aria-label"),
+            element.getAttribute("title"),
+            element.textContent
+          ];
+          if (element instanceof HTMLInputElement) values.push(element.value);
+          return values.map(normalize).filter((value) => value.length > 0);
+        };
+        const allElements = () => {
+          const result: Element[] = [];
+          const roots: ParentNode[] = [document];
+          for (let index = 0; index < roots.length; index += 1) {
+            const root = roots[index];
+            if (!root) continue;
+            for (const element of root.querySelectorAll("*")) {
+              result.push(element);
+              if (element.shadowRoot) roots.push(element.shadowRoot);
+            }
+          }
+          return result;
+        };
+        const parentOrHost = (element: Element): HTMLElement | null => {
+          if (element.parentElement) return element.parentElement;
+          const root = element.getRootNode();
+          return root instanceof ShadowRoot && root.host instanceof HTMLElement
+            ? root.host
+            : null;
+        };
+        const isWithin = (element: Element, boundary: Element) => {
+          let current: Element | null = element;
+          for (let depth = 0; current && depth < 24; depth += 1) {
+            if (current === boundary) return true;
+            current = parentOrHost(current);
+          }
+          return false;
+        };
+        const deepestExact = (
+          elements: readonly Element[],
+          names: ReadonlySet<string>
+        ) => {
+          const exact = elements.filter(
+            (element) =>
+              element instanceof HTMLElement &&
+              visible(element) &&
+              labels(element).some((label) => names.has(label))
+          ) as HTMLElement[];
+          return exact.filter(
+            (candidate) =>
+              !exact.some(
+                (other) => other !== candidate && isWithin(other, candidate)
+              )
+          );
+        };
+
+        const monitorNames = new Set(monitorLabels.map(normalize));
+        const modeGroups = modeLabelGroups.map(
+          (group) => new Set(group.map(normalize))
+        );
+        const deadline = Date.now() + Math.max(1, timeoutMs);
+        let ambiguousSeen = false;
+
+        while (Date.now() < deadline) {
+          const elements = allElements();
+          const titles = deepestExact(elements, monitorNames);
+          const visibleGroups = modeGroups
+            .map((group) => deepestExact(elements, group))
+            .filter((group) => group.length > 0);
+          if (titles.length === 1 && visibleGroups.length === 1) {
+            const title = titles[0];
+            const matches = new Set<HTMLElement>();
+            for (const target of visibleGroups[0] ?? []) {
+              let scope: Element | null = title ?? null;
+              for (let depth = 0; scope && depth < 12; depth += 1) {
+                if (isWithin(target, scope)) {
+                  matches.add(target);
+                  break;
+                }
+                scope = parentOrHost(scope);
+              }
+            }
+            if (matches.size === 1) {
+              const target = [...matches][0];
+              if (!target) return "not_found";
+              target.scrollIntoView({ block: "center", inline: "center" });
+              target.focus?.({ preventScroll: true });
+              target.click();
+              return "clicked";
+            }
+            if (matches.size > 1) ambiguousSeen = true;
+          } else if (titles.length > 1 || visibleGroups.length > 1) {
+            ambiguousSeen = true;
+          }
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+        }
+        return ambiguousSeen ? "ambiguous" : "not_found";
+      },
+      {
+        monitorLabels: [...monitorLabels],
+        modeLabelGroups: modeLabelGroups.map((labels) => [...labels]),
+        timeoutMs: Math.max(1, timeoutMs),
+        currentModeProbe: true
       }
     );
     return result === "clicked" ||
