@@ -79,7 +79,7 @@ else
     echo "${ADDON_SLUG} 설치 정보와 로컬 소스를 모두 찾지 못했습니다." >&2
     echo "현재 설치된 앱 ID를 확인하세요:" >&2
     echo "  ha addons list" >&2
-    echo "저장소 앱 ID가 d55cafb9_smartthings_web_bridge라면 local 주소가 아니라 저장소 주소를 사용해야 합니다." >&2
+    echo "저장소 앱 ID가 8a97f131_smartthings_web_bridge라면 local 주소가 아니라 현재 저장소 주소를 사용해야 합니다." >&2
     exit 1
   fi
   ADDON_DIR="${ADDONS_ROOT}/smartthings_web_bridge"

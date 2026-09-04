@@ -174,8 +174,8 @@ SmartThings Web이 호환되지 않는 ACK 또는 이벤트 구조를 반환하�
 ## 설치 경로 주의사항
 
 - 앱 구성 slug: `smartthings_web_bridge`
-- 저장소 설치 앱 ID: `d55cafb9_smartthings_web_bridge`
-- 저장소 설치 내부 DNS: `d55cafb9-smartthings-web-bridge`
+- 현재 저장소 설치 앱 ID: `8a97f131_smartthings_web_bridge`
+- 현재 저장소 설치 내부 DNS: `8a97f131-smartthings-web-bridge`
 - 수동 로컬 설치 소스 폴더: `/addons/smartthings_web_bridge`
 - 수동 로컬 설치 런타임 slug: `local_smartthings_web_bridge`
 

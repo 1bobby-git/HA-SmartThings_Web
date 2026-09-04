@@ -49,5 +49,6 @@ ha addons reload
 
 - 백업 폴더를 `/addons` 아래에 만들면 같은 slug가 중복 검색될 수 있으므로 스크립트는 `/share`에 백업합니다.
 - 기존 Samsung 로그인 프로필과 앱 옵션은 Supervisor의 앱 데이터 영역에 있으므로 `/addons` 소스 교체 대상에 포함되지 않습니다.
-- 앱 ID가 `d55cafb9_smartthings_web_bridge`이면 저장소 설치 앱입니다. 이 경우 앱 스토어에서 0.1.169로 업데이트하며 내부 주소는 `http://d55cafb9-smartthings-web-bridge:8100`입니다.
-- 통합 0.1.169는 `local`과 `d55cafb9` 두 내부 주소를 안전하게 확인한 뒤 실제 응답한 주소를 구성 항목에 저장합니다.
+- 현재 저장소 설치 앱 ID는 `8a97f131_smartthings_web_bridge`이고 내부 주소는 `http://8a97f131-smartthings-web-bridge:8100`입니다. 저장소 설치 앱은 앱 스토어에서 최신 버전으로 업데이트합니다.
+- 이전 `d55cafb9` 주소는 기존 구성 복구용 후보로만 유지합니다.
+- 통합 0.1.179부터 Supervisor가 전달한 실제 앱 slug로 Bridge 주소를 자동 입력하며, `/addons` 로컬 설치에서는 `http://local-smartthings-web-bridge:8100`을 사용합니다.

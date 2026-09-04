@@ -42,6 +42,8 @@ describe("Supervisor Bridge URL autodiscovery", () => {
     const constants = readText("custom_components/smartthings_web/const.py");
     const flow = readText("custom_components/smartthings_web/config_flow.py");
     const readme = readText("README.md");
+    const localUpdateDocs = readText("docs/local-addon-update.md");
+    const localUpdateHelper = readText("tools/update-local-addon.sh");
 
     expect(constants).toContain(
       'REPOSITORY_BRIDGE_URL = "http://8a97f131-smartthings-web-bridge:8100"'
@@ -56,5 +58,17 @@ describe("Supervisor Bridge URL autodiscovery", () => {
     expect(flow).toContain('expected_host = slug.replace("_", "-")');
     expect(flow).toContain("bridge_url_default = self._discovered_bridge_url or DEFAULT_BRIDGE_URL");
     expect(readme).toContain("칸에 자동 입력");
+    expect(readme).toContain(
+      "현재 저장소 설치 앱 ID: `8a97f131_smartthings_web_bridge`"
+    );
+    expect(readme).toContain(
+      "현재 저장소 설치 내부 DNS: `8a97f131-smartthings-web-bridge`"
+    );
+    expect(localUpdateDocs).toContain(
+      "현재 저장소 설치 앱 ID는 `8a97f131_smartthings_web_bridge`"
+    );
+    expect(localUpdateHelper).toContain(
+      "저장소 앱 ID가 8a97f131_smartthings_web_bridge라면"
+    );
   });
 });
