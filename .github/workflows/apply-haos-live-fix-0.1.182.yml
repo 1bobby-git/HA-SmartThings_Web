@@ -33,6 +33,7 @@ jobs:
           printf '%s  %s\n' \
             'ea6d33d30c0d1875c85545846d43462cb63cac71a748cf7b82ddeb7be10bc96e' \
             '/tmp/apply-0.1.182.py' | sha256sum --check --strict
+          python .github/scripts/0.1.182/fix-patch-source.py
           python /tmp/apply-0.1.182.py
           rm -rf .github/scripts/0.1.182
           rm -f .github/scripts/apply_haos_live_fix_0_1_182.py
