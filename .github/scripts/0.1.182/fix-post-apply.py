@@ -83,6 +83,9 @@ state_marker = (
     "    }\n"
 )
 if apply_block.count(state_marker) != 1:
+    print("===== GENERATED APPLY DEVICE EVENT BLOCK START =====")
+    print(apply_block)
+    print("===== GENERATED APPLY DEVICE EVENT BLOCK END =====")
     raise SystemExit(
         "DeviceStore state-change marker: expected one, "
         f"found {apply_block.count(state_marker)}"
