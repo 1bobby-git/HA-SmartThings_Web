@@ -1,5 +1,6 @@
 import type { BrowserPageLike, KeeperPageManager } from "./keeper-page.js";
 import { clickTextOnlyHomeMonitorAction } from "./home-monitor-dom.js";
+import { clickExactSceneCard } from "./scene-dom.js";
 import { safeCameraImageUrl } from "../state/camera-image-store.js";
 
 interface CommandLocatorLike {
@@ -501,12 +502,29 @@ export class SmartThingsWebUiCommandExecutor {
     const page = await this.openLocationPage(input.locationId, input.locationNames);
     try {
       let scene = await exactSceneControl(page, input.sceneName);
-      if (!scene) {
-        const automationsUrl = new URL("/automations", page.url()).toString();
-        await page.goto(automationsUrl, { waitUntil: "domcontentloaded" });
-        scene = await waitForExactSceneControl(page, input.sceneName);
+      if (scene) {
+        await clickExactlyOne(scene);
+        return;
       }
-      await clickExactlyOne(scene);
+      let domResult = await clickExactSceneCard(page, input.sceneName, 3_000);
+      if (domResult === "clicked") return;
+      if (domResult === "ambiguous") {
+        throw new Error("command_control_ambiguous");
+      }
+
+      const automationsUrl = new URL("/automations", page.url()).toString();
+      await page.goto(automationsUrl, { waitUntil: "domcontentloaded" });
+      scene = await exactSceneControl(page, input.sceneName);
+      if (scene) {
+        await clickExactlyOne(scene);
+        return;
+      }
+      domResult = await clickExactSceneCard(page, input.sceneName, 15_000);
+      if (domResult === "clicked") return;
+      if (domResult === "ambiguous") {
+        throw new Error("command_control_ambiguous");
+      }
+      throw new Error("command_control_not_found");
     } finally {
       await page.close().catch(() => undefined);
     }
@@ -621,6 +639,37 @@ export class SmartThingsWebUiCommandExecutor {
     if (!this.normalizeLocationId) return;
     const currentLocationId = this.normalizeLocationId(routeLocation);
     if (currentLocationId === targetLocationId) return;
+
+    const knownLocationIds = Object.keys(locationNames ?? {});
+    if (
+      knownLocationIds.length === 1 &&
+      knownLocationIds[0] === targetLocationId
+    ) {
+      return;
+    }
+
+    if (rawTargetLocationId) {
+      const directUrl = new URL(page.url());
+      directUrl.pathname = `/location/${encodeURIComponent(rawTargetLocationId)}`;
+      directUrl.search = "";
+      directUrl.hash = "";
+      try {
+        await page.goto(directUrl.toString(), { waitUntil: "domcontentloaded" });
+        if (
+          await waitForLocationRoute(
+            page,
+            targetLocationId,
+            this.normalizeLocationId,
+            rawTargetLocationId
+          )
+        ) {
+          return;
+        }
+      } catch {
+        // Keep the exact visible picker fallback for changed or rejected routes.
+      }
+    }
+
     const currentName = locationNames?.[currentLocationId];
     const targetName = locationNames?.[targetLocationId];
     if (!currentName || !targetName) throw new Error("command_location_unknown");
@@ -642,7 +691,14 @@ export class SmartThingsWebUiCommandExecutor {
     if ((await target.count()) !== 1) throw new Error("command_location_target_not_found");
     await target.click({ timeout: 15_000 });
 
-    if (!(await waitForLocationRoute(page, targetLocationId, this.normalizeLocationId))) {
+    if (
+      !(await waitForLocationRoute(
+        page,
+        targetLocationId,
+        this.normalizeLocationId,
+        rawTargetLocationId
+      ))
+    ) {
       throw new Error("command_location_change_failed");
     }
   }
@@ -1259,11 +1315,17 @@ function dialogControlSurface(
 async function waitForLocationRoute(
   page: CommandPageLike,
   targetLocationId: string,
-  normalizeLocationId: (rawLocationId: string) => string
+  normalizeLocationId: (rawLocationId: string) => string,
+  rawTargetLocationId?: string
 ): Promise<boolean> {
   for (let attempt = 0; attempt <= LOCATION_ROUTE_POLL_ATTEMPTS; attempt += 1) {
     const route = locationIdFromUrl(page.url());
-    if (route && normalizeLocationId(route) === targetLocationId) return true;
+    if (
+      route &&
+      (route === rawTargetLocationId || normalizeLocationId(route) === targetLocationId)
+    ) {
+      return true;
+    }
     if (attempt === LOCATION_ROUTE_POLL_ATTEMPTS || !page.waitForTimeout) break;
     await page.waitForTimeout(LOCATION_ROUTE_POLL_MS);
   }

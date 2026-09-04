@@ -1,3 +1,10 @@
+## 0.1.180
+
+- Home Monitor 명령이 실제 액션 탐색 전에 숨겨진 위치 선택 버튼을 요구하며 `command_location_picker_not_found`로 중단되던 경로를 수정했습니다. 단일 위치는 현재 인증된 페이지를 그대로 사용하고, 다중 위치는 저장된 원본 location 경로로 직접 이동한 뒤 기존의 엄격한 선택기 fallback을 유지합니다.
+- Scene 실행은 접근성 `button`뿐 아니라 링크·역할 없는 React 카드·open shadow root 안의 정확한 장면 이름을 찾습니다. 정확히 하나의 보이는 동일 이름 카드만 클릭하고 중복 후보는 계속 차단합니다.
+- 센서와 바이너리 센서는 동일 component/capability/attribute에서 관찰된 SmartThings Web 표시 라벨을 우선 사용합니다. 식별 가능한 역할은 괄호로 구분하되, 근거가 없는 `On 1`, `On 2` 같은 숫자 이름은 만들지 않고 Web 라벨을 그대로 유지합니다.
+- 위치 직접 이동·단일 위치 Home Monitor·역할 없는 Scene 카드·Web 라벨 우선순위·중복 라벨의 비숫자 처리에 대한 회귀 테스트를 추가했습니다.
+
 ## 0.1.179
 
 - 실제 Home Assistant OS가 보고한 설치 slug `8a97f131_smartthings_web_bridge`와 런타임 hostname `8a97f131-smartthings-web-bridge`를 기준으로, 통합 화면에 남아 있던 이전 `d55cafb9` 고정 주소를 수정했습니다.

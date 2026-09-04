@@ -35,6 +35,7 @@ from .models import (
     sensor_state_owned_by_primary_domain,
     state_has_entity_value,
     signal_metrics_native_value,
+    web_state_label,
 )
 
 
@@ -222,7 +223,7 @@ async def async_setup_entry(
                 continue
             image_device = is_image_device(device)
             firmware_keys = {item.key for item in firmware_states(device).values()}
-            candidates: list[tuple[BridgeState, SensorDescription]] = []
+            candidates: list[tuple[BridgeState, SensorDescription, str | None]] = []
             for state in device.states.values():
                 if not state_has_entity_value(state):
                     continue
@@ -238,14 +239,17 @@ async def async_setup_entry(
                     state_class=None,
                     entity_category=EntityCategory.DIAGNOSTIC,
                 )
-                candidates.append((state, description))
+                candidates.append((state, description, web_state_label(device, state)))
             name_overrides = disambiguated_state_names(
-                ((state, description.name) for state, description in candidates),
+                (
+                    (state, web_label or description.name)
+                    for state, description, web_label in candidates
+                ),
                 all_states=device.states.values(),
             )
-            for state, description in candidates:
+            for state, description, web_label in candidates:
                 unique_id = "_".join((device.device_id, *state.key))
-                name_override = name_overrides.get(state.key)
+                name_override = name_overrides.get(state.key) or web_label
                 if (
                     name_override is not None
                     and migrated_names.get(unique_id) != name_override
