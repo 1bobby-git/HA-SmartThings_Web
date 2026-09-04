@@ -81,6 +81,12 @@ try {
   await run("multiple visible dialogs", `<div role="dialog"><h2>홈 모니터</h2><button>외출</button></div>
     <div role="dialog"><h2>다른 설정</h2></div>`, 0, "ambiguous");
   await run("no dialog leaves existing card path unchanged", `<h2>SmartThings Home Monitor</h2><button>해제</button>`, 0, "unavailable");
+  await run("unrelated on-off select is not a security mode", `<div role="dialog"><h2>홈 모니터</h2><select id="setting"><option value="on">On</option><option value="off">Off</option></select></div>
+    <script>window.changed=false;setting.onchange=()=>window.changed=true</script>`,
+    2, "not_found", async (page) => assert.equal(await page.evaluate(() => window.changed), false));
+  await run("duplicate form value is ambiguous", `<div role="dialog"><h2>홈 모니터</h2><select>
+    <option value="shared">해제</option><option value="shared">외출</option><option value="stay">재실</option></select></div>`,
+    0, "ambiguous");
   // Also exercise the production command-page orchestration with all network requests fulfilled locally.
   const { SmartThingsWebUiCommandExecutor } = await import("../dist/bridge/src/browser/command-page.js");
   const page = await browser.newPage();
