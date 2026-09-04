@@ -1,0 +1,32 @@
+name: Prepare Home Monitor dialog candidate 0.1.183
+on:
+  push:
+    branches:
+      - fix/home-monitor-dialog-0.1.183
+    paths:
+      - .github/scripts/prepare_0_1_183.py
+      - .github/workflows/prepare-home-monitor-dialog-0.1.183.yml
+permissions:
+  contents: write
+jobs:
+  prepare:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Wire reviewed dialog handler and release metadata
+        run: |
+          python .github/scripts/prepare_0_1_183.py
+          rm .github/scripts/prepare_0_1_183.py
+          rm .github/workflows/prepare-home-monitor-dialog-0.1.183.yml
+          git diff --check
+      - name: Commit candidate for normal PR validation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: handle Home Monitor dialog forms 0.1.183'
+          git push origin HEAD:fix/home-monitor-dialog-0.1.183
