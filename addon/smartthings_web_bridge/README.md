@@ -8,7 +8,7 @@ SmartThings Web Bridge는 Home Assistant Ingress의 noVNC Chromium에서 사용�
 
 Home Assistant OS 또는 Supervised 환경에서 아래 버튼을 누르면 이 저장소가 앱 저장소에 추가되고 **SmartThings Web Bridge** 앱 화면이 열립니다.
 
-[![Home Assistant에서 SmartThings Web Bridge 앱 열기](https://my.home-assistant.io/badges/supervisor_addon.svg)](https://my.home-assistant.io/redirect/supervisor_addon/?addon=d55cafb9_smartthings_web_bridge&repository_url=https%3A%2F%2Fgithub.com%2F1bobby-git%2FHA-SmartThings_Web)
+[![Home Assistant에서 SmartThings Web Bridge 앱 열기](https://my.home-assistant.io/badges/supervisor_addon.svg)](https://my.home-assistant.io/redirect/supervisor_addon/?addon=8a97f131_smartthings_web_bridge&repository_url=https%3A%2F%2Fgithub.com%2F1bobby-git%2FHA-SmartThings_Web)
 
 버튼이 앱 화면까지 열지 못하면 아래 버튼으로 저장소만 먼저 추가한 뒤 **설정 → 앱 → 앱 스토어 → SmartThings Web Bridge**에서 설치합니다.
 
@@ -16,7 +16,7 @@ Home Assistant OS 또는 Supervised 환경에서 아래 버튼을 누르면 이 
 
 저장소 설치에서는 `config.yaml`의 버전과 같은 GitHub 릴리스 패키지를 자동으로 가져와 앱 이미지를 빌드합니다. 앱 설치가 끝나면 시작한 뒤 **웹 UI 열기**에서 Samsung 계정에 로그인합니다.
 
-앱 저장소 설치의 내부 주소는 `http://d55cafb9-smartthings-web-bridge:8100`, `/addons` 수동 로컬 설치의 내부 주소는 `http://local-smartthings-web-bridge:8100`입니다. 통합 0.1.169부터 두 주소를 안전하게 확인하고 실제 응답한 주소를 구성 항목에 저장합니다.
+앱은 시작할 때 Supervisor에 실제 런타임 hostname과 Core 전용 포트 `8100`을 게시합니다. 통합 추가 화면은 이 값을 받아 Bridge 주소를 자동 입력합니다. 현재 저장소 설치의 내부 주소는 `http://8a97f131-smartthings-web-bridge:8100`, `/addons` 수동 로컬 설치 주소는 `http://local-smartthings-web-bridge:8100`이며, 이전 `d55cafb9` 주소도 기존 구성 복구용 후보로만 유지합니다.
 
 ## 수동 로컬 설치
 

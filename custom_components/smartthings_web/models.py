@@ -750,7 +750,9 @@ def disambiguated_state_names(
         if qualifiers is None:
             qualifiers = _unique_state_qualifiers(ordered, "capability")
         if qualifiers is None:
-            qualifiers = [str(index) for index in range(1, len(ordered) + 1)]
+            for state in ordered:
+                names[state.key] = base_name
+            continue
         for state, qualifier in zip(ordered, qualifiers, strict=True):
             names[state.key] = f"{base_name} ({qualifier})"
     return names
@@ -835,6 +837,51 @@ def _web_control_label_for_switch_state(
     return next(iter(labels)) if len(labels) == 1 else None
 
 
+def web_state_label(device: BridgeDevice, state: BridgeState) -> str | None:
+    """Return one exact safe label observed for a pushed SmartThings Web row."""
+    matches = [
+        control
+        for control in device.controls.values()
+        if control.component == state.component
+        and control.capability == state.capability
+        and control.attribute == state.attribute
+        and safe_observed_control(control)
+    ]
+    web_labels = {
+        label
+        for control in matches
+        if control.transport != "advanced"
+        for label in (_web_control_label(control.label),)
+        if label is not None
+    }
+    if len(web_labels) == 1:
+        return next(iter(web_labels))
+    if len(web_labels) > 1:
+        return None
+
+    generic_state_labels = {
+        "active",
+        "disabled",
+        "enabled",
+        "false",
+        "inactive",
+        "off",
+        "on",
+        "true",
+        "꺼짐",
+        "켜짐",
+    }
+    advanced_labels = {
+        label
+        for control in matches
+        if control.transport == "advanced"
+        and control.label.strip().casefold() not in generic_state_labels
+        for label in (_web_control_label(control.label),)
+        if label is not None
+    }
+    return next(iter(advanced_labels)) if len(advanced_labels) == 1 else None
+
+
 def _deduplicated_switch_names(
     states: list[BridgeState],
     names: dict[tuple[str, str, str], str],
@@ -859,8 +906,10 @@ def _deduplicated_switch_names(
             for state, qualifier in zip(siblings, qualifiers, strict=True):
                 names[state.key] = f"{label} ({qualifier})"
             continue
-        for index, state in enumerate(sorted(siblings, key=lambda item: item.key), 1):
-            names[state.key] = f"{label} {index}"
+        # Opaque duplicate rows keep the exact Web label. Entity unique IDs
+        # already distinguish them; fabricated "On 1"/"On 2" names do not.
+        for state in siblings:
+            names[state.key] = label
     return names
 
 

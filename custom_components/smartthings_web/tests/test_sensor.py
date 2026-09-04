@@ -113,6 +113,7 @@ entity_module.migrate_entity_original_name = lambda *_args, **_kwargs: None  # t
 sys.modules["smartthings_web.entity"] = entity_module
 
 from smartthings_web.models import (  # noqa: E402
+    BridgeControl,
     BridgeDevice,
     BridgeInventory,
     BridgeState,
@@ -334,6 +335,62 @@ class SmartThingsWebSensorTests(unittest.TestCase):
 
 class SmartThingsWebSensorSetupTests(unittest.IsolatedAsyncioTestCase):
     """Keep camera byte URLs out of ordinary sensor entities."""
+
+    async def test_duplicate_web_rows_keep_exact_labels_without_on_ordinals(self) -> None:
+        states = [
+            BridgeState(
+                f"identifier_component_{index}",
+                f"identifier_capability_{index}",
+                "on",
+                True,
+                None,
+                "2026-09-04T00:00:00Z",
+            )
+            for index in (1, 2)
+        ]
+        device = BridgeDevice(
+            "dev_sensor",
+            "loc_001",
+            None,
+            "복합 센서",
+            "sensor",
+            True,
+            states={state.key: state for state in states},
+            controls={
+                f"status_{index}": BridgeControl(
+                    f"status_{index}",
+                    "value",
+                    "작동 상태",
+                    component=state.component,
+                    capability=state.capability,
+                    attribute=state.attribute,
+                )
+                for index, state in enumerate(states, 1)
+            },
+        )
+        inventory = BridgeInventory(
+            1,
+            True,
+            "0.1.180",
+            "5:test",
+            {"loc_001": "Home"},
+            {},
+            {device.device_id: device},
+        )
+        runtime = SmartThingsWebRuntime(object(), "loc_001", inventory)
+        entry = SimpleNamespace(
+            runtime_data=runtime,
+            async_on_unload=lambda _callback: None,
+        )
+        added: list[SmartThingsWebSensor] = []
+
+        await async_setup_entry(object(), entry, added.extend)
+
+        self.assertEqual(len(added), 2)
+        self.assertEqual(
+            [getattr(entity, "_attr_name", None) for entity in added],
+            ["작동 상태", "작동 상태"],
+        )
 
     async def test_camera_image_url_state_does_not_create_regular_sensor(self) -> None:
         image = BridgeState(

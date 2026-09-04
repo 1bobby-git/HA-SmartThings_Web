@@ -54,7 +54,7 @@
 
 Home Assistant OS 또는 Supervised 환경에서 아래 버튼을 누르면 이 저장소가 앱 저장소에 추가되고 **SmartThings Web Bridge** 앱 화면이 열립니다.
 
-[![Home Assistant에서 SmartThings Web Bridge 앱 열기](https://my.home-assistant.io/badges/supervisor_addon.svg)](https://my.home-assistant.io/redirect/supervisor_addon/?addon=d55cafb9_smartthings_web_bridge&repository_url=https%3A%2F%2Fgithub.com%2F1bobby-git%2FHA-SmartThings_Web)
+[![Home Assistant에서 SmartThings Web Bridge 앱 열기](https://my.home-assistant.io/badges/supervisor_addon.svg)](https://my.home-assistant.io/redirect/supervisor_addon/?addon=8a97f131_smartthings_web_bridge&repository_url=https%3A%2F%2Fgithub.com%2F1bobby-git%2FHA-SmartThings_Web)
 
 1. 열린 앱 화면에서 **설치**를 누릅니다.
 2. 설치가 끝나면 앱을 시작합니다.
@@ -98,10 +98,10 @@ npm run package:addon
 
 1. SmartThings Web Bridge 웹 UI에서 **페어링 코드 생성**을 누릅니다.
 2. 아래 버튼을 눌러 `smartthings_web` 설정을 시작합니다.
-3. 앱 저장소로 설치했다면 기본값인 `http://d55cafb9-smartthings-web-bridge:8100`을 사용하고, `/addons`에 수동 로컬 설치했다면 `http://local-smartthings-web-bridge:8100`을 사용합니다.
+3. 앱이 Supervisor에 게시한 실제 내부 주소가 **Bridge 주소** 칸에 자동 입력되는지 확인합니다. 현재 저장소 설치 주소는 `http://8a97f131-smartthings-web-bridge:8100`, `/addons` 수동 로컬 설치 주소는 `http://local-smartthings-web-bridge:8100`입니다.
 4. 8자리 페어링 코드를 입력하고 연결할 SmartThings 위치를 선택합니다.
 
-0.1.169부터 두 내부 호스트를 안전하게 순차 확인하여 실제 응답한 주소를 구성 항목에 저장합니다. 따라서 기존 구성에 잘못된 `local` 또는 `d55cafb9` 주소가 남아 있어도 설치된 앱 주소로 자동 복구됩니다.
+0.1.179부터 앱 discovery가 실제 `{REPO}_{SLUG}` 런타임 hostname과 Core 전용 `8100` 포트를 통합에 전달합니다. 수동 설정에서도 현재 저장소 주소가 기본값이며, 이전 `d55cafb9` 주소와 `local` 주소는 기존 구성 복구용으로 안전하게 순차 확인한 뒤 실제 응답한 주소를 저장합니다.
 
 [![SmartThings Web 통합 설정 시작](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=smartthings_web)
 
@@ -174,8 +174,8 @@ SmartThings Web이 호환되지 않는 ACK 또는 이벤트 구조를 반환하�
 ## 설치 경로 주의사항
 
 - 앱 구성 slug: `smartthings_web_bridge`
-- 저장소 설치 앱 ID: `d55cafb9_smartthings_web_bridge`
-- 저장소 설치 내부 DNS: `d55cafb9-smartthings-web-bridge`
+- 현재 저장소 설치 앱 ID: `8a97f131_smartthings_web_bridge`
+- 현재 저장소 설치 내부 DNS: `8a97f131-smartthings-web-bridge`
 - 수동 로컬 설치 소스 폴더: `/addons/smartthings_web_bridge`
 - 수동 로컬 설치 런타임 slug: `local_smartthings_web_bridge`
 

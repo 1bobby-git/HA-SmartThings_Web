@@ -18,6 +18,7 @@ from .models import (
     disambiguated_state_names,
     is_readonly_appliance_switch,
     location_name,
+    web_state_label,
 )
 
 
@@ -99,8 +100,15 @@ async def async_setup_entry(
             if device.location_id != runtime.location_id:
                 continue
             candidates = _binary_sensor_candidates(device)
+            web_labels = {
+                state.key: web_state_label(device, state)
+                for state, _description in candidates
+            }
             name_overrides = disambiguated_state_names(
-                ((state, description.name) for state, description in candidates),
+                (
+                    (state, web_labels[state.key] or description.name)
+                    for state, description in candidates
+                ),
                 all_states=device.states.values(),
                 main_presence_name=(
                     location_name(runtime.inventory, device.location_id)
@@ -110,7 +118,7 @@ async def async_setup_entry(
             )
             for state, description in candidates:
                 unique_id = "_".join((device.device_id, *state.key))
-                name_override = name_overrides.get(state.key)
+                name_override = name_overrides.get(state.key) or web_labels[state.key]
                 if (
                     name_override is not None
                     and migrated_names.get(unique_id) != name_override

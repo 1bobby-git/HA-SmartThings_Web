@@ -1402,6 +1402,71 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             },
         )
 
+    def test_web_state_label_prefers_exact_web_row_over_advanced_state_word(self) -> None:
+        current = inventory(10, 20, "2026-09-04T00:00:00Z")
+        device = current.devices["dev_001"]
+        state = BridgeState(
+            "main",
+            "customStatus",
+            "on",
+            True,
+            None,
+            "2026-09-04T00:00:00Z",
+        )
+        device.states = {state.key: state}
+        device.controls = {
+            "advanced": BridgeControl(
+                "advanced",
+                "value",
+                "on",
+                component=state.component,
+                capability=state.capability,
+                attribute=state.attribute,
+                transport="advanced",
+            ),
+            "web": BridgeControl(
+                "web",
+                "value",
+                "작동 상태",
+                component=state.component,
+                capability=state.capability,
+                attribute=state.attribute,
+            ),
+        }
+
+        self.assertEqual(models_module.web_state_label(device, state), "작동 상태")
+
+    def test_duplicate_exact_web_switch_labels_do_not_get_numeric_suffixes(self) -> None:
+        current = inventory(10, 20, "2026-09-04T00:00:00Z")
+        device = current.devices["dev_001"]
+        states = [
+            BridgeState(
+                f"identifier_component_{index}",
+                f"identifier_capability_{index}",
+                "switch",
+                "off",
+                None,
+                "2026-09-04T00:00:00Z",
+            )
+            for index in (1, 2)
+        ]
+        device.states = {state.key: state for state in states}
+        device.controls = {
+            f"control_{index}": BridgeControl(
+                f"control_{index}",
+                "toggle",
+                "On",
+                component=state.component,
+                capability=state.capability,
+                attribute=state.attribute,
+                commands=("on", "off"),
+            )
+            for index, state in enumerate(states, 1)
+        }
+
+        names = models_module.switch_name_overrides(device)
+        self.assertEqual([names[state.key] for state in states], ["On", "On"])
+
     def test_parse_control_rejects_unsupported_transport_value(self) -> None:
         self.assertIsNone(
             parse_control(
@@ -2896,8 +2961,8 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(names[first.key], "Reference Table (1)")
-        self.assertEqual(names[second.key], "Reference Table (2)")
+        self.assertEqual(names[first.key], "Reference Table")
+        self.assertEqual(names[second.key], "Reference Table")
         self.assertEqual(names[indoor.key], "Temperature (Indoor)")
         self.assertEqual(names[outdoor.key], "Temperature (Outdoor)")
         self.assertNotIn(battery.key, names)
@@ -3050,7 +3115,7 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             },
         )
 
-    def test_duplicate_state_names_keep_numbering_for_conflicting_sibling_roles(self) -> None:
+    def test_duplicate_state_names_preserve_base_for_conflicting_sibling_roles(self) -> None:
         first = BridgeState(
             "identifier_component_first",
             "contactSensor",
@@ -3093,8 +3158,8 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             all_states=[first, first_fridge, first_freezer, second],
         )
 
-        self.assertEqual(names[first.key], "Contact (1)")
-        self.assertEqual(names[second.key], "Contact (2)")
+        self.assertEqual(names[first.key], "Contact")
+        self.assertEqual(names[second.key], "Contact")
 
     def test_primary_state_attributes_prefer_safe_roles_for_duplicate_keys(self) -> None:
         device = BridgeDevice(

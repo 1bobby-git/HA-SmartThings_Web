@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Connect SmartThings Web Bridge",
-        "description": "Open the Bridge add-on and generate a pairing code.",
+        "description": "The Bridge address discovered from the app is filled automatically. Generate a pairing code in the Bridge app.",
         "data": {
           "bridge_url": "Bridge URL",
           "pairing_code": "Pairing code"
@@ -32,7 +32,9 @@
     },
     "abort": {
       "already_configured": "This SmartThings location is already configured",
-      "invalid_flow": "Restart setup and pair with the Bridge again"
+      "invalid_flow": "Restart setup and pair with the Bridge again",
+      "not_smartthings_web_bridge": "The discovery did not come from the SmartThings Web Bridge app",
+      "invalid_discovery": "The Bridge app published an invalid internal address"
     }
   },
   "options": {

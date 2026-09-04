@@ -1,0 +1,60 @@
+#!/command/with-contenv sh
+set -u
+umask 077
+
+log() {
+  printf '%s\n' "$1" >&2
+}
+
+if [ -z "${SUPERVISOR_TOKEN:-}" ]; then
+  log "bridge_discovery:skipped:no_supervisor_token"
+  exit 0
+fi
+
+bridge_ready=0
+attempt=0
+while [ "$attempt" -lt 120 ]; do
+  if curl -fsS --max-time 2 http://127.0.0.1:8098/health/live >/dev/null 2>&1; then
+    bridge_ready=1
+    break
+  fi
+  attempt=$((attempt + 1))
+  s6-sleep -m 500
+done
+
+if [ "$bridge_ready" -ne 1 ]; then
+  log "bridge_discovery:skipped:bridge_not_ready"
+  exit 0
+fi
+
+bridge_host="$(hostname)"
+case "$bridge_host" in
+  ""|*[!a-z0-9-]*|-*|*-)
+    log "bridge_discovery:skipped:invalid_hostname"
+    exit 0
+    ;;
+esac
+case "$bridge_host" in
+  smartthings-web-bridge|*-smartthings-web-bridge)
+    ;;
+  *)
+    log "bridge_discovery:skipped:unexpected_hostname"
+    exit 0
+    ;;
+esac
+
+payload="$(printf '{"service":"smartthings_web","config":{"host":"%s","port":8100}}' "$bridge_host")"
+curl_config="$(mktemp /tmp/smartthings-web-discovery.XXXXXX)" || {
+  log "bridge_discovery:failed:temporary_config"
+  exit 0
+}
+trap 'rm -f -- "$curl_config"' EXIT HUP INT TERM
+printf 'header = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\n'   "$SUPERVISOR_TOKEN" > "$curl_config"
+
+if curl -fsS --max-time 10   --config "$curl_config"   --request POST   --data "$payload"   http://supervisor/discovery >/dev/null; then
+  log "bridge_discovery:published:${bridge_host}:8100"
+else
+  log "bridge_discovery:failed:supervisor_request"
+fi
+
+exit 0
