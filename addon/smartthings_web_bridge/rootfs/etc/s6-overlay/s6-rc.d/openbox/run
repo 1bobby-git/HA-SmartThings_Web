@@ -1,5 +1,8 @@
 #!/usr/bin/env sh
+set -eu
 export DISPLAY=:99
 export HOME=/tmp/openbox-home
 export XDG_CACHE_HOME=/tmp/openbox-cache
+mkdir -p "$HOME" "$XDG_CACHE_HOME"
+chmod 0700 "$HOME" "$XDG_CACHE_HOME"
 exec openbox

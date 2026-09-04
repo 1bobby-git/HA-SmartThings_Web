@@ -17,6 +17,8 @@ Generated text is canonical UTF-8/LF. Equivalent Windows and Linux checkouts the
 
 Keep backup copies outside `/addons`. Supervisor scans child folders there as local apps, so a backup containing the same slug can make an older version appear current.
 
+Version 0.1.177 quarantines recoverable malformed Bridge files under root-only `/data/recovery` instead of blocking port 8098. It never quarantines the dedicated Chromium profile merely because nested ownership migration is pending, and it preserves valid Samsung login stores. If `bridge-secret` was empty or invalid and had to be regenerated, reauthenticate the existing Home Assistant integration once because its previous bearer token can no longer match.
+
 For a passive soak from inside the production-pruned add-on container, use the compiled local collector:
 
 ```sh
@@ -29,7 +31,7 @@ Open the add-on Ingress panel, use the noVNC browser view, and sign in to Samsun
 
 After the Bridge reaches `CONNECTED`, generate a ten-minute pairing code on its status page and add the `SmartThings Web` integration. Select the SmartThings location to add. As of 0.1.79, the limited alpha exposes all normalized pushed attributes plus binary sensors, switches, lights, buttons, numeric controls, fans, media players, updates, events, covers, climate entities, scenes, SmartThings Home Monitor, and refreshed camera stills. SmartThings Web-only state that the official integration does not model is kept as diagnostic sensors instead of being deleted. Clear domain values are grouped under their primary Home Assistant entities, while raw SmartThings Web content remains available as attributes. It never polls SmartThings state and never changes Home Assistant state optimistically; a command completes only after a newer SmartThings Web push confirms it. Synthetic refresh controls are not created unless a real observed SmartThings Web button control exists.
 
-Live Home Assistant OS 18.2 validation on 2026-08-24 confirmed that the Supervisor-loaded AppArmor profile is enforced, the add-on remains non-privileged with bridge networking, and sandboxed Chromium 151 starts as the non-root browser user. The status page and noVNC Ingress rendered the Samsung Account login page.
+Live Home Assistant OS 18.2 validation on 2026-08-24 confirmed that the Supervisor-loaded AppArmor profile is enforced and the add-on remains non-privileged with bridge networking. Version 0.1.177 still attempts sandboxed Chromium 151 first as the non-root browser user, but performs one narrowly classified compatibility retry without the Chromium sandbox when the host runtime blocks both the pinned SUID helper and user namespaces. The packaged runtime smoke test requires the status endpoint, Chromium process, and mapped X11 window before passing.
 
 After manual VNC login, the add-on reached `CONNECTED`, observed 213 devices, initially permitted readiness, decoded live DEVICE_EVENT counters, and kept `protocolChangeCount=0` and `restartCount=0`. Version 0.1.23 fixes the old 120-second readiness drop by treating the initial snapshot as a current browser-context proof; heartbeat freshness, recent push traffic, and current-context parser proof still gate readiness.
 

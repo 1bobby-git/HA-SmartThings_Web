@@ -1,3 +1,11 @@
+## 0.1.177
+
+- Chromium을 기존처럼 sandbox 활성 상태로 먼저 실행하되, HAOS/AppArmor 또는 컨테이너 런타임이 SUID·user namespace sandbox를 차단한 것으로 확인된 경우에만 sandbox 비활성 상태로 정확히 한 번 재시도합니다. 관련 없는 브라우저 오류에는 fallback하지 않으며, 검은 noVNC 화면 대신 실제 Chromium 창이 열리도록 복구합니다.
+- `/data`의 `bridge.sqlite`, sidecar, 설정·마커 또는 런타임 디렉터리가 잘못된 파일 형식·심볼릭 링크·손상된 SQLite 헤더로 남아 있어도 Bridge 전체 시작을 중단하지 않습니다. 문제 항목은 원본 이름을 포함한 고유 이름으로 root 전용 `/data/recovery`에 격리하고 새 런타임 파일을 생성하며, Chromium 로그인 프로필과 Samsung 쿠키 저장소는 삭제하지 않습니다.
+- 비어 있거나 허용 길이를 벗어난 Bridge secret은 안전하게 새 64자리 secret으로 복구하고, 기존의 유효한 secret은 바이트 단위로 유지합니다. secret이 복구된 설치는 기존 Home Assistant 통합에서 한 번 다시 인증해야 합니다.
+- Openbox의 임시 HOME·캐시 디렉터리를 시작 전에 생성하고 `bridge_init:http_server_ready:<port>` 및 `browser_launch:sandbox_fallback` 진단을 추가했습니다.
+- 실제 배포용 앱 패키지를 Docker로 빌드해 깨끗한 데이터, root 소유 프로필, 잘못된 SQLite 디렉터리·헤더, 빈 secret에서 8098 응답·Chromium 프로세스·X11 창까지 확인하는 영구 CI smoke test를 추가했습니다.
+
 ## 0.1.176
 
 - 0.1.175에서 Bridge의 선행 조건으로 남아 있던 Chromium 프로필 전체 소유권 검사를 분리했습니다. 이전 프로필이 크거나 손상된 경우 `data-prep`가 끝나지 않아 Node 프로세스와 `127.0.0.1:8098`이 아예 시작되지 않던 문제를 수정합니다.
