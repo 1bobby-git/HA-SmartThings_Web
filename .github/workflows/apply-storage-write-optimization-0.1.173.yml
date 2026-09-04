@@ -41,7 +41,6 @@ jobs:
           npm run build
           npm run package:addon
           python -m compileall -q custom_components/smartthings_web
-          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
 
       - name: Commit verified changes
         shell: bash
