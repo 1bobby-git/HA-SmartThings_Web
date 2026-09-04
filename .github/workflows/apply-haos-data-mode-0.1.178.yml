@@ -1,0 +1,317 @@
+name: Apply HAOS ownership-mode startup fix 0.1.178
+
+on:
+  push:
+    branches:
+      - fix/haos-data-mode-0.1.178
+    paths:
+      - .github/workflows/apply-haos-data-mode-0.1.178.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-haos-data-mode-0.1.178
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out fix branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Apply HAOS permission fix and version bump
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          VERSION = "0.1.178"
+          PREVIOUS = "0.1.177"
+
+          def read(path: str) -> str:
+              return Path(path).read_text(encoding="utf-8")
+
+          def write(path: str, text: str) -> None:
+              Path(path).write_text(text, encoding="utf-8")
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              text = read(path)
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match for {old!r}, found {count}")
+              write(path, text.replace(old, new, 1))
+
+          prepare_path = "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data"
+          prepare = read(prepare_path)
+          helper_anchor = '''ensure_runtime_directory() {
+            rd_path="$1"
+          '''
+          helper = '''set_pwuser_mode() {
+            pm_mode="$1"
+            pm_path="$2"
+            pm_failure="$3"
+            # The HAOS AppArmor profile intentionally does not grant CAP_FOWNER.
+            # Run chmod as the final owner instead of changing mode as root after chown.
+            s6-setuidgid pwuser chmod "$pm_mode" "$pm_path" || fail "$pm_failure"
+          }
+
+          ensure_runtime_directory() {
+            rd_path="$1"
+          '''
+          if prepare.count(helper_anchor) != 1:
+              raise SystemExit("prepare-data: runtime-directory anchor mismatch")
+          prepare = prepare.replace(helper_anchor, helper, 1)
+          replacements = {
+              '''  chown pwuser:pwuser "$rd_path" || fail "runtime_directory_chown:$rd_label"
+            chmod 0700 "$rd_path" || fail "runtime_directory_mode:$rd_label"''':
+              '''  chown pwuser:pwuser "$rd_path" || fail "runtime_directory_chown:$rd_label"
+            set_pwuser_mode 0700 "$rd_path" "runtime_directory_mode:$rd_label"''',
+              '''  chown pwuser:pwuser "$pf_path" || fail "critical_file_chown:$pf_label"
+            chmod 0600 "$pf_path" || fail "critical_file_mode:$pf_label"''':
+              '''  chown pwuser:pwuser "$pf_path" || fail "critical_file_chown:$pf_label"
+            set_pwuser_mode 0600 "$pf_path" "critical_file_mode:$pf_label"''',
+              '''chown pwuser:pwuser "$DATA_DIR" || fail "data_dir_chown"
+          chmod 0700 "$DATA_DIR" || fail "data_dir_mode"''':
+              '''chown pwuser:pwuser "$DATA_DIR" || fail "data_dir_chown"
+          set_pwuser_mode 0700 "$DATA_DIR" "data_dir_mode"''',
+              '''    chown pwuser:pwuser "$MIGRATED_MARKER" || fail "ownership_marker_chown"
+              chmod 0600 "$MIGRATED_MARKER" || fail "ownership_marker_mode"''':
+              '''    chown pwuser:pwuser "$MIGRATED_MARKER" || fail "ownership_marker_chown"
+              set_pwuser_mode 0600 "$MIGRATED_MARKER" "ownership_marker_mode"''',
+              '''chown pwuser:pwuser "$MAINTENANCE_REQUIRED" || fail "maintenance_request_chown"
+          chmod 0600 "$MAINTENANCE_REQUIRED" || fail "maintenance_request_mode"''':
+              '''chown pwuser:pwuser "$MAINTENANCE_REQUIRED" || fail "maintenance_request_chown"
+          set_pwuser_mode 0600 "$MAINTENANCE_REQUIRED" "maintenance_request_mode"''',
+          }
+          for old, new in replacements.items():
+              count = prepare.count(old)
+              if count != 1:
+                  raise SystemExit(f"prepare-data replacement mismatch: {old!r}: {count}")
+              prepare = prepare.replace(old, new, 1)
+          write(prepare_path, prepare)
+
+          maintain_path = "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/maintain-profile"
+          replace_once(
+              maintain_path,
+              '''  : > "$marker" || return 1
+            chown pwuser:pwuser "$marker" || return 1
+            chmod 0600 "$marker" || return 1''',
+              '''  : > "$marker" || return 1
+            chmod 0600 "$marker" || return 1
+            chown pwuser:pwuser "$marker" || return 1''',
+          )
+
+          smoke_path = "tools/ci-haos-runtime-smoke.sh"
+          replace_once(
+              smoke_path,
+              '''  docker run -d \\
+              --name "$container_name" \\
+              --shm-size=1g \\''',
+              '''  docker run -d \\
+              --name "$container_name" \\
+              --cap-drop=FOWNER \\
+              --shm-size=1g \\''',
+          )
+          replace_once(
+              smoke_path,
+              '''  grep -q 'bridge_init:http_server_ready:8098' "$log_file"
+            if grep -q 'browser_launch_failed:' "$log_file"; then''',
+              '''  grep -q 'data_prep:ready' "$log_file"
+            grep -q 'bridge_init:http_server_ready:8098' "$log_file"
+            if grep -q 'data_prep:failed:' "$log_file"; then
+              cat "$log_file" >&2
+              return 1
+            fi
+            if grep -q 'browser_launch_failed:' "$log_file"; then''',
+          )
+
+          regression = '''import { readFileSync } from "node:fs";
+          import { describe, expect, test } from "vitest";
+
+          const readText = (path: string) => readFileSync(path, "utf8");
+
+          describe("HAOS AppArmor ownership handoff", () => {
+            test("changes modes as pwuser without granting CAP_FOWNER", () => {
+              const prepare = readText(
+                "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data"
+              );
+              const apparmor = readText("addon/smartthings_web_bridge/apparmor.txt");
+              const smoke = readText("tools/ci-haos-runtime-smoke.sh");
+
+              expect(prepare).toContain(
+                's6-setuidgid pwuser chmod "$pm_mode" "$pm_path" || fail "$pm_failure"'
+              );
+              expect(prepare).toContain(
+                'set_pwuser_mode 0700 "$DATA_DIR" "data_dir_mode"'
+              );
+              expect(prepare).toContain(
+                'set_pwuser_mode 0700 "$rd_path" "runtime_directory_mode:$rd_label"'
+              );
+              expect(prepare).toContain(
+                'set_pwuser_mode 0600 "$pf_path" "critical_file_mode:$pf_label"'
+              );
+              expect(prepare).not.toContain(
+                'chown pwuser:pwuser "$DATA_DIR" || fail "data_dir_chown"\\nchmod 0700 "$DATA_DIR"'
+              );
+              expect(apparmor).not.toContain("capability fowner,");
+              expect(smoke).toContain("--cap-drop=FOWNER");
+              expect(smoke).toContain("grep -q 'data_prep:ready'");
+            });
+
+            test("sets marker mode before handing ownership to pwuser", () => {
+              const maintenance = readText(
+                "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/maintain-profile"
+              );
+              const modeIndex = maintenance.indexOf('chmod 0600 "$marker"');
+              const ownerIndex = maintenance.indexOf('chown pwuser:pwuser "$marker"');
+              expect(modeIndex).toBeGreaterThan(-1);
+              expect(ownerIndex).toBeGreaterThan(modeIndex);
+            });
+          });
+          '''
+          regression = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in regression.splitlines()
+          ) + "\n"
+          write("tests/haos-data-mode-regression.test.ts", regression)
+
+          def update_json(path: str, mutate) -> None:
+              value = json.loads(read(path))
+              mutate(value)
+              write(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+
+          update_json("package.json", lambda value: value.__setitem__("version", VERSION))
+          update_json(
+              "package-lock.json",
+              lambda value: (
+                  value.__setitem__("version", VERSION),
+                  value["packages"][""].__setitem__("version", VERSION),
+              ),
+          )
+          update_json(
+              "protocol/version.json",
+              lambda value: value.__setitem__("bridge_version", VERSION),
+          )
+          update_json(
+              "custom_components/smartthings_web/manifest.json",
+              lambda value: value.__setitem__("version", VERSION),
+          )
+          replace_once(
+              "addon/smartthings_web_bridge/config.yaml",
+              f"version: {PREVIOUS}",
+              f"version: {VERSION}",
+          )
+          replace_once(
+              "bridge/src/runtime.ts",
+              f'const bridgeVersion = "{PREVIOUS}";',
+              f'const bridgeVersion = "{VERSION}";',
+          )
+
+          addon_test = "tests/addon-config.test.ts"
+          replace_once(
+              addon_test,
+              f'test("packages HAOS runtime recovery as version {PREVIOUS}"',
+              f'test("packages HAOS chmod ownership recovery as version {VERSION}"',
+          )
+          for old, new in [
+              (f'expect(config.version).toBe("{PREVIOUS}");', f'expect(config.version).toBe("{VERSION}");'),
+              (f'expect(packageMetadata.version).toBe("{PREVIOUS}");', f'expect(packageMetadata.version).toBe("{VERSION}");'),
+              (f'expect(protocolMetadata.bridge_version).toBe("{PREVIOUS}");', f'expect(protocolMetadata.bridge_version).toBe("{VERSION}");'),
+              (f'expect(runtime).toContain(\'const bridgeVersion = "{PREVIOUS}";\');', f'expect(runtime).toContain(\'const bridgeVersion = "{VERSION}";\');'),
+              (f'expect(changelog).toContain("## {PREVIOUS}");', f'expect(changelog).toContain("## {VERSION}");\n    expect(changelog).toContain("## {PREVIOUS}");'),
+          ]:
+              replace_once(addon_test, old, new)
+
+          protocol_test = "tests/protocol-version-contract.test.ts"
+          replace_once(
+              protocol_test,
+              f'packaged {PREVIOUS} candidate',
+              f'packaged {VERSION} candidate',
+          )
+          replace_once(
+              protocol_test,
+              f'const expectedBridgeVersion = "{PREVIOUS}";',
+              f'const expectedBridgeVersion = "{VERSION}";',
+          )
+
+          changelog_path = "addon/smartthings_web_bridge/CHANGELOG.md"
+          changelog = read(changelog_path)
+          heading = f"## {VERSION}"
+          if heading in changelog:
+              raise SystemExit(f"{changelog_path}: {heading} already exists")
+          notes = f'''## {VERSION}
+
+          - 실제 Home Assistant OS AppArmor 환경에서 `data-prep`가 `/data` 또는 `chromium-profile`의 소유권을 `pwuser`로 변경한 직후 root 권한으로 `chmod`를 실행해 `Operation not permitted`로 종료되던 회귀를 수정했습니다. 이 실패가 Bridge 서비스 시작을 막아 `127.0.0.1:8098` 연결 거부와 빈 noVNC 화면을 발생시켰습니다.
+          - 권한 변경은 최종 소유자인 `pwuser`로 전환한 프로세스에서 실행해 `CAP_FOWNER` 권한을 추가하지 않고도 `/data`, Chromium 프로필, SQLite·설정 파일의 보안 모드를 유지합니다. 프로필 유지보수 marker도 mode를 먼저 설정한 뒤 소유권을 넘깁니다.
+          - 배포 패키지 런타임 smoke test는 모든 복구 시나리오에서 `FOWNER` capability를 제거한 상태로 8098 응답, Chromium 프로세스, X11 창과 `data_prep:ready`를 확인하여 동일한 HAOS 회귀를 차단합니다.
+
+          '''
+          notes = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in notes.splitlines()
+          ) + "\n"
+          write(changelog_path, notes + changelog)
+          PY
+
+      - name: Validate shell syntax
+        run: |
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/maintain-profile
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/profile-maintenance/run
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/openbox/run
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/bridge/run
+          bash -n tools/ci-haos-runtime-smoke.sh
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run complete validation
+        run: |
+          npm test
+          npm run typecheck
+          npm run build
+          tools/ci-haos-runtime-smoke.sh
+
+      - name: Run Python integration validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.9,<4' 'voluptuous>=0.13,<1'
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+          python -m compileall -q custom_components/smartthings_web
+
+      - name: Run repository audits
+        run: |
+          npm run audit:api-free
+          npm run audit:secrets
+          npm run audit:fixtures
+
+      - name: Remove one-time workflow
+        run: rm -f .github/workflows/apply-haos-data-mode-0.1.178.yml
+
+      - name: Commit verified changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix: restore HAOS Bridge startup under AppArmor 0.1.178'
+          git push origin HEAD:fix/haos-data-mode-0.1.178
