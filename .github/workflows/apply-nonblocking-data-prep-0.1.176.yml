@@ -1,0 +1,862 @@
+name: Apply nonblocking startup recovery 0.1.176
+
+on:
+  push:
+    branches:
+      - fix/nonblocking-data-prep-0.1.176
+    paths:
+      - .github/workflows/apply-nonblocking-data-prep-0.1.176.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-nonblocking-data-prep-0.1.176
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out work branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Apply nonblocking startup changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          VERSION = "0.1.176"
+
+          def read(path: str) -> str:
+              return Path(path).read_text(encoding="utf-8")
+
+          def write(path: str, content: str) -> None:
+              target = Path(path)
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_text(content, encoding="utf-8")
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              text = read(path)
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match for {old!r}, found {count}")
+              write(path, text.replace(old, new, 1))
+
+          def update_json(path: str, update) -> None:
+              value = json.loads(read(path))
+              update(value)
+              write(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+
+          prepare_data = r'''#!/command/with-contenv sh
+          set -eu
+          umask 077
+
+          log() {
+            printf '%s\n' "$1" >&2
+          }
+
+          fail() {
+            log "data_prep:failed:$1"
+            exit 1
+          }
+
+          DATA_DIR=/data
+          MIGRATED_MARKER="$DATA_DIR/.ownership-migrated-v2"
+          MAINTENANCE_REQUIRED="$DATA_DIR/.profile-maintenance-required"
+          MAINTENANCE_FAILED="$DATA_DIR/.profile-maintenance-failed"
+
+          log "data_prep:start"
+
+          [ -d "$DATA_DIR" ] || fail "missing_data_dir"
+          chown pwuser:pwuser "$DATA_DIR" || fail "data_dir_chown"
+
+          for directory in /data/chromium-profile /data/downloads /data/camera-images; do
+            [ ! -L "$directory" ] || fail "invalid_runtime_directory:${directory##*/}"
+            mkdir -p "$directory" || fail "runtime_directory_create:${directory##*/}"
+            [ -d "$directory" ] || fail "invalid_runtime_directory:${directory##*/}"
+            chown pwuser:pwuser "$directory" || fail "runtime_directory_chown:${directory##*/}"
+            chmod 0700 "$directory" || fail "runtime_directory_mode:${directory##*/}"
+          done
+
+          for file in \
+            /data/options.json \
+            /data/bridge-secret \
+            /data/bridge.sqlite \
+            /data/bridge.sqlite-wal \
+            /data/bridge.sqlite-shm \
+            /data/bridge.sqlite-journal \
+            /data/settings.json \
+            /data/protocol-fingerprint.json; do
+            if [ -e "$file" ] || [ -L "$file" ]; then
+              [ -f "$file" ] && [ ! -L "$file" ] || fail "invalid_critical_file:${file##*/}"
+              chown pwuser:pwuser "$file" || fail "critical_file_chown:${file##*/}"
+              chmod 0600 "$file" || fail "critical_file_mode:${file##*/}"
+            fi
+          done
+
+          if [ -e "$MIGRATED_MARKER" ] || [ -L "$MIGRATED_MARKER" ]; then
+            [ -f "$MIGRATED_MARKER" ] && [ ! -L "$MIGRATED_MARKER" ] || fail "invalid_ownership_marker"
+            chown pwuser:pwuser "$MIGRATED_MARKER" || fail "ownership_marker_chown"
+            chmod 0600 "$MIGRATED_MARKER" || fail "ownership_marker_mode"
+          fi
+
+          rm -f -- "$MAINTENANCE_FAILED" || fail "maintenance_failure_cleanup"
+          rm -f -- "$MAINTENANCE_REQUIRED" || fail "maintenance_request_cleanup"
+          : > "$MAINTENANCE_REQUIRED" || fail "maintenance_request_create"
+          chown pwuser:pwuser "$MAINTENANCE_REQUIRED" || fail "maintenance_request_chown"
+          chmod 0600 "$MAINTENANCE_REQUIRED" || fail "maintenance_request_mode"
+
+          log "data_prep:profile_maintenance_scheduled"
+          log "data_prep:ready"
+          '''
+          write(
+              "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data",
+              "\n".join(line[10:] if line.startswith("          ") else line for line in prepare_data.splitlines()) + "\n",
+          )
+
+          maintain_profile = r'''#!/command/with-contenv sh
+          set -u
+          umask 077
+
+          log() {
+            printf '%s\n' "$1" >&2
+          }
+
+          write_marker() {
+            marker="$1"
+            rm -f -- "$marker" || return 1
+            : > "$marker" || return 1
+            chown pwuser:pwuser "$marker" || return 1
+            chmod 0600 "$marker" || return 1
+          }
+
+          DATA_DIR=/data
+          MIGRATED_MARKER="$DATA_DIR/.ownership-migrated-v2"
+          MAINTENANCE_REQUIRED="$DATA_DIR/.profile-maintenance-required"
+          MAINTENANCE_FAILED="$DATA_DIR/.profile-maintenance-failed"
+
+          if [ "${1:-}" = "migrate" ]; then
+            migration_failed=0
+            for directory in /data/chromium-profile /data/downloads /data/camera-images; do
+              [ -d "$directory" ] || continue
+              find "$directory" -xdev \
+                \( -type d -o -type f \) \
+                \( ! -user pwuser -o ! -group pwuser \) \
+                -exec chown pwuser:pwuser {} + || migration_failed=1
+            done
+            exit "$migration_failed"
+          fi
+
+          log "profile_maintenance:start"
+
+          if [ ! -f "$MAINTENANCE_REQUIRED" ] || [ -L "$MAINTENANCE_REQUIRED" ]; then
+            log "profile_maintenance:not_requested"
+            exit 0
+          fi
+
+          maintenance_failed=0
+
+          for cache_path in \
+            "/data/chromium-profile/Default/Cache" \
+            "/data/chromium-profile/Default/Code Cache" \
+            "/data/chromium-profile/Default/GPUCache" \
+            "/data/chromium-profile/Default/Service Worker/CacheStorage" \
+            "/data/chromium-profile/Default/Service Worker/ScriptCache" \
+            "/data/chromium-profile/GrShaderCache" \
+            "/data/chromium-profile/ShaderCache" \
+            "/data/chromium-profile/GraphiteDawnCache" \
+            "/data/chromium-profile/DawnGraphiteCache" \
+            "/data/chromium-profile/DawnWebGPUCache" \
+            "/data/chromium-profile/Crashpad"; do
+            if ! rm -rf -- "$cache_path" 2>/dev/null; then
+              maintenance_failed=1
+              log "profile_maintenance:cache_cleanup_failed"
+            fi
+          done
+
+          find /data/downloads -mindepth 1 -type f -mtime +7 -delete 2>/dev/null || \
+            log "profile_maintenance:download_cleanup_failed"
+
+          if [ ! -f "$MIGRATED_MARKER" ]; then
+            log "profile_maintenance:ownership_migration_start"
+            if timeout --signal=TERM --kill-after=5s 180s "$0" migrate; then
+              if write_marker "$MIGRATED_MARKER"; then
+                log "profile_maintenance:ownership_migration_complete"
+              else
+                maintenance_failed=1
+                log "profile_maintenance:ownership_marker_write_failed"
+              fi
+            else
+              maintenance_failed=1
+              log "profile_maintenance:ownership_migration_timeout_or_failed"
+            fi
+          fi
+
+          if [ "$maintenance_failed" -eq 0 ]; then
+            rm -f -- "$MAINTENANCE_FAILED" || maintenance_failed=1
+          fi
+
+          if [ "$maintenance_failed" -ne 0 ]; then
+            if ! write_marker "$MAINTENANCE_FAILED"; then
+              log "profile_maintenance:failure_marker_write_failed"
+            fi
+            log "profile_maintenance:failed"
+          else
+            log "profile_maintenance:complete"
+          fi
+
+          if ! rm -f -- "$MAINTENANCE_REQUIRED"; then
+            log "profile_maintenance:request_cleanup_failed"
+          fi
+
+          exit 0
+          '''
+          write(
+              "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/maintain-profile",
+              "\n".join(line[10:] if line.startswith("          ") else line for line in maintain_profile.splitlines()) + "\n",
+          )
+
+          profile_run = r'''#!/command/with-contenv sh
+          set -u
+
+          if ! /etc/s6-overlay/scripts/maintain-profile; then
+            printf '%s\n' "profile_maintenance:wrapper_failed" >&2
+          fi
+
+          exec s6-pause
+          '''
+          write(
+              "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/profile-maintenance/run",
+              "\n".join(line[10:] if line.startswith("          ") else line for line in profile_run.splitlines()) + "\n",
+          )
+          write("addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/profile-maintenance/type", "longrun\n")
+          write(
+              "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/profile-maintenance/dependencies.d/data-prep",
+              "\n",
+          )
+          write(
+              "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/user-bundles.d/user/contents.d/profile-maintenance",
+              "\n",
+          )
+
+          bridge_run = r'''#!/command/with-contenv sh
+          set -eu
+
+          export HOME=/data
+          export XDG_CACHE_HOME=/data/chromium-profile/.cache
+          export XDG_CONFIG_HOME=/data/chromium-profile/.config
+          export XDG_DATA_HOME=/data/chromium-profile/.local/share
+          export XDG_STATE_HOME=/data/chromium-profile/.local/state
+
+          if [ ! -r /app/dist/bridge/src/main.js ]; then
+            printf '%s\n' "bridge_service:missing_compiled_main" >&2
+            exit 111
+          fi
+
+          printf '%s\n' "bridge_service:start" >&2
+          exec s6-setuidgid pwuser node --experimental-sqlite /app/dist/bridge/src/main.js
+          '''
+          write(
+              "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/bridge/run",
+              "\n".join(line[10:] if line.startswith("          ") else line for line in bridge_run.splitlines()) + "\n",
+          )
+
+          bridge_finish = r'''#!/command/with-contenv sh
+          set -u
+
+          printf '%s\n' "bridge_service:exit:code=${1:-unknown}:signal=${2:-unknown}" >&2
+          exit 0
+          '''
+          write(
+              "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/bridge/finish",
+              "\n".join(line[10:] if line.startswith("          ") else line for line in bridge_finish.splitlines()) + "\n",
+          )
+
+          dockerfile_path = "addon/smartthings_web_bridge/Dockerfile"
+          replace_once(
+              dockerfile_path,
+              "RUN find /etc/s6-overlay/s6-rc.d -type f \\( -name run -o -name up \\) -exec chmod +x {} +",
+              "RUN find /etc/s6-overlay/s6-rc.d -type f \\( -name run -o -name up -o -name finish \\) -exec chmod +x {} +",
+          )
+
+          runtime_path = "bridge/src/runtime.ts"
+          replace_once(
+              runtime_path,
+              'import { readFileSync } from "node:fs";\n',
+              'import { existsSync, readFileSync } from "node:fs";\nimport { join } from "node:path";\n',
+          )
+          replace_once(
+              runtime_path,
+              'const bridgeVersion = "0.1.175";\nconst SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;\nconst DETAIL_DISCOVERY_INTERVAL_MS = 15_000;\n',
+              'const bridgeVersion = "0.1.176";\nconst SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;\nconst DETAIL_DISCOVERY_INTERVAL_MS = 15_000;\nconst PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";\nconst PROFILE_MAINTENANCE_FAILED_FILE = ".profile-maintenance-failed";\nconst PROFILE_MAINTENANCE_WAIT_TIMEOUT_MS = 210_000;\nconst PROFILE_MAINTENANCE_POLL_MS = 250;\n',
+          )
+          replace_once(
+              runtime_path,
+              '''  const browserStartup = restartBrowser().catch(() => {\n    log.error("browser_startup_failed");\n  });\n''',
+              '''  const browserStartup = waitForProfileMaintenance(\n    paths.dataDir,\n    log,\n    () => stopped\n  )\n    .then(restartBrowser)\n    .catch(() => {\n      log.error("browser_startup_failed");\n    });\n''',
+          )
+
+          helper = r'''
+          export type ProfileMaintenanceWaitResult =
+            | "not_required"
+            | "complete"
+            | "failed"
+            | "timeout"
+            | "stopped";
+
+          export interface ProfileMaintenanceWaitOptions {
+            timeoutMs?: number;
+            pollMs?: number;
+          }
+
+          export async function waitForProfileMaintenance(
+            dataDir: string,
+            log: Pick<BridgeRuntimeLog, "info" | "warn">,
+            shouldStop: () => boolean = () => false,
+            options: ProfileMaintenanceWaitOptions = {}
+          ): Promise<ProfileMaintenanceWaitResult> {
+            const requiredPath = join(dataDir, PROFILE_MAINTENANCE_REQUIRED_FILE);
+            if (!existsSync(requiredPath)) return "not_required";
+
+            log.info("browser_startup:profile_maintenance_wait");
+            const timeoutMs = Math.max(
+              0,
+              options.timeoutMs ?? PROFILE_MAINTENANCE_WAIT_TIMEOUT_MS
+            );
+            const pollMs = Math.max(
+              1,
+              options.pollMs ?? PROFILE_MAINTENANCE_POLL_MS
+            );
+            const deadline = Date.now() + timeoutMs;
+
+            while (
+              existsSync(requiredPath) &&
+              !shouldStop() &&
+              Date.now() < deadline
+            ) {
+              await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+            }
+
+            if (shouldStop()) {
+              log.info("browser_startup:profile_maintenance_stopped");
+              return "stopped";
+            }
+            if (existsSync(requiredPath)) {
+              log.warn("browser_startup:profile_maintenance_timeout");
+              return "timeout";
+            }
+            if (existsSync(join(dataDir, PROFILE_MAINTENANCE_FAILED_FILE))) {
+              log.warn("browser_startup:profile_maintenance_failed");
+              return "failed";
+            }
+
+            log.info("browser_startup:profile_maintenance_complete");
+            return "complete";
+          }
+          '''
+          helper = "\n".join(line[10:] if line.startswith("          ") else line for line in helper.splitlines()) + "\n"
+          replace_once(
+              runtime_path,
+              "}\n\nexport function classifySmartThingsUrl(value: string): UrlCategory {",
+              "}\n" + helper + "\nexport function classifySmartThingsUrl(value: string): UrlCategory {",
+          )
+
+          profile_wait_test = r'''import {
+            mkdtempSync,
+            rmSync,
+            unlinkSync,
+            writeFileSync
+          } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { join } from "node:path";
+          import { describe, expect, test, vi } from "vitest";
+
+          import { waitForProfileMaintenance } from "../src/runtime.js";
+
+          const requiredName = ".profile-maintenance-required";
+          const failedName = ".profile-maintenance-failed";
+
+          const makeLog = () => ({
+            info: vi.fn<(message: string) => void>(),
+            warn: vi.fn<(message: string) => void>()
+          });
+
+          describe("profile maintenance startup gate", () => {
+            test("does not delay browser startup when maintenance was not requested", async () => {
+              const root = mkdtempSync(join(tmpdir(), "stw-profile-wait-"));
+              const log = makeLog();
+              try {
+                await expect(
+                  waitForProfileMaintenance(root, log, () => false, {
+                    timeoutMs: 20,
+                    pollMs: 2
+                  })
+                ).resolves.toBe("not_required");
+                expect(log.info).not.toHaveBeenCalled();
+                expect(log.warn).not.toHaveBeenCalled();
+              } finally {
+                rmSync(root, { recursive: true, force: true });
+              }
+            });
+
+            test("waits while HTTP can remain available and continues after maintenance completes", async () => {
+              const root = mkdtempSync(join(tmpdir(), "stw-profile-wait-"));
+              const required = join(root, requiredName);
+              const log = makeLog();
+              writeFileSync(required, "");
+              const timer = setTimeout(() => unlinkSync(required), 10);
+              try {
+                await expect(
+                  waitForProfileMaintenance(root, log, () => false, {
+                    timeoutMs: 200,
+                    pollMs: 2
+                  })
+                ).resolves.toBe("complete");
+                expect(log.info).toHaveBeenCalledWith(
+                  "browser_startup:profile_maintenance_wait"
+                );
+                expect(log.info).toHaveBeenCalledWith(
+                  "browser_startup:profile_maintenance_complete"
+                );
+              } finally {
+                clearTimeout(timer);
+                rmSync(root, { recursive: true, force: true });
+              }
+            });
+
+            test("continues with a bounded warning after maintenance failure or timeout", async () => {
+              const failedRoot = mkdtempSync(join(tmpdir(), "stw-profile-wait-"));
+              const failedRequired = join(failedRoot, requiredName);
+              const failedMarker = join(failedRoot, failedName);
+              const failedLog = makeLog();
+              writeFileSync(failedRequired, "");
+              const timer = setTimeout(() => {
+                writeFileSync(failedMarker, "");
+                unlinkSync(failedRequired);
+              }, 10);
+              try {
+                await expect(
+                  waitForProfileMaintenance(failedRoot, failedLog, () => false, {
+                    timeoutMs: 200,
+                    pollMs: 2
+                  })
+                ).resolves.toBe("failed");
+                expect(failedLog.warn).toHaveBeenCalledWith(
+                  "browser_startup:profile_maintenance_failed"
+                );
+              } finally {
+                clearTimeout(timer);
+                rmSync(failedRoot, { recursive: true, force: true });
+              }
+
+              const timeoutRoot = mkdtempSync(join(tmpdir(), "stw-profile-wait-"));
+              const timeoutLog = makeLog();
+              writeFileSync(join(timeoutRoot, requiredName), "");
+              try {
+                await expect(
+                  waitForProfileMaintenance(timeoutRoot, timeoutLog, () => false, {
+                    timeoutMs: 10,
+                    pollMs: 2
+                  })
+                ).resolves.toBe("timeout");
+                expect(timeoutLog.warn).toHaveBeenCalledWith(
+                  "browser_startup:profile_maintenance_timeout"
+                );
+              } finally {
+                rmSync(timeoutRoot, { recursive: true, force: true });
+              }
+            });
+          });
+          '''
+          write(
+              "bridge/tests/profile-maintenance-wait.test.ts",
+              "\n".join(line[10:] if line.startswith("          ") else line for line in profile_wait_test.splitlines()) + "\n",
+          )
+
+          startup_test = r'''import { existsSync, readFileSync } from "node:fs";
+          import { describe, expect, test } from "vitest";
+
+          const readText = (path: string) => readFileSync(path, "utf8");
+          const root = "addon/smartthings_web_bridge/rootfs/etc/s6-overlay";
+          const prepareDataPath = `${root}/scripts/prepare-data`;
+          const maintainProfilePath = `${root}/scripts/maintain-profile`;
+          const serviceRoot = `${root}/s6-rc.d`;
+          const bundleRoot = `${root}/user-bundles.d/user/contents.d`;
+          const nginxPath = "addon/smartthings_web_bridge/rootfs/etc/nginx/nginx.conf";
+          const fallbackPath =
+            "addon/smartthings_web_bridge/rootfs/usr/share/smartthings-web/bridge-unavailable.html";
+
+          describe("SmartThings Web add-on startup resilience", () => {
+            test("keeps the Bridge gate limited to fast critical data preparation", () => {
+              const prepareData = readText(prepareDataPath);
+              const bridgeDependencies = `${serviceRoot}/bridge/dependencies.d`;
+
+              expect(prepareData).toContain("data_prep:start");
+              expect(prepareData).toContain("data_prep:ready");
+              expect(prepareData).toContain(".profile-maintenance-required");
+              expect(prepareData).toContain("/data/options.json");
+              expect(prepareData).toContain("/data/bridge.sqlite-wal");
+              expect(prepareData).not.toContain('find "$directory" -xdev');
+              expect(prepareData).not.toContain("Service Worker/CacheStorage");
+              expect(prepareData).not.toContain("chown -R");
+              expect(existsSync(`${bridgeDependencies}/data-prep`)).toBe(true);
+              expect(existsSync(`${bridgeDependencies}/xvfb-ready`)).toBe(true);
+              expect(existsSync(`${bridgeDependencies}/profile-maintenance`)).toBe(false);
+            });
+
+            test("runs bounded profile maintenance independently from HTTP startup", () => {
+              const maintenance = readText(maintainProfilePath);
+              const profileRun = readText(`${serviceRoot}/profile-maintenance/run`);
+              const runtime = readText("bridge/src/runtime.ts");
+
+              expect(maintenance).toContain("profile_maintenance:start");
+              expect(maintenance).toContain("Service Worker/CacheStorage");
+              expect(maintenance).toContain("timeout --signal=TERM --kill-after=5s 180s");
+              expect(maintenance).toContain('find "$directory" -xdev');
+              expect(maintenance).toContain(".ownership-migrated-v2");
+              expect(maintenance).toContain(".profile-maintenance-failed");
+              expect(maintenance.indexOf("Service Worker/CacheStorage")).toBeLessThan(
+                maintenance.indexOf('find "$directory" -xdev')
+              );
+              expect(profileRun).toContain("/etc/s6-overlay/scripts/maintain-profile");
+              expect(profileRun).toContain("exec s6-pause");
+              expect(readText(`${serviceRoot}/profile-maintenance/type`).trim()).toBe("longrun");
+              expect(
+                readText(`${serviceRoot}/profile-maintenance/dependencies.d/data-prep`).trim()
+              ).toBe("");
+              expect(existsSync(`${bundleRoot}/profile-maintenance`)).toBe(true);
+              expect(runtime.indexOf("createBridgeHttpServer")).toBeLessThan(
+                runtime.indexOf("waitForProfileMaintenance(")
+              );
+              expect(runtime).toContain("browser_startup:profile_maintenance_wait");
+            });
+
+            test("logs the Bridge service boundary before Node starts and whenever it exits", () => {
+              const run = readText(`${serviceRoot}/bridge/run`);
+              const finish = readText(`${serviceRoot}/bridge/finish`);
+
+              expect(run).toContain("bridge_service:missing_compiled_main");
+              expect(run).toContain("bridge_service:start");
+              expect(run.indexOf("bridge_service:start")).toBeLessThan(
+                run.indexOf("exec s6-setuidgid pwuser node")
+              );
+              expect(finish).toContain("bridge_service:exit:code=");
+            });
+
+            test("keeps ingress usable while the internal Bridge HTTP process is restarting", () => {
+              const nginx = readText(nginxPath);
+
+              expect(nginx).toContain("location = / {");
+              expect(nginx).toContain("proxy_pass http://127.0.0.1:8098;");
+              expect(nginx).toContain("proxy_connect_timeout 2s;");
+              expect(nginx).toContain("proxy_intercept_errors on;");
+              expect(nginx).toContain(
+                "error_page 502 503 504 =200 /bridge-unavailable.html;"
+              );
+              expect(nginx).toContain("location = /bridge-unavailable.html {");
+              expect(nginx).toContain("internal;");
+              expect(nginx).toContain("root /usr/share/smartthings-web;");
+              expect(nginx.match(/location \/ \{/gu)?.length).toBe(2);
+              expect(nginx).not.toMatch(/location\s+=\s+\/health\/live[\s\S]*?error_page/u);
+            });
+
+            test("packages a visible recovery page with direct noVNC access", () => {
+              expect(existsSync(fallbackPath)).toBe(true);
+              const fallback = readText(fallbackPath);
+
+              expect(fallback).toContain('http-equiv="refresh" content="5"');
+              expect(fallback).toContain("127.0.0.1:8098");
+              expect(fallback).toContain("bridge_start_failed:");
+              expect(fallback).toContain("bridge_init:");
+              expect(fallback).toContain("data_prep_");
+              expect(fallback).toContain("novnc-ui/vnc.html");
+            });
+          });
+          '''
+          write(
+              "tests/addon-startup-resilience.test.ts",
+              "\n".join(line[10:] if line.startswith("          ") else line for line in startup_test.splitlines()) + "\n",
+          )
+
+          storage_test = r'''import { readFileSync } from "node:fs";
+          import { describe, expect, test } from "vitest";
+
+          const prepareData = () =>
+            readFileSync(
+              "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data",
+              "utf8"
+            );
+          const maintainProfile = () =>
+            readFileSync(
+              "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/maintain-profile",
+              "utf8"
+            );
+
+          describe("HAOS storage hygiene", () => {
+            test("keeps normal protocol capture persistence opt-in", () => {
+              const runtime = readFileSync("bridge/src/runtime.ts", "utf8");
+              expect(runtime).toContain("deps.config.debugProtocolLogging === true");
+              expect(runtime).toContain(
+                'persistCapture(record, analysis?.kind === "protocol_changed")'
+              );
+            });
+
+            test("keeps normal startup shallow while preserving Samsung login stores", () => {
+              const quick = prepareData();
+              const maintenance = maintainProfile();
+
+              expect(quick).not.toContain("chown -R");
+              expect(quick).not.toContain("find ");
+              expect(quick).toContain("chown pwuser:pwuser \"$DATA_DIR\"");
+              expect(quick).toContain("/data/options.json");
+              expect(quick).toContain("/data/bridge-secret");
+              expect(quick).toContain("/data/bridge.sqlite-wal");
+              expect(maintenance).toContain("/data/chromium-profile/Default/Cache");
+              expect(maintenance).toContain(
+                "/data/chromium-profile/Default/Service Worker/CacheStorage"
+              );
+              expect(maintenance).not.toContain("/data/chromium-profile/Default/Cookies");
+              expect(maintenance).not.toContain("/data/chromium-profile/Default/Local Storage");
+              expect(maintenance).not.toContain("/data/chromium-profile/Default/IndexedDB");
+            });
+
+            test("bounds the legacy ownership migration without gating Bridge HTTP", () => {
+              const quick = prepareData();
+              const maintenance = maintainProfile();
+
+              expect(quick).toContain(".profile-maintenance-required");
+              expect(maintenance).toContain('if [ "${1:-}" = "migrate" ]; then');
+              expect(maintenance).toContain('find "$directory" -xdev');
+              expect(maintenance).toContain("! -user pwuser");
+              expect(maintenance).toContain("! -group pwuser");
+              expect(maintenance).toContain(
+                'timeout --signal=TERM --kill-after=5s 180s "$0" migrate'
+              );
+              expect(maintenance).toContain("profile_maintenance:ownership_migration_complete");
+              expect(maintenance).toContain("profile_maintenance:ownership_migration_timeout_or_failed");
+              expect(maintenance).toContain('rm -f -- "$MAINTENANCE_REQUIRED"');
+              expect(maintenance).not.toContain("find /data -xdev");
+            });
+          });
+          '''
+          write(
+              "tests/storage-hygiene.test.ts",
+              "\n".join(line[10:] if line.startswith("          ") else line for line in storage_test.splitlines()) + "\n",
+          )
+
+          validate = r'''name: Validate
+
+          on:
+            push:
+              branches:
+                - main
+            pull_request:
+
+          permissions:
+            contents: read
+
+          jobs:
+            tests:
+              name: Tests
+              runs-on: ubuntu-24.04
+              steps:
+                - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+                - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+                  with:
+                    node-version: 24.18.1
+                    cache: npm
+
+                - name: Install Node dependencies
+                  run: npm ci
+
+                - name: Run Node tests, typecheck, and build
+                  run: |
+                    npm test
+                    npm run typecheck
+                    npm run build
+
+                - name: Run Python tests
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    python -m venv .venv
+                    . .venv/bin/activate
+                    python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.9,<4' 'voluptuous>=0.13,<1'
+                    python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+                    python -m compileall -q custom_components/smartthings_web
+
+                - name: Validate add-on shell syntax
+                  run: |
+                    sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data
+                    sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/maintain-profile
+                    sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/profile-maintenance/run
+                    sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/bridge/run
+                    sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/bridge/finish
+
+            hacs:
+              name: HACS
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+                - uses: hacs/action@main
+                  with:
+                    category: integration
+                    ignore: topics
+
+            hassfest:
+              name: Hassfest
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+                - uses: home-assistant/actions/hassfest@master
+          '''
+          write(
+              ".github/workflows/validate.yml",
+              "\n".join(line[10:] if line.startswith("          ") else line for line in validate.splitlines()) + "\n",
+          )
+
+          addon_test_path = "tests/addon-config.test.ts"
+          addon_test = read(addon_test_path)
+          replacements = [
+              ("packages capability stability and storage-write optimization as version 0.1.175", "packages nonblocking startup recovery as version 0.1.176"),
+              ('expect(config.version).toBe("0.1.175");', 'expect(config.version).toBe("0.1.176");'),
+              ('expect(packageMetadata.version).toBe("0.1.175");', 'expect(packageMetadata.version).toBe("0.1.176");'),
+              ('expect(protocolMetadata.bridge_version).toBe("0.1.175");', 'expect(protocolMetadata.bridge_version).toBe("0.1.176");'),
+              ('expect(runtime).toContain(\'const bridgeVersion = "0.1.175";\');', 'expect(runtime).toContain(\'const bridgeVersion = "0.1.176";\');'),
+              ('expect(changelog).toContain("## 0.1.175");', 'expect(changelog).toContain("## 0.1.176");\n    expect(changelog).toContain("## 0.1.175");'),
+              ('const prepareData = readText("addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data");', 'const prepareData = readText("addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data");\n    const maintainProfile = readText("addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/maintain-profile");'),
+              ('expect(prepareData).toContain("Service Worker/CacheStorage");', 'expect(maintainProfile).toContain("Service Worker/CacheStorage");'),
+              ('expect(dockerfile).toContain("-name up");', 'expect(dockerfile).toContain("-name up");\n    expect(dockerfile).toContain("-name finish");'),
+              ('["bridge", "data-prep", "nginx", "novnc", "openbox", "x11vnc", "xvfb", "xvfb-ready"]', '["bridge", "data-prep", "nginx", "novnc", "openbox", "profile-maintenance", "x11vnc", "xvfb", "xvfb-ready"]'),
+          ]
+          for old, new in replacements:
+              count = addon_test.count(old)
+              if count != 1:
+                  raise SystemExit(f"{addon_test_path}: expected one match for {old!r}, found {count}")
+              addon_test = addon_test.replace(old, new, 1)
+
+          insertion = '''    expect(readText(`${serviceRoot}/data-prep/up`).trim()).toBe(
+              "/etc/s6-overlay/scripts/prepare-data"
+            );
+          '''
+          insertion = "\n".join(line[10:] if line.startswith("          ") else line for line in insertion.splitlines())
+          expanded = insertion + '''
+              expect(readText(`${serviceRoot}/profile-maintenance/type`).trim()).toBe("longrun");
+              expect(
+                readText(`${serviceRoot}/profile-maintenance/dependencies.d/data-prep`).trim()
+              ).toBe("");
+              expect(readText(`${serviceRoot}/profile-maintenance/run`)).toContain(
+                "/etc/s6-overlay/scripts/maintain-profile"
+              );
+              expect(readText(`${serviceRoot}/profile-maintenance/run`)).toContain("exec s6-pause");
+              expect(existsSync(`${serviceRoot}/bridge/dependencies.d/profile-maintenance`)).toBe(false);
+          '''
+          expanded = "\n".join(line[10:] if line.startswith("          ") else line for line in expanded.splitlines())
+          if addon_test.count(insertion) != 1:
+              raise SystemExit("tests/addon-config.test.ts: profile-maintenance insertion anchor mismatch")
+          addon_test = addon_test.replace(insertion, expanded, 1)
+          write(addon_test_path, addon_test)
+
+          protocol_test_path = "tests/protocol-version-contract.test.ts"
+          protocol_test = read(protocol_test_path)
+          protocol_test = protocol_test.replace(
+              "packaged 0.1.175 candidate",
+              "packaged 0.1.176 candidate",
+              1,
+          ).replace(
+              'const expectedBridgeVersion = "0.1.175";',
+              'const expectedBridgeVersion = "0.1.176";',
+              1,
+          )
+          write(protocol_test_path, protocol_test)
+
+          replace_once("addon/smartthings_web_bridge/config.yaml", "version: 0.1.175", "version: 0.1.176")
+          update_json("package.json", lambda value: value.__setitem__("version", VERSION))
+          update_json(
+              "package-lock.json",
+              lambda value: (
+                  value.__setitem__("version", VERSION),
+                  value["packages"][""].__setitem__("version", VERSION),
+              ),
+          )
+          update_json("protocol/version.json", lambda value: value.__setitem__("bridge_version", VERSION))
+          update_json("custom_components/smartthings_web/manifest.json", lambda value: value.__setitem__("version", VERSION))
+
+          changelog_path = "addon/smartthings_web_bridge/CHANGELOG.md"
+          changelog = read(changelog_path)
+          if not changelog.startswith("## 0.1.175"):
+              raise SystemExit("unexpected changelog head")
+          notes = r'''## 0.1.176
+
+          - 0.1.175에서 Bridge의 선행 조건으로 남아 있던 Chromium 프로필 전체 소유권 검사를 분리했습니다. 이전 프로필이 크거나 손상된 경우 `data-prep`가 끝나지 않아 Node 프로세스와 `127.0.0.1:8098`이 아예 시작되지 않던 문제를 수정합니다.
+          - 부팅 차단 경로에는 `/data` 디렉터리와 `options.json`, Bridge secret, SQLite 및 sidecar, 설정 파일의 빠른 검증·권한 복구만 남기고, 캐시 정리와 레거시 프로필 소유권 마이그레이션은 독립 `profile-maintenance` 서비스에서 수행합니다.
+          - Bridge HTTP 서버를 먼저 연 뒤 브라우저 시작만 profile maintenance 완료를 기다립니다. 유지보수는 180초로 제한하며 실패·시간 초과 시에도 HTTP 상태 화면과 noVNC 진단 경로는 유지됩니다.
+          - `data_prep:start/ready`, `profile_maintenance:*`, `bridge_service:start/exit` 로그를 추가해 s6 선행 단계, Node 실행 전 실패, 프로세스 종료를 구분할 수 있게 했습니다.
+          - 비차단 서비스 의존성, 브라우저 시작 대기, 유지보수 시간 제한, 저장소 보존, 셸 구문을 검증하는 회귀 테스트를 추가했습니다.
+
+          '''
+          notes = "\n".join(line[10:] if line.startswith("          ") else line for line in notes.splitlines()) + "\n"
+          write(changelog_path, notes + changelog)
+          PY
+
+      - name: Validate shell scripts
+        run: |
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/maintain-profile
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/profile-maintenance/run
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/bridge/run
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/bridge/finish
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run Node validation
+        run: |
+          npm test
+          npm run typecheck
+          npm run build
+
+      - name: Run Python validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.9,<4' 'voluptuous>=0.13,<1'
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+          python -m compileall -q custom_components/smartthings_web
+
+      - name: Run repository audits
+        run: |
+          npm run audit:api-free
+          npm run audit:secrets
+          npm run audit:fixtures
+
+      - name: Remove one-time workflow
+        run: rm -f .github/workflows/apply-nonblocking-data-prep-0.1.176.yml
+
+      - name: Commit verified changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix: make Bridge startup data preparation nonblocking 0.1.176'
+          git push origin HEAD:fix/nonblocking-data-prep-0.1.176
