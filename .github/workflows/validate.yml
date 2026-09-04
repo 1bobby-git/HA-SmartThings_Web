@@ -13,6 +13,7 @@ jobs:
   tests:
     name: Tests
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -29,6 +30,11 @@ jobs:
           npm test
           npm run typecheck
           npm run build
+
+      - name: Exercise Home Monitor dialogs in real Chromium
+        run: |
+          npx playwright-core install --with-deps chromium
+          node tools/ci-home-monitor-dialog-smoke.mjs
 
       - name: Run Python tests
         shell: bash
