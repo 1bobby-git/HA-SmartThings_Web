@@ -11,23 +11,124 @@ fail() {
   exit 1
 }
 
+path_exists() {
+  [ -e "$1" ] || [ -L "$1" ]
+}
+
 DATA_DIR=/data
 MIGRATED_MARKER="$DATA_DIR/.ownership-migrated-v2"
 MAINTENANCE_REQUIRED="$DATA_DIR/.profile-maintenance-required"
 MAINTENANCE_FAILED="$DATA_DIR/.profile-maintenance-failed"
+RECOVERY_DIR="$DATA_DIR/recovery"
+RECOVERY_STAMP="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || printf 'unknown')-$$"
+RECOVERY_READY=0
+SQLITE_RESET_REQUIRED=0
+
+ensure_recovery_dir() {
+  if [ "$RECOVERY_READY" -eq 1 ]; then
+    return 0
+  fi
+  if path_exists "$RECOVERY_DIR"; then
+    if [ ! -d "$RECOVERY_DIR" ] || [ -L "$RECOVERY_DIR" ]; then
+      erd_target="$DATA_DIR/.recovery-invalid-$RECOVERY_STAMP"
+      erd_counter=0
+      while path_exists "$erd_target"; do
+        erd_counter=$((erd_counter + 1))
+        erd_target="$DATA_DIR/.recovery-invalid-$RECOVERY_STAMP-$erd_counter"
+      done
+      mv -- "$RECOVERY_DIR" "$erd_target" || fail "recovery_dir_quarantine"
+      log "data_prep:quarantined:recovery"
+    fi
+  fi
+  mkdir -p "$RECOVERY_DIR" || fail "recovery_dir_create"
+  [ -d "$RECOVERY_DIR" ] && [ ! -L "$RECOVERY_DIR" ] || fail "invalid_recovery_dir"
+  chown root:root "$RECOVERY_DIR" || fail "recovery_dir_chown"
+  chmod 0700 "$RECOVERY_DIR" || fail "recovery_dir_mode"
+  RECOVERY_READY=1
+}
+
+quarantine_path() {
+  qp_path="$1"
+  qp_label="$2"
+  path_exists "$qp_path" || return 0
+  ensure_recovery_dir
+  qp_target="$RECOVERY_DIR/$RECOVERY_STAMP-$qp_label"
+  qp_counter=0
+  while path_exists "$qp_target"; do
+    qp_counter=$((qp_counter + 1))
+    qp_target="$RECOVERY_DIR/$RECOVERY_STAMP-$qp_label-$qp_counter"
+  done
+  mv -- "$qp_path" "$qp_target" || fail "quarantine_move:$qp_label"
+  log "data_prep:quarantined:$qp_label"
+}
+
+ensure_runtime_directory() {
+  rd_path="$1"
+  rd_label="$2"
+  if path_exists "$rd_path" && { [ ! -d "$rd_path" ] || [ -L "$rd_path" ]; }; then
+    quarantine_path "$rd_path" "$rd_label"
+  fi
+  mkdir -p "$rd_path" || fail "runtime_directory_create:$rd_label"
+  [ -d "$rd_path" ] && [ ! -L "$rd_path" ] || fail "invalid_runtime_directory:$rd_label"
+  chown pwuser:pwuser "$rd_path" || fail "runtime_directory_chown:$rd_label"
+  chmod 0700 "$rd_path" || fail "runtime_directory_mode:$rd_label"
+}
+
+repair_private_file() {
+  pf_path="$1"
+  pf_label="$2"
+  if ! path_exists "$pf_path"; then
+    return 0
+  fi
+  if [ ! -f "$pf_path" ] || [ -L "$pf_path" ]; then
+    quarantine_path "$pf_path" "$pf_label"
+    if [ "$pf_label" = "bridge.sqlite" ]; then
+      SQLITE_RESET_REQUIRED=1
+    fi
+    return 0
+  fi
+  chown pwuser:pwuser "$pf_path" || fail "critical_file_chown:$pf_label"
+  chmod 0600 "$pf_path" || fail "critical_file_mode:$pf_label"
+}
+
+remove_runtime_marker() {
+  rm_path="$1"
+  rm_label="$2"
+  path_exists "$rm_path" || return 0
+  if [ -f "$rm_path" ] && [ ! -L "$rm_path" ]; then
+    rm -f -- "$rm_path" || fail "marker_cleanup:$rm_label"
+  else
+    quarantine_path "$rm_path" "$rm_label"
+  fi
+}
+
+sqlite_header_valid() {
+  NODE_NO_WARNINGS=1 node -e '
+const fs = require("node:fs");
+const path = process.argv[1];
+const expected = Buffer.from("SQLite format 3\0", "binary");
+const actual = Buffer.alloc(expected.length);
+const fd = fs.openSync(path, "r");
+let bytesRead = 0;
+try {
+  bytesRead = fs.readSync(fd, actual, 0, actual.length, 0);
+} finally {
+  fs.closeSync(fd);
+}
+process.exit(bytesRead === expected.length && actual.equals(expected) ? 0 : 1);
+' "$1"
+}
 
 log "data_prep:start"
 
 [ -d "$DATA_DIR" ] || fail "missing_data_dir"
+[ ! -L "$DATA_DIR" ] || fail "invalid_data_dir"
 chown pwuser:pwuser "$DATA_DIR" || fail "data_dir_chown"
+chmod 0700 "$DATA_DIR" || fail "data_dir_mode"
 
-for directory in /data/chromium-profile /data/downloads /data/camera-images; do
-  [ ! -L "$directory" ] || fail "invalid_runtime_directory:${directory##*/}"
-  mkdir -p "$directory" || fail "runtime_directory_create:${directory##*/}"
-  [ -d "$directory" ] || fail "invalid_runtime_directory:${directory##*/}"
-  chown pwuser:pwuser "$directory" || fail "runtime_directory_chown:${directory##*/}"
-  chmod 0700 "$directory" || fail "runtime_directory_mode:${directory##*/}"
-done
+ensure_runtime_directory /data/chromium-profile chromium-profile
+ensure_runtime_directory /data/downloads downloads
+ensure_runtime_directory /data/camera-images camera-images
 
 for file in \
   /data/options.json \
@@ -38,21 +139,34 @@ for file in \
   /data/bridge.sqlite-journal \
   /data/settings.json \
   /data/protocol-fingerprint.json; do
-  if [ -e "$file" ] || [ -L "$file" ]; then
-    [ -f "$file" ] && [ ! -L "$file" ] || fail "invalid_critical_file:${file##*/}"
-    chown pwuser:pwuser "$file" || fail "critical_file_chown:${file##*/}"
-    chmod 0600 "$file" || fail "critical_file_mode:${file##*/}"
-  fi
+  repair_private_file "$file" "${file##*/}"
 done
 
-if [ -e "$MIGRATED_MARKER" ] || [ -L "$MIGRATED_MARKER" ]; then
-  [ -f "$MIGRATED_MARKER" ] && [ ! -L "$MIGRATED_MARKER" ] || fail "invalid_ownership_marker"
-  chown pwuser:pwuser "$MIGRATED_MARKER" || fail "ownership_marker_chown"
-  chmod 0600 "$MIGRATED_MARKER" || fail "ownership_marker_mode"
+if [ -f /data/bridge.sqlite ] && [ -s /data/bridge.sqlite ]; then
+  if ! sqlite_header_valid /data/bridge.sqlite; then
+    quarantine_path /data/bridge.sqlite bridge.sqlite-invalid-header
+    SQLITE_RESET_REQUIRED=1
+  fi
 fi
 
-rm -f -- "$MAINTENANCE_FAILED" || fail "maintenance_failure_cleanup"
-rm -f -- "$MAINTENANCE_REQUIRED" || fail "maintenance_request_cleanup"
+if [ "$SQLITE_RESET_REQUIRED" -eq 1 ] || { [ -f /data/bridge.sqlite ] && [ ! -s /data/bridge.sqlite ] && { path_exists /data/bridge.sqlite-wal || path_exists /data/bridge.sqlite-shm || path_exists /data/bridge.sqlite-journal; }; }; then
+  quarantine_path /data/bridge.sqlite-wal bridge.sqlite-wal-stale
+  quarantine_path /data/bridge.sqlite-shm bridge.sqlite-shm-stale
+  quarantine_path /data/bridge.sqlite-journal bridge.sqlite-journal-stale
+  log "data_prep:sqlite_reset"
+fi
+
+if path_exists "$MIGRATED_MARKER"; then
+  if [ -f "$MIGRATED_MARKER" ] && [ ! -L "$MIGRATED_MARKER" ]; then
+    chown pwuser:pwuser "$MIGRATED_MARKER" || fail "ownership_marker_chown"
+    chmod 0600 "$MIGRATED_MARKER" || fail "ownership_marker_mode"
+  else
+    quarantine_path "$MIGRATED_MARKER" ownership-marker
+  fi
+fi
+
+remove_runtime_marker "$MAINTENANCE_FAILED" profile-maintenance-failed
+remove_runtime_marker "$MAINTENANCE_REQUIRED" profile-maintenance-required
 : > "$MAINTENANCE_REQUIRED" || fail "maintenance_request_create"
 chown pwuser:pwuser "$MAINTENANCE_REQUIRED" || fail "maintenance_request_chown"
 chmod 0600 "$MAINTENANCE_REQUIRED" || fail "maintenance_request_mode"
