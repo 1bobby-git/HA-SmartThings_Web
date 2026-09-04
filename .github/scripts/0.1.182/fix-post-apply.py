@@ -23,8 +23,7 @@ replace_once(
 
 
 # Preserve the exact valid SmartThings timestamp spelling that entered the
-# store. Timestamp-only repeats advance the internal sequence but do not need
-# to fabricate millisecond digits.
+# store. Timestamp-only repeats do not need fabricated millisecond digits.
 device_store_test = Path("bridge/tests/state/device-store.test.ts")
 text = device_store_test.read_text(encoding="utf-8")
 start = text.index(
@@ -46,7 +45,8 @@ device_store_test.write_text(text[:start] + block + text[end:], encoding="utf-8"
 # timestamp-only same-value push must not wake every Home Assistant entity, but
 # it can still be authoritative evidence for a just-executed Scene. Normal
 # published events are delivered to both listener groups; semantic duplicates
-# are delivered only to confirmation listeners.
+# are delivered only to confirmation listeners with a non-persisted sequence
+# one step after the current public sequence. This avoids creating an SSE gap.
 device_store = Path("bridge/src/state/device-store.ts")
 replace_once(
     device_store,
@@ -72,55 +72,48 @@ replace_once(
     "DeviceStore confirmation subscription",
 )
 
-text = device_store.read_text(encoding="utf-8")
-apply_start = text.index("  #applyDeviceEvent(input: unknown): void {")
-apply_end = text.index("\n  #applyDeviceHealthEvent", apply_start)
-apply_block = text[apply_start:apply_end]
-state_marker = (
-    "    const stateChanged = this.#setState(device, state);\n"
-    "    if (!stateChanged) {\n"
-    "      return;\n"
-    "    }\n"
+replace_once(
+    device_store,
+    """    if (semanticStateChanged || momentaryEvent || commandId) {
+      const sequence = this.#nextSequence();
+      this.#publish({
+        schemaVersion: 1,
+        sequence,
+        type: "state",
+        deviceId,
+        state: cloneState(state),
+        ...(eventId ? { eventId } : {}),
+        ...(state.updatedAt ? { eventTime: state.updatedAt } : {}),
+        ...(commandId ? { commandId } : {})
+      });
+    }
+""",
+    """    if (semanticStateChanged || momentaryEvent || commandId) {
+      const sequence = this.#nextSequence();
+      this.#publish({
+        schemaVersion: 1,
+        sequence,
+        type: "state",
+        deviceId,
+        state: cloneState(state),
+        ...(eventId ? { eventId } : {}),
+        ...(state.updatedAt ? { eventTime: state.updatedAt } : {}),
+        ...(commandId ? { commandId } : {})
+      });
+    } else {
+      this.#publishConfirmation({
+        schemaVersion: 1,
+        sequence: this.#sequence + 1,
+        type: "state",
+        deviceId,
+        state: cloneState(state),
+        ...(eventId ? { eventId } : {}),
+        ...(state.updatedAt ? { eventTime: state.updatedAt } : {})
+      });
+    }
+""",
+    "DeviceStore private duplicate confirmation",
 )
-if apply_block.count(state_marker) != 1:
-    print("===== GENERATED APPLY DEVICE EVENT BLOCK START =====")
-    print(apply_block)
-    print("===== GENERATED APPLY DEVICE EVENT BLOCK END =====")
-    raise SystemExit(
-        "DeviceStore state-change marker: expected one, "
-        f"found {apply_block.count(state_marker)}"
-    )
-confirmation_branch = state_marker + (
-    "    const confirmationEventId = safeEventMetadata(\n"
-    "      event.event_id ?? event.eventId ?? data.event_id ?? data.eventId\n"
-    "    );\n"
-    "    const confirmationCommandId = safeEventMetadata(\n"
-    "      event.command_id ?? event.commandId ?? data.command_id ?? data.commandId\n"
-    "    );\n"
-    "    if (!durableStateChanged && !confirmationCommandId) {\n"
-    "      const wasOnline = device.online;\n"
-    "      this.#setDeviceHealth(device, true, state.updatedAt);\n"
-    "      if (!wasOnline) {\n"
-    "        const onlineSequence = this.#nextSequence();\n"
-    "        this.#publish({ schemaVersion: 1, sequence: onlineSequence, type: \"inventory\" });\n"
-    "      }\n"
-    "      const sequence = this.#nextSequence();\n"
-    "      this.#publishConfirmation({\n"
-    "        schemaVersion: 1,\n"
-    "        sequence,\n"
-    "        type: \"state\",\n"
-    "        deviceId,\n"
-    "        state: cloneState(state),\n"
-    "        ...(confirmationEventId ? { eventId: confirmationEventId } : {}),\n"
-    "        ...(state.updatedAt ? { eventTime: state.updatedAt } : {})\n"
-    "      });\n"
-    "      if (!wasOnline) this.#schedulePersist();\n"
-    "      return;\n"
-    "    }\n"
-)
-apply_block = apply_block.replace(state_marker, confirmation_branch, 1)
-text = text[:apply_start] + apply_block + text[apply_end:]
-device_store.write_text(text, encoding="utf-8")
 
 replace_once(
     device_store,
