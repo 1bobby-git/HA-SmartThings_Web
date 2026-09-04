@@ -65,7 +65,7 @@ describe("Phase 1 documentation gate", () => {
     expect(feasibility.trimEnd()).toMatch(/DECISION: (GO|LIMITED|STOP)$/);
     expect(feasibility).not.toContain("DECISION: PENDING");
     expect(feasibility).toContain("DECISION: LIMITED");
-    expect(readme).toContain("Current gate: `DECISION: LIMITED`");
+    expect(readme).toContain("Current status is documented as live HAOS partially verified");
     expect(readme).toContain("do not install or manage Docker yourself");
     expect(readme).toContain("npm ci");
     expect(readme).toContain("npm run package:addon");
