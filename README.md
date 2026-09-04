@@ -17,7 +17,7 @@
 
 브라우저 로그인을 담당하는 **SmartThings Web Bridge 앱**과 Home Assistant 엔티티를 생성하는 **`smartthings_web` 커스텀 통합**으로 구성됩니다. Samsung 비밀번호·MFA·CAPTCHA를 소스나 설정 파일에 입력하지 않고, 사용자가 앱의 noVNC 브라우저에서 직접 로그인합니다.
 
-> **현재 상태: `0.1.180` · 실환경 부분 검증**
+> **현재 상태: `0.1.181` · 실환경 부분 검증**
 >
 > 실제 Home Assistant OS에서 앱 기동, Ingress/noVNC Samsung 로그인, Bridge 연결, 인벤토리 수신과 Home Assistant 엔티티 생성까지 확인했습니다. `0.1.180`의 Home Monitor·Scene·Web 표시명 수정과 Advanced command·Galaxy Home Mini TTS는 구현 및 자동 검증을 통과했지만, 모든 계정과 기기에서 실기기 재검증이 끝난 상태는 아닙니다.
 
@@ -282,17 +282,19 @@ npm run deploy:haos:candidate
 
 | 영역 | 현재 확인 상태 | 검증 수준 |
 | --- | --- | --- |
-| 최신 배포 | `v0.1.180` Bridge 앱과 Home Assistant 통합 패키지가 GitHub Release에 게시됨 | 배포 확인 |
+| 최신 배포 | `v0.1.181` Bridge 앱과 Home Assistant 통합 패키지가 GitHub Release에 게시됨 | 배포 확인 |
 | HAOS 앱·브라우저 | 실제 사용자 HAOS에서 `0.1.178` 이후 앱 기동, Ingress/noVNC 접속과 Samsung 계정 로그인 확인 | 실환경 확인 |
 | Bridge·통합 연결 | 페어링, 내부 Bridge 연결, 인벤토리 수신과 Home Assistant 기기·엔티티 생성 확인 | 실환경 확인 |
 | 상태 동기화·부하 억제 | push/SSE 상태 반영, 동일 인벤토리 억제, 유한 큐·백프레셔, 무변경 상태 및 registry 쓰기 억제 구현 | 자동 검증 통과, 장시간 실환경 soak 필요 |
-| Home Monitor | 실제 발생한 `command_location_picker_not_found` 경로를 `0.1.180`에서 위치 직접 라우팅 방식으로 수정 | 자동 검증 통과, 사용자 환경 재검증 필요 |
+| Home Monitor | `0.1.180`에서 위치 직접 라우팅 뒤 `command_control_not_found`가 실환경 재현됨. `0.1.181`은 roleless React 카드 열기, shadow host 탐색과 비식별 구조 진단을 추가 | 자동 검증 통과, 사용자 환경 재검증 필요 |
 | SmartThings Scene | 실제 발생한 `command_control_not_found` 경로를 정확한 Scene 카드 탐색 방식으로 수정 | 자동 검증 통과, 사용자 환경 재검증 필요 |
 | Web 표시명 | `On 1`, `On 2` 같은 근거 없는 숫자 이름 대신 관찰된 SmartThings Web 라벨을 우선하도록 수정 | 자동 검증 통과, 실제 인벤토리 재확인 필요 |
 | Advanced commands | `smartthings_web.list_commands`와 `smartthings_web.execute_command` 구현. 장치의 live safe command catalog에 실제로 존재하는 명령만 실행 | 구현·자동 검증 완료, 장치별 지원 범위는 실환경 의존 |
 | Galaxy Home Mini TTS | 안전한 `speechSynthesis.speak` descriptor가 정확히 하나일 때 사용하는 `smartthings_web.speak` 구현 | 구현·자동 검증 완료, Galaxy Home Mini 실기기 재검증 필요 |
 
 `0.1.180` 변경 검증에서는 Vitest 89개 파일·1,054개 Node 테스트, TypeScript typecheck/build, Python 통합 테스트, HACS, Hassfest, 보안 검사와 패키지형 HAOS 런타임 smoke가 통과했습니다. 실제 사용자 환경에서 아직 다시 확인하지 않은 Home Monitor, Scene, Web 표시명과 Galaxy Home Mini TTS는 완료로 과장하지 않고 재검증 필요 상태로 표시합니다.
+
+`0.1.181`은 실제 `command_control_not_found` 재현을 기준으로 Home Monitor의 roleless 카드 열기와 실패 전용 `home_monitor_diag` 구조 로그를 추가했습니다. 현재 실기기 성공 여부는 새 버전 설치 후 다시 확인해야 합니다.
 
 ## 제한 사항
 

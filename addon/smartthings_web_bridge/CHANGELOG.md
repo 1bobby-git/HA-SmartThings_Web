@@ -1,3 +1,10 @@
+## 0.1.181
+
+- 실제 `0.1.180` 환경에서 위치 라우팅 이후에도 Home Monitor가 `command_control_not_found`로 실패한 경로를 보강했습니다. 접근성 role이 없는 React Home Monitor 카드의 정확한 제목을 찾아 카드를 먼저 열고, 그 뒤 전체 화면·drawer·dialog 안의 정확한 `외출`·`재실`·`해제` 제어를 다시 탐색합니다.
+- 텍스트 제어와 카드 탐색은 open shadow root의 host 경계를 따라 상위 클릭 핸들러까지 추적하고 `menuitemradio`, `option`, `switch` 등 실제 렌더링 가능한 역할을 지원합니다. 동일 후보가 여러 개이면 계속 실행하지 않습니다.
+- 최종 실패 때 페이지 텍스트·URL·계정·원본 식별자를 기록하지 않고, 정확한 제목/액션 수, 클릭 가능 후보 수, 모드 그룹, dialog, iframe, open shadow root 개수만 `home_monitor_diag`로 남깁니다.
+- roleless 카드 열기, 정확한 모드 재탐색, 진단 콜백과 비식별 구조 로그에 대한 회귀 테스트를 추가했습니다.
+
 ## 0.1.180
 
 - Home Monitor 명령이 실제 액션 탐색 전에 숨겨진 위치 선택 버튼을 요구하며 `command_location_picker_not_found`로 중단되던 경로를 수정했습니다. 단일 위치는 현재 인증된 페이지를 그대로 사용하고, 다중 위치는 저장된 원본 location 경로로 직접 이동한 뒤 기존의 엄격한 선택기 fallback을 유지합니다.
