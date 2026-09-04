@@ -24,7 +24,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Reassemble, align and apply reviewed source changes
+      - name: Reassemble, align and apply final reviewed source changes
         shell: bash
         run: |
           set -euo pipefail
