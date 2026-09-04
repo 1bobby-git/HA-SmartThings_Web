@@ -27,6 +27,7 @@ jobs:
 
       - name: Apply reviewed source and version changes
         run: |
+          # Retry after aligning the complete 0.1.181 release contract.
           python .github/scripts/apply_home_monitor_live_dom_0_1_181.py
           rm -f .github/scripts/apply_home_monitor_live_dom_0_1_181.py
 
