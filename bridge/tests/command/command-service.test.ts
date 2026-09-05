@@ -1,3 +1,4 @@
+import { runLocationCommandSession } from "../../src/command/location-command-session.js";
 import { describe, expect, test, vi } from "vitest";
 
 import {
@@ -3954,3 +3955,110 @@ function capture(direction: "sent" | "received", text: string): SanitizedCapture
     payloadHash: `${direction}:${text}`
   };
 }
+
+
+describe("Home Monitor confirmation-owned command lifetime", () => {
+  const request = (commandName = "armAway", id = "request_location_lifecycle") => ({
+    targetType: "location", targetId: "loc_001", command: commandName,
+    arguments: [], clientRequestId: id
+  });
+
+  test.each([
+    ["armAway", "DISARMED", "ARMED_AWAY"],
+    ["armStay", "DISARMED", "ARMED_STAY"],
+    ["disarm", "ARMED_AWAY", "DISARMED"]
+  ])("keeps %s page alive until a delayed matching security event", async (action, initial, desired) => {
+    const store = readyDeviceStore();
+    observeLocationSnapshot(store, initial, "2026-08-25T00:00:00Z");
+    let closed = false;
+    const phases: string[] = [];
+    const service = new SafeCommandService({
+      devices: store, status: connectedStatus(), timeoutMs: 1_000,
+      resync: async () => undefined,
+      onLocationDiagnostic: (entry) => phases.push(entry.phase),
+      executor: { executeLocationAction: async (input) => runLocationCommandSession(
+        async () => {
+          setTimeout(() => {
+            if (!closed) store.observe(received(securityEventFrame(desired, "2026-08-25T00:00:01Z")));
+          }, 25);
+        },
+        async () => { closed = true; }, input.waitForConfirmation
+      ) }
+    });
+    await expect(service.execute(request(action))).resolves.toMatchObject({
+      status: "confirmed", confirmation: "security_arm_state_event"
+    });
+    expect(closed).toBe(true);
+    expect(phases).toEqual(["dispatching", "waiting", "confirmed"]);
+  });
+
+  test("request timeout bounds a hung recheck and closes the page", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = readyDeviceStore();
+      observeLocationSnapshot(store, "DISARMED", "2026-08-25T00:00:00Z");
+      let closed = false;
+      const service = new SafeCommandService({
+        devices: store, status: connectedStatus(), timeoutMs: 5_000, resyncAfterMs: 10,
+        resync: async () => new Promise<undefined>(() => undefined),
+        executor: { executeLocationAction: async (input) => runLocationCommandSession(
+          async () => {}, async () => { closed = true; }, input.waitForConfirmation
+        ) }
+      });
+      const checked = expect(service.execute({ ...request(), timeout: 1 })).rejects.toMatchObject({
+        code: "command_confirmation_timeout"
+      });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(closed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await checked;
+      expect(closed).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
+  test("does not confirm contradicted evidence observed during dispatch", async () => {
+    const store = readyDeviceStore();
+    observeLocationSnapshot(store, "DISARMED", "2026-08-25T00:00:00Z");
+    const service = new SafeCommandService({
+      devices: store, status: connectedStatus(), timeoutMs: 25, resync: async () => undefined,
+      executor: { executeLocationAction: async (input) => runLocationCommandSession(
+        async () => {
+          store.observe(received(securityEventFrame("ARMED_AWAY", "2026-08-25T00:00:01Z")));
+          store.observe(received(securityEventFrame("DISARMED", "2026-08-25T00:00:02Z")));
+        }, async () => {}, input.waitForConfirmation
+      ) }
+    });
+    await expect(service.execute(request())).rejects.toMatchObject({ code: "command_confirmation_timeout" });
+  });
+
+  test("wrong-location security traffic cannot confirm the request", async () => {
+    const store = readyDeviceStore();
+    observeLocationSnapshot(store, "DISARMED", "2026-08-25T00:00:00Z");
+    const service = new SafeCommandService({
+      devices: store, status: connectedStatus(), timeoutMs: 25, resync: async () => undefined,
+      executor: { executeLocationAction: async (input) => runLocationCommandSession(
+        async () => store.observe(received(securityEventFrame("ARMED_AWAY", "2026-08-25T00:00:01Z").replaceAll("loc_001", "loc_999"))),
+        async () => {}, input.waitForConfirmation
+      ) }
+    });
+    await expect(service.execute(request())).rejects.toMatchObject({ code: "command_confirmation_timeout" });
+  });
+
+  test("dispatch failure closes once and keeps the original error", async () => {
+    const store = readyDeviceStore();
+    observeLocationSnapshot(store, "DISARMED", "2026-08-25T00:00:00Z");
+    let closes = 0;
+    const phases: string[] = [];
+    const service = new SafeCommandService({
+      devices: store, status: connectedStatus(), timeoutMs: 25, resync: async () => undefined,
+      onLocationDiagnostic: entry => phases.push(entry.phase),
+      executor: { executeLocationAction: async (input) => runLocationCommandSession(
+        async () => { throw new Error("command_control_not_found"); },
+        async () => { closes++; }, input.waitForConfirmation
+      ) }
+    });
+    await expect(service.execute(request())).rejects.toMatchObject({ code: "command_control_not_found" });
+    expect(closes).toBe(1);
+    expect(phases).toEqual(["dispatching", "failed"]);
+  });
+});
