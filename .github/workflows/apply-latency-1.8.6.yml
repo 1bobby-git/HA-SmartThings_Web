@@ -74,13 +74,20 @@ jobs:
           npm run audit:secrets
           npm run audit:fixtures
 
-      - name: Commit verified source and remove temporary tooling
+      - name: Commit verified source without changing workflow definitions
         shell: bash
         run: |
           set -euo pipefail
+          # The CI token is restricted to contents. Publish workflow changes separately
+          # through the authorized connector, after this source commit succeeds.
+          git restore --source=HEAD --staged --worktree -- .github/workflows
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git diff --cached --check
+          if git diff --cached --name-only | grep -q '^.github/workflows/'; then
+            echo 'Refusing to publish workflow definitions with the CI contents token' >&2
+            exit 1
+          fi
           git commit -m 'fix: preserve Home Monitor state and reduce command latency 1.8.6'
           git push origin HEAD:fix/home-monitor-latency-1.8.6
