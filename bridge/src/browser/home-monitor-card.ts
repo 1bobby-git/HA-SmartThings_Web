@@ -192,7 +192,7 @@ export async function clickHomeMonitorCardAction(
     const { kind: _kind, ...counts } = last;
     try { onDiagnostic?.({ outcome, ...counts }); } catch { /* Diagnostics are non-fatal. */ }
   };
-  const deadline = Date.now() + Math.max(1, Math.min(timeoutMs, 1_800));
+  const deadline = Date.now() + Math.max(1, Math.min(timeoutMs, 5_000));
   try {
     do {
       last = await page.evaluate(probeHomeMonitorCard, input);

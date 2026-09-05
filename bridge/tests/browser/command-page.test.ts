@@ -3575,7 +3575,7 @@ describe("SmartThingsWebUiCommandExecutor", () => {
       expect(normalizeCalls).toBe(0);
       expect(pickerQueries).toBe(0);
       expect(title.locator).toHaveBeenCalledWith("..");
-      expect(actionControl.click).toHaveBeenCalledWith({ timeout: 15_000 });
+      expect(actionControl.click).toHaveBeenCalledWith({ timeout: 3_000 });
       expect(page.close).toHaveBeenCalledTimes(1);
     }
   });

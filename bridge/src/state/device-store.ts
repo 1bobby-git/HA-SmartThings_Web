@@ -1,3 +1,4 @@
+import { normalizeLocationArmState } from "./location-arm-state.js";
 import type { SanitizedCaptureRecord } from "./capture-store.js";
 import { decodeSocketIoTextFrame } from "../inspector/socketio-decoder.js";
 import {
@@ -405,6 +406,37 @@ export class DeviceStore {
     };
   }
 
+  /** Avoid cloning every device and capability while checking a location command. */
+  location(locationId: string): BridgeLocation | undefined {
+    const value = this.#locations.get(locationId);
+    return value ? { ...value } : undefined;
+  }
+
+  /** A freshly fetched, exact-location status; never infer status from a click or a button. */
+  observeLocationStatusSnapshot(input: unknown, expectedLocationId: string): boolean {
+    const row = asRecord(input);
+    const id = safeId(row?.locationId ?? row?.location_id ?? row?.id, "loc");
+    const armState = readString(row?.armState ?? row?.arm_state);
+    const current = id ? this.#locations.get(id) : undefined;
+    if (!current || id !== expectedLocationId || !normalizeLocationArmState(armState)) return false;
+    const updatedAt = validTimestamp(row?.updatedAt ?? row?.updated_at ?? row?.timestamp);
+    // A dated event takes precedence over an older or equal-time contradictory read.
+    if (current.updatedAt && updatedAt && Date.parse(updatedAt) <= Date.parse(current.updatedAt)) {
+      return normalizeLocationArmState(current.armState) === normalizeLocationArmState(armState);
+    }
+    // An undated read may confirm the current state, but cannot replace a dated contrary event.
+    if (current.updatedAt && !updatedAt) {
+      return normalizeLocationArmState(current.armState) === normalizeLocationArmState(armState);
+    }
+    const next: BridgeLocation = { ...current, armState: armState!, updatedAt };
+    if (setIfChanged(this.#locations, id!, next)) {
+      const sequence = this.#nextSequence();
+      this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
+      this.#schedulePersist();
+    }
+    return true;
+  }
+
   currentSequence(): number {
     return this.#sequence;
   }
@@ -639,12 +671,15 @@ export class DeviceStore {
           ? (readString(row.armState ?? row.arm_state) as string)
           : undefined;
         const updatedAt = validTimestamp(row.updatedAt ?? row.updated_at ?? row.timestamp);
+        const current = this.#locations.get(id);
+        const newerSecurity = armState !== undefined &&
+          (!current?.updatedAt || (updatedAt !== null && Date.parse(updatedAt) > Date.parse(current.updatedAt)));
         changed =
           setIfChanged(this.#locations, id, {
+            ...current,
             id,
             name,
-            ...(armState ? { armState } : {}),
-            ...(armState || updatedAt ? { updatedAt } : {})
+            ...(newerSecurity ? { armState, updatedAt } : {})
           }) || changed;
       }
       return changed;
@@ -911,7 +946,8 @@ export class DeviceStore {
       );
       const name = safeName(row.name ?? row.locationName ?? row.label);
       if (!id || !name) continue;
-      changed = setIfChanged(this.#locations, id, { id, name }) || changed;
+      // Advanced locations are metadata, not a fresh Home Monitor security status.
+      changed = setIfChanged(this.#locations, id, { ...this.#locations.get(id), id, name }) || changed;
     }
     return changed;
   }

@@ -87,6 +87,7 @@ _SAFE_BRIDGE_ERROR_CODES = {
     "capability_not_found",
     "client_request_conflict",
     "command_api_unavailable",
+    "command_queue_timeout",
     "command_browser_unavailable",
     "command_confirmation_timeout",
     "command_control_ambiguous",

@@ -452,4 +452,15 @@ describe("KeeperPageManager", () => {
     });
     expect(command.bringToFront).toHaveBeenCalledTimes(1);
   });
+  test("opens the exact command location once instead of loading the keeper then navigating again", async () => {
+    const context = new FakeContext([new FakePage("https://my.smartthings.com/location/other")]);
+    const manager = new KeeperPageManager(context);
+    await manager.ensureKeeper();
+    const page = await manager.openCommandPage("target-location");
+    expect(page.goto).toHaveBeenCalledTimes(1);
+    expect(page.goto).toHaveBeenCalledWith("https://my.smartthings.com/location/target-location", {
+      waitUntil: "domcontentloaded", timeout: 10_000
+    });
+  });
+
 });

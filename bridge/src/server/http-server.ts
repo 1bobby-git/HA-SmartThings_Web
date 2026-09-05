@@ -239,6 +239,7 @@ function commandErrorStatus(code: SafeCommandError["code"]): number {
   if (code === "command_confirmation_timeout") return 504;
   if (
     code === "bridge_not_connected" ||
+    code === "command_queue_timeout" ||
     code === "command_browser_unavailable" ||
     code === "command_login_required"
   ) {

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { BrowserContextLike, BrowserPageLike } from "./browser/keeper-page.js";
+import { readLocationSecurityStatus } from "./browser/location-status.js";
 import { installCakeClientCapture } from "./browser/cake-client-capture.js";
 import {
   ADVANCED_DEVICE_SNAPSHOT_URLS,
@@ -102,7 +103,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.5";
+const bridgeVersion = "1.8.6";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -303,6 +304,23 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       const keeper = currentKeeperManager?.currentKeeper();
       if (!keeper || classifySmartThingsUrl(keeper.url()) !== "smartthings_location") {
         throw new Error("command_browser_unavailable");
+      }
+      if (request?.locationId) {
+        const rawLocationId = volatileIdentifiers.rawLocationId(request.locationId);
+        if (!rawLocationId) throw new Error("location_status_identifier_unavailable");
+        const observed = await readLocationSecurityStatus(keeper, rawLocationId);
+        if (!observed) {
+          log.info("home_monitor_command:status_read_unavailable");
+          throw new Error("location_status_unavailable");
+        }
+        // The exact raw ID has been checked by the reader. Do not expose it or copy names.
+        const accepted = devices.observeLocationStatusSnapshot({
+          locationId: request.locationId, armState: observed.armState, updatedAt: observed.updatedAt
+        }, request.locationId);
+        if (!accepted) throw new Error("location_status_stale");
+        log.info("home_monitor_command:status_read_completed");
+        return { source: "location_status", authoritativeSnapshot: false,
+          locationId: request.locationId, armState: observed.armState, startedAtMs };
       }
       if (request?.deviceId) {
         const device = devices

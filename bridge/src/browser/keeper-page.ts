@@ -21,7 +21,7 @@ export interface BrowserPageLike {
     argument: Argument
   ): Promise<Result>;
   bringToFront?(): Promise<unknown>;
-  goto(url: string, options?: { waitUntil?: "domcontentloaded" | "load" }): Promise<unknown>;
+  goto(url: string, options?: { waitUntil?: "domcontentloaded" | "load"; timeout?: number }): Promise<unknown>;
   close(): Promise<unknown>;
 }
 
@@ -292,14 +292,17 @@ export class KeeperPageManager {
     return page;
   }
 
-  async openCommandPage(): Promise<BrowserPageLike> {
+  async openCommandPage(rawLocationId?: string): Promise<BrowserPageLike> {
     const page = await this.context.newPage();
     this.#commandPages.add(page);
     try {
       await page.bringToFront?.();
       const keeperUrl = this.currentKeeper()?.url();
-      const target = keeperUrl && isKeeperSettledUrl(keeperUrl) ? keeperUrl : KEEPER_URL;
-      await page.goto(target, { waitUntil: "domcontentloaded" });
+      const target = rawLocationId
+        ? `${KEEPER_URL}/${encodeURIComponent(rawLocationId)}`
+        : keeperUrl && isKeeperSettledUrl(keeperUrl) ? keeperUrl : KEEPER_URL;
+      await page.goto(target, { waitUntil: "domcontentloaded",
+        ...(rawLocationId ? { timeout: 10_000 } : {}) });
       return page;
     } catch (error) {
       this.#commandPages.delete(page);

@@ -1,3 +1,4 @@
+import { enqueueWithDeadline } from "../command/bounded-command-queue.js";
 import { runLocationCommandSession } from "../command/location-command-session.js";
 import type { BrowserPageLike, KeeperPageManager } from "./keeper-page.js";
 import {
@@ -51,6 +52,10 @@ type CommandPageManagerLike = Pick<KeeperPageManager, "openCommandPage"> &
 type CommandDiagnosticStage =
   | "foreground_requested"
   | "foreground_ready"
+  | "home_monitor_keeper_reused"
+  | "home_monitor_fresh_page"
+  | `home_monitor_queue_ms_${number}`
+  | `home_monitor_dispatch_ms_${number}`
   | "home_monitor_current_mode_opened"
   | "home_monitor_current_mode_missing"
   | "native_identifier_missing"
@@ -557,8 +562,17 @@ export class SmartThingsWebUiCommandExecutor {
     locationNames?: Readonly<Record<string, string>>;
     action: "armAway" | "armStay" | "disarm";
     waitForConfirmation?: () => Promise<void>;
+    isDesiredStateCurrent?: () => boolean;
   }): Promise<void> {
-    await this.#runForeground(() => this.#executeLocationAction(input));
+    const queuedAt = Date.now();
+    await this.#runForeground(async () => {
+      this.#diagnostic(`home_monitor_queue_ms_${Date.now() - queuedAt}`);
+      if (input.isDesiredStateCurrent?.()) {
+        await input.waitForConfirmation?.();
+        return;
+      }
+      await this.#executeLocationAction(input);
+    }, 10_000);
   }
 
   async #executeLocationAction(input: {
@@ -566,9 +580,40 @@ export class SmartThingsWebUiCommandExecutor {
     locationNames?: Readonly<Record<string, string>>;
     action: "armAway" | "armStay" | "disarm";
     waitForConfirmation?: () => Promise<void>;
+    isDesiredStateCurrent?: () => boolean;
   }): Promise<void> {
+    const dispatchStartedAt = Date.now();
+    const locationName = input.locationNames?.[input.locationId];
+    const keeper = this.getManager()?.currentKeeper?.();
+    const routeId = keeper && !keeper.isClosed() && isSmartThingsLocation(keeper.url())
+      ? locationIdFromUrl(keeper.url()) : undefined;
+    const exactKeeper = routeId !== undefined &&
+      (this.#resolveRawLocationId?.(input.locationId) === routeId ||
+        this.normalizeLocationId?.(routeId) === input.locationId);
+    if (keeper && exactKeeper) {
+      // Borrow only an exact-location dashboard for a direct click. Never navigate or close it.
+      await keeper.bringToFront?.();
+      const result = await clickHomeMonitorCardAction(keeper, homeMonitorLabels(locationName),
+        [locationActionLabels("armAway"), locationActionLabels("armStay"), locationActionLabels("disarm")],
+        { armAway: 0, armStay: 1, disarm: 2 }[input.action], 350, this.#onHomeMonitorCardDiagnostic);
+      if (result === "clicked") {
+        this.#diagnostic("home_monitor_keeper_reused");
+        this.#diagnostic(`home_monitor_dispatch_ms_${Date.now() - dispatchStartedAt}`);
+        await input.waitForConfirmation?.();
+        return;
+      }
+      if (result === "ambiguous") throw new Error("command_control_ambiguous");
+      if (result === "blocked") throw new Error("command_control_not_found");
+    }
     await this.#invalidateWarmPage();
-    const page = await this.openLocationPage(input.locationId, input.locationNames);
+    const page = await this.openLocationPage(input.locationId, input.locationNames, true);
+    this.#diagnostic("home_monitor_fresh_page");
+    const deadline = Date.now() + 12_000;
+    const budget = (cap: number) => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error("command_control_not_found");
+      return Math.max(1, Math.min(cap, remaining));
+    };
     await runLocationCommandSession(
       async () => {
         const actionName = locationActionName(input.action);
@@ -600,6 +645,7 @@ export class SmartThingsWebUiCommandExecutor {
         };
         let monitorOpened = false;
         const clickRequestedText = async (timeoutMs: number) => {
+          timeoutMs = budget(timeoutMs);
           const dialogResult = await clickHomeMonitorDialogAction(
             page, monitorLabels, actionLabels, modeLabelGroups, timeoutMs,
             monitorOpened, this.#onHomeMonitorDialogDiagnostic
@@ -620,13 +666,13 @@ export class SmartThingsWebUiCommandExecutor {
         const dashboardResult = await clickHomeMonitorCardAction(
           page, monitorLabels, modeLabelGroups,
           { armAway: 0, armStay: 1, disarm: 2 }[input.action],
-          1_800, this.#onHomeMonitorCardDiagnostic
+          budget(5_000), this.#onHomeMonitorCardDiagnostic
         );
         if (dashboardResult === "clicked") return;
         if (dashboardResult === "ambiguous") throw new Error("command_control_ambiguous");
         if (dashboardResult === "blocked") throw new Error("command_control_not_found");
         if (dashboardResult === "dialog") {
-          const modalResult = await clickRequestedText(10_000);
+          const modalResult = await clickRequestedText(budget(3_000));
           if (modalResult === "clicked") return;
           if (modalResult === "ambiguous") throw new Error("command_control_ambiguous");
           // Never fall through to an obscured dashboard when a modal is already open.
@@ -638,19 +684,19 @@ export class SmartThingsWebUiCommandExecutor {
           monitorName,
           monitorLabels,
           actionName,
-          3_000
+          budget(1_000)
         );
         if (action) {
-          await action.click({ timeout: 15_000 });
+          await action.click({ timeout: budget(3_000) });
           return;
         }
-        let textResult = await clickRequestedText(1_200);
+        let textResult = await clickRequestedText(budget(600));
         if (textResult === "clicked") return;
         if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
         if (await clickHomeMonitorCardActionByText(page, monitorLabels, actionLabels)) return;
-        action = await findLocationActionControl(page, actionName, 250);
+        action = await findLocationActionControl(page, actionName, budget(250));
         if (action) {
-          await action.click({ timeout: 15_000 });
+          await action.click({ timeout: budget(3_000) });
           return;
         }
 
@@ -659,7 +705,7 @@ export class SmartThingsWebUiCommandExecutor {
           page,
           monitorLabels,
           modeLabelGroups,
-          3_500
+          budget(1_000)
         );
         if (currentModeResult === "ambiguous") {
           throw new Error("command_control_ambiguous");
@@ -667,39 +713,39 @@ export class SmartThingsWebUiCommandExecutor {
         if (currentModeResult === "clicked") {
           monitorOpened = true;
           this.#onDiagnostic?.("home_monitor_current_mode_opened");
-          textResult = await clickRequestedText(10_000);
+          textResult = await clickRequestedText(budget(3_000));
           if (textResult === "clicked") return;
           if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
-          action = await findLocationActionControl(page, actionName, 1_500);
+          action = await findLocationActionControl(page, actionName, budget(500));
           if (action) {
-            await action.click({ timeout: 15_000 });
+            await action.click({ timeout: budget(3_000) });
             return;
           }
           await emitDomDiagnostic("after_card_open");
         } else {
           this.#onDiagnostic?.("home_monitor_current_mode_missing");
           let cardOpened = false;
-          const cardResult = await clickTextOnlyHomeMonitorCard(page, monitorLabels, 3_000);
+          const cardResult = await clickTextOnlyHomeMonitorCard(page, monitorLabels, budget(1_000));
           if (cardResult === "ambiguous") throw new Error("command_control_ambiguous");
           if (cardResult === "clicked") {
             cardOpened = true;
             monitorOpened = true;
-            textResult = await clickRequestedText(8_000);
+            textResult = await clickRequestedText(budget(3_000));
             if (textResult === "clicked") return;
             if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
-            action = await findLocationActionControl(page, actionName, 1_000);
+            action = await findLocationActionControl(page, actionName, budget(500));
             if (action) {
-              await action.click({ timeout: 15_000 });
+              await action.click({ timeout: budget(3_000) });
               return;
             }
           }
           if (!cardOpened) {
-            const monitor = await findHomeMonitorControl(page, monitorName);
+            const monitor = await findHomeMonitorControl(page, monitorName, budget(1_000));
             if (monitor) {
-              await monitor.click({ timeout: 15_000 });
+              await monitor.click({ timeout: budget(3_000) });
               cardOpened = true;
             monitorOpened = true;
-              textResult = await clickRequestedText(8_000);
+              textResult = await clickRequestedText(budget(3_000));
               if (textResult === "clicked") return;
               if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
             }
@@ -707,16 +753,16 @@ export class SmartThingsWebUiCommandExecutor {
           if (cardOpened) {
             const dialog = page.getByRole("dialog");
             try {
-              await dialog.first().waitFor({ state: "visible", timeout: 1_000 });
+              await dialog.first().waitFor({ state: "visible", timeout: budget(500) });
             } catch {
               // Cake may render a drawer or roleless overlay.
             }
             const dialogCount = await dialog.count();
             if (dialogCount > 1) throw new Error("command_control_ambiguous");
             if (dialogCount === 1) {
-              action = await findLocationActionControl(dialog, actionName, 1_000);
+              action = await findLocationActionControl(dialog, actionName, budget(500));
               if (action) {
-                await action.click({ timeout: 15_000 });
+                await action.click({ timeout: budget(3_000) });
                 return;
               }
             }
@@ -727,17 +773,21 @@ export class SmartThingsWebUiCommandExecutor {
         throw new Error("command_control_not_found");
       },
       () => page.close(),
-      input.waitForConfirmation
+      async () => {
+        this.#diagnostic(`home_monitor_dispatch_ms_${Date.now() - dispatchStartedAt}`);
+        await input.waitForConfirmation?.();
+      }
     );
   }
 
   private async openLocationPage(
     locationId: string,
-    locationNames?: Readonly<Record<string, string>>
+    locationNames?: Readonly<Record<string, string>>,
+    direct = false
   ): Promise<CommandPageLike> {
     const manager = this.getManager();
     if (!manager) throw new Error("command_browser_unavailable");
-    const page = (await manager.openCommandPage()) as CommandPageLike;
+    const page = (await manager.openCommandPage(direct ? this.#resolveRawLocationId?.(locationId) : undefined)) as CommandPageLike;
     try {
       if (!isSmartThingsLocation(page.url())) throw new Error("command_login_required");
       await this.ensureLocation(page, locationId, locationNames);
@@ -825,8 +875,13 @@ export class SmartThingsWebUiCommandExecutor {
     }
   }
 
-  async #runExclusive<T>(work: () => Promise<T>): Promise<T> {
+  async #runExclusive<T>(work: () => Promise<T>, maxWaitMs?: number): Promise<T> {
     const previous = this.#uiQueue;
+    if (maxWaitMs !== undefined) {
+      const queued = enqueueWithDeadline(previous, work, maxWaitMs);
+      this.#uiQueue = queued.completion;
+      return await queued.result;
+    }
     let release: () => void = () => undefined;
     this.#uiQueue = new Promise<void>((resolve) => {
       release = resolve;
@@ -839,7 +894,7 @@ export class SmartThingsWebUiCommandExecutor {
     }
   }
 
-  async #runForeground<T>(work: () => Promise<T>): Promise<T> {
+  async #runForeground<T>(work: () => Promise<T>, maxWaitMs?: number): Promise<T> {
     this.#foregroundOperationCount += 1;
     try {
       this.#backgroundPreemption?.request();
@@ -847,7 +902,7 @@ export class SmartThingsWebUiCommandExecutor {
       if (backgroundPage && !backgroundPage.isClosed()) {
         void backgroundPage.close().catch(() => undefined);
       }
-      return await this.#runExclusive(work);
+      return await this.#runExclusive(work, maxWaitMs);
     } finally {
       this.#foregroundOperationCount -= 1;
     }
@@ -2101,6 +2156,7 @@ async function findHomeMonitorCardAction(
   actionName: RegExp,
   timeoutMs: number
 ): Promise<CommandLocatorLike | undefined> {
+  const deadline = Date.now() + timeoutMs;
   const title = await firstVisibleCandidate(
     [
       scope.getByRole("heading", { name: monitorName }),
@@ -2114,11 +2170,11 @@ async function findHomeMonitorCardAction(
   if (titleCount !== 1) return undefined;
 
   let cardScope = title;
-  for (let depth = 0; depth < 8; depth += 1) {
+  for (let depth = 0; depth < 8 && Date.now() < deadline; depth += 1) {
     const action = await findLocationActionControl(
       cardScope,
       actionName,
-      Math.min(timeoutMs, 500)
+      Math.max(1, Math.min(deadline - Date.now(), 150))
     );
     if (action) return action;
     cardScope = cardScope.locator("..");
@@ -2128,13 +2184,14 @@ async function findHomeMonitorCardAction(
 
 async function findHomeMonitorControl(
   scope: CommandControlSurface,
-  monitorName: RegExp
+  monitorName: RegExp,
+  timeoutMs = 15_000
 ): Promise<CommandLocatorLike | undefined> {
   const candidate = await firstVisibleCandidate(
     ["button", "link", "menuitem", "tab"].map((role) =>
       scope.getByRole(role, { name: monitorName })
     ),
-    15_000
+    timeoutMs
   );
   if (!candidate) return undefined;
   const count = await candidate.count();
