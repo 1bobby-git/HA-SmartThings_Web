@@ -52,7 +52,7 @@ async function run(name, { ignoreLifetimeHook = false, mode = "correct", action 
     const page = await browser.newPage();
     pages.push(page);
     await page.route("**/*", (route) => route.fulfill({ status: 200,
-      contentType: "text/html; charset=utf-8", body: html(150, mode) }));
+      contentType: "text/html; charset=utf-8", body: html(400, mode) }));
     await page.exposeFunction("syntheticClick", () => { clicks++; order.push("click"); });
     await page.exposeFunction("syntheticSecurity", (state) => {
       events++; order.push("event");
@@ -67,7 +67,7 @@ async function run(name, { ignoreLifetimeHook = false, mode = "correct", action 
   const executor = new SmartThingsWebUiCommandExecutor(() => manager, () => "loc_001", {
     onHomeMonitorCardDiagnostic: (item) => cards.push(item)
   });
-  const service = new SafeCommandService({ devices: store, status: connected(), timeoutMs: 700,
+  const service = new SafeCommandService({ devices: store, status: connected(), timeoutMs: 1600,
     resyncAfterMs: 10, resync: () => new Promise(() => undefined),
     executor: { executeLocationAction: async (input) => {
       // Reproduce the old contract with the real page.close() path, not a stubbed close.

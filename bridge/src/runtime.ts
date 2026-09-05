@@ -102,7 +102,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.4";
+const bridgeVersion = "1.8.5";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -416,6 +416,11 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     timeoutMs: deps.config.commandConfirmationTimeoutMs ?? 30_000,
     ...(deps.config.statusRecheckEnabled === false ? {} : { resyncAfterMs: 1_000 }),
     resync: refreshCommandSnapshot,
+    onLocationDiagnostic: (diagnostic) => log.info(
+      `home_monitor_command:${diagnostic.phase}:action_${diagnostic.action}` +
+      `:matches_${Number(diagnostic.observedStateMatches)}:elapsed_ms_${diagnostic.elapsedMs}` +
+      (diagnostic.reason ? `:reason_${diagnostic.reason}` : "")
+    ),
     onPendingCountChange: (count) => status.update({ pendingCommandCount: count }),
     onResult: (result) => {
       const current = status.getSnapshot();
