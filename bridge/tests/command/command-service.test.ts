@@ -3954,3 +3954,178 @@ function capture(direction: "sent" | "received", text: string): SanitizedCapture
     payloadHash: `${direction}:${text}`
   };
 }
+
+
+describe("Home Monitor confirmation lifetime", () => {
+  const request = (id: string) => ({ targetType: "location", targetId: "loc_001",
+    command: "armAway", arguments: [], clientRequestId: id });
+  const initialStore = () => {
+    const store = readyDeviceStore();
+    observeLocationSnapshot(store, "DISARMED", "2026-08-25T00:00:00Z");
+    return store;
+  };
+
+  test("passes a completion hook that waits for a delayed security event", async () => {
+    const store = initialStore();
+    let hookUsed = false;
+    let evidenceReceived = false;
+    const service = new SafeCommandService({ devices: store, status: connectedStatus(),
+      timeoutMs: 1_000, resync: async () => undefined,
+      executor: { executeLocationAction: async (input) => {
+        expect(input.waitForConfirmation).toBeTypeOf("function");
+        expect(input.confirmationTimeoutMs).toBe(1_000);
+        const timer = setTimeout(() => {
+          evidenceReceived = true;
+          store.observe(received(securityEventFrame("ARMED_AWAY", "2026-08-25T00:00:01Z")));
+        }, 20);
+        try {
+          await input.waitForConfirmation!();
+          hookUsed = true;
+          expect(evidenceReceived).toBe(true);
+        } finally { clearTimeout(timer); }
+      } }
+    });
+    await expect(service.execute(request("request_hm_delayed"))).resolves.toMatchObject({
+      status: "confirmed", confirmation: "security_arm_state_event" });
+    expect(hookUsed).toBe(true);
+  });
+
+  test("retains a fast in-click event until the hook starts", async () => {
+    const store = initialStore();
+    const service = new SafeCommandService({ devices: store, status: connectedStatus(),
+      timeoutMs: 100, resync: async () => undefined,
+      executor: { executeLocationAction: async (input) => {
+        store.observe(received(securityEventFrame("ARMED_AWAY", "2026-08-25T00:00:01Z")));
+        await input.waitForConfirmation!();
+      } }
+    });
+    await expect(service.execute(request("request_hm_fast"))).resolves.toMatchObject({ status: "confirmed" });
+  });
+
+  test("does not accept a security event contradicted before UI completion", async () => {
+    const store = initialStore();
+    const service = new SafeCommandService({ devices: store, status: connectedStatus(),
+      timeoutMs: 30, resync: async () => undefined,
+      executor: { executeLocationAction: async (input) => {
+        store.observe(received(securityEventFrame("ARMED_AWAY", "2026-08-25T00:00:01Z")));
+        store.observe(received(securityEventFrame("DISARMED", "2026-08-25T00:00:02Z")));
+        await input.waitForConfirmation!();
+      } }
+    });
+    await expect(service.execute(request("request_hm_contradicted"))).rejects.toMatchObject({ code: "command_confirmation_timeout" });
+  });
+
+  test("has a hard deadline when the status resync never finishes", async () => {
+    const store = initialStore();
+    const resync = vi.fn(() => new Promise<CommandResyncEvidence | undefined>(() => undefined));
+    const service = new SafeCommandService({ devices: store, status: connectedStatus(),
+      timeoutMs: 30, resyncAfterMs: 0, resync,
+      executor: { executeLocationAction: async (input) => { await input.waitForConfirmation!(); } }
+    });
+    await expect(service.execute(request("request_hm_hung_resync"))).rejects.toMatchObject({ code: "command_confirmation_timeout" });
+    expect(resync).toHaveBeenCalled();
+  });
+
+  test("honors the request deadline and isolates diagnostic failures", async () => {
+    const store = initialStore();
+    const service = new SafeCommandService({ devices: store, status: connectedStatus(),
+      timeoutMs: 30_000, resync: async () => undefined,
+      onLocationDiagnostic: () => { throw new Error("diagnostic only"); },
+      executor: { executeLocationAction: async (input) => {
+        expect(input.confirmationTimeoutMs).toBe(1_000);
+        store.observe(received(securityEventFrame("ARMED_AWAY", "2026-08-25T00:00:01Z")));
+        await input.waitForConfirmation!();
+      } }
+    });
+    await expect(service.execute({ ...request("request_hm_timeout_option"), timeout: 1 })).resolves.toMatchObject({ status: "confirmed" });
+  });
+});
+
+
+describe("Home Monitor location metadata preservation", () => {
+  const setup = () => {
+    const store = readyDeviceStore();
+    observeLocationSnapshot(store, "DISARMED", "2026-08-25T00:00:00Z");
+    store.observe(received(securityEventFrame("ARMED_AWAY", "2026-08-25T00:00:02Z")));
+    return store;
+  };
+  const location = (store: DeviceStore) => store.snapshot().locations.find((item) => item.id === "loc_001");
+  const metadata = (store: DeviceStore, name = "Home") => store.observeAdvancedInventorySnapshot({
+    locations: [{ locationId: "loc_001", name }]
+  });
+  const consumerMetadata = (store: DeviceStore, updatedAt?: string) => {
+    store.observe(sent('4226["find","api/location",{}]'));
+    store.observe(received(`4326${JSON.stringify([null, [{ locationId: "loc_001", name: "Home",
+      ...(updatedAt ? { updatedAt } : {}) }]])}`));
+  };
+
+  test("Advanced metadata must not erase observed security state or emit duplicate inventory", () => {
+    const store = setup();
+    const before = location(store);
+    const listener = vi.fn();
+    const unsubscribe = store.subscribe(listener);
+    metadata(store);
+    metadata(store);
+    expect(location(store)).toEqual(before);
+    expect(listener).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  test("a location rename preserves the security state and its timestamp", () => {
+    const store = setup();
+    metadata(store, "Renamed home");
+    expect(location(store)).toMatchObject({ name: "Renamed home", armState: "ARMED_AWAY",
+      updatedAt: location(setup())?.updatedAt });
+  });
+
+  test("a metadata-only consumer location snapshot retains the security state", () => {
+    const store = setup();
+    const before = location(store);
+    consumerMetadata(store);
+    expect(location(store)).toEqual(before);
+  });
+
+  test("a metadata timestamp is not a security timestamp", () => {
+    const store = setup();
+    consumerMetadata(store, "2026-09-01T00:00:00Z");
+    store.observe(received(securityEventFrame("DISARMED", "2026-08-25T00:00:03Z")));
+    expect(location(store)?.armState).toBe("DISARMED");
+  });
+
+  test("an older or undated snapshot cannot revert a newer security event", () => {
+    const store = setup();
+    const before = location(store);
+    observeLocationSnapshot(store, "DISARMED", "2026-08-25T00:00:01Z");
+    expect(location(store)).toEqual(before);
+    observeLocationSnapshot(store, "DISARMED", "invalid-time");
+    expect(location(store)).toEqual(before);
+  });
+
+  test("a newer explicit consumer security snapshot is still applied", () => {
+    const store = setup();
+    observeLocationSnapshot(store, "DISARMED", "2026-08-25T00:00:03Z");
+    expect(location(store)?.armState).toBe("DISARMED");
+  });
+
+  test("metadata never invents an arm state for a new location", () => {
+    const store = new DeviceStore();
+    metadata(store);
+    expect(location(store)?.armState).toBeUndefined();
+  });
+
+  test("metadata reconciliation does not invalidate fresh pending command evidence", async () => {
+    const store = readyDeviceStore();
+    observeLocationSnapshot(store, "DISARMED", "2026-08-25T00:00:00Z");
+    const service = new SafeCommandService({ devices: store, status: connectedStatus(),
+      timeoutMs: 100, resync: async () => undefined,
+      executor: { executeLocationAction: async (input) => {
+        store.observe(received(securityEventFrame("ARMED_AWAY", "2026-08-25T00:00:02Z")));
+        metadata(store);
+        await input.waitForConfirmation!();
+      } }
+    });
+    await expect(service.execute({ targetType: "location", targetId: "loc_001",
+      command: "armAway", arguments: [], clientRequestId: "request_hm_metadata" }))
+      .resolves.toMatchObject({ status: "confirmed", confirmation: "security_arm_state_event" });
+  });
+});

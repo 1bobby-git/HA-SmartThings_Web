@@ -133,6 +133,9 @@ export interface SafeCommandExecutor {
     action: LocationAction;
     locationId: string;
     locationNames?: Readonly<Record<string, string>>;
+    /** Await after the UI action, before closing its browser page. */
+    waitForConfirmation?: () => Promise<void>;
+    confirmationTimeoutMs?: number;
   }): Promise<void>;
 }
 
@@ -197,6 +200,13 @@ interface SafeCommandServiceOptions {
   confirmationStabilityMs?: number;
   resync: (request?: CommandResyncRequest) => Promise<CommandResyncEvidence | undefined>;
   onPendingCountChange?: (count: number) => void;
+  onLocationDiagnostic?: (event: {
+    stage: "dispatch" | "waiting" | "confirmed" | "timed_out" | "failed";
+    action: string;
+    observed: string;
+    timeoutMs: number;
+    sequence: number;
+  }) => void;
   onResult?: (result: SafeCommandResult) => void;
 }
 
@@ -717,6 +727,17 @@ export class SafeCommandService {
     const desired = armStateForCommand(request.command);
     if (!desired || request.arguments.length !== 0) throw new SafeCommandError("unsupported_command");
     if (location.armState?.toUpperCase() === desired) return alreadyConfirmed(request.clientRequestId, snapshot.sequence);
+    const timeoutMs = request.timeout === undefined ? this.options.timeoutMs : request.timeout * 1_000;
+    const diagnostic = (stage: "dispatch" | "waiting" | "confirmed" | "timed_out" | "failed") => {
+      const current = this.options.devices.snapshot();
+      const value = current.locations.find((item) => item.id === request.targetId)?.armState?.toUpperCase();
+      const observed = value && ["ARMED_AWAY", "ARMED_STAY", "DISARMED"].includes(value) ? value : "UNKNOWN";
+      try {
+        this.options.onLocationDiagnostic?.({ stage, action: request.command, observed,
+          timeoutMs, sequence: current.sequence });
+      } catch { /* Diagnostics must never change a security command. */ }
+    };
+    // Subscribe before interaction. Fast events are held until interaction is marked complete.
     const confirmation = waitForLocationArmState({
       devices: this.options.devices,
       locationId: request.targetId,
@@ -724,20 +745,40 @@ export class SafeCommandService {
       afterSequence: snapshot.sequence,
       resync: this.options.resync
     });
+    let waiting = false;
+    const waitForConfirmation = async (): Promise<void> => {
+      if (!waiting) {
+        waiting = true;
+        diagnostic("waiting");
+        confirmation.startTimeout(timeoutMs, this.options.resyncAfterMs);
+      }
+      await confirmation.result;
+    };
+    diagnostic("dispatch");
     try {
       if (!this.options.executor.executeLocationAction) throw new SafeCommandError("command_execution_failed");
-      await this.options.executor.executeLocationAction({ action: request.command as LocationAction, locationId: request.targetId, locationNames });
+      await this.options.executor.executeLocationAction({
+        action: request.command as LocationAction,
+        locationId: request.targetId,
+        locationNames,
+        waitForConfirmation,
+        confirmationTimeoutMs: timeoutMs
+      });
+      // Compatibility for other executors that return a receipt without consuming the hook.
+      await waitForConfirmation();
     } catch (error) {
       confirmation.cancel();
+      const timedOut = error instanceof Error && error.message === "command_confirmation_timeout";
+      diagnostic(timedOut ? "timed_out" : "failed");
+      // The completion hook now rejects inside the executor await. Preserve its failure code.
+      if (timedOut) throw new SafeCommandError("command_confirmation_timeout");
+      if (error instanceof SafeCommandError) throw error;
       throw commandError(error);
     }
-    confirmation.startTimeout(this.options.timeoutMs, this.options.resyncAfterMs);
-    return confirmed(
-      request.clientRequestId,
-      (await confirmation.result).sequence,
-      "security_arm_state_event"
-    );
+    diagnostic("confirmed");
+    return confirmed(request.clientRequestId, (await confirmation.result).sequence, "security_arm_state_event");
   }
+
 }
 
 function validateRequest(input: unknown): SafeCommandRequest {
@@ -1006,11 +1047,16 @@ function waitForRefreshCommand(options: {
 }
 
 function waitForLocationArmState(options: { devices: DeviceStore; locationId: string; desired: string; afterSequence: number; resync: CommandResync }): ConfirmationWait {
+  const matches = () => options.devices.snapshot().locations.some((location) =>
+    location.id === options.locationId && location.armState?.toUpperCase() === options.desired);
   return waitForPredicate({
     devices: options.devices,
     afterSequence: options.afterSequence,
     resync: options.resync,
-    matches: (event) => event.type === "inventory" && options.devices.snapshot().locations.some((location) => location.id === options.locationId && location.armState?.toUpperCase() === options.desired)
+    matches: (event) => event.type === "inventory" && matches(),
+    invalidates: (event) => event.type === "inventory" && !matches(),
+    // Keep a hard deadline even if a refresh hangs. A refresh receipt alone is never proof.
+    forceFinalResync: true
   });
 }
 

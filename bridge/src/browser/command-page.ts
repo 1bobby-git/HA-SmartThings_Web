@@ -1,3 +1,4 @@
+import { finishHomeMonitorInteraction, type HomeMonitorLifecycleStage } from "./home-monitor-post-action.js";
 import type { BrowserPageLike, KeeperPageManager } from "./keeper-page.js";
 import {
   clickCurrentHomeMonitorMode,
@@ -48,6 +49,7 @@ type CommandPageManagerLike = Pick<KeeperPageManager, "openCommandPage"> &
   Partial<Pick<KeeperPageManager, "currentKeeper">>;
 
 type CommandDiagnosticStage =
+  | HomeMonitorLifecycleStage
   | "foreground_requested"
   | "foreground_ready"
   | "home_monitor_current_mode_opened"
@@ -555,6 +557,8 @@ export class SmartThingsWebUiCommandExecutor {
     locationId: string;
     locationNames?: Readonly<Record<string, string>>;
     action: "armAway" | "armStay" | "disarm";
+    waitForConfirmation?: () => Promise<void>;
+    confirmationTimeoutMs?: number;
   }): Promise<void> {
     await this.#runForeground(() => this.#executeLocationAction(input));
   }
@@ -563,6 +567,8 @@ export class SmartThingsWebUiCommandExecutor {
     locationId: string;
     locationNames?: Readonly<Record<string, string>>;
     action: "armAway" | "armStay" | "disarm";
+    waitForConfirmation?: () => Promise<void>;
+    confirmationTimeoutMs?: number;
   }): Promise<void> {
     await this.#invalidateWarmPage();
     const page = await this.openLocationPage(input.locationId, input.locationNames);
@@ -594,6 +600,14 @@ export class SmartThingsWebUiCommandExecutor {
           // Diagnostics must never change command behavior.
         }
       };
+      const finishInteraction = () => finishHomeMonitorInteraction(page, {
+        monitorLabels,
+        modeLabelGroups,
+        requestedGroup: { armAway: 0, armStay: 1, disarm: 2 }[input.action],
+        ...(input.waitForConfirmation ? { waitForConfirmation: input.waitForConfirmation } : {}),
+        ...(input.confirmationTimeoutMs === undefined ? {} : { confirmationTimeoutMs: input.confirmationTimeoutMs }),
+        ...(this.#onDiagnostic ? { diagnostic: this.#onDiagnostic } : {})
+      });
       let monitorOpened = false;
       const clickRequestedText = async (timeoutMs: number) => {
         const dialogResult = await clickHomeMonitorDialogAction(
@@ -618,12 +632,12 @@ export class SmartThingsWebUiCommandExecutor {
         { armAway: 0, armStay: 1, disarm: 2 }[input.action],
         1_800, this.#onHomeMonitorCardDiagnostic
       );
-      if (dashboardResult === "clicked") return;
+      if (dashboardResult === "clicked") { await finishInteraction(); return; }
       if (dashboardResult === "ambiguous") throw new Error("command_control_ambiguous");
       if (dashboardResult === "blocked") throw new Error("command_control_not_found");
       if (dashboardResult === "dialog") {
         const modalResult = await clickRequestedText(10_000);
-        if (modalResult === "clicked") return;
+        if (modalResult === "clicked") { await finishInteraction(); return; }
         if (modalResult === "ambiguous") throw new Error("command_control_ambiguous");
         // Never fall through to an obscured dashboard when a modal is already open.
         throw new Error("command_control_not_found");
@@ -638,15 +652,17 @@ export class SmartThingsWebUiCommandExecutor {
       );
       if (action) {
         await action.click({ timeout: 15_000 });
+        await finishInteraction();
         return;
       }
       let textResult = await clickRequestedText(1_200);
-      if (textResult === "clicked") return;
+      if (textResult === "clicked") { await finishInteraction(); return; }
       if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
-      if (await clickHomeMonitorCardActionByText(page, monitorLabels, actionLabels)) return;
+      if (await clickHomeMonitorCardActionByText(page, monitorLabels, actionLabels)) { await finishInteraction(); return; }
       action = await findLocationActionControl(page, actionName, 250);
       if (action) {
         await action.click({ timeout: 15_000 });
+        await finishInteraction();
         return;
       }
 
@@ -664,11 +680,12 @@ export class SmartThingsWebUiCommandExecutor {
         monitorOpened = true;
         this.#onDiagnostic?.("home_monitor_current_mode_opened");
         textResult = await clickRequestedText(10_000);
-        if (textResult === "clicked") return;
+        if (textResult === "clicked") { await finishInteraction(); return; }
         if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
         action = await findLocationActionControl(page, actionName, 1_500);
         if (action) {
           await action.click({ timeout: 15_000 });
+          await finishInteraction();
           return;
         }
         await emitDomDiagnostic("after_card_open");
@@ -681,11 +698,12 @@ export class SmartThingsWebUiCommandExecutor {
           cardOpened = true;
           monitorOpened = true;
           textResult = await clickRequestedText(8_000);
-          if (textResult === "clicked") return;
+          if (textResult === "clicked") { await finishInteraction(); return; }
           if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
           action = await findLocationActionControl(page, actionName, 1_000);
           if (action) {
             await action.click({ timeout: 15_000 });
+            await finishInteraction();
             return;
           }
         }
@@ -696,7 +714,7 @@ export class SmartThingsWebUiCommandExecutor {
             cardOpened = true;
           monitorOpened = true;
             textResult = await clickRequestedText(8_000);
-            if (textResult === "clicked") return;
+            if (textResult === "clicked") { await finishInteraction(); return; }
             if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
           }
         }
@@ -713,6 +731,7 @@ export class SmartThingsWebUiCommandExecutor {
             action = await findLocationActionControl(dialog, actionName, 1_000);
             if (action) {
               await action.click({ timeout: 15_000 });
+              await finishInteraction();
               return;
             }
           }

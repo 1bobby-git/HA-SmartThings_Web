@@ -639,12 +639,18 @@ export class DeviceStore {
           ? (readString(row.armState ?? row.arm_state) as string)
           : undefined;
         const updatedAt = validTimestamp(row.updatedAt ?? row.updated_at ?? row.timestamp);
+        const current = this.#locations.get(id);
+        const acceptArmState = armState !== undefined && (
+          current?.armState === undefined || !current.updatedAt ||
+          !isOlderOrUndated(updatedAt, current.updatedAt)
+        );
         changed =
           setIfChanged(this.#locations, id, {
+            ...current,
             id,
             name,
-            ...(armState ? { armState } : {}),
-            ...(armState || updatedAt ? { updatedAt } : {})
+            ...(acceptArmState ? { armState, updatedAt } : {}),
+            ...(!current && !armState && updatedAt ? { updatedAt } : {})
           }) || changed;
       }
       return changed;
@@ -911,7 +917,10 @@ export class DeviceStore {
       );
       const name = safeName(row.name ?? row.locationName ?? row.label);
       if (!id || !name) continue;
-      changed = setIfChanged(this.#locations, id, { id, name }) || changed;
+      // Advanced locations are metadata, not a security-state observation.
+      // Replacing the row with {id, name} erased a newer armState on every resync.
+      const current = this.#locations.get(id);
+      changed = setIfChanged(this.#locations, id, { ...current, id, name }) || changed;
     }
     return changed;
   }
