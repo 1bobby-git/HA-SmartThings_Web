@@ -1,0 +1,32 @@
+name: Prepare Home Monitor latency workspace
+on:
+  push:
+    branches: [fix/home-monitor-latency-1.8.6]
+    paths: [.github/workflows/workspace-home-monitor-1.8.6.yml]
+permissions:
+  contents: read
+jobs:
+  workspace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - run: npm ci
+      - name: Package public source and locked test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$(command -v node)" /tmp/workspace-node
+          tar --exclude=.git -czf /tmp/home-monitor-workspace.tgz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: home-monitor-latency-workspace
+          path: |
+            /tmp/home-monitor-workspace.tgz
+            /tmp/workspace-node
+          retention-days: 1
+          compression-level: 1
