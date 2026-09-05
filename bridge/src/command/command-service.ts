@@ -774,7 +774,7 @@ export class SafeCommandService {
       return confirmed(request.clientRequestId, evidence.sequence, "security_arm_state_event");
     } catch (error) {
       confirmation.cancel();
-      const failure = commandError(error);
+      const failure = error instanceof SafeCommandError ? error : commandError(error);
       diagnostic("failed", failure.code);
       throw failure;
     }
