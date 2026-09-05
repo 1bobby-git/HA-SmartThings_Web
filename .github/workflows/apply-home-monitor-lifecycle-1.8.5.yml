@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/apply-home-monitor-lifecycle-1.8.5.yml
       - .github/scripts/apply_home_monitor_lifecycle_1_8_5.py
+      - .github/scripts/complete_home_monitor_state_1_8_5.py
       - bridge/src/browser/home-monitor-post-action.ts
       - tools/ci-home-monitor-lifecycle-smoke.mjs
 
@@ -34,15 +35,30 @@ jobs:
           node-version: 24.18.1
           cache: npm
 
-      - name: Reproduce the 1.8.4 lifecycle defect before applying the patch
+      - name: Reproduce the 1.8.4 lifecycle and metadata defects before applying the patch
         run: |
           npm ci
           npm run build
           npx playwright-core install --with-deps chromium
           node tools/ci-home-monitor-lifecycle-smoke.mjs --baseline
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { DeviceStore } from './dist/bridge/src/state/device-store.js';
+          const store = new DeviceStore();
+          store.observeAdvancedInventorySnapshot({locations:[{locationId:'loc_001',name:'Home'}]});
+          const text = '42'+JSON.stringify(['api/subscription SECURITY_ARM_STATE_EVENT',{data:{location_id:'loc_001',arm_state:'ARMED_AWAY',event_time:'2026-08-25T00:00:02Z'}}]);
+          store.observe({__sanitized:true,source:'playwright-websocket-frame',receivedAt:new Date().toISOString(),payload:{direction:'received',frame:{payload:text,truncated:false}},payloadHash:text});
+          assert.equal(store.snapshot().locations[0].armState,'ARMED_AWAY');
+          store.observeAdvancedInventorySnapshot({locations:[{locationId:'loc_001',name:'Home'}]});
+          assert.equal(store.snapshot().locations[0].armState,undefined);
+          store.close();
+          console.log('REPRODUCED 1.8.4: Advanced location metadata erases observed security state');
+          JS
 
       - name: Apply reviewed source and release update
-        run: python .github/scripts/apply_home_monitor_lifecycle_1_8_5.py
+        run: |
+          python .github/scripts/apply_home_monitor_lifecycle_1_8_5.py
+          python .github/scripts/complete_home_monitor_state_1_8_5.py
 
       - name: Validate Node, TypeScript and actual Chromium lifecycle
         run: |
@@ -75,11 +91,12 @@ jobs:
         run: |
           set -euo pipefail
           rm -f .github/scripts/apply_home_monitor_lifecycle_1_8_5.py
+          rm -f .github/scripts/complete_home_monitor_state_1_8_5.py
           rm -f .github/workflows/apply-home-monitor-lifecycle-1.8.5.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git diff --cached --check
           git diff --cached --stat
-          git commit -m 'fix: keep Home Monitor page alive until verified security state 1.8.5'
+          git commit -m 'fix: retain Home Monitor page and observed security state 1.8.5'
           git push origin HEAD:fix/home-monitor-confirmed-lifecycle-1.8.5
