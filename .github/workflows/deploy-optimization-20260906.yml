@@ -1,0 +1,193 @@
+name: Deploy optimization 20260906
+on:
+  push:
+    branches: [release/optimization-20260906]
+    paths: [.github/workflows/deploy-optimization-20260906.yml]
+permissions:
+  contents: write
+concurrency:
+  group: deploy-optimization-20260906
+  cancel-in-progress: false
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PATCH_SPEC: >-
+        {"repository":"1bobby-git/HA-SmartThings_Web","branch":"main","base_version":"1.8.6","candidate_version":"1.8.7","summary":["지연 알림 큐의 마지막 구독 해제 시 콜백과 빈 타이머 정리","즉시 전달한 버튼 등 이벤트 콜백이 이전 지연 배치에서 다시 실행되지 않도록 처리","같은 콜백이 다른 범위에 계속 구독된 경우 그 구독은 유지","Advanced·실시간 SSE·장치 명령·쿠키/로그인·브리지 앱·엔티티 식별자 정책은 변경하지 않음"],"changes":[{"path":"custom_components/smartthings_web/models.py","git_blob_sha1":"f56b9c2a39ffc9f5c1e884746bc3795015b68a74","old":"            self.listeners.discard(listener)\n            self._pending_listeners.discard(listener)\n","new":"            self.listeners.discard(listener)\n            self._discard_unsubscribed_listener(listener)\n"},{"path":"custom_components/smartthings_web/models.py","git_blob_sha1":"f56b9c2a39ffc9f5c1e884746bc3795015b68a74","old":"    @staticmethod\n    def _remove_scoped_listener(\n        listeners: dict[Any, set[Callable[[], None]]],\n        key: Any,\n        listener: Callable[[], None],\n    ) -> None:\n        scoped = listeners.get(key)\n        if scoped is None:\n            return\n        scoped.discard(listener)\n        if not scoped:\n            listeners.pop(key, None)\n","new":"    def _remove_scoped_listener(\n        self,\n        listeners: dict[Any, set[Callable[[], None]]],\n        key: Any,\n        listener: Callable[[], None],\n    ) -> None:\n        scoped = listeners.get(key)\n        if scoped is not None:\n            scoped.discard(listener)\n            if not scoped:\n                listeners.pop(key, None)\n        self._discard_unsubscribed_listener(listener)\n\n    def _discard_unsubscribed_listener(self, listener: Callable[[], None]) -> None:\n        \"\"\"Drop queued callbacks only after their last subscription is removed.\"\"\"\n        if listener in self.listeners:\n            return\n        if any(listener in scoped for scoped in self.state_listeners.values()):\n            return\n        if any(listener in scoped for scoped in self.device_listeners.values()):\n            return\n        self._pending_listeners.discard(listener)\n        self._cancel_empty_listener_flush()\n\n    def _cancel_empty_listener_flush(self) -> None:\n        \"\"\"Release a timer when no delayed listeners remain.\"\"\"\n        if not self._pending_listeners and self._listener_flush_handle is not None:\n            self._listener_flush_handle.cancel()\n            self._listener_flush_handle = None\n"},{"path":"custom_components/smartthings_web/models.py","git_blob_sha1":"f56b9c2a39ffc9f5c1e884746bc3795015b68a74","old":"        if immediate or self.listener_coalesce_ms <= 0:\n            self._dispatch_listeners(listeners)\n            return\n","new":"        if immediate or self.listener_coalesce_ms <= 0:\n            # This callback observes the latest state now. Do not deliver it\n            # again from an older delayed batch, especially for button events.\n            self._pending_listeners.difference_update(listeners)\n            self._cancel_empty_listener_flush()\n            self._dispatch_listeners(listeners)\n            return\n"},{"path":"custom_components/smartthings_web/manifest.json","git_blob_sha1":"0ae09e638d9d9c368cd94c514e3e5d1181c7a47a","old":"\"version\": \"1.8.6\"","new":"\"version\": \"1.8.7\""}]}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: 1bobby-git/HA-iOS-ANCS
+          ref: d5c58703029ea8cfbff4cfd335c59fc49d3fbe98
+          path: .release-helper
+          sparse-checkout: .optimization-release
+          persist-credentials: false
+      - name: Prepare isolated publisher and preserve the unchanged bridge archive
+        run: |
+          python - <<'PY'
+          import ast, os, shutil, textwrap
+          from pathlib import Path
+          source = Path('.release-helper/.optimization-release')
+          text = (source/'deploy.py').read_text()
+          old = '    release = api("releases/tags/" + state["tag"])'
+          assert text.count(old) == 2
+          text = text.replace(old, '    release = next(r for r in api("releases?per_page=100") if r["tag_name"] == state["tag"])', 1)
+          anchor = '    assets = sorted(output.iterdir())\n'
+          assert text.count(anchor) == 1
+          extra = '''
+          if DOMAIN == "smartthings_web":
+              import tarfile
+              require(not run("git", "diff", "--name-only", "--", "bridge", "addon", "tools", "package.json", "package-lock.json"), "Bridge source or package metadata changed")
+              require(json.loads(Path("package.json").read_text())["version"] == BASE_VERSION, "Bridge package version changed")
+              tar_path = output / f"smartthings-web-integration-{VERSION}.tgz"
+              with tarfile.open(tar_path, "w:gz") as archive:
+                  for name in sorted(filter(None, tracked)):
+                      p = Path(name)
+                      if p.is_file() and not p.is_symlink() and "__pycache__" not in p.parts and p.suffix not in {".pyc", ".pyo"}:
+                          archive.add(p, arcname=DOMAIN + "/" + p.relative_to(component).as_posix(), recursive=False)
+              with tarfile.open(tar_path, "r:gz") as archive:
+                  require(json.load(archive.extractfile(DOMAIN + "/manifest.json"))["version"] == VERSION, "Integration tar version mismatch")
+              old_release = state["old_release"]
+              bridge_assets = [a for a in old_release["assets"] if a["name"] == f"smartthings-web-bridge-{BASE_VERSION}.tgz"]
+              require(len(bridge_assets) == 1, "Expected the existing bridge archive")
+              asset = bridge_assets[0]
+              run("gh", "release", "download", old_release["tag_name"], "--repo", REPO, "--pattern", asset["name"], "--dir", str(output))
+              p = output / asset["name"]
+              require(p.stat().st_size == asset["size"], "Bridge archive size mismatch")
+              require(asset.get("digest") == "sha256:" + hashlib.sha256(p.read_bytes()).hexdigest(), "Bridge archive checksum mismatch")
+          '''
+          text = text.replace(anchor, textwrap.indent(textwrap.dedent(extra).strip()+'\n', '    ') + anchor)
+          ast.parse(text)
+          temp = Path(os.environ['RUNNER_TEMP'])
+          (temp/'optimization-deploy.py').write_text(text)
+          shutil.copyfile(source/'unittest_report.py', temp/'optimization-unittest.py')
+          shutil.rmtree('.release-helper')
+          PY
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.18.1'
+          cache: npm
+      - name: Check source hashes, version and branch protections
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python "$RUNNER_TEMP/optimization-deploy.py" check
+      - name: Install native validation dependencies
+        run: |
+          python -m pip install 'aiohttp>=3.10,<4' 'yarl>=1.9,<2' 'voluptuous>=0.15,<1'
+          npm ci
+      - name: Test unchanged baseline
+        run: |
+          python -m compileall -q custom_components/smartthings_web
+          PYTHONPATH="$PWD" python "$RUNNER_TEMP/optimization-unittest.py" custom_components/smartthings_web/tests "$RUNNER_TEMP/optimization-baseline.xml"
+          npm test -- --reporter=junit --outputFile="$RUNNER_TEMP/optimization-node-baseline.xml"
+      - name: Require all other six releases to be published first
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import json, subprocess
+          releases = {'HA-iOS-ANCS': 'v0.6.10', 'HA-SmartThings-Find': 'v1.4.3', 'HA-YTMusic-URL-Player': 'v1.9.4', 'HA-Seoul-Bike': 'v1.3.2', 'HA-Member-Adjacency': 'v1.6.5', 'HA-Kepco-Meter': 'v0.3.4'}
+          for repo, tag in releases.items():
+              release = json.loads(subprocess.check_output(['gh', 'api', f'repos/1bobby-git/{repo}/releases/tags/{tag}'], text=True))
+              assert release['tag_name'] == tag and release['published_at'] and not release['draft'] and not release['prerelease'], repo
+              print(repo, tag, release['published_at'])
+          PY
+      - name: Apply exact source patches and update documentation
+        run: python "$RUNNER_TEMP/optimization-deploy.py" apply
+      - name: Document integration-only release and preserve existing development warning
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          note = '\n\n## 통합과 브리지 버전\n\n이번 배포는 Home Assistant 통합 1.8.7만 업데이트합니다. 브리지 앱과 Node 패키지는 1.8.6을 유지합니다. 함께 첨부한 smartthings-web-bridge-1.8.6.tgz는 이전 릴리스와 SHA-256이 동일한 파일이며 재빌드하거나 업데이트한 앱이 아닙니다. HACS 통합 업데이트를 위해 브리지를 재설치할 필요는 없습니다. 기존 개발 중 경고와 설치 자제 안내는 유지합니다.\n'
+          p = Path('docs/OPTIMIZATION_2026-09-06.md')
+          p.write_text(p.read_text().rstrip() + note)
+          p = Path('README.md')
+          p.write_text(p.read_text().rstrip() + note)
+          state = json.loads(Path(os.environ['RUNNER_TEMP'], 'optimization-state.json').read_text())
+          for name in state['paths']:
+              if name.endswith('.md'):
+                  p = Path(name)
+                  p.write_text(p.read_text().rstrip()+'\n')
+          PY
+          git add -N CHANGELOG.md docs/OPTIMIZATION_2026-09-06.md
+          git diff --check
+      - name: Test complete patched integration
+        run: |
+          python -m compileall -q custom_components/smartthings_web
+          PYTHONPATH="$PWD" python "$RUNNER_TEMP/optimization-unittest.py" custom_components/smartthings_web/tests "$RUNNER_TEMP/optimization-patched.xml"
+      - name: Native Node tests, build and defensive repository audits
+        run: |
+          npm test -- --reporter=junit --outputFile="$RUNNER_TEMP/optimization-node-patched.xml"
+          npm run typecheck
+          npm run build
+          npm run audit:api-free
+          npm run audit:secrets
+          npm run audit:fixtures
+          npm audit --omit=dev --audit-level=high
+      - name: Native Chromium synthetic UI checks
+        run: |
+          npx playwright-core install --with-deps chromium
+          node tools/ci-home-monitor-dialog-smoke.mjs
+          node tools/ci-home-monitor-card-smoke.mjs
+          node tools/ci-home-monitor-confirmation-smoke.mjs
+          node tools/ci-home-monitor-latency-smoke.mjs
+      - name: Native bridge shell checks
+        run: |
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/maintain-profile
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/profile-maintenance/run
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/openbox/run
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/bridge/run
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/bridge/finish
+          bash -n tools/ci-haos-runtime-smoke.sh
+      - name: Native container startup checks without user HA or account credentials
+        run: tools/ci-haos-runtime-smoke.sh
+      - name: Validate local brand assets
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import struct
+          root = Path('custom_components/smartthings_web/brand')
+          expected = {'icon.png': (256,256), 'icon@2x.png': (512,512), 'logo.png': None, 'logo@2x.png': None, 'dark_logo.png': None, 'dark_logo@2x.png': None}
+          for name, size in expected.items():
+              data = (root/name).read_bytes()
+              assert data[:8] == b'\x89PNG\r\n\x1a\n' and data[12:16] == b'IHDR', name
+              width, height = struct.unpack('>II', data[16:24])
+              if size:
+                  assert (width,height) == size, name
+              else:
+                  low, high = (256,512) if '@2x' in name else (128,256)
+                  assert low <= min(width,height) <= high, name
+          PY
+      - name: HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration
+          ignore: topics
+      - name: Hassfest validation
+        uses: home-assistant/actions/hassfest@master
+      - name: Publish verified commit, tag and release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python "$RUNNER_TEMP/optimization-deploy.py" publish
+      - name: Preserve validation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: optimization-validation
+          path: |
+            ${{ runner.temp }}/optimization-baseline.xml
+            ${{ runner.temp }}/optimization-patched.xml
+            ${{ runner.temp }}/optimization-node-baseline.xml
+            ${{ runner.temp }}/optimization-node-patched.xml
+            ${{ runner.temp }}/optimization-result.json
+          if-no-files-found: ignore
