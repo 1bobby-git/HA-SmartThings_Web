@@ -102,18 +102,20 @@ jobs:
           npm run audit:fixtures
           git diff --check
 
-      - name: Commit verified source and remove temporary workflow
+      - name: Commit verified source
         shell: bash
         run: |
           set -euo pipefail
+          # Workflow edits use the maintainer connection separately; this job only has contents permission.
+          git restore .github/workflows/validate.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add bridge/src/browser/command-page.ts bridge/src/command/command-service.ts bridge/src/runtime.ts
           git add package.json package-lock.json protocol/version.json custom_components/smartthings_web/manifest.json
           git add addon/smartthings_web_bridge/config.yaml addon/smartthings_web_bridge/CHANGELOG.md README.md
-          git add tests/addon-config.test.ts tests/protocol-version-contract.test.ts .github/workflows/validate.yml
+          git add tests/addon-config.test.ts tests/protocol-version-contract.test.ts
           git add tools/ci-home-monitor-confirmation-smoke.mjs
-          git rm .github/scripts/prepare-home-monitor-1.8.5.py .github/workflows/prepare-home-monitor-1.8.5.yml
+          git rm .github/scripts/prepare-home-monitor-1.8.5.py
           git diff --cached --check
           git commit -m 'fix: retain Home Monitor command page through state confirmation 1.8.5'
           git push origin HEAD:fix/home-monitor-confirmation-lifecycle-1.8.5
