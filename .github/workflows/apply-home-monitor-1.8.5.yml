@@ -24,12 +24,14 @@ jobs:
           fetch-depth: 0
       - name: Apply reviewed source transformer
         run: python .github/scripts/apply_home_monitor_1_8_5.py
-      - name: Commit source and remove one-time build helpers
+      - name: Commit source only
         shell: bash
         run: |
           set -euo pipefail
           rm .github/scripts/apply_home_monitor_1_8_5.py
-          rm .github/workflows/apply-home-monitor-1.8.5.yml
+          # GITHUB_TOKEN has contents permission, not workflows permission.
+          # Workflow edits and helper removal are done separately by the authorized connector.
+          git restore .github/workflows/validate.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
