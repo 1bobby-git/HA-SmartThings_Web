@@ -1,3 +1,4 @@
+import { runLocationCommandSession } from "../command/location-command-session.js";
 import type { BrowserPageLike, KeeperPageManager } from "./keeper-page.js";
 import {
   clickCurrentHomeMonitorMode,
@@ -555,6 +556,7 @@ export class SmartThingsWebUiCommandExecutor {
     locationId: string;
     locationNames?: Readonly<Record<string, string>>;
     action: "armAway" | "armStay" | "disarm";
+    waitForConfirmation?: () => Promise<void>;
   }): Promise<void> {
     await this.#runForeground(() => this.#executeLocationAction(input));
   }
@@ -563,167 +565,170 @@ export class SmartThingsWebUiCommandExecutor {
     locationId: string;
     locationNames?: Readonly<Record<string, string>>;
     action: "armAway" | "armStay" | "disarm";
+    waitForConfirmation?: () => Promise<void>;
   }): Promise<void> {
     await this.#invalidateWarmPage();
     const page = await this.openLocationPage(input.locationId, input.locationNames);
-    try {
-      const actionName = locationActionName(input.action);
-      const actionLabels = locationActionLabels(input.action);
-      const modeLabelGroups = [
-        locationActionLabels("armAway"),
-        locationActionLabels("armStay"),
-        locationActionLabels("disarm")
-      ];
-      const locationName = input.locationNames?.[input.locationId];
-      const monitorName = homeMonitorName(locationName);
-      const monitorLabels = homeMonitorLabels(locationName);
-      const emitDomDiagnostic = async (
-        phase: HomeMonitorDomDiagnostics["phase"]
-      ): Promise<void> => {
-        const diagnostics = await inspectHomeMonitorDom(
-          page,
-          monitorLabels,
-          actionLabels,
-          modeLabelGroups,
-          phase
+    await runLocationCommandSession(
+      async () => {
+        const actionName = locationActionName(input.action);
+        const actionLabels = locationActionLabels(input.action);
+        const modeLabelGroups = [
+          locationActionLabels("armAway"),
+          locationActionLabels("armStay"),
+          locationActionLabels("disarm")
+        ];
+        const locationName = input.locationNames?.[input.locationId];
+        const monitorName = homeMonitorName(locationName);
+        const monitorLabels = homeMonitorLabels(locationName);
+        const emitDomDiagnostic = async (
+          phase: HomeMonitorDomDiagnostics["phase"]
+        ): Promise<void> => {
+          const diagnostics = await inspectHomeMonitorDom(
+            page,
+            monitorLabels,
+            actionLabels,
+            modeLabelGroups,
+            phase
+          );
+          if (!diagnostics) return;
+          try {
+            this.#onHomeMonitorDiagnostic?.(diagnostics);
+          } catch {
+            // Diagnostics must never change command behavior.
+          }
+        };
+        let monitorOpened = false;
+        const clickRequestedText = async (timeoutMs: number) => {
+          const dialogResult = await clickHomeMonitorDialogAction(
+            page, monitorLabels, actionLabels, modeLabelGroups, timeoutMs,
+            monitorOpened, this.#onHomeMonitorDialogDiagnostic
+          );
+          if (dialogResult === "not_found") {
+            // Never fall back to dashboard buttons behind an unrecognized modal.
+            await emitDomDiagnostic("final_failure");
+            throw new Error("command_control_not_found");
+          }
+          if (dialogResult !== "unavailable") return dialogResult;
+          return clickTextOnlyHomeMonitorAction(
+            page, monitorLabels, actionLabels, modeLabelGroups, timeoutMs
+          );
+        };
+
+        // The dashboard may already expose two security actions, including SVG text.
+        // Probe that exact card before attempting to open its current-state dialog.
+        const dashboardResult = await clickHomeMonitorCardAction(
+          page, monitorLabels, modeLabelGroups,
+          { armAway: 0, armStay: 1, disarm: 2 }[input.action],
+          1_800, this.#onHomeMonitorCardDiagnostic
         );
-        if (!diagnostics) return;
-        try {
-          this.#onHomeMonitorDiagnostic?.(diagnostics);
-        } catch {
-          // Diagnostics must never change command behavior.
-        }
-      };
-      let monitorOpened = false;
-      const clickRequestedText = async (timeoutMs: number) => {
-        const dialogResult = await clickHomeMonitorDialogAction(
-          page, monitorLabels, actionLabels, modeLabelGroups, timeoutMs,
-          monitorOpened, this.#onHomeMonitorDialogDiagnostic
-        );
-        if (dialogResult === "not_found") {
-          // Never fall back to dashboard buttons behind an unrecognized modal.
-          await emitDomDiagnostic("final_failure");
+        if (dashboardResult === "clicked") return;
+        if (dashboardResult === "ambiguous") throw new Error("command_control_ambiguous");
+        if (dashboardResult === "blocked") throw new Error("command_control_not_found");
+        if (dashboardResult === "dialog") {
+          const modalResult = await clickRequestedText(10_000);
+          if (modalResult === "clicked") return;
+          if (modalResult === "ambiguous") throw new Error("command_control_ambiguous");
+          // Never fall through to an obscured dashboard when a modal is already open.
           throw new Error("command_control_not_found");
         }
-        if (dialogResult !== "unavailable") return dialogResult;
-        return clickTextOnlyHomeMonitorAction(
-          page, monitorLabels, actionLabels, modeLabelGroups, timeoutMs
+
+        let action = await findHomeMonitorCardAction(
+          page,
+          monitorName,
+          monitorLabels,
+          actionName,
+          3_000
         );
-      };
-
-      // The dashboard may already expose two security actions, including SVG text.
-      // Probe that exact card before attempting to open its current-state dialog.
-      const dashboardResult = await clickHomeMonitorCardAction(
-        page, monitorLabels, modeLabelGroups,
-        { armAway: 0, armStay: 1, disarm: 2 }[input.action],
-        1_800, this.#onHomeMonitorCardDiagnostic
-      );
-      if (dashboardResult === "clicked") return;
-      if (dashboardResult === "ambiguous") throw new Error("command_control_ambiguous");
-      if (dashboardResult === "blocked") throw new Error("command_control_not_found");
-      if (dashboardResult === "dialog") {
-        const modalResult = await clickRequestedText(10_000);
-        if (modalResult === "clicked") return;
-        if (modalResult === "ambiguous") throw new Error("command_control_ambiguous");
-        // Never fall through to an obscured dashboard when a modal is already open.
-        throw new Error("command_control_not_found");
-      }
-
-      let action = await findHomeMonitorCardAction(
-        page,
-        monitorName,
-        monitorLabels,
-        actionName,
-        3_000
-      );
-      if (action) {
-        await action.click({ timeout: 15_000 });
-        return;
-      }
-      let textResult = await clickRequestedText(1_200);
-      if (textResult === "clicked") return;
-      if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
-      if (await clickHomeMonitorCardActionByText(page, monitorLabels, actionLabels)) return;
-      action = await findLocationActionControl(page, actionName, 250);
-      if (action) {
-        await action.click({ timeout: 15_000 });
-        return;
-      }
-
-      await emitDomDiagnostic("before_card_open");
-      const currentModeResult = await clickCurrentHomeMonitorMode(
-        page,
-        monitorLabels,
-        modeLabelGroups,
-        3_500
-      );
-      if (currentModeResult === "ambiguous") {
-        throw new Error("command_control_ambiguous");
-      }
-      if (currentModeResult === "clicked") {
-        monitorOpened = true;
-        this.#onDiagnostic?.("home_monitor_current_mode_opened");
-        textResult = await clickRequestedText(10_000);
-        if (textResult === "clicked") return;
-        if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
-        action = await findLocationActionControl(page, actionName, 1_500);
         if (action) {
           await action.click({ timeout: 15_000 });
           return;
         }
-        await emitDomDiagnostic("after_card_open");
-      } else {
-        this.#onDiagnostic?.("home_monitor_current_mode_missing");
-        let cardOpened = false;
-        const cardResult = await clickTextOnlyHomeMonitorCard(page, monitorLabels, 3_000);
-        if (cardResult === "ambiguous") throw new Error("command_control_ambiguous");
-        if (cardResult === "clicked") {
-          cardOpened = true;
+        let textResult = await clickRequestedText(1_200);
+        if (textResult === "clicked") return;
+        if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
+        if (await clickHomeMonitorCardActionByText(page, monitorLabels, actionLabels)) return;
+        action = await findLocationActionControl(page, actionName, 250);
+        if (action) {
+          await action.click({ timeout: 15_000 });
+          return;
+        }
+
+        await emitDomDiagnostic("before_card_open");
+        const currentModeResult = await clickCurrentHomeMonitorMode(
+          page,
+          monitorLabels,
+          modeLabelGroups,
+          3_500
+        );
+        if (currentModeResult === "ambiguous") {
+          throw new Error("command_control_ambiguous");
+        }
+        if (currentModeResult === "clicked") {
           monitorOpened = true;
-          textResult = await clickRequestedText(8_000);
+          this.#onDiagnostic?.("home_monitor_current_mode_opened");
+          textResult = await clickRequestedText(10_000);
           if (textResult === "clicked") return;
           if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
-          action = await findLocationActionControl(page, actionName, 1_000);
+          action = await findLocationActionControl(page, actionName, 1_500);
           if (action) {
             await action.click({ timeout: 15_000 });
             return;
           }
-        }
-        if (!cardOpened) {
-          const monitor = await findHomeMonitorControl(page, monitorName);
-          if (monitor) {
-            await monitor.click({ timeout: 15_000 });
+          await emitDomDiagnostic("after_card_open");
+        } else {
+          this.#onDiagnostic?.("home_monitor_current_mode_missing");
+          let cardOpened = false;
+          const cardResult = await clickTextOnlyHomeMonitorCard(page, monitorLabels, 3_000);
+          if (cardResult === "ambiguous") throw new Error("command_control_ambiguous");
+          if (cardResult === "clicked") {
             cardOpened = true;
-          monitorOpened = true;
+            monitorOpened = true;
             textResult = await clickRequestedText(8_000);
             if (textResult === "clicked") return;
             if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
-          }
-        }
-        if (cardOpened) {
-          const dialog = page.getByRole("dialog");
-          try {
-            await dialog.first().waitFor({ state: "visible", timeout: 1_000 });
-          } catch {
-            // Cake may render a drawer or roleless overlay.
-          }
-          const dialogCount = await dialog.count();
-          if (dialogCount > 1) throw new Error("command_control_ambiguous");
-          if (dialogCount === 1) {
-            action = await findLocationActionControl(dialog, actionName, 1_000);
+            action = await findLocationActionControl(page, actionName, 1_000);
             if (action) {
               await action.click({ timeout: 15_000 });
               return;
             }
           }
-          await emitDomDiagnostic("after_card_open");
+          if (!cardOpened) {
+            const monitor = await findHomeMonitorControl(page, monitorName);
+            if (monitor) {
+              await monitor.click({ timeout: 15_000 });
+              cardOpened = true;
+            monitorOpened = true;
+              textResult = await clickRequestedText(8_000);
+              if (textResult === "clicked") return;
+              if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
+            }
+          }
+          if (cardOpened) {
+            const dialog = page.getByRole("dialog");
+            try {
+              await dialog.first().waitFor({ state: "visible", timeout: 1_000 });
+            } catch {
+              // Cake may render a drawer or roleless overlay.
+            }
+            const dialogCount = await dialog.count();
+            if (dialogCount > 1) throw new Error("command_control_ambiguous");
+            if (dialogCount === 1) {
+              action = await findLocationActionControl(dialog, actionName, 1_000);
+              if (action) {
+                await action.click({ timeout: 15_000 });
+                return;
+              }
+            }
+            await emitDomDiagnostic("after_card_open");
+          }
         }
-      }
-      await emitDomDiagnostic("final_failure");
-      throw new Error("command_control_not_found");
-    } finally {
-      await page.close().catch(() => undefined);
-    }
+        await emitDomDiagnostic("final_failure");
+        throw new Error("command_control_not_found");
+      },
+      () => page.close(),
+      input.waitForConfirmation
+    );
   }
 
   private async openLocationPage(

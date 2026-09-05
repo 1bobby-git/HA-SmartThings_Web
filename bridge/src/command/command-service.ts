@@ -133,6 +133,7 @@ export interface SafeCommandExecutor {
     action: LocationAction;
     locationId: string;
     locationNames?: Readonly<Record<string, string>>;
+    waitForConfirmation?: () => Promise<void>;
   }): Promise<void>;
 }
 
@@ -196,6 +197,13 @@ interface SafeCommandServiceOptions {
   resyncAfterMs?: number;
   confirmationStabilityMs?: number;
   resync: (request?: CommandResyncRequest) => Promise<CommandResyncEvidence | undefined>;
+  onLocationDiagnostic?: (diagnostic: {
+    phase: "dispatching" | "waiting" | "confirmed" | "failed";
+    action: LocationAction;
+    elapsedMs: number;
+    observedStateMatches: boolean;
+    reason?: SafeCommandErrorCode;
+  }) => void;
   onPendingCountChange?: (count: number) => void;
   onResult?: (result: SafeCommandResult) => void;
 }
@@ -717,6 +725,24 @@ export class SafeCommandService {
     const desired = armStateForCommand(request.command);
     if (!desired || request.arguments.length !== 0) throw new SafeCommandError("unsupported_command");
     if (location.armState?.toUpperCase() === desired) return alreadyConfirmed(request.clientRequestId, snapshot.sequence);
+    const startedAt = Date.now();
+    const timeoutMs = request.timeout === undefined ? this.options.timeoutMs : request.timeout * 1_000;
+    const diagnostic = (phase: "dispatching" | "waiting" | "confirmed" | "failed", reason?: SafeCommandErrorCode) => {
+      try {
+        this.options.onLocationDiagnostic?.({
+          phase,
+          action: request.command as LocationAction,
+          elapsedMs: Math.max(0, Date.now() - startedAt),
+          observedStateMatches: this.options.devices.snapshot().locations.some(
+            (candidate) => candidate.id === request.targetId && candidate.armState?.toUpperCase() === desired
+          ),
+          ...(reason ? { reason } : {})
+        });
+      } catch {
+        // Diagnostics must never change a security command's outcome.
+      }
+    };
+    // Subscribe before dispatch so an event arriving during the click is retained.
     const confirmation = waitForLocationArmState({
       devices: this.options.devices,
       locationId: request.targetId,
@@ -724,19 +750,35 @@ export class SafeCommandService {
       afterSequence: snapshot.sequence,
       resync: this.options.resync
     });
+    let started = false;
+    const waitForConfirmation = async (): Promise<void> => {
+      if (!started) {
+        started = true;
+        diagnostic("waiting");
+        confirmation.startTimeout(timeoutMs, this.options.resyncAfterMs);
+      }
+      await confirmation.result;
+    };
     try {
       if (!this.options.executor.executeLocationAction) throw new SafeCommandError("command_execution_failed");
-      await this.options.executor.executeLocationAction({ action: request.command as LocationAction, locationId: request.targetId, locationNames });
+      diagnostic("dispatching");
+      await this.options.executor.executeLocationAction({
+        action: request.command as LocationAction,
+        locationId: request.targetId,
+        locationNames,
+        waitForConfirmation
+      });
+      // Test/custom executors may not own a browser page or consume the optional hook.
+      await waitForConfirmation();
+      const evidence = await confirmation.result;
+      diagnostic("confirmed");
+      return confirmed(request.clientRequestId, evidence.sequence, "security_arm_state_event");
     } catch (error) {
       confirmation.cancel();
-      throw commandError(error);
+      const failure = error instanceof SafeCommandError ? error : commandError(error);
+      diagnostic("failed", failure.code);
+      throw failure;
     }
-    confirmation.startTimeout(this.options.timeoutMs, this.options.resyncAfterMs);
-    return confirmed(
-      request.clientRequestId,
-      (await confirmation.result).sequence,
-      "security_arm_state_event"
-    );
   }
 }
 
@@ -1010,6 +1052,8 @@ function waitForLocationArmState(options: { devices: DeviceStore; locationId: st
     devices: options.devices,
     afterSequence: options.afterSequence,
     resync: options.resync,
+    forceFinalResync: true,
+    invalidates: (event) => event.type === "inventory" && !options.devices.snapshot().locations.some((location) => location.id === options.locationId && location.armState?.toUpperCase() === options.desired),
     matches: (event) => event.type === "inventory" && options.devices.snapshot().locations.some((location) => location.id === options.locationId && location.armState?.toUpperCase() === options.desired)
   });
 }
