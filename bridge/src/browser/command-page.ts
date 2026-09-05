@@ -7,6 +7,7 @@ import {
   type HomeMonitorDomDiagnostics
 } from "./home-monitor-dom.js";
 import { clickExactSceneCard } from "./scene-dom.js";
+import { clickHomeMonitorCardAction, type HomeMonitorCardDiagnostics } from "./home-monitor-card.js";
 import { clickHomeMonitorDialogAction, type HomeMonitorDialogDiagnostics } from "./home-monitor-dialog.js";
 import { safeCameraImageUrl } from "../state/camera-image-store.js";
 
@@ -103,6 +104,7 @@ interface CommandExecutorOptions {
   onDiagnostic?: (stage: CommandDiagnosticStage) => void;
   onHomeMonitorDiagnostic?: (diagnostics: HomeMonitorDomDiagnostics) => void;
   onHomeMonitorDialogDiagnostic?: (diagnostics: HomeMonitorDialogDiagnostics) => void;
+  onHomeMonitorCardDiagnostic?: (diagnostics: HomeMonitorCardDiagnostics) => void;
   resolveRawDeviceId?: (alias: string) => string | undefined;
   resolveRawLocationId?: (alias: string) => string | undefined;
   resolveRawIdentifier?: (alias: string) => string | undefined;
@@ -155,6 +157,7 @@ export class SmartThingsWebUiCommandExecutor {
     | ((diagnostics: HomeMonitorDomDiagnostics) => void)
     | undefined;
   readonly #onHomeMonitorDialogDiagnostic: ((diagnostics: HomeMonitorDialogDiagnostics) => void) | undefined;
+  readonly #onHomeMonitorCardDiagnostic: ((diagnostics: HomeMonitorCardDiagnostics) => void) | undefined;
   readonly #resolveRawDeviceId: ((alias: string) => string | undefined) | undefined;
   readonly #resolveRawLocationId: ((alias: string) => string | undefined) | undefined;
   readonly #resolveRawIdentifier: ((alias: string) => string | undefined) | undefined;
@@ -171,6 +174,7 @@ export class SmartThingsWebUiCommandExecutor {
     this.#onDiagnostic = options?.onDiagnostic;
     this.#onHomeMonitorDiagnostic = options?.onHomeMonitorDiagnostic;
     this.#onHomeMonitorDialogDiagnostic = options?.onHomeMonitorDialogDiagnostic;
+    this.#onHomeMonitorCardDiagnostic = options?.onHomeMonitorCardDiagnostic;
     this.#resolveRawDeviceId = options?.resolveRawDeviceId;
     this.#resolveRawLocationId = options?.resolveRawLocationId;
     this.#resolveRawIdentifier = options?.resolveRawIdentifier;
@@ -606,6 +610,24 @@ export class SmartThingsWebUiCommandExecutor {
           page, monitorLabels, actionLabels, modeLabelGroups, timeoutMs
         );
       };
+
+      // The dashboard may already expose two security actions, including SVG text.
+      // Probe that exact card before attempting to open its current-state dialog.
+      const dashboardResult = await clickHomeMonitorCardAction(
+        page, monitorLabels, modeLabelGroups,
+        { armAway: 0, armStay: 1, disarm: 2 }[input.action],
+        1_800, this.#onHomeMonitorCardDiagnostic
+      );
+      if (dashboardResult === "clicked") return;
+      if (dashboardResult === "ambiguous") throw new Error("command_control_ambiguous");
+      if (dashboardResult === "blocked") throw new Error("command_control_not_found");
+      if (dashboardResult === "dialog") {
+        const modalResult = await clickRequestedText(10_000);
+        if (modalResult === "clicked") return;
+        if (modalResult === "ambiguous") throw new Error("command_control_ambiguous");
+        // Never fall through to an obscured dashboard when a modal is already open.
+        throw new Error("command_control_not_found");
+      }
 
       let action = await findHomeMonitorCardAction(
         page,

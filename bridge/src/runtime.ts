@@ -102,7 +102,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.3";
+const bridgeVersion = "1.8.4";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -366,6 +366,14 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           `:dialogs_${diagnostics.visibleDialogCount}` +
           `:iframes_${diagnostics.visibleIframeCount}` +
           `:shadow_roots_${diagnostics.openShadowRootCount}`
+        ),
+      onHomeMonitorCardDiagnostic: (diagnostics) =>
+        log.info(
+`home_monitor_card:${diagnostics.outcome}` +
+`:titles_${diagnostics.titles}:mode_groups_${diagnostics.modeGroups}` +
+`:html_${diagnostics.htmlModes}:svg_${diagnostics.svgModes}` +
+`:pseudo_${diagnostics.pseudoModes}:canvas_${diagnostics.canvases}` +
+`:dialogs_${diagnostics.dialogs}:targets_${diagnostics.targets}`
         ),
       onHomeMonitorDialogDiagnostic: (diagnostics) =>
         log.info(
