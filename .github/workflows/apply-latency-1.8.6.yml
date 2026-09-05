@@ -1,0 +1,86 @@
+name: Apply Home Monitor latency fixes 1.8.6
+
+on:
+  push:
+    branches:
+      - fix/home-monitor-latency-1.8.6
+    paths:
+      - .github/workflows/apply-latency-1.8.6.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-home-monitor-latency-1.8.6
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out fix branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Apply checksum-verified source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/latency186.01.b64 .github/latency186.02.b64 .github/latency186.03.b64 | base64 --decode | xz --decompress > /tmp/latency186.patch
+          echo 'd1537a7da96d57e7e293048de2e5d28ceb94ea1ce019403ef339496032da9f03  /tmp/latency186.patch' | sha256sum --check -
+          git apply --check /tmp/latency186.patch
+          git apply /tmp/latency186.patch
+          rm .github/latency186.01.b64 .github/latency186.02.b64 .github/latency186.03.b64
+          rm .github/workflows/apply-latency-1.8.6.yml
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Install locked Node dependencies
+        run: npm ci
+
+      - name: Test, typecheck and build
+        run: |
+          npm test
+          npm run typecheck
+          npm run build
+
+      - name: Validate Home Monitor in actual Chromium
+        run: |
+          npx playwright-core install --with-deps chromium
+          node tools/ci-home-monitor-dialog-smoke.mjs
+          node tools/ci-home-monitor-card-smoke.mjs
+          node tools/ci-home-monitor-confirmation-smoke.mjs
+          node tools/ci-home-monitor-latency-smoke.mjs
+
+      - name: Validate Python integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.9,<4' 'voluptuous>=0.13,<1'
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+          python -m compileall -q custom_components/smartthings_web
+
+      - name: Validate repository boundaries
+        run: |
+          npm run audit:api-free
+          npm run audit:secrets
+          npm run audit:fixtures
+
+      - name: Commit verified source and remove temporary tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix: preserve Home Monitor state and reduce command latency 1.8.6'
+          git push origin HEAD:fix/home-monitor-latency-1.8.6
