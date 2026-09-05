@@ -77,7 +77,7 @@ describe("Home Monitor command stability", () => {
       action: "armAway"
     });
 
-    expect(page.action.click).toHaveBeenCalledWith({ timeout: 15_000 });
+    expect(page.action.click).toHaveBeenCalledWith({ timeout: 3_000 });
     expect(page.close).toHaveBeenCalledTimes(1);
   });
 

@@ -170,3 +170,47 @@ describe("Home Monitor command session", () => {
     expect(order).toEqual(["click:armAway", "close:armAway", "click:disarm", "close:disarm"]);
   });
 });
+
+
+describe("Home Monitor low-latency confirmation", () => {
+  test.each([
+    ["armAway", "AWAY"], ["armAway", "armedaway"], ["armStay", "STAY"],
+    ["armStay", "armed_home"], ["armStay", "armedstay"], ["disarm", "OFF"]
+  ])("confirms %s from the observed %s event without waiting for the full timeout", async (command, value) => {
+    const f = fixture(async (store, input) => runLocationCommandSession(async () => {
+      security(store, value, "2026-09-01T00:00:02Z");
+      store.observeAdvancedInventorySnapshot({ locations: [{ locationId: "loc_001", name: "Synthetic home" }] });
+    }, async () => undefined, input.waitForConfirmation));
+    if (command === "disarm") security(f.store, "STAY");
+    await expect(f.service.execute({ ...request(`request_alias_${value}`), command })).resolves.toMatchObject({ status: "confirmed" });
+    expect(f.resync).not.toHaveBeenCalled();
+    expect(f.diagnostics.at(-1)?.observedStateMatches).toBe(true);
+  });
+  test("a Home Monitor recheck requests only its location, never a full device inventory", async () => {
+    const f = fixture(async () => undefined);
+    await expect(f.service.execute(request())).rejects.toMatchObject({ code: "command_confirmation_timeout" });
+    expect(f.resync.mock.calls.every((args) => (args as unknown[])[0] && JSON.stringify((args as unknown[])[0]) === '{"locationId":"loc_001"}')).toBe(true);
+  });
+  test("expires queued security requests without replaying them after the running command", async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: () => void;
+      const f = fixture(async (store, input) => {
+        await new Promise<void>((resolve) => { finish = resolve; });
+        security(store, "AWAY");
+        await input.waitForConfirmation?.();
+      });
+      const first = f.service.execute(request("request_queue_first"));
+      await vi.advanceTimersByTimeAsync(1);
+      let failed: unknown;
+      const second = f.service.execute({ ...request("request_queue_expired"), command: "armStay" }).catch((e: unknown) => { failed = e; });
+      await vi.advanceTimersByTimeAsync(10_001);
+      await second;
+      expect(failed).toMatchObject({ code: "command_queue_timeout" });
+      expect(f.execute).toHaveBeenCalledTimes(1);
+      finish(); await first;
+      await vi.advanceTimersByTimeAsync(1);
+      expect(f.execute).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+});

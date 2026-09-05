@@ -1,3 +1,5 @@
+import { normalizeLocationArmState } from "../state/location-arm-state.js";
+import { enqueueWithDeadline } from "./bounded-command-queue.js";
 import type {
   BridgeDevice,
   BridgeDeviceState,
@@ -134,16 +136,20 @@ export interface SafeCommandExecutor {
     locationId: string;
     locationNames?: Readonly<Record<string, string>>;
     waitForConfirmation?: () => Promise<void>;
+    isDesiredStateCurrent?: () => boolean;
   }): Promise<void>;
 }
 
 export interface CommandResyncEvidence {
-  source: "advanced_device_status" | "advanced_inventory";
+  source: "advanced_device_status" | "advanced_inventory" | "location_status";
+  locationId?: string;
+  armState?: string;
   authoritativeSnapshot: boolean;
   startedAtMs: number;
 }
 
 export interface CommandResyncRequest {
+  locationId?: string;
   deviceId?: string;
 }
 
@@ -163,6 +169,7 @@ export type SafeCommandErrorCode =
   | "device_offline"
   | "capability_not_found"
   | "client_request_conflict"
+  | "command_queue_timeout"
   | "command_browser_unavailable"
   | "command_login_required"
   | "command_location_mismatch"
@@ -326,8 +333,12 @@ export class SafeCommandService {
 
   #enqueue(request: SafeCommandRequest): Promise<SafeCommandResult> {
     const previous = this.#queues.get(request.targetId) ?? Promise.resolve();
-    const operation = previous.catch(() => undefined).then(() => this.#execute(request));
-    const queueTail = operation.then(
+    const queued = request.targetType === "location"
+      ? enqueueWithDeadline(previous, () => this.#execute(request), 10_000,
+          () => new SafeCommandError("command_queue_timeout"))
+      : undefined;
+    const operation = queued?.result ?? previous.catch(() => undefined).then(() => this.#execute(request));
+    const queueTail = queued?.completion ?? operation.then(
       () => undefined,
       () => undefined
     );
@@ -724,7 +735,7 @@ export class SafeCommandService {
     if (!location) throw new SafeCommandError("device_not_found");
     const desired = armStateForCommand(request.command);
     if (!desired || request.arguments.length !== 0) throw new SafeCommandError("unsupported_command");
-    if (location.armState?.toUpperCase() === desired) return alreadyConfirmed(request.clientRequestId, snapshot.sequence);
+    if (normalizeLocationArmState(location.armState) === desired) return alreadyConfirmed(request.clientRequestId, snapshot.sequence);
     const startedAt = Date.now();
     const timeoutMs = request.timeout === undefined ? this.options.timeoutMs : request.timeout * 1_000;
     const diagnostic = (phase: "dispatching" | "waiting" | "confirmed" | "failed", reason?: SafeCommandErrorCode) => {
@@ -733,9 +744,7 @@ export class SafeCommandService {
           phase,
           action: request.command as LocationAction,
           elapsedMs: Math.max(0, Date.now() - startedAt),
-          observedStateMatches: this.options.devices.snapshot().locations.some(
-            (candidate) => candidate.id === request.targetId && candidate.armState?.toUpperCase() === desired
-          ),
+          observedStateMatches: normalizeLocationArmState(this.options.devices.location(request.targetId)?.armState) === desired,
           ...(reason ? { reason } : {})
         });
       } catch {
@@ -748,14 +757,14 @@ export class SafeCommandService {
       locationId: request.targetId,
       desired,
       afterSequence: snapshot.sequence,
-      resync: this.options.resync
+      resync: () => this.options.resync({ locationId: request.targetId })
     });
     let started = false;
     const waitForConfirmation = async (): Promise<void> => {
       if (!started) {
         started = true;
         diagnostic("waiting");
-        confirmation.startTimeout(timeoutMs, this.options.resyncAfterMs);
+        confirmation.startTimeout(timeoutMs, this.options.resyncAfterMs, Date.now());
       }
       await confirmation.result;
     };
@@ -766,7 +775,8 @@ export class SafeCommandService {
         action: request.command as LocationAction,
         locationId: request.targetId,
         locationNames,
-        waitForConfirmation
+        waitForConfirmation,
+        isDesiredStateCurrent: () => normalizeLocationArmState(this.options.devices.location(request.targetId)?.armState) === desired
       });
       // Test/custom executors may not own a browser page or consume the optional hook.
       await waitForConfirmation();
@@ -1048,13 +1058,18 @@ function waitForRefreshCommand(options: {
 }
 
 function waitForLocationArmState(options: { devices: DeviceStore; locationId: string; desired: string; afterSequence: number; resync: CommandResync }): ConfirmationWait {
+  const matches = () => normalizeLocationArmState(options.devices.location(options.locationId)?.armState) === options.desired;
   return waitForPredicate({
     devices: options.devices,
     afterSequence: options.afterSequence,
     resync: options.resync,
     forceFinalResync: true,
-    invalidates: (event) => event.type === "inventory" && !options.devices.snapshot().locations.some((location) => location.id === options.locationId && location.armState?.toUpperCase() === options.desired),
-    matches: (event) => event.type === "inventory" && options.devices.snapshot().locations.some((location) => location.id === options.locationId && location.armState?.toUpperCase() === options.desired)
+    invalidates: (event) => event.type === "inventory" && !matches(),
+    matches: (event) => event.type === "inventory" && matches(),
+    acceptsResyncEvidence: (evidence, minStartedAtMs) =>
+      evidence?.source === "location_status" && evidence.locationId === options.locationId &&
+      normalizeLocationArmState(evidence.armState) === options.desired &&
+      minStartedAtMs !== undefined && evidence.startedAtMs >= minStartedAtMs && matches()
   });
 }
 
@@ -2507,7 +2522,7 @@ function commandError(error: unknown): SafeCommandError {
 }
 
 function isExecutorErrorCode(value: string): value is SafeCommandErrorCode {
-  return ["command_browser_unavailable", "command_login_required", "command_location_mismatch", "command_location_unknown", "command_location_picker_not_found", "command_location_target_not_found", "command_location_change_failed", "command_room_not_found", "command_target_not_found", "command_target_ambiguous", "command_search_not_found", "command_search_ambiguous", "command_control_not_found", "command_control_ambiguous", "component_command_partial_failure", "component_command_rollback_failed"].includes(value);
+  return ["command_queue_timeout", "command_browser_unavailable", "command_login_required", "command_location_mismatch", "command_location_unknown", "command_location_picker_not_found", "command_location_target_not_found", "command_location_change_failed", "command_room_not_found", "command_target_not_found", "command_target_ambiguous", "command_search_not_found", "command_search_ambiguous", "command_control_not_found", "command_control_ambiguous", "component_command_partial_failure", "component_command_rollback_failed"].includes(value);
 }
 
 function jsonValue(value: unknown): BridgeJsonValue | undefined {
