@@ -31,11 +31,15 @@ jobs:
           npm run typecheck
           npm run build
 
+      - name: Verify Home Monitor command-page lifetime
+        run: node --test tools/ci-home-monitor-lifecycle-smoke.mjs
+
       - name: Exercise Home Monitor dialogs and dashboard in real Chromium
         run: |
           npx playwright-core install --with-deps chromium
           node tools/ci-home-monitor-dialog-smoke.mjs
           node tools/ci-home-monitor-card-smoke.mjs
+          node tools/ci-home-monitor-lifecycle-browser-smoke.mjs
 
       - name: Run Python tests
         shell: bash
