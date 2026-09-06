@@ -128,7 +128,9 @@ change('custom_components/smartthings_web/tests/test_alarm_control_panel.py','''
         self.assertEqual(runtime.inventory.sequence, 9)
 
 ''')
-change('.github/workflows/validate.yml','          node tools/home-monitor-selector-regression.mjs','          node tools/home-monitor-selector-regression.mjs\n          node tools/ci-home-monitor-linked-popup-smoke.mjs')
+# The workflow was updated through the user's authorized connector. The bot changes application source only.
+if (root/'.github/workflows/validate.yml').read_text(encoding='utf-8').count('          node tools/ci-home-monitor-linked-popup-smoke.mjs') != 1:
+ raise SystemExit('Missing standard linked-popup regression validation')
 for name in ['package.json','package-lock.json','protocol/version.json','custom_components/smartthings_web/manifest.json','addon/smartthings_web_bridge/config.yaml','bridge/src/runtime.ts','tests/addon-config.test.ts','tests/protocol-version-contract.test.ts']:
  p=root/name;s=p.read_text(encoding='utf-8')
  if '1.8.9' not in s:raise SystemExit(f'Missing old version in {name}')
