@@ -33,7 +33,14 @@ class RolelessHomeMonitorPage {
   isClosed(): boolean { return false; }
   getByRole(): MissingLocator { return this.missing; }
   getByText(): MissingLocator { return this.missing; }
-  locator(): MissingLocator { return this.missing; }
+  locator(selector?: string): MissingLocator {
+    if (selector?.includes("data-stw-hm-selector")) {
+      const control = new MissingLocator();
+      control.click = vi.fn(async () => { this.cardOpened = true; });
+      return control;
+    }
+    return this.missing;
+  }
 
   async evaluate<Result, Argument>(
     _pageFunction: (argument: Argument) => Result | Promise<Result>,
@@ -52,9 +59,11 @@ class RolelessHomeMonitorPage {
         openShadowRootCount: 1
       } as Result;
     }
-    if (input.currentModeProbe === true) {
-      this.cardOpened = true;
-      return "clicked" as Result;
+    if (_pageFunction.name === "probeHomeMonitorSelector") {
+      return {
+        kind: input.cleanup ? "missing" : this.cardOpened ? "dialog" : "target",
+        titles: 1, localModes: 1, localGroups: 1, targets: 1
+      } as Result;
     }
     if ("timeoutMs" in input && !("actionLabels" in input)) {
       return "not_found" as Result;
@@ -139,7 +148,10 @@ describe("live Home Monitor DOM recovery", () => {
 
     expect(domSource).toContain("root instanceof ShadowRoot");
     expect(domSource).toContain("clickCurrentHomeMonitorMode");
-    expect(domSource).toContain("currentModeProbe: true");
+    const selectorSource = readFileSync("bridge/src/browser/home-monitor-selector.ts", "utf8");
+    expect(domSource).toContain("clickScopedHomeMonitorSelector");
+    expect(selectorSource).toContain("probeHomeMonitorSelector");
+    expect(selectorSource).toContain("data-stw-hm-selector");
     expect(domSource).toContain("root.host instanceof HTMLElement");
     expect(domSource).toContain('"menuitemradio"');
     expect(commandSource).toContain("clickTextOnlyHomeMonitorCard");

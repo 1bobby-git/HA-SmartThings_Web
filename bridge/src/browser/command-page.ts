@@ -666,7 +666,7 @@ export class SmartThingsWebUiCommandExecutor {
         const dashboardResult = await clickHomeMonitorCardAction(
           page, monitorLabels, modeLabelGroups,
           { armAway: 0, armStay: 1, disarm: 2 }[input.action],
-          budget(5_000), this.#onHomeMonitorCardDiagnostic
+          budget(5_000), this.#onHomeMonitorCardDiagnostic, true
         );
         if (dashboardResult === "clicked") return;
         if (dashboardResult === "ambiguous") throw new Error("command_control_ambiguous");
@@ -679,25 +679,30 @@ export class SmartThingsWebUiCommandExecutor {
           throw new Error("command_control_not_found");
         }
 
-        let action = await findHomeMonitorCardAction(
-          page,
-          monitorName,
-          monitorLabels,
-          actionName,
-          budget(1_000)
-        );
-        if (action) {
-          await action.click({ timeout: budget(3_000) });
-          return;
-        }
-        let textResult = await clickRequestedText(budget(600));
-        if (textResult === "clicked") return;
-        if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
-        if (await clickHomeMonitorCardActionByText(page, monitorLabels, actionLabels)) return;
-        action = await findLocationActionControl(page, actionName, budget(250));
-        if (action) {
-          await action.click({ timeout: budget(3_000) });
-          return;
+        let action: CommandLocatorLike | undefined;
+        let textResult: Awaited<ReturnType<typeof clickRequestedText>>;
+        // An observed selector is ready: do not repeat action lookups for a hidden mode.
+        if (dashboardResult !== "selector") {
+          action = await findHomeMonitorCardAction(
+            page,
+            monitorName,
+            monitorLabels,
+            actionName,
+            budget(1_000)
+          );
+          if (action) {
+            await action.click({ timeout: budget(3_000) });
+            return;
+          }
+          textResult = await clickRequestedText(budget(600));
+          if (textResult === "clicked") return;
+          if (textResult === "ambiguous") throw new Error("command_control_ambiguous");
+          if (await clickHomeMonitorCardActionByText(page, monitorLabels, actionLabels)) return;
+          action = await findLocationActionControl(page, actionName, budget(250));
+          if (action) {
+            await action.click({ timeout: budget(3_000) });
+            return;
+          }
         }
 
         await emitDomDiagnostic("before_card_open");
@@ -709,6 +714,9 @@ export class SmartThingsWebUiCommandExecutor {
         );
         if (currentModeResult === "ambiguous") {
           throw new Error("command_control_ambiguous");
+        }
+        if (currentModeResult === "blocked") {
+          throw new Error("command_control_not_found");
         }
         if (currentModeResult === "clicked") {
           monitorOpened = true;
