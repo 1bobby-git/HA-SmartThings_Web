@@ -1,0 +1,89 @@
+name: Prepare SmartThings Web 1.8.8
+
+on:
+  push:
+    branches:
+      - fix/home-monitor-selector-1.8.8
+    paths:
+      - .github/scripts/prepare_1_8_8.py
+      - .github/scripts/reconcile_1_8_8.py
+      - .github/workflows/prepare-1.8.8.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prepare-smartthings-web-1.8.8
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Verify base and assemble exact source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor 4effb4ad0402fe3fb8d6f7b5d89d8cd5701492c0 HEAD
+          python .github/scripts/prepare_1_8_8.py
+          python .github/scripts/reconcile_1_8_8.py
+          git diff --check
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Node tests, typecheck and build
+        run: |
+          npm ci
+          npm test
+          npm run typecheck
+          npm run build
+
+      - name: Python integration regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.9,<4' 'voluptuous>=0.13,<1'
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+          python -m compileall -q custom_components/smartthings_web
+
+      - name: Browser regressions on the production build
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx playwright-core install --with-deps chromium
+          node tools/ci-home-monitor-dialog-smoke.mjs
+          node tools/ci-home-monitor-card-smoke.mjs
+          node tools/ci-home-monitor-confirmation-smoke.mjs
+          node tools/ci-home-monitor-latency-smoke.mjs
+          OUTPUT_PATH="${RUNNER_TEMP}/home-monitor-selector-results.json" node tools/home-monitor-selector-regression.mjs
+
+      - name: Repository audits
+        run: |
+          npm run audit:api-free
+          npm run audit:secrets
+          npm run audit:fixtures
+
+      - name: Commit only validated source and remove temporary assembly files
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_sha="$(git ls-remote origin refs/heads/fix/home-monitor-selector-1.8.8 | cut -f1)"
+          test "${remote_sha}" = "${GITHUB_SHA}"
+          rm .github/scripts/prepare_1_8_8.py .github/scripts/reconcile_1_8_8.py .github/workflows/prepare-1.8.8.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -u
+          git add docs/release-1.8.8.md tools/home-monitor-selector-regression.mjs
+          git diff --cached --check
+          git commit -m 'fix: complete 1.8.8 monitor selection, room assignment and exact switch scope'
+          git push origin HEAD:fix/home-monitor-selector-1.8.8
