@@ -6,6 +6,7 @@ on:
       - fix/home-monitor-selector-1.8.8
     paths:
       - .github/scripts/prepare_1_8_8.py
+      - .github/scripts/reconcile_1_8_8.py
       - .github/workflows/prepare-1.8.8.yml
 
 permissions:
@@ -30,6 +31,7 @@ jobs:
           set -euo pipefail
           git merge-base --is-ancestor 4effb4ad0402fe3fb8d6f7b5d89d8cd5701492c0 HEAD
           python .github/scripts/prepare_1_8_8.py
+          python .github/scripts/reconcile_1_8_8.py
           git diff --check
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
@@ -77,7 +79,7 @@ jobs:
           set -euo pipefail
           remote_sha="$(git ls-remote origin refs/heads/fix/home-monitor-selector-1.8.8 | cut -f1)"
           test "${remote_sha}" = "${GITHUB_SHA}"
-          rm .github/scripts/prepare_1_8_8.py .github/workflows/prepare-1.8.8.yml
+          rm .github/scripts/prepare_1_8_8.py .github/scripts/reconcile_1_8_8.py .github/workflows/prepare-1.8.8.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -u
