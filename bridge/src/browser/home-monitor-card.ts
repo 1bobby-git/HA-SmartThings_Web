@@ -1,4 +1,5 @@
 import type { BrowserPageLike } from "./keeper-page.js";
+import { scopedHomeMonitorModeGroups } from "./home-monitor-mode-labels.js";
 import { hasHomeMonitorSelector } from "./home-monitor-selector.js";
 
 export interface HomeMonitorCardDiagnostics {
@@ -187,7 +188,7 @@ export async function clickHomeMonitorCardAction(
   } };
   if (!page.evaluate || !controls.locator) return "unavailable";
   const input: CardProbeInput = { marker: `hm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
-    monitorLabels: [...monitorLabels], modeLabelGroups: modeLabelGroups.map((group) => [...group]), requestedGroup };
+    monitorLabels: [...monitorLabels], modeLabelGroups: scopedHomeMonitorModeGroups(modeLabelGroups), requestedGroup };
   let last: CardProbeResult | undefined;
   const report = (outcome: string) => {
     if (!last) return;

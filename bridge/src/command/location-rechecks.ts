@@ -8,7 +8,7 @@ export function scheduleLocationRechecks(
   const first = options.firstDelayMs;
   const early = first !== undefined && Number.isFinite(first) && first >= 0 && first < timeout;
   const offsets = [...new Set([
-    ...(early ? [first!, first! + 1_000, first! + 3_000, first! + 6_000]
+    ...(early ? [first!, first! + 1_000, first! + 3_000, first! + 6_000, first! + 9_000, first! + 14_000, first! + 19_000]
       .filter((at) => at < finalAt) : []), finalAt
   ])].sort((a, b) => a - b);
   const start = Date.now();

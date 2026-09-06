@@ -138,6 +138,28 @@ def _runtime(location: BridgeLocation | str | None) -> SmartThingsWebRuntime:
 
 
 class SmartThingsWebHomeMonitorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_current_confirmed_sse_skips_redundant_inventory_read(self) -> None:
+        runtime = _runtime(BridgeLocation("loc_001", "Home", "armed_home"))
+        runtime.inventory.sequence = 9
+        runtime.client = SimpleNamespace(
+            async_execute_command=AsyncMock(return_value=SimpleNamespace(status="confirmed", sequence=9)),
+            async_get_inventory=AsyncMock(),
+        )
+        await SmartThingsWebHomeMonitor(runtime).async_alarm_arm_home()
+        runtime.client.async_get_inventory.assert_not_awaited()
+
+    async def test_matching_state_with_older_sequence_still_gets_verified_snapshot(self) -> None:
+        runtime = _runtime(BridgeLocation("loc_001", "Home", "armed_home"))
+        runtime.inventory.sequence = 8
+        latest = BridgeInventory(9, True, "1.8.10", "5", {"loc_001": BridgeLocation("loc_001", "Home", "armed_home")}, {}, {})
+        runtime.client = SimpleNamespace(
+            async_execute_command=AsyncMock(return_value=SimpleNamespace(status="confirmed", sequence=9)),
+            async_get_inventory=AsyncMock(return_value=latest),
+        )
+        await SmartThingsWebHomeMonitor(runtime).async_alarm_arm_home()
+        runtime.client.async_get_inventory.assert_awaited_once()
+        self.assertEqual(runtime.inventory.sequence, 9)
+
     """Map location arm state to HA alarm state and exact arm commands."""
 
     async def test_confirmed_command_fetches_real_snapshot_without_waiting_for_sse(self) -> None:

@@ -1,4 +1,5 @@
 import type { BrowserPageLike } from "./keeper-page.js";
+import { scopedHomeMonitorModeGroups } from "./home-monitor-mode-labels.js";
 
 export interface HomeMonitorDialogDiagnostics {
   outcome: string;
@@ -15,11 +16,13 @@ type ProbeInput = {
   modeLabelGroups: string[][];
   requestedGroup: number;
   phase: "select" | "commit" | "cleanup";
+  popupToken?: string;
 };
 
 type ProbeResult = Omit<HomeMonitorDialogDiagnostics, "outcome"> & {
   kind: "missing" | "unrecognized" | "ambiguous" | "disabled" | "select" | "click" | "expand" | "commit";
   optionValue?: string;
+  associated?: boolean;
 };
 
 /** Runs inside Chromium. Form values stay private; diagnostics contain counters only. */
@@ -94,8 +97,32 @@ export function probeHomeMonitorDialog(input: ProbeInput): ProbeResult {
     }
     return -1;
   };
-  const dialogs = elements.filter((element) =>
-    (element.matches('dialog,[role="dialog"]')) && visible(element));
+  const modals = elements.filter((element) =>
+    element.matches('dialog,[role="dialog"],[aria-modal="true"]') && visible(element));
+  const linked = new Set<Element>();
+  const owners = input.popupToken ? elements.filter((element) =>
+    element.getAttribute("data-stw-hm-popup-owner") === input.popupToken) : [];
+  if (owners.length > 1) return { ...result, kind: "ambiguous" };
+  for (const owner of owners) {
+    if (owner.getAttribute("aria-expanded") === "false" || disabled(owner)) continue;
+    const root = owner.getRootNode() as Document | ShadowRoot;
+    const ids = `${owner.getAttribute("aria-controls") ?? ""} ${owner.getAttribute("aria-owns") ?? ""}`.split(/\s+/u).filter(Boolean);
+    for (const id of ids) {
+      const popup = root.getElementById?.(id);
+      if (popup && visible(popup) && !within(owner, popup) &&
+          !popup.matches('html,body,main,nav,header,footer,[role="main"]')) linked.add(popup);
+    }
+    if (owner.id) {
+      for (const popup of elements) {
+        if (visible(popup) && popup.matches('[role="menu"],[role="listbox"],dialog,[role="dialog"],[aria-modal="true"]') &&
+            (popup.getAttribute("aria-labelledby") ?? "").split(/\s+/u).includes(owner.id) &&
+            !within(owner, popup)) linked.add(popup);
+      }
+    }
+  }
+  // A popup inside an existing dialog is one surface, not two competing dialogs.
+  const surfaces = [...new Set([...modals, ...linked])];
+  const dialogs = surfaces.filter((element) => !surfaces.some((other) => other !== element && within(element, other)));
   result.dialogs = dialogs.length;
   if (dialogs.length === 0) return result;
   if (dialogs.length !== 1) return { ...result, kind: "ambiguous" };
@@ -137,7 +164,13 @@ export function probeHomeMonitorDialog(input: ProbeInput): ProbeResult {
   const identified = scoped.some((element) => visible(element) &&
     labels(element).some((label) => monitorNames.has(label)));
   // Only a monitor-labelled dialog or a complete three-mode selector is eligible.
-  if (!identified && seenGroups.size !== 3) return { ...result, kind: "unrecognized" };
+  const belongsToOpener = [...linked].some((popup) => within(popup, dialog) || within(dialog, popup));
+  result.associated = belongsToOpener;
+  // Two alternatives are sufficient ONLY with an explicit link from the validated monitor opener.
+  // Unlinked/titleless dialogs still require all three security modes.
+  if (!identified && seenGroups.size !== 3 && !(belongsToOpener && seenGroups.size >= 2)) {
+    return { ...result, kind: "unrecognized" };
+  }
   if (input.phase === "commit") {
     const submitLabels = new Set(["apply", "save", "done", "ok", "confirm", "적용", "저장", "완료", "확인"]);
     const buttons = scoped.filter((element) => within(element, dialog) && visible(element) &&
@@ -161,7 +194,7 @@ export function probeHomeMonitorDialog(input: ProbeInput): ProbeResult {
     }
   }
   const interactive = (element: Element) => element.matches(
-    'button,a[href],input[type="radio"],label,[role="button"],[role="radio"],[role="option"],[role="menuitemradio"], [role="tab"]'
+    'button,a[href],input[type="radio"],label,[role="button"],[role="radio"],[role="option"],[role="menuitem"],[role="menuitemradio"], [role="tab"]'
   ) || (element instanceof HTMLElement && (element.tabIndex >= 0 || element.hasAttribute("onclick")));
   const candidates = new Set<Element>();
   for (const element of scoped) {
@@ -219,7 +252,8 @@ export async function clickHomeMonitorDialogAction(
   modeLabelGroups: readonly (readonly string[])[],
   timeoutMs: number,
   waitForDialog: boolean,
-  onDiagnostic?: (value: HomeMonitorDialogDiagnostics) => void
+  onDiagnostic?: (value: HomeMonitorDialogDiagnostics) => void,
+  popupToken?: string
 ): Promise<"clicked" | "not_found" | "ambiguous" | "unavailable"> {
   const controls = page as BrowserPageLike & { locator?: (selector: string) => {
     click(options: { timeout: number }): Promise<unknown>;
@@ -230,7 +264,8 @@ export async function clickHomeMonitorDialogAction(
   if (requestedGroup < 0) return "not_found";
   const markerId = `stw-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   const input: ProbeInput = { markerId, monitorLabels: [...monitorLabels],
-    modeLabelGroups: modeLabelGroups.map((group) => [...group]), requestedGroup, phase: "select" };
+    modeLabelGroups: scopedHomeMonitorModeGroups(modeLabelGroups), requestedGroup, phase: "select",
+    ...(popupToken ? { popupToken } : {}) };
   const deadline = Date.now() + Math.max(1, Math.min(timeoutMs, 10_000));
   let last: ProbeResult | undefined;
   let expanded = false;
@@ -247,7 +282,7 @@ export async function clickHomeMonitorDialogAction(
       if (last.kind === "missing" && !waitForDialog) return "unavailable";
       if (last.kind === "ambiguous") { report("ambiguous"); return "ambiguous"; }
       if (last.kind === "select" || last.kind === "click") {
-        report(last.kind);
+        report(`${last.associated ? "linked_" : ""}${last.kind}`);
         const target = controls.locator(`[data-stw-hm-target="${markerId}"]`);
         if (last.kind === "select") {
           await target.selectOption({ value: last.optionValue! }, { timeout: 3_000 });

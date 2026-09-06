@@ -241,9 +241,10 @@ export async function clickCurrentHomeMonitorMode(
   page: BrowserPageLike,
   monitorLabels: readonly string[],
   modeLabelGroups: readonly (readonly string[])[],
-  timeoutMs = 3_000
+  timeoutMs = 3_000,
+  popupToken?: string
 ): Promise<HomeMonitorDomResult> {
-  return clickScopedHomeMonitorSelector(page, monitorLabels, modeLabelGroups, timeoutMs);
+  return clickScopedHomeMonitorSelector(page, monitorLabels, modeLabelGroups, timeoutMs, popupToken);
 }
 
 /**

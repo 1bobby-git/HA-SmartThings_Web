@@ -123,6 +123,16 @@ class SmartThingsWebHomeMonitor(AlarmControlPanelEntity):
             raise HomeAssistantError(bridge_error_message("Home Monitor command", err)) from err
         if getattr(result, "status", None) not in {"confirmed", "already_confirmed"}:
             return
+        sequence = getattr(result, "sequence", None)
+        expected_state = {"armAway": "armed_away", "armStay": "armed_home", "disarm": "disarmed"}.get(command)
+        if (
+            isinstance(sequence, int)
+            and not isinstance(sequence, bool)
+            and self.runtime.inventory.sequence >= sequence
+            and self.state == expected_state
+        ):
+            # The verified result has already arrived through SSE. Avoid a redundant full read.
+            return
         try:
             # One post-command read closes the SSE delivery race; never set a requested mode.
             # A delayed read cannot overwrite a newer snapshot (apply_inventory checks sequence).
