@@ -354,3 +354,7 @@ final-summary.json.sha256
 ## 통합과 브리지 버전
 
 이번 배포는 Home Assistant 통합 1.8.7만 업데이트합니다. 브리지 앱과 Node 패키지는 1.8.6을 유지합니다. 함께 첨부한 smartthings-web-bridge-1.8.6.tgz는 이전 릴리스와 SHA-256이 동일한 파일이며 재빌드하거나 업데이트한 앱이 아닙니다. HACS 통합 업데이트를 위해 브리지를 재설치할 필요는 없습니다. 기존 개발 중 경고와 설치 자제 안내는 유지합니다.
+
+### 1.8.8 Home Monitor 제어 보완
+
+현재 모드 선택기의 카드 범위와 실제 클릭 대상 판정을 수정하고, 단일 모드 화면의 불필요한 직접 버튼 탐색 대기를 줄였습니다. 외출·실내·해제는 요청한 모드만 선택하며 중간 해제를 자동 실행하지 않습니다. 실제 상태 확인을 유지하고, 기존 Scene·Advanced commands·Galaxy Home Mini `speak`와 엔티티 ID는 변경하지 않습니다. Chromium 합성 회귀 검증과 실계정 동작 검증은 구분합니다. 세부 내용은 [변경 이력](addon/smartthings_web_bridge/CHANGELOG.md#188)을 확인하세요.

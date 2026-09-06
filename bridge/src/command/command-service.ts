@@ -137,6 +137,7 @@ export interface SafeCommandExecutor {
     locationNames?: Readonly<Record<string, string>>;
     waitForConfirmation?: () => Promise<void>;
     isDesiredStateCurrent?: () => boolean;
+    getCurrentModeGroup?: () => number;
   }): Promise<void>;
 }
 
@@ -776,7 +777,10 @@ export class SafeCommandService {
         locationId: request.targetId,
         locationNames,
         waitForConfirmation,
-        isDesiredStateCurrent: () => normalizeLocationArmState(this.options.devices.location(request.targetId)?.armState) === desired
+        isDesiredStateCurrent: () => normalizeLocationArmState(this.options.devices.location(request.targetId)?.armState) === desired,
+        getCurrentModeGroup: () => (["armAway", "armStay", "disarm"] as const).findIndex(
+          (command) => armStateForCommand(command) === normalizeLocationArmState(this.options.devices.location(request.targetId)?.armState)
+        )
       });
       // Test/custom executors may not own a browser page or consume the optional hook.
       await waitForConfirmation();

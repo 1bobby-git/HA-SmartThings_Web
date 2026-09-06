@@ -20,7 +20,7 @@ type CardProbeInput = {
   cleanup?: boolean;
 };
 type CardProbeResult = Omit<HomeMonitorCardDiagnostics, "outcome"> & {
-  kind: "missing" | "target" | "ambiguous" | "disabled" | "dialog" | "scan_limit";
+  kind: "missing" | "target" | "ambiguous" | "disabled" | "dialog" | "scan_limit" | "current_mode";
 };
 
 /** Browser-local probe. No account text, selectors, URLs or identifiers leave this function. */
@@ -123,6 +123,7 @@ export function probeHomeMonitorCard(input: CardProbeInput): CardProbeResult {
   // Do not widen an exact monitor card into the entire dashboard or another named widget.
   let scope: Element | null = parent(titles[0]!);
   let card: Element | undefined;
+  let singleModeCard = false;
   for (let depth = 0; scope && depth < 10; depth++, scope = parent(scope)) {
     if (scope.matches("html,body,main")) break;
     const foreignHeadings = elements.some((element) => within(element, scope!) && visible(element) &&
@@ -131,12 +132,15 @@ export function probeHomeMonitorCard(input: CardProbeInput): CardProbeResult {
       !labels(element).some((label) => statusCaptions.has(label)));
     if (foreignHeadings) break;
     const localModes = modes.filter((element) => within(element, scope!));
-    if (new Set(localModes.map((element) => modeMap.get(element))).size >= 2) {
+    const localGroupCount = new Set(localModes.map((element) => modeMap.get(element))).size;
+    if (localGroupCount >= 2) {
       card = scope;
       break;
     }
+    if (localGroupCount === 1) singleModeCard = true;
+    if (scope.matches('section,article,[role="region"]')) break;
   }
-  if (!card) return result; // A single current-mode pill is handled by the existing dialog path.
+  if (!card) return singleModeCard ? { ...result, kind: "current_mode" } : result;
   const requested = modes.filter((element) => within(element, card!) && modeMap.get(element) === input.requestedGroup);
   const targets = new Set<Element>();
   let blocked = false;
@@ -187,6 +191,7 @@ export async function clickHomeMonitorCardAction(
   const input: CardProbeInput = { marker: `hm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
     monitorLabels: [...monitorLabels], modeLabelGroups: modeLabelGroups.map((group) => [...group]), requestedGroup };
   let last: CardProbeResult | undefined;
+  let singleModeSince: number | undefined;
   const report = (outcome: string) => {
     if (!last) return;
     const { kind: _kind, ...counts } = last;
@@ -202,6 +207,11 @@ export async function clickHomeMonitorCardAction(
       // This is an additive probe. Large dashboards retain the existing bounded locator paths.
       if (last.kind === "scan_limit") { report(last.kind); return "unavailable"; }
       if (last.kind === "dialog") { report(last.kind); return "dialog"; }
+      if (last.kind === "current_mode") {
+        singleModeSince ??= Date.now();
+        // Debounce hydration, then stop waiting for buttons this layout does not expose.
+        if (Date.now() - singleModeSince >= 300) { report("current_mode"); return "not_found"; }
+      } else singleModeSince = undefined;
       if (last.kind === "target") {
         await controls.locator(`[data-stw-hm-card-action="${input.marker}"]`).click({ timeout: 3_000 });
         report("clicked");

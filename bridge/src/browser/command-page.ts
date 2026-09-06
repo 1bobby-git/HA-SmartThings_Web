@@ -563,6 +563,7 @@ export class SmartThingsWebUiCommandExecutor {
     action: "armAway" | "armStay" | "disarm";
     waitForConfirmation?: () => Promise<void>;
     isDesiredStateCurrent?: () => boolean;
+    getCurrentModeGroup?: () => number;
   }): Promise<void> {
     const queuedAt = Date.now();
     await this.#runForeground(async () => {
@@ -581,6 +582,7 @@ export class SmartThingsWebUiCommandExecutor {
     action: "armAway" | "armStay" | "disarm";
     waitForConfirmation?: () => Promise<void>;
     isDesiredStateCurrent?: () => boolean;
+    getCurrentModeGroup?: () => number;
   }): Promise<void> {
     const dispatchStartedAt = Date.now();
     const locationName = input.locationNames?.[input.locationId];
@@ -679,6 +681,21 @@ export class SmartThingsWebUiCommandExecutor {
           throw new Error("command_control_not_found");
         }
 
+        // A rendered single-mode card needs its selector, not another series of absent-button waits.
+        const fastModeResult = await clickCurrentHomeMonitorMode(
+          page, monitorLabels, modeLabelGroups, budget(600), input.getCurrentModeGroup?.()
+        );
+        if (fastModeResult === "ambiguous") throw new Error("command_control_ambiguous");
+        if (fastModeResult === "clicked") {
+          monitorOpened = true;
+          this.#diagnostic("home_monitor_current_mode_opened");
+          const selected = await clickRequestedText(budget(3_000));
+          if (selected === "clicked") return;
+          if (selected === "ambiguous") throw new Error("command_control_ambiguous");
+          await emitDomDiagnostic("final_failure");
+          throw new Error("command_control_not_found");
+        }
+
         let action = await findHomeMonitorCardAction(
           page,
           monitorName,
@@ -705,7 +722,8 @@ export class SmartThingsWebUiCommandExecutor {
           page,
           monitorLabels,
           modeLabelGroups,
-          budget(1_000)
+          budget(1_000),
+          input.getCurrentModeGroup?.()
         );
         if (currentModeResult === "ambiguous") {
           throw new Error("command_control_ambiguous");
