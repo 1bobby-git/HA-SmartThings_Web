@@ -153,8 +153,11 @@ describe("Home Monitor command session", () => {
       security(store, "ARMED_AWAY");
     }, async () => undefined, input.waitForConfirmation));
     await f.service.execute(request("request_first_arm"));
+    f.resync.mockImplementation(async () => ({ source: "location_status", locationId: "loc_001", armState: "ARMED_AWAY",
+      authoritativeSnapshot: false, startedAtMs: Date.now() }));
     await expect(f.service.execute(request("request_second_arm"))).resolves.toMatchObject({ status: "already_confirmed" });
     expect(f.execute).toHaveBeenCalledOnce();
+    expect(f.resync).toHaveBeenCalledOnce();
   });
 
   test("serializes the next command until the first page is closed", async () => {

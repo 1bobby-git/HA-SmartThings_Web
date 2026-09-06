@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import type { BrowserContextLike, BrowserPageLike } from "./browser/keeper-page.js";
 import { readLocationSecurityStatus } from "./browser/location-status.js";
+import { verifyLocationRead } from "./state/location-read-proof.js";
 import { installCakeClientCapture } from "./browser/cake-client-capture.js";
 import {
   ADVANCED_DEVICE_SNAPSHOT_URLS,
@@ -103,7 +104,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.8";
+const bridgeVersion = "1.8.9";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -308,15 +309,19 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       if (request?.locationId) {
         const rawLocationId = volatileIdentifiers.rawLocationId(request.locationId);
         if (!rawLocationId) throw new Error("location_status_identifier_unavailable");
-        const observed = await readLocationSecurityStatus(keeper, rawLocationId);
-        if (!observed) {
+        const before = devices.location(request.locationId);
+        const checked = await verifyLocationRead(
+          () => readLocationSecurityStatus(keeper, rawLocationId), rawLocationId, before
+        );
+        if (!checked || !before) {
           log.info("home_monitor_command:status_read_unavailable");
           throw new Error("location_status_unavailable");
         }
-        // The exact raw ID has been checked by the reader. Do not expose it or copy names.
+        const { observed, undatedConfirmed } = checked;
+        // Exact raw IDs remain browser-local. Compare against the pre-read observation.
         const accepted = devices.observeLocationStatusSnapshot({
           locationId: request.locationId, armState: observed.armState, updatedAt: observed.updatedAt
-        }, request.locationId);
+        }, request.locationId, { before, undatedConfirmed });
         if (!accepted) throw new Error("location_status_stale");
         log.info("home_monitor_command:status_read_completed");
         return { source: "location_status", authoritativeSnapshot: false,

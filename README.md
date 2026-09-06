@@ -13,11 +13,15 @@
 
 # HA SmartThings Web
 
+## 1.8.9 Home Monitor 상태 전달 개선
+
+캐시된 모드의 재확인, Push 누락 시 제한된 순차 조회, 날짜 없는 상태의 교차 확인 및 명령 완료 후 HA 상태 갱신을 보완했습니다. 제어 명령을 반복 전송하거나 요청값으로 상태를 덮어쓰지 않습니다. 변경 범위와 검증 한계는 `docs/HOME_MONITOR_1.8.9.md`를 참조하세요.
+
 `HA SmartThings Web`은 Home Assistant에서 `my.smartthings.com` 웹 세션을 이용해 SmartThings 기기 상태, 일반 제어, **Scene**과 **SmartThings Advanced의 안전한 command**를 연결하는 비공식 프로젝트입니다. `speechSynthesis.speak`를 제공하는 **Galaxy Home Mini의 TTS를 Home Assistant 자동화에서 사용할 수 있도록 전용 `smartthings_web.speak` 서비스**도 제공합니다.
 
 브라우저 로그인을 담당하는 **SmartThings Web Bridge 앱**과 Home Assistant 엔티티를 생성하는 **`smartthings_web` 커스텀 통합**으로 구성됩니다. Samsung 비밀번호·MFA·CAPTCHA를 소스나 설정 파일에 입력하지 않고, 사용자가 앱의 noVNC 브라우저에서 직접 로그인합니다.
 
-> **현재 버전: Bridge `1.8.7` / HA 통합 `1.8.7` · 기존 실환경 부분 검증, 새 개선분은 CI 검증**
+> **현재 버전: Bridge `1.8.9` / HA 통합 `1.8.9` · 기존 실환경 부분 검증, 새 개선분은 CI 검증**
 >
 > 실제 Home Assistant OS에서 앱 기동, Ingress/noVNC Samsung 로그인, Bridge 연결, 인벤토리 수신과 Home Assistant 엔티티 생성까지 확인했습니다. `0.1.182`는 `0.1.181` 실환경 진단으로 확인된 Home Monitor 현재 모드 pill, 중복 Supervisor discovery, `..._on`·`..._jaesil` ID와 상태 이벤트 폭주 경로를 수정했으며, 모든 계정과 기기에서 실기기 재검증이 끝난 상태는 아닙니다.
 
