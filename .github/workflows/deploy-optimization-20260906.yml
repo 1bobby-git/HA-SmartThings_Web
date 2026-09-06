@@ -30,13 +30,46 @@ jobs:
       - name: Prepare isolated publisher and preserve the unchanged bridge archive
         run: |
           python - <<'PY'
-          import ast, os, shutil, textwrap
+          import ast, hashlib, os, shutil, textwrap
           from pathlib import Path
           source = Path('.release-helper/.optimization-release')
-          text = (source/'deploy.py').read_text()
-          old = '    release = api("releases/tags/" + state["tag"])'
-          assert text.count(old) == 2
-          text = text.replace(old, '    release = next(r for r in api("releases?per_page=100") if r["tag_name"] == state["tag"])', 1)
+          raw = (source/'deploy.py').read_bytes()
+          assert hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest() == '13b5835fbdccf949f0aa92b9989759d677cbb6b1'
+          text = raw.decode()
+          start = text.index('    run("gh", "release", "create", state["tag"]')
+          end = text.index('    require(api("git/ref/tags/"', start)
+          replacement = '''
+          import mimetypes
+          import time
+          from urllib.parse import quote
+          metadata = TEMP / "optimization-release-request.json"
+          metadata.write_text(json.dumps({"tag_name": state["tag"], "target_commitish": commit, "name": f"{REPO.split('/')[-1]} {VERSION}", "body": notes.read_text(), "draft": True, "prerelease": False}))
+          release = json.loads(run("gh", "api", "--method", "POST", f"repos/{REPO}/releases", "--input", str(metadata)))
+          require(release["tag_name"] == state["tag"] and release["draft"], "Unexpected created release")
+          release_id = release["id"]
+          for p in sorted(output.iterdir()):
+              endpoint = f"https://uploads.github.com/repos/{REPO}/releases/{release_id}/assets?name=" + quote(p.name, safe="")
+              content_type = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+              asset = json.loads(run("gh", "api", "--method", "POST", endpoint, "-H", "Content-Type: " + content_type, "--input", str(p)))
+              require(asset["name"] == p.name and asset["state"] == "uploaded", "Upload incomplete")
+              require(asset["size"] == p.stat().st_size, "Upload size mismatch")
+              require(asset.get("digest") == "sha256:" + hashlib.sha256(p.read_bytes()).hexdigest(), "Upload digest mismatch")
+          release = api(f"releases/{release_id}")
+          require({a["name"] for a in release["assets"]} == expected, "Uploaded release assets incomplete")
+          for asset in release["assets"]:
+              p = output / asset["name"]
+              require(asset["size"] == p.stat().st_size and asset.get("digest") == "sha256:" + hashlib.sha256(p.read_bytes()).hexdigest(), "Uploaded bytes mismatch")
+          metadata.write_text(json.dumps({"draft": False, "prerelease": False, "make_latest": "true"}))
+          run("gh", "api", "--method", "PATCH", f"repos/{REPO}/releases/{release_id}", "--input", str(metadata))
+          for attempt in range(6):
+              release = api(f"releases/{release_id}")
+              if not release["draft"] and not release["prerelease"] and release["published_at"] and api("releases/latest")["id"] == release_id:
+                  break
+              time.sleep(2)
+          else:
+              raise RuntimeError("Public latest release not verified")
+          '''
+          text = text[:start] + textwrap.indent(textwrap.dedent(replacement).strip()+'\n', '    ') + text[end:]
           anchor = '    assets = sorted(output.iterdir())\n'
           assert text.count(anchor) == 1
           extra = '''
@@ -62,13 +95,16 @@ jobs:
               require(asset.get("digest") == "sha256:" + hashlib.sha256(p.read_bytes()).hexdigest(), "Bridge archive checksum mismatch")
           '''
           text = text.replace(anchor, textwrap.indent(textwrap.dedent(extra).strip()+'\n', '    ') + anchor)
+          anchor = '        p.write_text(text, encoding="utf-8")'
+          assert text.count(anchor) == 1
+          text = text.replace(anchor, '        p.write_text(text.rstrip() + "\\n" if path.endswith(".md") else text, encoding="utf-8")')
           ast.parse(text)
           temp = Path(os.environ['RUNNER_TEMP'])
           (temp/'optimization-deploy.py').write_text(text)
           shutil.copyfile(source/'unittest_report.py', temp/'optimization-unittest.py')
           shutil.rmtree('.release-helper')
           PY
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.13'
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
@@ -79,15 +115,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python "$RUNNER_TEMP/optimization-deploy.py" check
-      - name: Install native validation dependencies
-        run: |
-          python -m pip install 'aiohttp>=3.10,<4' 'yarl>=1.9,<2' 'voluptuous>=0.15,<1'
-          npm ci
-      - name: Test unchanged baseline
-        run: |
-          python -m compileall -q custom_components/smartthings_web
-          PYTHONPATH="$PWD" python "$RUNNER_TEMP/optimization-unittest.py" custom_components/smartthings_web/tests "$RUNNER_TEMP/optimization-baseline.xml"
-          npm test -- --reporter=junit --outputFile="$RUNNER_TEMP/optimization-node-baseline.xml"
       - name: Require all other six releases to be published first
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -100,8 +127,124 @@ jobs:
               assert release['tag_name'] == tag and release['published_at'] and not release['draft'] and not release['prerelease'], repo
               print(repo, tag, release['published_at'])
           PY
+      - name: Install native validation dependencies
+        run: |
+          python -m pip install 'aiohttp>=3.10,<4' 'yarl>=1.9,<2' 'voluptuous>=0.15,<1'
+          npm ci
+      - name: Test unchanged baseline
+        run: |
+          python -m compileall -q custom_components/smartthings_web
+          PYTHONPATH="$PWD" python "$RUNNER_TEMP/optimization-unittest.py" custom_components/smartthings_web/tests "$RUNNER_TEMP/optimization-baseline.xml"
+          npm test -- --reporter=junit --outputFile="$RUNNER_TEMP/optimization-node-baseline.xml"
       - name: Apply exact source patches and update documentation
         run: python "$RUNNER_TEMP/optimization-deploy.py" apply
+      - name: Add native listener lifecycle regressions
+        run: |
+          python - <<'PY'
+          import ast, json, os, textwrap
+          from pathlib import Path
+          path = Path('custom_components/smartthings_web/tests/test_listener_lifecycle.py')
+          assert not path.exists()
+          content = '''
+          """Regressions using the actual runtime and a real asyncio timer."""
+          import unittest
+          from test_models import FakeClient, SmartThingsWebRuntime, inventory
+
+          class ListenerLifecycleTests(unittest.IsolatedAsyncioTestCase):
+              async def asyncSetUp(self):
+                  self.runtime = SmartThingsWebRuntime(FakeClient(), "loc_001", inventory(10, 20, "2026-08-24T21:00:00Z"))
+                  self.runtime.listener_coalesce_ms = 60000
+                  self.observed = []
+                  self.listener = lambda: self.observed.append("first")
+
+              async def asyncTearDown(self):
+                  if self.runtime._listener_flush_handle is not None:
+                      self.runtime._listener_flush_handle.cancel()
+                  self.runtime._pending_listeners.clear()
+
+              def queue(self):
+                  self.runtime._notify_listeners()
+                  handle = self.runtime._listener_flush_handle
+                  self.assertIsNotNone(handle)
+                  self.assertFalse(handle.cancelled())
+                  return handle
+
+              async def test_last_state_unsubscribe_cancels_pending_timer(self):
+                  unsubscribe = self.runtime.subscribe_state("dev_001", ("main", "switch", "switch"), self.listener)
+                  handle = self.queue()
+                  unsubscribe()
+                  unsubscribe()
+                  self.assertTrue(handle.cancelled())
+                  self.assertIsNone(self.runtime._listener_flush_handle)
+                  self.assertFalse(self.runtime._pending_listeners)
+                  self.runtime._flush_pending_listeners()
+                  self.assertEqual(self.observed, [])
+
+              async def test_last_device_unsubscribe_cancels_pending_timer(self):
+                  unsubscribe = self.runtime.subscribe_device("dev_001", self.listener)
+                  handle = self.queue()
+                  unsubscribe()
+                  self.assertTrue(handle.cancelled())
+                  self.assertIsNone(self.runtime._listener_flush_handle)
+                  self.assertFalse(self.runtime._pending_listeners)
+
+              async def test_global_unsubscribe_preserves_remaining_state_subscription(self):
+                  remove_global = self.runtime.subscribe(self.listener)
+                  remove_state = self.runtime.subscribe_state("dev_001", ("main", "switch", "switch"), self.listener)
+                  handle = self.queue()
+                  remove_global()
+                  self.assertIn(self.listener, self.runtime._pending_listeners)
+                  self.assertFalse(handle.cancelled())
+                  remove_state()
+                  self.assertTrue(handle.cancelled())
+                  self.assertFalse(self.runtime._pending_listeners)
+
+              async def test_state_unsubscribe_preserves_other_device_subscription(self):
+                  remove_state = self.runtime.subscribe_state("dev_001", ("main", "switch", "switch"), self.listener)
+                  remove_device = self.runtime.subscribe_device("dev_002", self.listener)
+                  handle = self.queue()
+                  remove_state()
+                  self.assertIn(self.listener, self.runtime._pending_listeners)
+                  self.assertFalse(handle.cancelled())
+                  remove_device()
+                  self.assertTrue(handle.cancelled())
+                  self.assertFalse(self.runtime._pending_listeners)
+
+              async def test_immediate_delivery_removes_older_batch_not_new_events(self):
+                  self.runtime.subscribe(self.listener)
+                  handle = self.queue()
+                  self.runtime._notify_listeners(immediate=True)
+                  self.assertEqual(self.observed, ["first"])
+                  self.assertTrue(handle.cancelled())
+                  self.assertIsNone(self.runtime._listener_flush_handle)
+                  self.runtime._flush_pending_listeners()
+                  self.assertEqual(self.observed, ["first"])
+                  self.runtime._notify_listeners(immediate=True)
+                  self.assertEqual(self.observed, ["first", "first"])
+
+              async def test_immediate_delivery_preserves_unrelated_queued_callback(self):
+                  other = lambda: self.observed.append("second")
+                  self.runtime.subscribe_device("dev_001", self.listener)
+                  self.runtime.subscribe_device("dev_002", other)
+                  handle = self.queue()
+                  self.runtime._notify_listeners(device_ids={"dev_001"}, notify_global=False, immediate=True)
+                  self.assertEqual(self.observed, ["first"])
+                  self.assertEqual(self.runtime._pending_listeners, {other})
+                  self.assertIs(self.runtime._listener_flush_handle, handle)
+                  self.assertFalse(handle.cancelled())
+                  handle.cancel()
+                  self.runtime._flush_pending_listeners()
+                  self.assertEqual(self.observed, ["first", "second"])
+          '''
+          content = textwrap.dedent(content).lstrip()
+          ast.parse(content)
+          path.write_text(content)
+          state_path = Path(os.environ['RUNNER_TEMP'], 'optimization-state.json')
+          state = json.loads(state_path.read_text())
+          state['paths'] = sorted(set(state['paths'] + [str(path)]))
+          state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2)+'\n')
+          PY
+          git add -N custom_components/smartthings_web/tests/test_listener_lifecycle.py
       - name: Document integration-only release and preserve existing development warning
         run: |
           python - <<'PY'
@@ -109,7 +252,7 @@ jobs:
           from pathlib import Path
           note = '\n\n## 통합과 브리지 버전\n\n이번 배포는 Home Assistant 통합 1.8.7만 업데이트합니다. 브리지 앱과 Node 패키지는 1.8.6을 유지합니다. 함께 첨부한 smartthings-web-bridge-1.8.6.tgz는 이전 릴리스와 SHA-256이 동일한 파일이며 재빌드하거나 업데이트한 앱이 아닙니다. HACS 통합 업데이트를 위해 브리지를 재설치할 필요는 없습니다. 기존 개발 중 경고와 설치 자제 안내는 유지합니다.\n'
           p = Path('docs/OPTIMIZATION_2026-09-06.md')
-          p.write_text(p.read_text().rstrip() + note)
+          p.write_text(p.read_text().rstrip() + note + '\n실제 런타임과 asyncio 타이머를 사용하는 구독 해제·중복 알림 회귀 테스트 6개를 추가했습니다.\n')
           p = Path('README.md')
           p.write_text(p.read_text().rstrip() + note)
           state = json.loads(Path(os.environ['RUNNER_TEMP'], 'optimization-state.json').read_text())
@@ -169,12 +312,12 @@ jobs:
                   assert low <= min(width,height) <= high, name
           PY
       - name: HACS validation
-        uses: hacs/action@main
+        uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa
         with:
           category: integration
           ignore: topics
       - name: Hassfest validation
-        uses: home-assistant/actions/hassfest@master
+        uses: home-assistant/actions/hassfest@a7c616ce81ccda50150bf1595786c71b1883fabb
       - name: Publish verified commit, tag and release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
