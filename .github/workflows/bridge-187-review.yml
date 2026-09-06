@@ -1,0 +1,28 @@
+name: Bridge 1.8.7 source review
+on:
+  push:
+    branches: [fix/bridge-1.8.7-20260906]
+    paths: [.github/workflows/bridge-187-review.yml]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: aa7000eec7b0d095b6baf669c20784e045f2eba2
+          persist-credentials: false
+      - name: Export only tracked public source
+        run: |
+          mkdir -p "$RUNNER_TEMP/source-review"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/source-review/source.tar.gz"
+          git rev-parse HEAD > "$RUNNER_TEMP/source-review/COMMIT.txt"
+          git ls-tree -r HEAD > "$RUNNER_TEMP/source-review/TREE.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bridge-187-source-review
+          path: ${{ runner.temp }}/source-review/
+          retention-days: 3
+          if-no-files-found: error
