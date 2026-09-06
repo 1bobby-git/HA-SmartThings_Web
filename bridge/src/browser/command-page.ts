@@ -644,11 +644,12 @@ export class SmartThingsWebUiCommandExecutor {
           }
         };
         let monitorOpened = false;
+        const popupToken = `hm-popup-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
         const clickRequestedText = async (timeoutMs: number) => {
           timeoutMs = budget(timeoutMs);
           const dialogResult = await clickHomeMonitorDialogAction(
             page, monitorLabels, actionLabels, modeLabelGroups, timeoutMs,
-            monitorOpened, this.#onHomeMonitorDialogDiagnostic
+            monitorOpened, this.#onHomeMonitorDialogDiagnostic, monitorOpened ? popupToken : undefined
           );
           if (dialogResult === "not_found") {
             // Never fall back to dashboard buttons behind an unrecognized modal.
@@ -710,7 +711,8 @@ export class SmartThingsWebUiCommandExecutor {
           page,
           monitorLabels,
           modeLabelGroups,
-          budget(1_000)
+          budget(1_000),
+          popupToken
         );
         if (currentModeResult === "ambiguous") {
           throw new Error("command_control_ambiguous");

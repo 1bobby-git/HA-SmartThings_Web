@@ -1,10 +1,12 @@
 import type { BrowserPageLike } from "./keeper-page.js";
+import { scopedHomeMonitorModeGroups } from "./home-monitor-mode-labels.js";
 
 interface SelectorProbeInput {
   marker: string;
   monitorLabels: string[];
   modeLabelGroups: string[][];
   cleanup?: boolean;
+  popupToken?: string;
 }
 
 export interface HomeMonitorSelectorProbe {
@@ -94,7 +96,7 @@ export function probeHomeMonitorSelector(input: SelectorProbeInput): HomeMonitor
   const title = titles[0]!;
   const modeElements = deepest(elements.filter((element) => visible(element) && groupOf(element) >= 0));
   const opensPopup = (element: Element) => element.matches('[role="combobox"]') ||
-    ["listbox", "menu"].includes(element.getAttribute("aria-haspopup") ?? "") ||
+    ["true", "dialog", "listbox", "menu"].includes(element.getAttribute("aria-haspopup") ?? "") ||
     (element.hasAttribute("aria-expanded") && Boolean(element.getAttribute("aria-controls")));
   const popupElements = elements.filter((element) => visible(element) && opensPopup(element));
   const captions = new Set([normalize("System ready to arm")]);
@@ -121,7 +123,7 @@ export function probeHomeMonitorSelector(input: SelectorProbeInput): HomeMonitor
   // A multi-mode action row belongs to the direct-action path, not the selector opener.
   if (result.localGroups > 1) return result;
   const stateCaptions = new Set([
-    "Armed away", "Armed (Away)", "Armed stay", "Armed (Stay)", "Disarmed", "Not armed", "Security off",
+    "Armed away", "Armed (Away)", "Armed stay", "Armed (Stay)", "Armed home", "Armed (Home)", "Disarmed", "Not armed", "Security off",
     "외출 중", "외출중", "집 밖에 있음", "집 밖에 있어요", "집을 비움",
     "재실 중", "재실중", "집에 있음", "집 안에 있음", "집 안에 있어요", "해제됨"
   ].map(normalize));
@@ -159,6 +161,7 @@ export function probeHomeMonitorSelector(input: SelectorProbeInput): HomeMonitor
     if (cursor === card) break;
   }
   target.setAttribute(attribute, input.marker);
+  if (input.popupToken) target.setAttribute("data-stw-hm-popup-owner", input.popupToken);
   return { ...result, kind: "target" };
 }
 
@@ -168,21 +171,22 @@ export async function hasHomeMonitorSelector(
 ): Promise<boolean> {
   if (!page.evaluate) return false;
   const input: SelectorProbeInput = { marker: `hm-probe-${Date.now().toString(36)}`,
-    monitorLabels: [...monitorLabels], modeLabelGroups: modeLabelGroups.map((group) => [...group]) };
+    monitorLabels: [...monitorLabels], modeLabelGroups: scopedHomeMonitorModeGroups(modeLabelGroups) };
   try { return (await page.evaluate(probeHomeMonitorSelector, input))?.kind === "target"; }
   catch { return false; }
   finally { await page.evaluate(probeHomeMonitorSelector, { ...input, cleanup: true }).catch(() => undefined); }
 }
 
 export async function clickScopedHomeMonitorSelector(
-  page: BrowserPageLike, monitorLabels: readonly string[], modeLabelGroups: readonly (readonly string[])[], timeoutMs: number
+  page: BrowserPageLike, monitorLabels: readonly string[], modeLabelGroups: readonly (readonly string[])[], timeoutMs: number, popupToken?: string
 ): Promise<"clicked" | "not_found" | "ambiguous" | "unavailable" | "blocked"> {
   const controls = page as BrowserPageLike & { locator?: (selector: string) => {
     click(options: { timeout: number }): Promise<unknown>;
   } };
   if (!page.evaluate || !controls.locator) return "unavailable";
   const input: SelectorProbeInput = { marker: `hm-open-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
-    monitorLabels: [...monitorLabels], modeLabelGroups: modeLabelGroups.map((group) => [...group]) };
+    monitorLabels: [...monitorLabels], modeLabelGroups: scopedHomeMonitorModeGroups(modeLabelGroups),
+    ...(popupToken ? { popupToken } : {}) };
   const deadline = Date.now() + Math.max(1, Math.min(timeoutMs, 3_000));
   try {
     do {

@@ -13,6 +13,10 @@
 
 # HA SmartThings Web
 
+## 1.8.10 Home Monitor 실내 선택 및 지연 개선
+
+검증된 카드 선택기에 연결된 두 선택지 팝업과 Home/집 표기를 지원하고 기본 상태 재확인 공백과 중복 HA 조회를 줄였습니다. 실제 보안 상태 확인과 기존 제어 경로는 유지합니다. 상세 범위 및 검증 한계는 `docs/HOME_MONITOR_1.8.10.md`를 참조하세요.
+
 ## 1.8.9 Home Monitor 상태 전달 개선
 
 캐시된 모드의 재확인, Push 누락 시 제한된 순차 조회, 날짜 없는 상태의 교차 확인 및 명령 완료 후 HA 상태 갱신을 보완했습니다. 제어 명령을 반복 전송하거나 요청값으로 상태를 덮어쓰지 않습니다. 변경 범위와 검증 한계는 `docs/HOME_MONITOR_1.8.9.md`를 참조하세요.
@@ -21,7 +25,7 @@
 
 브라우저 로그인을 담당하는 **SmartThings Web Bridge 앱**과 Home Assistant 엔티티를 생성하는 **`smartthings_web` 커스텀 통합**으로 구성됩니다. Samsung 비밀번호·MFA·CAPTCHA를 소스나 설정 파일에 입력하지 않고, 사용자가 앱의 noVNC 브라우저에서 직접 로그인합니다.
 
-> **현재 버전: Bridge `1.8.9` / HA 통합 `1.8.9` · 기존 실환경 부분 검증, 새 개선분은 CI 검증**
+> **현재 버전: Bridge `1.8.10` / HA 통합 `1.8.10` · 기존 실환경 부분 검증, 새 개선분은 CI 검증**
 >
 > 실제 Home Assistant OS에서 앱 기동, Ingress/noVNC Samsung 로그인, Bridge 연결, 인벤토리 수신과 Home Assistant 엔티티 생성까지 확인했습니다. `0.1.182`는 `0.1.181` 실환경 진단으로 확인된 Home Monitor 현재 모드 pill, 중복 Supervisor discovery, `..._on`·`..._jaesil` ID와 상태 이벤트 폭주 경로를 수정했으며, 모든 계정과 기기에서 실기기 재검증이 끝난 상태는 아닙니다.
 
