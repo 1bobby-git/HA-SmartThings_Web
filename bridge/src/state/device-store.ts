@@ -413,22 +413,30 @@ export class DeviceStore {
   }
 
   /** A freshly fetched, exact-location status; never infer status from a click or a button. */
-  observeLocationStatusSnapshot(input: unknown, expectedLocationId: string): boolean {
+  observeLocationStatusSnapshot(input: unknown, expectedLocationId: string,
+    proof?: { before: BridgeLocation; undatedConfirmed: boolean }): boolean {
     const row = asRecord(input);
     const id = safeId(row?.locationId ?? row?.location_id ?? row?.id, "loc");
     const armState = readString(row?.armState ?? row?.arm_state);
     const current = id ? this.#locations.get(id) : undefined;
     if (!current || id !== expectedLocationId || !normalizeLocationArmState(armState)) return false;
     const updatedAt = validTimestamp(row?.updatedAt ?? row?.updated_at ?? row?.timestamp);
+    // Discard a read overtaken by another security observation, including an ABA change.
+    if (proof && (proof.before.id !== id || proof.before.armState !== current.armState ||
+        proof.before.updatedAt !== current.updatedAt)) return false;
     // A dated event takes precedence over an older or equal-time contradictory read.
     if (current.updatedAt && updatedAt && Date.parse(updatedAt) <= Date.parse(current.updatedAt)) {
       return normalizeLocationArmState(current.armState) === normalizeLocationArmState(armState);
     }
-    // An undated read may confirm the current state, but cannot replace a dated contrary event.
+    // Only two agreeing, fresh exact-location reads may repair a missed dated push.
+    // The ordinary snapshot path has no proof and retains its strict ordering checks.
     if (current.updatedAt && !updatedAt) {
-      return normalizeLocationArmState(current.armState) === normalizeLocationArmState(armState);
+      if (normalizeLocationArmState(current.armState) === normalizeLocationArmState(armState)) return true;
+      if (proof?.undatedConfirmed !== true) return false;
     }
-    const next: BridgeLocation = { ...current, armState: armState!, updatedAt };
+    const next: BridgeLocation = { ...current, armState: armState!,
+      // Keep the last upstream timestamp as the replay watermark, not a fabricated new time.
+      updatedAt: updatedAt ?? current.updatedAt ?? null };
     if (setIfChanged(this.#locations, id!, next)) {
       const sequence = this.#nextSequence();
       this.#publish({ schemaVersion: 1, sequence, type: "inventory" });

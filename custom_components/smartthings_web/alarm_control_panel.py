@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+
 from homeassistant.components.alarm_control_panel import (
     AlarmControlPanelEntity,
     AlarmControlPanelEntityFeature,
@@ -110,7 +113,7 @@ class SmartThingsWebHomeMonitor(AlarmControlPanelEntity):
 
     async def _async_arm(self, command: str) -> None:
         try:
-            await self.runtime.client.async_execute_command(
+            result = await self.runtime.client.async_execute_command(
                 target_type="location",
                 target_id=self.runtime.location_id,
                 command=command,
@@ -118,3 +121,15 @@ class SmartThingsWebHomeMonitor(AlarmControlPanelEntity):
             )
         except BridgeClientError as err:
             raise HomeAssistantError(bridge_error_message("Home Monitor command", err)) from err
+        if getattr(result, "status", None) not in {"confirmed", "already_confirmed"}:
+            return
+        try:
+            # One post-command read closes the SSE delivery race; never set a requested mode.
+            # A delayed read cannot overwrite a newer snapshot (apply_inventory checks sequence).
+            async with asyncio.timeout(3):
+                latest = await self.runtime.client.async_get_inventory()
+            self.runtime.apply_inventory(latest)
+        except (BridgeClientError, TimeoutError):
+            logging.getLogger(__name__).warning(
+                "Home Monitor command confirmed; immediate inventory read unavailable, waiting for Bridge events"
+            )

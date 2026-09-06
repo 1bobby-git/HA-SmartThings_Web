@@ -1,5 +1,6 @@
 import { normalizeLocationArmState } from "../state/location-arm-state.js";
 import { enqueueWithDeadline } from "./bounded-command-queue.js";
+import { boundedLocationRead, scheduleLocationRechecks } from "./location-rechecks.js";
 import type {
   BridgeDevice,
   BridgeDeviceState,
@@ -737,7 +738,18 @@ export class SafeCommandService {
     if (!location) throw new SafeCommandError("device_not_found");
     const desired = armStateForCommand(request.command);
     if (!desired || request.arguments.length !== 0) throw new SafeCommandError("unsupported_command");
-    if (normalizeLocationArmState(location.armState) === desired) return alreadyConfirmed(request.clientRequestId, snapshot.sequence);
+    if (normalizeLocationArmState(location.armState) === desired) {
+      // A cached match is not proof: a missed push can leave the previous mode here.
+      const readStarted = Date.now();
+      const evidence = await boundedLocationRead(() => this.options.resync({ locationId: request.targetId }));
+      if (evidence?.source === "location_status" && evidence.locationId === request.targetId &&
+          evidence.startedAtMs >= readStarted && normalizeLocationArmState(evidence.armState) === desired &&
+          normalizeLocationArmState(this.options.devices.location(request.targetId)?.armState) === desired) {
+        return alreadyConfirmed(request.clientRequestId, this.options.devices.currentSequence());
+      }
+    }
+    const initialLocation = this.options.devices.location(request.targetId);
+    const initialSequence = this.options.devices.currentSequence();
     const startedAt = Date.now();
     const timeoutMs = request.timeout === undefined ? this.options.timeoutMs : request.timeout * 1_000;
     const diagnostic = (phase: "dispatching" | "waiting" | "confirmed" | "failed", reason?: SafeCommandErrorCode) => {
@@ -758,7 +770,7 @@ export class SafeCommandService {
       devices: this.options.devices,
       locationId: request.targetId,
       desired,
-      afterSequence: snapshot.sequence,
+      afterSequence: initialSequence,
       resync: () => this.options.resync({ locationId: request.targetId })
     });
     let started = false;
@@ -778,7 +790,11 @@ export class SafeCommandService {
         locationId: request.targetId,
         locationNames,
         waitForConfirmation,
-        isDesiredStateCurrent: () => normalizeLocationArmState(this.options.devices.location(request.targetId)?.armState) === desired
+        isDesiredStateCurrent: () => {
+          const current = this.options.devices.location(request.targetId);
+          return normalizeLocationArmState(current?.armState) === desired &&
+            (current?.armState !== initialLocation?.armState || current?.updatedAt !== initialLocation?.updatedAt);
+        }
       });
       // Test/custom executors may not own a browser page or consume the optional hook.
       await waitForConfirmation();
@@ -1060,14 +1076,20 @@ function waitForRefreshCommand(options: {
 }
 
 function waitForLocationArmState(options: { devices: DeviceStore; locationId: string; desired: string; afterSequence: number; resync: CommandResync }): ConfirmationWait {
+  const before = options.devices.location(options.locationId);
   const matches = () => normalizeLocationArmState(options.devices.location(options.locationId)?.armState) === options.desired;
+  const changed = () => {
+    const current = options.devices.location(options.locationId);
+    return current?.armState !== before?.armState || current?.updatedAt !== before?.updatedAt;
+  };
   return waitForPredicate({
     devices: options.devices,
     afterSequence: options.afterSequence,
     resync: options.resync,
     forceFinalResync: true,
+    boundedLocationRechecks: true,
     invalidates: (event) => event.type === "inventory" && !matches(),
-    matches: (event) => event.type === "inventory" && matches(),
+    matches: (event) => event.type === "inventory" && changed() && matches(),
     acceptsResyncEvidence: (evidence, minStartedAtMs) =>
       evidence?.source === "location_status" && evidence.locationId === options.locationId &&
       normalizeLocationArmState(evidence.armState) === options.desired &&
@@ -1112,13 +1134,14 @@ interface ConfirmationEvidence {
   commandId?: string;
 }
 
-function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: CommandResync; matches: (event: BridgeDeviceStoreEvent) => boolean; invalidates?: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean; acceptsResyncEvidence?: (evidence: CommandResyncEvidence | undefined, minStartedAtMs?: number) => boolean; acceptsEvidence?: (evidence: ConfirmationEvidence) => boolean; stabilityMs?: number; forceFinalResync?: boolean }): ConfirmationWait {
+function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: CommandResync; matches: (event: BridgeDeviceStoreEvent) => boolean; invalidates?: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean; acceptsResyncEvidence?: (evidence: CommandResyncEvidence | undefined, minStartedAtMs?: number) => boolean; acceptsEvidence?: (evidence: ConfirmationEvidence) => boolean; stabilityMs?: number; forceFinalResync?: boolean; boundedLocationRechecks?: boolean }): ConfirmationWait {
   let settled = false;
   let interactionComplete = false;
   let unsubscribe: () => void = () => undefined;
   let timer: NodeJS.Timeout | undefined;
   let resyncTimer: NodeJS.Timeout | undefined;
   let finalResyncTimer: NodeJS.Timeout | undefined;
+  let stopLocationRechecks: (() => void) | undefined;
   let stabilityTimer: NodeJS.Timeout | undefined;
   let resyncPromise: Promise<void> | undefined;
   let lastResyncStartedAfterSequence: number | undefined;
@@ -1131,6 +1154,7 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
     if (timer) clearTimeout(timer);
     if (resyncTimer) clearTimeout(resyncTimer);
     if (finalResyncTimer) clearTimeout(finalResyncTimer);
+    stopLocationRechecks?.();
     if (stabilityTimer) clearTimeout(stabilityTimer);
     unsubscribe();
   };
@@ -1231,6 +1255,19 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
         Number.isFinite(resyncAfterMs) &&
         resyncAfterMs >= 0 &&
         resyncAfterMs < timeoutMs;
+      if (options.boundedLocationRechecks === true) {
+        stopLocationRechecks = scheduleLocationRechecks(
+          () => resyncAndCheck(minResyncStartedAtMs, true),
+          { timeoutMs, ...(hasEarlyResync ? { firstDelayMs: resyncAfterMs } : {}) }
+        );
+        timer = setTimeout(() => {
+          timer = undefined;
+          if (settled) return;
+          cleanup();
+          rejectResult(new SafeCommandError("command_confirmation_timeout"));
+        }, timeoutMs);
+        return;
+      }
       if (options.forceFinalResync === true) {
         const finalLeadMs = Math.min(5_000, Math.max(1, Math.floor(timeoutMs / 3)));
         const finalResyncAfterMs = Math.max(0, timeoutMs - finalLeadMs);

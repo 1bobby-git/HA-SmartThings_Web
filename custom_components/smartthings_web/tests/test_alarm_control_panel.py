@@ -140,6 +140,52 @@ def _runtime(location: BridgeLocation | str | None) -> SmartThingsWebRuntime:
 class SmartThingsWebHomeMonitorTests(unittest.IsolatedAsyncioTestCase):
     """Map location arm state to HA alarm state and exact arm commands."""
 
+    async def test_confirmed_command_fetches_real_snapshot_without_waiting_for_sse(self) -> None:
+        runtime = _runtime(BridgeLocation("loc_001", "Home", "disarmed"))
+        latest = BridgeInventory(2, True, "1.8.9", "5", {"loc_001": BridgeLocation("loc_001", "Home", "armed_home")}, {}, {})
+        runtime.client = SimpleNamespace(
+            async_execute_command=AsyncMock(return_value=SimpleNamespace(status="confirmed")),
+            async_get_inventory=AsyncMock(return_value=latest),
+        )
+        entity = SmartThingsWebHomeMonitor(runtime)
+        await entity.async_alarm_arm_home()
+        self.assertEqual(entity.state, "armed_home")
+        runtime.client.async_get_inventory.assert_awaited_once()
+
+    async def test_snapshot_failure_does_not_turn_a_confirmed_command_into_failure(self) -> None:
+        runtime = _runtime(BridgeLocation("loc_001", "Home", "disarmed"))
+        runtime.client = SimpleNamespace(
+            async_execute_command=AsyncMock(return_value=SimpleNamespace(status="confirmed")),
+            async_get_inventory=AsyncMock(side_effect=BridgeClientError("bridge_request_failed")),
+        )
+        entity = SmartThingsWebHomeMonitor(runtime)
+        await entity.async_alarm_arm_home()
+        self.assertEqual(entity.state, "disarmed", "never assign the requested state optimistically")
+
+    async def test_unconfirmed_receipt_does_not_trigger_snapshot_or_optimistic_state(self) -> None:
+        runtime = _runtime(BridgeLocation("loc_001", "Home", "disarmed"))
+        runtime.client = SimpleNamespace(
+            async_execute_command=AsyncMock(return_value=SimpleNamespace(status="accepted_unconfirmed")),
+            async_get_inventory=AsyncMock(),
+        )
+        entity = SmartThingsWebHomeMonitor(runtime)
+        await entity.async_alarm_arm_home()
+        self.assertEqual(entity.state, "disarmed")
+        runtime.client.async_get_inventory.assert_not_awaited()
+
+    async def test_delayed_snapshot_cannot_overwrite_a_newer_push(self) -> None:
+        runtime = _runtime(BridgeLocation("loc_001", "Home", "armed_away"))
+        runtime.inventory.sequence = 5
+        stale = BridgeInventory(4, True, "1.8.9", "5", {"loc_001": BridgeLocation("loc_001", "Home", "armed_home")}, {}, {})
+        runtime.client = SimpleNamespace(
+            async_execute_command=AsyncMock(return_value=SimpleNamespace(status="confirmed")),
+            async_get_inventory=AsyncMock(return_value=stale),
+        )
+        entity = SmartThingsWebHomeMonitor(runtime)
+        await entity.async_alarm_arm_home()
+        self.assertEqual(entity.state, "armed_away")
+
+
     async def test_setup_discovers_home_monitor_when_location_exists_without_arm_state(self) -> None:
         runtime = _runtime(BridgeLocation("loc_001", "ExampleOffice", None))
         added: list[SmartThingsWebHomeMonitor] = []
