@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 
 export type CaptureSource =
   | "unit"
@@ -57,6 +57,10 @@ export function sanitizeCaptureRecord(
 
 export class CaptureStore {
   readonly #db: DatabaseSync;
+  readonly #insert: StatementSync;
+  readonly #recent: StatementSync;
+  readonly #ping: StatementSync;
+  readonly #prune: StatementSync;
   readonly #lastPayloadHashBySource = new Map<CaptureSource, string>();
   #writesSincePrune = 0;
 
@@ -78,6 +82,20 @@ export class CaptureStore {
         payload_hash TEXT NOT NULL
       )
     `);
+    this.#insert = this.#db.prepare(
+      "INSERT INTO captures (source, received_at, payload_json, payload_hash) VALUES (?, ?, ?, ?)"
+    );
+    this.#recent = this.#db.prepare(
+      "SELECT source, received_at AS receivedAt, payload_json AS payload, payload_hash AS payloadHash FROM captures ORDER BY id DESC LIMIT ?"
+    );
+    this.#ping = this.#db.prepare("SELECT 1");
+    this.#prune = this.#db.prepare(`
+      DELETE FROM captures
+      WHERE id < COALESCE(
+        (SELECT id FROM captures ORDER BY id DESC LIMIT 1 OFFSET ?),
+        0
+      )
+    `);
     this.#pruneOldCaptures();
   }
 
@@ -89,11 +107,9 @@ export class CaptureStore {
       return;
     }
     try {
-      this.#db
-        .prepare(
-          "INSERT INTO captures (source, received_at, payload_json, payload_hash) VALUES (?, ?, ?, ?)"
-        )
-        .run(record.source, record.receivedAt, JSON.stringify(record.payload), record.payloadHash);
+      this.#insert.run(
+        record.source, record.receivedAt, JSON.stringify(record.payload), record.payloadHash
+      );
       this.#lastPayloadHashBySource.set(record.source, record.payloadHash);
       this.#writesSincePrune += 1;
       if (this.#writesSincePrune >= capturePruneInterval) {
@@ -111,15 +127,11 @@ export class CaptureStore {
     if (!Number.isInteger(limit) || limit < 1 || limit > maxRecentCaptureLimit) {
       throw new Error(`capture list limit must be an integer between 1 and ${maxRecentCaptureLimit}`);
     }
-    return this.#db
-      .prepare(
-        "SELECT source, received_at AS receivedAt, payload_json AS payload, payload_hash AS payloadHash FROM captures ORDER BY id DESC LIMIT ?"
-      )
-      .all(limit) as unknown as CaptureRow[];
+    return this.#recent.all(limit) as unknown as CaptureRow[];
   }
 
   ping(): boolean {
-    this.#db.prepare("SELECT 1").get();
+    this.#ping.get();
     return true;
   }
 
@@ -133,15 +145,7 @@ export class CaptureStore {
   }
 
   #pruneOldCaptures(): void {
-    this.#db
-      .prepare(`
-        DELETE FROM captures
-        WHERE id < COALESCE(
-          (SELECT id FROM captures ORDER BY id DESC LIMIT 1 OFFSET ?),
-          0
-        )
-      `)
-      .run(maxPersistedCaptureRows - 1);
+    this.#prune.run(maxPersistedCaptureRows - 1);
     this.#writesSincePrune = 0;
   }
 }

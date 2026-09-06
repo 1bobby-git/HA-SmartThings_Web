@@ -1,16 +1,22 @@
 import { createHmac } from "node:crypto";
 import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 
 export type AliasKind = "location" | "device" | "account" | "user" | "identifier";
 
 const digestOnlyAliasKinds = new Set<AliasKind>(["account", "user", "identifier"]);
 const digestOnlyMigration = "digest-only-aliases-v1";
+const maxCachedAliases = 2048;
 
 export class SqliteAliasStore {
   readonly #db: DatabaseSync;
   readonly #secret: string;
+  readonly #lookup: StatementSync;
+  readonly #insert: StatementSync;
+  readonly #count: StatementSync;
+  // Cache HMAC digests, never raw device/account identifiers or credentials.
+  readonly #cache = new Map<string, string>();
 
   constructor(path: string, secret: string) {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -32,6 +38,9 @@ export class SqliteAliasStore {
       );
     `);
     this.#migrateDigestOnlyAliases();
+    this.#lookup = this.#db.prepare("SELECT alias FROM aliases WHERE kind = ? AND digest = ?");
+    this.#insert = this.#db.prepare("INSERT INTO aliases (kind, digest, alias) VALUES (?, ?, ?)");
+    this.#count = this.#db.prepare("SELECT COUNT(*) AS count FROM aliases WHERE kind = ?");
   }
 
   alias(kind: AliasKind, rawIdentifier: string): string {
@@ -39,22 +48,32 @@ export class SqliteAliasStore {
     if (digestOnlyAliasKinds.has(kind)) {
       return this.#createAlias(kind, digest);
     }
-    const found = this.#db
-      .prepare("SELECT alias FROM aliases WHERE kind = ? AND digest = ?")
-      .get(kind, digest) as { alias: string } | undefined;
+    const key = `${kind}:${digest}`;
+    const cached = this.#cache.get(key);
+    if (cached !== undefined) return cached;
+    const found = this.#lookup.get(kind, digest) as { alias: string } | undefined;
     if (found) {
+      this.#remember(key, found.alias);
       return found.alias;
     }
 
     const alias = this.#createAlias(kind, digest);
-    this.#db
-      .prepare("INSERT INTO aliases (kind, digest, alias) VALUES (?, ?, ?)")
-      .run(kind, digest, alias);
+    this.#insert.run(kind, digest, alias);
+    this.#remember(key, alias);
     return alias;
   }
 
   close(): void {
+    this.#cache.clear();
     this.#db.close();
+  }
+
+  #remember(key: string, alias: string): void {
+    this.#cache.set(key, alias);
+    if (this.#cache.size > maxCachedAliases) {
+      const oldest = this.#cache.keys().next().value;
+      if (oldest !== undefined) this.#cache.delete(oldest);
+    }
   }
 
   #migrateDigestOnlyAliases(): void {
@@ -94,9 +113,7 @@ export class SqliteAliasStore {
   #createAlias(kind: AliasKind, digest: string): string {
     if (kind === "location" || kind === "device") {
       const prefix = kind === "location" ? "loc" : "dev";
-      const row = this.#db
-        .prepare("SELECT COUNT(*) AS count FROM aliases WHERE kind = ?")
-        .get(kind) as { count: number };
+      const row = this.#count.get(kind) as { count: number };
       return `${prefix}_${String(row.count + 1).padStart(3, "0")}`;
     }
 

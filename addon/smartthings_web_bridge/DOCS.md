@@ -42,3 +42,11 @@ Version 0.1.28 was then verified on the same HAOS install: the persisted login s
 Home Assistant service usage for `smartthings_web.list_commands`, `smartthings_web.execute_command`, `smartthings_web.speak`, `smartthings_web.reload_inventory`, `smartthings_web.refresh_device`, and `smartthings_web.reconnect_realtime` is documented at `https://github.com/1bobby-git/HA-SmartThings_Web/blob/main/docs/smartthings-web-services-ui-guide.md`. Use Home Assistant Developer Tools -> Actions, select a SmartThings Web device, and copy the exact `commands[].component`, `commands[].capability`, and `commands[].command` values from `list_commands` before executing Advanced-only commands.
 
 The current evidence gate is `DECISION: LIMITED`. Before Phase 2, collect sanitized evidence for long-idle delivery, keep-login behavior across a host reboot, network outage recovery, commands, and complete API independence. Keep Phase 2 closed until the gate reaches GO.
+
+## 1.8.7 브리지 최적화
+
+keeper 동시 복구와 실패 탭 정리, 최대 2,048개 HMAC 별칭 캐시, 캡처 SQL 문 재사용 및 capability 캐시 경합 수정이 포함됩니다. 기존 쿠키/Chromium 프로필·로그인/SSO 복구 간격·명령 동작은 그대로입니다. 서버 측 세션 만료를 연장하거나 우회하지 않습니다.
+
+HA 앱 스토어 새로고침 후 1.8.7로 업데이트하고 앱의 실행 상태를 확인하세요. 기존 HACS 통합 1.8.7 재설치는 필요하지 않습니다. 업데이트 전 앱 백업과 디스크 여유 공간을 확보하고 앱 데이터/프로필은 삭제하지 마세요. 문제가 생기면 업데이트 전 앱 백업을 복원하세요.
+
+브리지 소스 태그는 `bridge-v1.8.7`이며 `v1.8.7` 릴리스의 새 `smartthings-web-bridge-1.8.7.tgz`와 전용 체크섬/provenance를 사용합니다. 자동 회귀 검증과 운영 계정의 장시간 세션·실기기 검증은 별개입니다.

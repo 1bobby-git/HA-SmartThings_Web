@@ -103,6 +103,8 @@ export async function fetchAdvancedDeviceSnapshotEntries(
 export class KeeperPageManager {
   #keeper: BrowserPageLike | undefined;
   #restoredPagesReconciled = false;
+  #restoreInFlight: Promise<BrowserPageLike | undefined> | undefined;
+  #ensureInFlight: Promise<BrowserPageLike> | undefined;
   readonly #commandPages = new WeakSet<BrowserPageLike>();
   readonly #now: () => number;
   readonly #sessionReauthRecoveryDelayMs: number;
@@ -143,7 +145,17 @@ export class KeeperPageManager {
     );
   }
 
-  async reconcileRestoredPages(): Promise<BrowserPageLike | undefined> {
+  reconcileRestoredPages(): Promise<BrowserPageLike | undefined> {
+    if (!this.#restoreInFlight) {
+      const pending = this.reconcileRestoredPagesOnce().finally(() => {
+        if (this.#restoreInFlight === pending) this.#restoreInFlight = undefined;
+      });
+      this.#restoreInFlight = pending;
+    }
+    return this.#restoreInFlight;
+  }
+
+  private async reconcileRestoredPagesOnce(): Promise<BrowserPageLike | undefined> {
     if (this.#restoredPagesReconciled) return this.currentKeeper();
     const pages = this.context.pages().filter((page) => !page.isClosed());
     const keeper =
@@ -166,7 +178,19 @@ export class KeeperPageManager {
     return keeper;
   }
 
-  async ensureKeeper(): Promise<BrowserPageLike> {
+  ensureKeeper(): Promise<BrowserPageLike> {
+    if (!this.#ensureInFlight) {
+      // Heartbeats and recovery may overlap while newPage/goto/close is pending.
+      // Share only the current operation, never cache a completed page promise.
+      const pending = this.ensureKeeperOnce().finally(() => {
+        if (this.#ensureInFlight === pending) this.#ensureInFlight = undefined;
+      });
+      this.#ensureInFlight = pending;
+    }
+    return this.#ensureInFlight;
+  }
+
+  private async ensureKeeperOnce(): Promise<BrowserPageLike> {
     await this.reconcileRestoredPages();
     const candidates = this.context
       .pages()
@@ -287,9 +311,15 @@ export class KeeperPageManager {
     beforeGoto?: (page: BrowserPageLike) => Promise<void>
   ): Promise<BrowserPageLike> {
     const page = await this.context.newPage();
-    await beforeGoto?.(page);
-    await page.goto(ADVANCED_URL, { waitUntil: "domcontentloaded" });
-    return page;
+    try {
+      await beforeGoto?.(page);
+      await page.goto(ADVANCED_URL, { waitUntil: "domcontentloaded" });
+      return page;
+    } catch (error) {
+      // The caller cannot close a page that was never returned to it.
+      await page.close().catch(() => undefined);
+      throw error;
+    }
   }
 
   async openCommandPage(rawLocationId?: string): Promise<BrowserPageLike> {
@@ -313,8 +343,13 @@ export class KeeperPageManager {
 
   private async createKeeperPage(): Promise<BrowserPageLike> {
     const page = await this.context.newPage();
-    await page.goto(KEEPER_URL, { waitUntil: "domcontentloaded" });
-    return page;
+    try {
+      await page.goto(KEEPER_URL, { waitUntil: "domcontentloaded" });
+      return page;
+    } catch (error) {
+      await page.close().catch(() => undefined);
+      throw error;
+    }
   }
 
   private findReusableBlankPage(): BrowserPageLike | undefined {

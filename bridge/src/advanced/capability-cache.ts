@@ -50,7 +50,7 @@ export class CapabilityDefinitionCache {
         return definition;
       })
       .catch((error: unknown) => {
-        this.#entries.delete(key);
+        if (this.#entries.get(key) === loaded) this.#entries.delete(key);
         throw error;
       });
     this.#entries.set(key, loaded);
