@@ -1,0 +1,34 @@
+name: Candidate source snapshot
+
+on:
+  push:
+    branches:
+      - fix/home-monitor-selector-1.8.8
+    paths:
+      - .github/workflows/candidate-source.yml
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Archive tracked source only
+        run: |
+          git archive --format=tar.gz --output=candidate-source.tar.gz HEAD
+          git rev-parse HEAD > candidate-source.sha
+          sha256sum candidate-source.tar.gz > candidate-source.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: candidate-source
+          path: |
+            candidate-source.tar.gz
+            candidate-source.sha
+            candidate-source.sha256
+          retention-days: 1
+          if-no-files-found: error
