@@ -720,9 +720,15 @@ export class DeviceStore {
         const id = safeId(source.deviceId, "dev");
         const locationId = safeId(source.locationId, "loc");
         if (!id || !locationId) continue;
+        const previousLocation = this.#devices.get(id)?.locationId;
+        const locationChanged = previousLocation !== undefined && previousLocation !== locationId;
         const device = this.#ensureDevice(id, locationId);
         const nextName = safeName(source.deviceName) ?? device.name;
-        const nextRoomId = safeId(source.roomId, "identifier");
+        // Card/health enrichment can omit roomId; absence is not a room removal.
+        // Only an explicit null clears it. Ignore malformed non-null identifiers.
+        const nextRoomId = source.roomId === null
+          ? null
+          : safeId(source.roomId, "identifier") ?? device.roomId;
         const typeData = asRecord(source.deviceTypeData);
         const presentation = devicePresentation(source);
         const rawType = safeName(typeData?.type);
@@ -731,6 +737,7 @@ export class DeviceStore {
             ? presentation.assetType
             : rawType;
         if (
+          locationChanged ||
           device.name !== nextName ||
           device.roomId !== nextRoomId ||
           device.type !== nextType ||
@@ -1102,7 +1109,10 @@ export class DeviceStore {
   #ensureDevice(id: string, locationId: string): MutableDevice {
     const existing = this.#devices.get(id);
     if (existing) {
-      if (existing.locationId !== locationId) existing.locationId = locationId;
+      if (existing.locationId !== locationId) {
+        existing.locationId = locationId;
+        existing.roomId = null; // A room from the previous location must not leak.
+      }
       return existing;
     }
     const created: MutableDevice = {

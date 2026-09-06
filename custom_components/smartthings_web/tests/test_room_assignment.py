@@ -88,5 +88,52 @@ class RoomAssignmentTests(unittest.TestCase):
         self.assertFalse(repair(registry, "device", "entry", "bathroom"))
 
 
+class AreaRegistry:
+    def __init__(self, areas):
+        self.entries = list(areas)
+        self.created = []
+
+    def async_list_areas(self):
+        return self.entries
+
+    def async_get_or_create(self, name):
+        item = area(f"created_{len(self.created)}", name)
+        self.created.append(name)
+        self.entries.append(item)
+        return item
+
+
+class ResolveRoomAreaTests(unittest.TestCase):
+    def test_existing_canonical_name_is_reused(self):
+        original = area("bathroom", "화장실")
+        registry = AreaRegistry([original])
+        self.assertIs(module.resolve_room_area(registry, " 화장실 "), original)
+        self.assertEqual(registry.created, [])
+
+    def test_ambiguous_normalized_name_is_not_created(self):
+        registry = AreaRegistry([area("a", "Room"), area("b", "room")])
+        self.assertIsNone(module.resolve_room_area(registry, " ROOM "))
+        self.assertEqual(registry.created, [])
+
+    def test_unknown_area_is_created_once(self):
+        registry = AreaRegistry([])
+        first = module.resolve_room_area(registry, " 화장실 ")
+        self.assertIs(module.resolve_room_area(registry, "화장실"), first)
+        self.assertEqual(registry.created, ["화장실"])
+
+    def test_blank_room_does_not_create_an_area(self):
+        registry = AreaRegistry([])
+        self.assertIsNone(module.resolve_room_area(registry, " "))
+        self.assertEqual(registry.created, [])
+
+    def test_resolved_area_repairs_only_missing_assignment(self):
+        areas = AreaRegistry([area("bathroom", "화장실")])
+        devices = Registry(SimpleNamespace(id="device", area_id=None, config_entry_id="entry"))
+        target = module.resolve_room_area(areas, "화장실")
+        self.assertTrue(repair(devices, "device", "entry", target.id))
+        self.assertFalse(repair(devices, "device", "entry", target.id))
+        self.assertEqual(devices.writes, [("device", {"area_id": "bathroom"})])
+
+
 if __name__ == "__main__":
     unittest.main()

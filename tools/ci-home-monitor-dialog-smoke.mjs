@@ -92,7 +92,7 @@ try {
   const page = await browser.newPage();
   try {
     await page.route("**/*", (route) => route.fulfill({ status: 200, contentType: "text/html", body:
-      `<h2>SmartThings Home Monitor</h2><button id="current">Disarmed</button>
+      `<section class="monitor-card"><h2>SmartThings Home Monitor</h2><button id="current">Disarmed</button></section>
        <script>window.saved=null;current.onclick=()=>{
          const modal=document.createElement('div');modal.setAttribute('role','dialog');
          modal.innerHTML='<h2>SmartThings Home Monitor</h2><select id="mode"><option>Disarmed</option><option>Armed ( Away )</option><option>Armed ( Stay )</option></select><button id="apply">Apply</button>';

@@ -11,6 +11,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_RESTORED, STATE_UNAVAILABLE, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
@@ -60,6 +61,7 @@ from .models import (
     switch_name_overrides,
 )
 from .services import async_setup_services
+from .room_assignment import resolve_room_area, repair_missing_device_area
 from .naming import (
     canonical_entity_object_id,
     canonical_primary_control_object_id,
@@ -167,6 +169,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
 
     def register_devices() -> None:
         registry = dr.async_get(hass)
+        area_registry = ar.async_get(hass)
+        resolved_areas = {}
         for device in runtime.inventory.devices.values():
             if device.location_id != location_id:
                 continue
@@ -183,10 +187,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
             )
             if registered_metadata.get(device.device_id) == metadata:
                 continue
+            room_name = room[1] if room and room[0] == location_id else None
+            if room_name and room_name not in resolved_areas:
+                resolved_areas[room_name] = resolve_room_area(area_registry, room_name)
+            area = resolved_areas.get(room_name)
             registry_entry = registry.async_get_or_create(
                 config_entry_id=entry.entry_id,
-                suggested_area=room[1] if room and room[0] == location_id else None,
+                suggested_area=area.name if area else None,
                 **device_info,
+            )
+            repair_missing_device_area(
+                registry, registry_entry.id, entry.entry_id, area.id if area else None
             )
             if registry_entry.manufacturer == "SmartThings Web":
                 registry.async_update_device(registry_entry.id, manufacturer=None)

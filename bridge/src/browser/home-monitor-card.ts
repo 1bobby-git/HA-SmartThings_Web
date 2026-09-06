@@ -1,4 +1,5 @@
 import type { BrowserPageLike } from "./keeper-page.js";
+import { hasHomeMonitorSelector } from "./home-monitor-selector.js";
 
 export interface HomeMonitorCardDiagnostics {
   outcome: string;
@@ -178,8 +179,9 @@ export async function clickHomeMonitorCardAction(
   modeLabelGroups: readonly (readonly string[])[],
   requestedGroup: number,
   timeoutMs: number,
-  onDiagnostic?: (value: HomeMonitorCardDiagnostics) => void
-): Promise<"clicked" | "not_found" | "ambiguous" | "unavailable" | "blocked" | "dialog"> {
+  onDiagnostic?: (value: HomeMonitorCardDiagnostics) => void,
+  stopForSelector = false
+): Promise<"clicked" | "not_found" | "ambiguous" | "unavailable" | "blocked" | "dialog" | "selector"> {
   const controls = page as BrowserPageLike & { locator?: (selector: string) => {
     click(options: { timeout: number }): Promise<unknown>;
   } };
@@ -206,6 +208,11 @@ export async function clickHomeMonitorCardAction(
         await controls.locator(`[data-stw-hm-card-action="${input.marker}"]`).click({ timeout: 3_000 });
         report("clicked");
         return "clicked";
+      }
+      if (stopForSelector && last.kind === "missing" &&
+          await hasHomeMonitorSelector(page, monitorLabels, modeLabelGroups)) {
+        report("selector_available");
+        return "selector";
       }
       if (Date.now() >= deadline) break;
       await new Promise<void>((resolve) => setTimeout(resolve, 150));

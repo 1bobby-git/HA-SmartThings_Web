@@ -414,7 +414,9 @@ export class SafeCommandService {
         state,
         this.options.devices,
         snapshot,
-        locationNames
+        locationNames,
+        // Use the original request: resolution can infer a controlId too.
+        !request.controlId
       );
     }
     if (componentPlan) {
@@ -1377,7 +1379,8 @@ function buildComponentSwitchPlan(
   requestedState: BridgeDeviceState,
   devices: DeviceStore,
   snapshot: ReturnType<DeviceStore["snapshot"]>,
-  locationNames: Readonly<Record<string, string>>
+  locationNames: Readonly<Record<string, string>>,
+  allowAggregate = true
 ): ComponentSwitchPlan | undefined {
   const desiredCommand = request.command;
   if (
@@ -1396,6 +1399,9 @@ function buildComponentSwitchPlan(
   ) {
     throw new SafeCommandError("unsupported_command");
   }
+  // Explicit HA controls stay on one channel, after the existing device guard.
+  // Do not infer child mappings or expand into sibling channels for that request.
+  if (!allowAggregate) return undefined;
   const entryFor = (
     deviceId: string,
     state: BridgeDeviceState

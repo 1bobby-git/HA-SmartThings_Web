@@ -12,6 +12,81 @@ import { DeviceStore, type BridgeStateSource } from "../../src/state/device-stor
 import { RuntimeStatusStore } from "../../src/state/runtime-state.js";
 
 describe("SafeCommandService", () => {
+  test.each(["main", "switch2", "switch3", "switch4"])("a concrete %s switch control never becomes a component aggregate", async (component) => {
+    const fixture = multiSwitchFixture(["main", "switch2", "switch3", "switch4"]);
+    const controlId = component === "main" ? "identifier_toggle_aggregate" : `identifier_toggle_${component}`;
+    const label = component === "main" ? "Aggregate power" : component;
+    if (component !== "main") observeDeviceDetails(fixture.store, [
+      detailSwatch("TOGGLE", "toggle", { swatchId: controlId, label,
+        componentId: `identifier_${component}`, commands: ["on", "off"] })
+    ]);
+    fixture.executeDeviceAction.mockImplementation(async (input) => {
+      fixture.store.observe(received(deviceEventFrame("off", "2026-09-01T02:00:00.000Z", "switch",
+        "dev_001", "identifier_switch", undefined, input.component)));
+      return undefined;
+    });
+    const result = await fixture.service.execute({
+      targetType: "device", targetId: "dev_001", component: `identifier_${component}`,
+      capability: "identifier_switch", attribute: "switch", controlId, controlLabel: label,
+      command: "off", arguments: [], clientRequestId: `request_concrete_${component}`
+    });
+    expect(result.status).toBe("confirmed");
+    expect(fixture.executeDeviceAction).toHaveBeenCalledOnce();
+    expect(fixture.executeDeviceAction.mock.calls[0]?.[0]).toMatchObject({ deviceId: "dev_001", component: `identifier_${component}`, command: "off" });
+    expect(fixture.executeComponentTransaction).not.toHaveBeenCalled();
+    const states = fixture.store.snapshot().devices.find((device) => device.id === "dev_001")!.states;
+    for (const state of states.filter((item) => item.attribute === "switch" && item.componentRole)) {
+      expect(state.value).toBe(state.component === `identifier_${component}` ? "off" : "on");
+    }
+    fixture.store.close();
+  });
+
+  test("unknown concrete control ID still fails without executing any aggregate", async () => {
+    const fixture = multiSwitchFixture(["main", "switch2"]);
+    await expect(fixture.service.execute({
+      targetType: "device", targetId: "dev_001", component: "identifier_main",
+      capability: "identifier_switch", attribute: "switch", controlId: "identifier_missing",
+      command: "off", arguments: [], clientRequestId: "request_missing_concrete"
+    })).rejects.toMatchObject({ code: "capability_not_found" });
+    expect(fixture.executeDeviceAction).not.toHaveBeenCalled();
+    expect(fixture.executeComponentTransaction).not.toHaveBeenCalled();
+    fixture.store.close();
+  });
+
+  test("a concrete main command does not require a guessed child mapping", async () => {
+    const fixture = multiSwitchFixture(["main", "switch2", "switch3", "switch4"]);
+    configureChildMappedSwitch(fixture.store, { ambiguous: true });
+    // The child fixture starts at 02:01; the default 01:00 event is stale.
+    // Supply fresh evidence for only the explicitly requested parent channel.
+    fixture.executeDeviceAction.mockImplementation(async (input) => {
+      fixture.store.observe(received(deviceEventFrame("off", "2026-09-01T03:00:00.000Z", "switch",
+        "dev_001", "identifier_switch", undefined, input.component)));
+      return undefined;
+    });
+    const result = await fixture.service.execute({
+      targetType: "device", targetId: "dev_001", component: "identifier_main",
+      capability: "identifier_switch", attribute: "switch", controlId: "identifier_toggle_aggregate",
+      controlLabel: "Aggregate power", command: "off", arguments: [], clientRequestId: "request_concrete_no_children"
+    });
+    expect(result.status).toBe("confirmed");
+    expect(fixture.executeDeviceAction).toHaveBeenCalledOnce();
+    expect(fixture.executeDeviceAction.mock.calls[0]?.[0].deviceId).toBe("dev_001");
+    expect(fixture.executeComponentTransaction).not.toHaveBeenCalled();
+    fixture.store.close();
+  });
+
+  test.each(["door lock", "valve", "garage door"])("a concrete control retains the multi-component %s device guard", async (deviceType) => {
+    const fixture = multiSwitchFixture(["main", "switch2"], { deviceType });
+    await expect(fixture.service.execute({
+      targetType: "device", targetId: "dev_001", component: "identifier_main",
+      capability: "identifier_switch", attribute: "switch", controlId: "identifier_toggle_aggregate",
+      command: "off", arguments: [], clientRequestId: `request_concrete_blocked_${deviceType.replaceAll(" ", "_")}`
+    })).rejects.toMatchObject({ code: "unsupported_command" });
+    expect(fixture.executeDeviceAction).not.toHaveBeenCalled();
+    expect(fixture.executeComponentTransaction).not.toHaveBeenCalled();
+    fixture.store.close();
+  });
+
   test("uses a component transaction for a multi-switch aggregate", async () => {
     const fixture = multiSwitchFixture(["main", "switch2", "switch3", "switch4"]);
     fixture.resync.mockImplementationOnce(async () => {

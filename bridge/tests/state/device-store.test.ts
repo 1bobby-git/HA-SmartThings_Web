@@ -12,6 +12,47 @@ import type {
 import { DeviceStore } from "../../src/state/device-store.js";
 
 describe("DeviceStore", () => {
+  test("preserves room metadata when a Web card omits roomId", () => {
+    const store = new DeviceStore();
+    const device = { deviceId: "dev_001", locationId: "loc_001", deviceName: "Bathroom light" };
+    observeDeviceSnapshot(store, { ...device, roomId: "identifier_bathroom" });
+    const afterRoom = store.snapshot().sequence;
+    observeDeviceSnapshot(store, device);
+    expect(store.snapshot().devices[0]?.roomId).toBe("identifier_bathroom");
+    expect(store.snapshot().sequence).toBe(afterRoom);
+    store.close();
+  });
+
+  test.each([undefined, "", 42, "not a valid id"])("malformed room metadata %s does not erase a known room", (roomId) => {
+    const store = new DeviceStore();
+    const device = { deviceId: "dev_001", locationId: "loc_001", deviceName: "Bathroom light" };
+    observeDeviceSnapshot(store, { ...device, roomId: "identifier_bathroom" });
+    observeDeviceSnapshot(store, { ...device, roomId });
+    expect(store.snapshot().devices[0]?.roomId).toBe("identifier_bathroom");
+    store.close();
+  });
+
+  test("explicit null removes a room and later omissions do not restore it", () => {
+    const store = new DeviceStore();
+    const device = { deviceId: "dev_001", locationId: "loc_001", deviceName: "Bathroom light" };
+    observeDeviceSnapshot(store, { ...device, roomId: "identifier_bathroom" });
+    observeDeviceSnapshot(store, { ...device, roomId: null });
+    observeDeviceSnapshot(store, device);
+    expect(store.snapshot().devices[0]?.roomId).toBeNull();
+    store.close();
+  });
+
+  test("moving a device to another location cannot retain its old room", () => {
+    const store = new DeviceStore();
+    observeDeviceSnapshot(store, { deviceId: "dev_001", locationId: "loc_001", deviceName: "Light", roomId: "identifier_bathroom" });
+    const listener = vi.fn();
+    store.subscribe(listener);
+    observeDeviceSnapshot(store, { deviceId: "dev_001", locationId: "loc_002", deviceName: "Light" });
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ type: "inventory" }));
+    expect(store.snapshot().devices[0]).toMatchObject({ locationId: "loc_002", roomId: null });
+    store.close();
+  });
+
   test("deduplicates repeated event IDs before applying or publishing state", () => {
     const store = new DeviceStore();
     const listener = vi.fn();
