@@ -73,17 +73,21 @@ jobs:
           npm run audit:secrets
           npm run audit:fixtures
 
-      - name: Commit only validated source and remove temporary assembly files
+      - name: Commit only validated product source
         shell: bash
         run: |
           set -euo pipefail
           remote_sha="$(git ls-remote origin refs/heads/fix/home-monitor-selector-1.8.8 | cut -f1)"
           test "${remote_sha}" = "${GITHUB_SHA}"
-          rm .github/scripts/prepare_1_8_8.py .github/scripts/reconcile_1_8_8.py .github/workflows/prepare-1.8.8.yml
+          rm .github/scripts/prepare_1_8_8.py .github/scripts/reconcile_1_8_8.py
+          # This token may write product source, but not workflows. Workflow
+          # maintenance is committed separately through the authorized user connection.
+          git restore --source=HEAD --worktree -- .github/workflows
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -u
           git add docs/release-1.8.8.md tools/home-monitor-selector-regression.mjs
           git diff --cached --check
+          test -z "$(git diff --cached --name-only -- .github/workflows)"
           git commit -m 'fix: complete 1.8.8 monitor selection, room assignment and exact switch scope'
           git push origin HEAD:fix/home-monitor-selector-1.8.8
