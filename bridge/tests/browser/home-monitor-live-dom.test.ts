@@ -28,18 +28,42 @@ class RolelessHomeMonitorPage {
   readonly close = vi.fn(async () => undefined);
   readonly goto = vi.fn(async (url: string) => { this.currentUrl = url; });
   readonly missing = new MissingLocator();
+  readonly selectedGroups: number[] = [];
+  lastRequestedGroup = -1;
+  readonly selector = new MissingLocator();
+  readonly action = new MissingLocator();
+  constructor() {
+    this.selector.click.mockImplementation(async () => { this.cardOpened = true; });
+    this.action.click.mockImplementation(async () => {
+      this.selectedGroups.push(this.lastRequestedGroup);
+      this.cardOpened = false;
+    });
+  }
 
   url(): string { return this.currentUrl; }
   isClosed(): boolean { return false; }
   getByRole(): MissingLocator { return this.missing; }
   getByText(): MissingLocator { return this.missing; }
-  locator(): MissingLocator { return this.missing; }
+  locator(selector: string): MissingLocator {
+    if (selector.startsWith('[data-stw-hm-current-mode=')) return this.selector;
+    if (selector.startsWith('[data-stw-hm-target=')) return this.action;
+    return this.missing;
+  }
 
   async evaluate<Result, Argument>(
     _pageFunction: (argument: Argument) => Result | Promise<Result>,
     argument: Argument
   ): Promise<Result> {
     const input = argument as Record<string, unknown>;
+    if (typeof input.marker === "string" && input.marker.startsWith("hm-mode-")) {
+      return { kind: input.cleanup ? "missing" : "target", targets: input.cleanup ? 0 : 1 } as Result;
+    }
+    if (typeof input.markerId === "string") {
+      if (input.phase === "select" && this.cardOpened) this.lastRequestedGroup = input.requestedGroup as number;
+      const selectable = input.phase === "select" && this.cardOpened;
+      return { kind: selectable ? "click" : "missing", dialogs: selectable ? 1 : 0,
+        selects: 0, options: 0, modeGroups: selectable ? 3 : 0, targets: selectable ? 1 : 0 } as Result;
+    }
     if (typeof input.phase === "string") {
       return {
         phase: input.phase,
@@ -51,10 +75,6 @@ class RolelessHomeMonitorPage {
         visibleIframeCount: 0,
         openShadowRootCount: 1
       } as Result;
-    }
-    if (input.currentModeProbe === true) {
-      this.cardOpened = true;
-      return "clicked" as Result;
     }
     if ("timeoutMs" in input && !("actionLabels" in input)) {
       return "not_found" as Result;
@@ -104,8 +124,11 @@ describe("live Home Monitor DOM recovery", () => {
       action: "armAway"
     });
 
-    expect(page.cardOpened).toBe(true);
-    expect(diagnostics).toEqual(["before_card_open"]);
+    expect(page.selector.click).toHaveBeenCalledTimes(1);
+    expect(page.action.click).toHaveBeenCalledTimes(1);
+    expect(page.selectedGroups).toEqual([0]); // Only the requested Away mode, not an intermediate Disarm.
+    expect(page.cardOpened).toBe(false);
+    expect(diagnostics).toEqual([]); // Fast selector path no longer needs a failed-card diagnostic.
     expect(page.close).toHaveBeenCalledTimes(1);
   });
 
@@ -139,7 +162,13 @@ describe("live Home Monitor DOM recovery", () => {
 
     expect(domSource).toContain("root instanceof ShadowRoot");
     expect(domSource).toContain("clickCurrentHomeMonitorMode");
-    expect(domSource).toContain("currentModeProbe: true");
+    const scopedSource = readFileSync("bridge/src/browser/home-monitor-current-mode.ts", "utf8");
+    expect(domSource).toContain("clickScopedCurrentHomeMonitorMode");
+    expect(scopedSource).toContain("root instanceof ShadowRoot");
+    expect(scopedSource).toContain("const targets = new Set<Element>()");
+    expect(scopedSource).toContain("local = modes.filter");
+    expect(scopedSource).toContain("input.currentModeGroup");
+    expect(scopedSource).not.toContain(".first()");
     expect(domSource).toContain("root.host instanceof HTMLElement");
     expect(domSource).toContain('"menuitemradio"');
     expect(commandSource).toContain("clickTextOnlyHomeMonitorCard");
