@@ -1,0 +1,85 @@
+name: Prepare Home Monitor 1.8.10
+
+on:
+  push:
+    branches:
+      - fix/home-monitor-linked-stay-1.8.10
+    paths:
+      - '.github/scripts/prepare_1_8_10.py'
+      - '.github/workflows/prepare-home-monitor-1.8.10.yml'
+      - 'tools/ci-home-monitor-linked-popup-smoke.mjs'
+      - 'bridge/tests/command/location-recheck-cadence.test.ts'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prepare-home-monitor-1.8.10
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Verify source and assemble candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor 0a93f8a986c17a6ffc2c1cceab72c186d3dc5e57 HEAD
+          python .github/scripts/prepare_1_8_10.py
+          git diff --check
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Node tests, typecheck and build
+        run: |
+          npm ci
+          npm test
+          npm run typecheck
+          npm run build
+
+      - name: Python integration regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.9,<4' 'voluptuous>=0.13,<1'
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+          python -m compileall -q custom_components/smartthings_web
+
+      - name: Existing and new browser regressions
+        run: |
+          npx playwright-core install --with-deps chromium
+          node tools/ci-home-monitor-dialog-smoke.mjs
+          node tools/ci-home-monitor-card-smoke.mjs
+          node tools/ci-home-monitor-confirmation-smoke.mjs
+          node tools/ci-home-monitor-latency-smoke.mjs
+          node tools/home-monitor-selector-regression.mjs
+          node tools/ci-home-monitor-linked-popup-smoke.mjs
+
+      - name: Repository audits
+        run: |
+          npm run audit:api-free
+          npm run audit:secrets
+          npm run audit:fixtures
+
+      - name: Commit validated source and remove temporary preparation files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/scripts/prepare_1_8_10.py .github/workflows/prepare-home-monitor-1.8.10.yml
+          git add .github/workflows/validate.yml bridge custom_components package.json package-lock.json protocol tests tools/ci-home-monitor-linked-popup-smoke.mjs README.md CHANGELOG.md docs addon
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: support linked Stay-mode popups and reduce confirmation gaps (1.8.10)'
+          git push origin HEAD:fix/home-monitor-linked-stay-1.8.10
