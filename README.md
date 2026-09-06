@@ -335,3 +335,16 @@ The probe adds no browser command, DOM state scraping, direct SmartThings API ca
 0.1.28 is deployed
 final-summary.json.sha256
 -->
+
+## 통합 업데이트 1.8.7
+
+- 지연 알림 큐의 마지막 구독 해제 시 콜백과 빈 타이머 정리
+- 즉시 전달한 버튼 등 이벤트 콜백이 이전 지연 배치에서 다시 실행되지 않도록 처리
+- 같은 콜백이 다른 범위에 계속 구독된 경우 그 구독은 유지
+- Advanced·실시간 SSE·장치 명령·쿠키/로그인·브리지 앱·엔티티 식별자 정책은 변경하지 않음
+
+변경 내용, 검증 범위 및 롤백 방법: [최적화 문서](docs/OPTIMIZATION_2026-09-06.md). 펌웨어·브리지 앱은 변경하지 않으며, 운영 HA 설치·실기기 검증은 별도입니다.
+
+## 통합과 브리지 버전
+
+이번 배포는 Home Assistant 통합 1.8.7만 업데이트합니다. 브리지 앱과 Node 패키지는 1.8.6을 유지합니다. 함께 첨부한 smartthings-web-bridge-1.8.6.tgz는 이전 릴리스와 SHA-256이 동일한 파일이며 재빌드하거나 업데이트한 앱이 아닙니다. HACS 통합 업데이트를 위해 브리지를 재설치할 필요는 없습니다. 기존 개발 중 경고와 설치 자제 안내는 유지합니다.

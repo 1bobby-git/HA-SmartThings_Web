@@ -224,7 +224,7 @@ class SmartThingsWebRuntime:
 
         def unsubscribe() -> None:
             self.listeners.discard(listener)
-            self._pending_listeners.discard(listener)
+            self._discard_unsubscribed_listener(listener)
 
         return unsubscribe
 
@@ -529,6 +529,10 @@ class SmartThingsWebRuntime:
         if not listeners:
             return
         if immediate or self.listener_coalesce_ms <= 0:
+            # This callback observes the latest state now. Do not deliver it
+            # again from an older delayed batch, especially for button events.
+            self._pending_listeners.difference_update(listeners)
+            self._cancel_empty_listener_flush()
             self._dispatch_listeners(listeners)
             return
         try:
@@ -557,18 +561,35 @@ class SmartThingsWebRuntime:
             except Exception:  # noqa: BLE001 - one HA entity must not break the push loop
                 _LOGGER.exception("runtime_listener_failed")
 
-    @staticmethod
     def _remove_scoped_listener(
+        self,
         listeners: dict[Any, set[Callable[[], None]]],
         key: Any,
         listener: Callable[[], None],
     ) -> None:
         scoped = listeners.get(key)
-        if scoped is None:
+        if scoped is not None:
+            scoped.discard(listener)
+            if not scoped:
+                listeners.pop(key, None)
+        self._discard_unsubscribed_listener(listener)
+
+    def _discard_unsubscribed_listener(self, listener: Callable[[], None]) -> None:
+        """Drop queued callbacks only after their last subscription is removed."""
+        if listener in self.listeners:
             return
-        scoped.discard(listener)
-        if not scoped:
-            listeners.pop(key, None)
+        if any(listener in scoped for scoped in self.state_listeners.values()):
+            return
+        if any(listener in scoped for scoped in self.device_listeners.values()):
+            return
+        self._pending_listeners.discard(listener)
+        self._cancel_empty_listener_flush()
+
+    def _cancel_empty_listener_flush(self) -> None:
+        """Release a timer when no delayed listeners remain."""
+        if not self._pending_listeners and self._listener_flush_handle is not None:
+            self._listener_flush_handle.cancel()
+            self._listener_flush_handle = None
 
 
 ControlKind = Literal["switch", "light"]

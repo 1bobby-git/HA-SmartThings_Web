@@ -12,8 +12,9 @@ import {
 import { bootstrapDataPaths } from "../bridge/src/security/data-paths.js";
 
 describe("protocol version contract", () => {
-  test("keeps every Bridge and integration release surface on the packaged 1.8.6 candidate", () => {
+  test("keeps integration 1.8.7 compatible with unchanged Bridge 1.8.6 and protocol 5", () => {
     const expectedBridgeVersion = "1.8.6";
+    const expectedIntegrationVersion = "1.8.7";
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as { version?: string };
     const packageLock = JSON.parse(readFileSync("package-lock.json", "utf8")) as {
       version?: string;
@@ -32,7 +33,7 @@ describe("protocol version contract", () => {
     expect(packageLock.packages?.[""]?.version).toBe(expectedBridgeVersion);
     expect(protocolVersion.bridge_version).toBe(expectedBridgeVersion);
     expect(addonConfig.version).toBe(expectedBridgeVersion);
-    expect(integrationManifest.version).toBe(expectedBridgeVersion);
+    expect(integrationManifest.version).toBe(expectedIntegrationVersion);
     expect(runtimeSource).toContain(`const bridgeVersion = "${expectedBridgeVersion}";`);
     expect(protocolVersion.protocol_version).toBe(5);
   });
