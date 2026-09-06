@@ -1,0 +1,77 @@
+name: Prepare Home Monitor 1.8.8
+
+on:
+  push:
+    branches: [fix/home-monitor-scoped-mode-1.8.8]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prepare-home-monitor-1.8.8
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/home-monitor-scoped-mode-1.8.8
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Install dependencies and Chromium
+        run: |
+          npm ci
+          npx playwright-core install --with-deps chromium
+      - name: Reproduce old ambiguity and prepare surgical source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p 'JSON.parse(require("fs").readFileSync("package.json","utf8")).version')"
+          if [[ "$version" == '1.8.7' ]]; then
+            npm run build
+            node tools/ci-home-monitor-current-mode-smoke.mjs --expect-legacy-failure
+            python tools/prepare-home-monitor-1.8.8.py
+          else
+            [[ "$version" == '1.8.8' ]]
+          fi
+      - name: Commit candidate to isolated branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git add bridge/src/browser/command-page.ts bridge/src/browser/home-monitor-dom.ts bridge/src/browser/home-monitor-card.ts bridge/src/command/command-service.ts
+          git add package.json package-lock.json protocol/version.json custom_components/smartthings_web/manifest.json addon/smartthings_web_bridge/config.yaml
+          git add README.md CHANGELOG.md addon/smartthings_web_bridge/CHANGELOG.md
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'fix: scope Home Monitor current-mode controls and reduce selector latency (1.8.8)'
+            git push origin HEAD:fix/home-monitor-scoped-mode-1.8.8
+          fi
+      - name: Typecheck, unit tests and build
+        run: |
+          npm run typecheck
+          npm test
+          npm run build
+      - name: Real Chromium control and confirmation regressions
+        run: |
+          node tools/ci-home-monitor-dialog-smoke.mjs
+          node tools/ci-home-monitor-card-smoke.mjs
+          node tools/ci-home-monitor-confirmation-smoke.mjs
+          node tools/ci-home-monitor-latency-smoke.mjs
+          node tools/ci-home-monitor-current-mode-smoke.mjs
+      - name: Export candidate sources for independent inspection
+        if: always()
+        run: git archive --format=tar.gz --output=home-monitor-1.8.8-candidate-source.tar.gz HEAD
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: home-monitor-1.8.8-candidate-source
+          path: home-monitor-1.8.8-candidate-source.tar.gz
+          retention-days: 3
