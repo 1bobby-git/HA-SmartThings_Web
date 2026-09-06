@@ -263,6 +263,29 @@ jobs:
           PY
           git add -N CHANGELOG.md docs/OPTIMIZATION_2026-09-06.md
           git diff --check
+      - name: Assert integration and unchanged bridge versions independently
+        run: |
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          p = Path('tests/protocol-version-contract.test.ts')
+          raw = p.read_bytes()
+          assert hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest() == '6188c5a78adc27fd558cd9fd348f174b5e6070ab'
+          text = raw.decode()
+          replacements = [
+              ('keeps every Bridge and integration release surface on the packaged 1.8.6 candidate', 'keeps integration 1.8.7 compatible with unchanged Bridge 1.8.6 and protocol 5'),
+              ('    const expectedBridgeVersion = "1.8.6";', '    const expectedBridgeVersion = "1.8.6";\n    const expectedIntegrationVersion = "1.8.7";'),
+              ('expect(integrationManifest.version).toBe(expectedBridgeVersion);', 'expect(integrationManifest.version).toBe(expectedIntegrationVersion);'),
+          ]
+          for old, new in replacements:
+              assert text.count(old) == 1, old
+              text = text.replace(old, new)
+          p.write_text(text)
+          state_path = Path(os.environ['RUNNER_TEMP'], 'optimization-state.json')
+          state = json.loads(state_path.read_text())
+          state['paths'] = sorted(set(state['paths'] + [str(p)]))
+          state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2)+'\n')
+          PY
       - name: Test complete patched integration
         run: |
           python -m compileall -q custom_components/smartthings_web
