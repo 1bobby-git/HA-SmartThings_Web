@@ -1,0 +1,146 @@
+name: Bridge 1.8.7 validation
+on:
+  push:
+    branches: [fix/bridge-1.8.7-20260906]
+    paths:
+      - .bridge187/**
+      - .github/workflows/bridge-187-validate.yml
+permissions:
+  contents: read
+concurrency:
+  group: bridge-187-validation
+  cancel-in-progress: false
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Preserve reviewed driver outside source checkout
+        run: cp -a .bridge187 "$RUNNER_TEMP/bridge187-driver"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: aa7000eec7b0d095b6baf669c20784e045f2eba2
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - name: Validate unchanged native baseline
+        run: |
+          mkdir -p "$RUNNER_TEMP/bridge187-evidence"
+          npm ci
+          npm test -- --reporter=json --outputFile="$RUNNER_TEMP/bridge187-evidence/baseline.json"
+          npm run typecheck
+          npm run build
+      - name: Apply exact reviewed source, documentation and regressions
+        run: bash "$RUNNER_TEMP/bridge187-driver/prepare.sh"
+      - name: Validate complete candidate
+        run: |
+          npm test -- --reporter=json --outputFile="$RUNNER_TEMP/bridge187-evidence/patched.json"
+          npm run typecheck
+          npm run build
+          npm run audit:api-free
+          npm run audit:secrets
+          npm run audit:fixtures
+          npm audit --omit=dev --audit-level=high
+      - name: Existing HA integration regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.10,<4' 'yarl>=1.9,<2' 'voluptuous>=0.15,<1'
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py' 2>&1 | tee "$RUNNER_TEMP/bridge187-evidence/python.log"
+          python -m compileall -q custom_components/smartthings_web
+      - name: Synthetic real-Chromium sessions and existing UI checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx playwright-core install --with-deps chromium
+          node tools/ci-bridge-lifecycle-smoke.mjs | tee "$RUNNER_TEMP/bridge187-evidence/chromium.json"
+          node tools/ci-home-monitor-dialog-smoke.mjs
+          node tools/ci-home-monitor-card-smoke.mjs
+          node tools/ci-home-monitor-confirmation-smoke.mjs
+          node tools/ci-home-monitor-latency-smoke.mjs
+      - name: Shell and local brand validation
+        run: |
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/maintain-profile
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/profile-maintenance/run
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/openbox/run
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/bridge/run
+          sh -n addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/bridge/finish
+          bash -n tools/ci-haos-runtime-smoke.sh
+      - name: HACS validation
+        uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa
+        with:
+          category: integration
+          ignore: topics
+      - name: Hassfest validation
+        uses: home-assistant/actions/hassfest@a7c616ce81ccda50150bf1595786c71b1883fabb
+      - name: Preserve exact tested source tree and versioned package
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run package:addon
+          tar -C dist-addon -czf "$RUNNER_TEMP/bridge187-evidence/smartthings-web-bridge-1.8.7.tgz" smartthings_web_bridge
+          git diff --cached --binary > "$RUNNER_TEMP/bridge187-evidence/changes.patch"
+          git write-tree > "$RUNNER_TEMP/bridge187-evidence/TREE_SHA.txt"
+          git diff --cached --stat
+          python - <<'PY'
+          import json, os, hashlib
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP'])/'bridge187-evidence'
+          baseline=json.loads((root/'baseline.json').read_text())
+          patched=json.loads((root/'patched.json').read_text())
+          assert baseline['success'] and patched['success']
+          assert patched['numTotalTests'] == baseline['numTotalTests'] + 18
+          assert patched['numFailedTests'] == 0
+          assert (root/'chromium.json').read_text().strip()
+          result={'base':'aa7000eec7b0d095b6baf669c20784e045f2eba2','driver':os.environ['GITHUB_SHA'],'run':os.environ['GITHUB_RUN_ID'],'bridge_version':'1.8.7','baseline_tests':baseline['numTotalTests'],'patched_tests':patched['numTotalTests'],'real_account_tested':False,'files':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in root.iterdir() if p.is_file()}}
+          (root/'validation.json').write_text(json.dumps(result,indent=2)+'\n')
+          print(json.dumps(result,indent=2))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: bridge187-native-evidence
+          path: ${{ runner.temp }}/bridge187-evidence/
+          retention-days: 7
+          if-no-files-found: error
+  runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: cp -a .bridge187 "$RUNNER_TEMP/bridge187-driver"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: aa7000eec7b0d095b6baf669c20784e045f2eba2
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - run: bash "$RUNNER_TEMP/bridge187-driver/prepare.sh"
+      - name: Packaged clean and damaged-data HAOS startup checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools/ci-haos-runtime-smoke.sh 2>&1 | tee "$RUNNER_TEMP/bridge187-runtime.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: bridge187-runtime-evidence
+          path: ${{ runner.temp }}/bridge187-runtime.log
+          retention-days: 7
+          if-no-files-found: warn
