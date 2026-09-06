@@ -28,30 +28,19 @@ jobs:
         run: |
           npm ci
           npx playwright-core install --with-deps chromium
-      - name: Reproduce old ambiguity and prepare surgical source changes
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(node -p 'JSON.parse(require("fs").readFileSync("package.json","utf8")).version')"
-          if [[ "$version" == '1.8.7' ]]; then
-            npm run build
-            node tools/ci-home-monitor-current-mode-smoke.mjs --expect-legacy-failure
-            python tools/prepare-home-monitor-1.8.8.py
-          else
-            [[ "$version" == '1.8.8' ]]
-          fi
+      - name: Synchronize candidate runtime and regression contracts
+        run: python tools/finalize-home-monitor-1.8.8.py
       - name: Commit candidate to isolated branch only
         shell: bash
         run: |
           set -euo pipefail
           git diff --check
-          git add bridge/src/browser/command-page.ts bridge/src/browser/home-monitor-dom.ts bridge/src/browser/home-monitor-card.ts bridge/src/command/command-service.ts
-          git add package.json package-lock.json protocol/version.json custom_components/smartthings_web/manifest.json addon/smartthings_web_bridge/config.yaml
-          git add README.md CHANGELOG.md addon/smartthings_web_bridge/CHANGELOG.md
+          git add bridge/src/runtime.ts tests/addon-config.test.ts tests/protocol-version-contract.test.ts bridge/tests/browser/home-monitor-live-dom.test.ts
+          git add README.md addon/smartthings_web_bridge/README.md addon/smartthings_web_bridge/DOCS.md
           if ! git diff --cached --quiet; then
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git commit -m 'fix: scope Home Monitor current-mode controls and reduce selector latency (1.8.8)'
+            git commit -m 'test: synchronize 1.8.8 runtime contract and model trusted selector clicks'
             git push origin HEAD:fix/home-monitor-scoped-mode-1.8.8
           fi
       - name: Typecheck, unit tests and build
@@ -69,7 +58,7 @@ jobs:
       - name: Export candidate sources for independent inspection
         if: always()
         run: git archive --format=tar.gz --output=home-monitor-1.8.8-candidate-source.tar.gz HEAD
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: home-monitor-1.8.8-candidate-source
