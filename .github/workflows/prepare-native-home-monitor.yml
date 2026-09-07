@@ -60,10 +60,11 @@ jobs:
           npm run audit:api-free
           npm run audit:secrets
           npm run audit:fixtures
-      - name: Remove one-shot preparation and commit the validated diff
+      - name: Commit validated source only; workflow edits require the authorized connector
         run: |
           set -euo pipefail
-          rm tools/prepare-native-home-monitor.py .github/workflows/prepare-native-home-monitor.yml
+          rm tools/prepare-native-home-monitor.py
+          git restore .github/workflows/validate.yml
           git diff --check
           git fetch origin fix/home-monitor-native-buttons-1.8.11
           test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
