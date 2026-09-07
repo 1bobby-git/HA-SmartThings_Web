@@ -1,0 +1,31 @@
+name: Device control source
+on:
+  push:
+    branches: [fix/device-control-recovery-1.8.20]
+    paths: [.github/workflows/device-control-source.yml]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+      - name: Archive tracked source and locked test dependencies
+        run: |
+          git archive --format=tar.gz -o source.tar.gz HEAD
+          npm ci
+          tar -czf test-dependencies.tar.gz node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: device-control-source
+          path: |
+            source.tar.gz
+            test-dependencies.tar.gz
+          retention-days: 1
+          if-no-files-found: error
