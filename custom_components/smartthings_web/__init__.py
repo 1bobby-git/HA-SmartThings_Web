@@ -30,6 +30,7 @@ from .const import (
     CONF_CONTROL_MODE,
     CONF_LOCATION_ID,
     CONF_SYNC_ROOMS,
+    DEFAULT_SYNC_ROOMS,
     CONTROL_MODE_READ_ONLY,
     CONTROL_MODE_SAFE_CONTROL,
     DOMAIN,
@@ -62,7 +63,7 @@ from .models import (
     switch_name_overrides,
 )
 from .services import async_setup_services
-from .room_assignment import resolve_room_area, sync_device_area
+from .room_assignment import resolve_room_area, sync_device_area, subscribe_room_registry_changes
 from .naming import (
     canonical_entity_object_id,
     canonical_primary_control_object_id,
@@ -172,7 +173,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
         registry = dr.async_get(hass)
         area_registry = ar.async_get(hass)
         resolved_areas = {}
-        follow_room = entry.options.get(CONF_SYNC_ROOMS, False) is True
+        follow_room = entry.options.get(CONF_SYNC_ROOMS, DEFAULT_SYNC_ROOMS) is True
         for device in runtime.inventory.devices.values():
             if device.location_id != location_id:
                 continue
@@ -189,6 +190,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
                 device.room_id,
                 device.room_source,
                 runtime.inventory.ready,
+                follow_room,
             )
             if registered_metadata.get(device.device_id) == metadata:
                 continue
@@ -216,6 +218,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
 
     register_devices()
     entry.async_on_unload(runtime.subscribe(register_devices))
+    entry.async_on_unload(subscribe_room_registry_changes(
+        hass, entry.entry_id, register_devices, registered_metadata.clear,
+    ))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(_subscribe_entity_registry_migration(hass, entry))

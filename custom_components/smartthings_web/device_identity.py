@@ -123,6 +123,7 @@ def _merge_pair(cloud: BridgeDevice, local: BridgeDevice) -> BridgeDevice:
         parent_device_id=getattr(local_metadata, "parent_device_id", None),
         execution_context=getattr(cloud_metadata, "execution_context", None),
         linked_device_ids=tuple(sorted(linked)),
+        sensor_categories=getattr(cloud_metadata, "sensor_categories", ()),
     )
     return merged
 

@@ -31,6 +31,7 @@ class BinarySensorDeviceClass:
     GAS = "gas"
     MOISTURE = "moisture"
     MOTION = "motion"
+    OCCUPANCY = "occupancy"
     MOVING = "moving"
     OPENING = "opening"
     POWER = "power"

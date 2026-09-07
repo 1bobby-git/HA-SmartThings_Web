@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 
 from . import SmartThingsWebConfigEntry
 from .bridge_client import BridgeClientError
-from .const import CONF_CONTROL_MODE, CONF_SYNC_ROOMS, CONTROL_MODE_SAFE_CONTROL
+from .const import CONF_CONTROL_MODE, CONF_SYNC_ROOMS, DEFAULT_SYNC_ROOMS, CONTROL_MODE_SAFE_CONTROL
 
 
 async def async_get_config_entry_diagnostics(
@@ -23,7 +23,7 @@ async def async_get_config_entry_diagnostics(
             "has_bridge_url": "bridge_url" in entry.data,
             "has_bridge_token": "bridge_token" in entry.data,
             "has_location": "location_id" in entry.data,
-            "sync_rooms": entry.options.get(CONF_SYNC_ROOMS, False) is True,
+            "sync_rooms": entry.options.get(CONF_SYNC_ROOMS, DEFAULT_SYNC_ROOMS) is True,
             "control_mode": entry.options.get(CONF_CONTROL_MODE, CONTROL_MODE_SAFE_CONTROL),
         }
     }

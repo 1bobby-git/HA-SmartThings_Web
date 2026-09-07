@@ -11,6 +11,7 @@ CONF_DOM_FALLBACK_ENABLED = "dom_fallback_enabled"
 CONF_DEBUG_PROTOCOL_LOGGING = "debug_protocol_logging"
 CONF_LOCATION_ID = "location_id"
 CONF_SYNC_ROOMS = "sync_rooms"
+DEFAULT_SYNC_ROOMS = True
 CONTROL_MODE_READ_ONLY = "read_only"
 CONTROL_MODE_SAFE_CONTROL = "safe_control"
 BRIDGE_ADDON_SLUG = "smartthings_web_bridge"
