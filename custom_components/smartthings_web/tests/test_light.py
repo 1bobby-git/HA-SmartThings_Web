@@ -238,10 +238,13 @@ class SmartThingsWebLightTests(unittest.TestCase):
             async def async_execute_command(self, **kwargs: object) -> None:
                 self.calls.append(kwargs)
 
+            async def async_get_inventory(self) -> BridgeInventory:
+                return runtime.inventory
+
         client = Client()
-        runtime = SimpleNamespace(
-            client=client,
-            inventory=SimpleNamespace(devices={device.device_id: device}),
+        runtime = SmartThingsWebRuntime(
+            client, "loc_001",
+            BridgeInventory(1, True, "test", "5", {}, {}, {device.device_id: device}),
         )
         entity = SmartThingsWebLight(runtime, device, states[0])
 

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime
+import logging
 
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
@@ -32,6 +35,11 @@ from .models import (
     safe_observed_control,
     toggle_control_for_state,
 )
+
+
+_LOGGER = logging.getLogger(__name__)
+_COMMAND_QUEUE_TIMEOUT = 10
+_STATE_CATCHUP_TIMEOUT = 3
 
 
 async def async_setup_entry(
@@ -221,13 +229,16 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
 
     async def async_turn_on(self, **kwargs: object) -> None:
         """Validate all requested features before dispatch; keep pushed values intact."""
-        async with self._command_lock:
+        async with _command_slot(self._command_lock):
             plan: list[tuple[str, int | float]] = []
             mode = None
             if ATTR_BRIGHTNESS in kwargs:
                 value = _input_number(kwargs[ATTR_BRIGHTNESS], 0, 255)
                 if value == 0:
-                    await self._async_command("off")
+                    try:
+                        await self._async_command("off")
+                    finally:
+                        await self._async_catch_up_state()
                     return
                 # HA brightness 1 must not round to a native OFF level of zero.
                 plan.append(("level", max(1, round(value * 100 / 255))))
@@ -249,18 +260,37 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
             for attribute, value in plan:
                 if self._control(attribute) is None:
                     raise HomeAssistantError(f"SmartThings Web light has no verified {attribute} control")
-            await self._async_command("on")
-            for attribute, value in plan:
-                await self._async_set_number(attribute, value)
-            if mode is not None:
-                # A fallback mode hint only after confirmed commands, never a color value.
-                self._confirmed_color_mode = mode
-                if getattr(self, "hass", None) is not None:
-                    self.async_write_ha_state()
+            try:
+                await self._async_command("on")
+                for attribute, value in plan:
+                    await self._async_set_number(attribute, value)
+                if mode is not None:
+                    # A fallback mode hint only after confirmed commands, never a color value.
+                    self._confirmed_color_mode = mode
+                    if getattr(self, "hass", None) is not None:
+                        self.async_write_ha_state()
+            finally:
+                await self._async_catch_up_state()
 
     async def async_turn_off(self, **kwargs: object) -> None:
-        async with self._command_lock:
-            await self._async_command("off")
+        async with _command_slot(self._command_lock):
+            try:
+                await self._async_command("off")
+            finally:
+                await self._async_catch_up_state()
+
+    async def _async_catch_up_state(self) -> None:
+        """Read the Bridge once after a plan, even if a later step failed.
+
+        This catches up a lagging SSE stream without changing request/receipt
+        values into state or masking the original command failure.
+        """
+        try:
+            async with asyncio.timeout(_STATE_CATCHUP_TIMEOUT):
+                inventory = await self.runtime.client.async_get_inventory()
+                self.runtime.apply_inventory(inventory)
+        except (BridgeClientError, TimeoutError):
+            _LOGGER.debug("SmartThings Web light state catch-up unavailable; waiting for events")
 
     async def _async_command(self, command: str) -> None:
         device = self.bridge_device
@@ -290,7 +320,7 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
                 arguments=[],
             )
         except BridgeClientError as err:
-            raise HomeAssistantError(bridge_error_message("light command", err)) from err
+            raise HomeAssistantError(bridge_error_message(f"light {command} command", err)) from err
 
     async def _async_set_number(self, attribute: str, value: int | float) -> None:
         binding = self._control(attribute)
@@ -315,7 +345,7 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
                     control_label=control.label, command="setNumber", arguments=[value],
                 )
         except BridgeClientError as err:
-            raise HomeAssistantError(bridge_error_message("light command", err)) from err
+            raise HomeAssistantError(bridge_error_message(f"light {attribute} command", err)) from err
 
 
 def _number(state: BridgeState | None, minimum: float, maximum: float) -> float | None:
@@ -337,3 +367,17 @@ def _updated_at(state: BridgeState | None) -> float:
         return datetime.fromisoformat(state.updated_at.replace("Z", "+00:00")).timestamp()
     except (ValueError, TypeError, OverflowError):
         return 0
+
+
+@asynccontextmanager
+async def _command_slot(lock: asyncio.Lock) -> AsyncIterator[None]:
+    """Reject queued stale UI requests, but never interrupt a dispatched command."""
+    try:
+        async with asyncio.timeout(_COMMAND_QUEUE_TIMEOUT):
+            await lock.acquire()
+    except TimeoutError as err:
+        raise HomeAssistantError("SmartThings Web light command failed: command_queue_timeout") from err
+    try:
+        yield
+    finally:
+        lock.release()
