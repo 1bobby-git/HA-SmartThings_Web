@@ -1,0 +1,79 @@
+name: Apply light confirmation followup
+on:
+  push:
+    branches: [fix/light-confirmation-followup-1.8.19]
+    paths: [.github/workflows/apply-light-followup.yml]
+permissions:
+  contents: write
+concurrency:
+  group: apply-light-confirmation-followup-1.8.19
+  cancel-in-progress: false
+jobs:
+  apply:
+    if: github.repository == '1bobby-git/HA-SmartThings_Web' && github.ref == 'refs/heads/fix/light-confirmation-followup-1.8.19'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/light-confirmation-followup-1.8.19
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+      - name: Apply reviewed source and regression additions
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor 1cea28f1e5de556fd151235d1702bd74c47b4737 HEAD
+          git diff --quiet bbb252f97515a12d16fd8f5d7dedbc1ef193546f HEAD -- bridge/src custom_components package.json package-lock.json protocol/version.json addon README.md
+          python tools/prepare-light-confirmation.py
+          python tools/finish-light-followup.py
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          expected = {
+              'bridge/src/command/command-service.ts': '7e61a0a68801e56d236306e7d6bb5419913a118789b1c48773941346fbbf9e50',
+              'bridge/src/state/device-store.ts': 'a4e75fcc1e87a00e182325ed09d6c198999215928a781b170c54f88b107218e4',
+              'bridge/src/runtime.ts': '042c0ae7b9b2d511c3ec99a3240d084aac4ff81529091c1a77b86ea5245dc786',
+              'bridge/tests/command/command-service.test.ts': 'a250f18774da527b6be059227f08c00ccb7f86a084fc0344dfb3fe8ea57bcd37',
+              'bridge/tests/state/command-status-evidence.test.ts': '4551eba9d837253df24c20cf88e32d7f6d1ad6cda6e6a28e519ab24783acb753',
+              'custom_components/smartthings_web/light.py': '3a4f789a1c0a7f4e0696f9eee5cb2e045044e0c8ee3ed89918ddd4a74ffe7e9c',
+              'custom_components/smartthings_web/tests/test_light_capabilities.py': '8a466cdcfc219456f1727cc58f7f7c772198d45f85040de4b094a9bf03da01d8',
+              'docs/LIGHT_CONFIRMATION_1.8.19.md': '75ca99852647705c6ba070b3d6dfd49df8860056fef5f83e1e2cdd75cd4c4da6',
+              'README.md': '5c4dbcb76057baab92c92a0cf119d45a5124b67709300caab1b2664c5295038b'
+          }
+          for name, digest in expected.items():
+              assert hashlib.sha256(Path(name).read_bytes()).hexdigest() == digest, name
+          PY
+          rm tools/prepare-light-confirmation.py tools/finish-light-followup.py tools/light-confirmation-node.txt tools/light-confirmation-python.txt tools/light-confirmation-notes.txt tools/light-confirmation.patch.part1
+          rm .github/workflows/light-confirmation-source.yml .github/workflows/light-followup-source.yml .github/workflows/apply-light-followup.yml
+          git diff --check
+      - name: Run complete Node and Python regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run typecheck
+          npm test > /tmp/light-followup-node.log 2>&1 || { tail -120 /tmp/light-followup-node.log; exit 1; }
+          tail -12 /tmp/light-followup-node.log
+          npm run build
+          npm run audit:api-free
+          npm run audit:secrets
+          npm run audit:fixtures
+          python -m venv /tmp/light-followup-tests
+          source /tmp/light-followup-tests/bin/activate
+          python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.10,<4' 'voluptuous>=0.15,<1'
+          python -m compileall -q custom_components/smartthings_web
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+          python custom_components/smartthings_web/tests/test_light_capabilities.py --isolated
+      - name: Commit tested source on isolated branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix: confirm delayed light states and resume scalar controls; release 1.8.19'
+          git push origin HEAD:refs/heads/fix/light-confirmation-followup-1.8.19
