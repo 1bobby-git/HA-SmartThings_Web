@@ -69,6 +69,7 @@ export interface CommandRouteDiagnostic {
 }
 
 export interface AdvancedFirstCommandExecutorOptions {
+  locationExecutor?: Pick<SafeCommandExecutor, "executeLocationAction">;
   now?: () => number;
   domFallbackEnabled?: boolean;
   canUseAdvanced?: (input: DeviceActionExecutionInput) => boolean;
@@ -86,7 +87,7 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
   constructor(
     private readonly advanced: CommandTransport,
     private readonly legacy: LegacyWebCommandExecutor,
-    options: AdvancedFirstCommandExecutorOptions = {}
+    private readonly options: AdvancedFirstCommandExecutorOptions = {}
   ) {
     this.#componentExecutor = new ComponentCommandExecutor(
       advanced,
@@ -265,9 +266,14 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
 
   async executeLocationAction(
     input: Parameters<NonNullable<SafeCommandExecutor["executeLocationAction"]>>[0]
-  ): Promise<void> {
+  ): Promise<void | "location_native"> {
+    if (this.options.locationExecutor) {
+      const execute = this.options.locationExecutor.executeLocationAction;
+      if (!execute) throw new Error("command_execution_failed");
+      return await execute.call(this.options.locationExecutor, input);
+    }
     if (!this.legacy.executeLocationAction) throw new Error("command_control_not_found");
-    await this.legacy.executeLocationAction(input);
+    return await this.legacy.executeLocationAction(input);
   }
 }
 

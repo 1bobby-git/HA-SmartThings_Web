@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import type { BrowserContextLike, BrowserPageLike } from "./browser/keeper-page.js";
 import { readLocationSecurityStatus } from "./browser/location-status.js";
+import { LocationSecurityCommandExecutor } from "./browser/location-security-command.js";
 import { verifyLocationRead } from "./state/location-read-proof.js";
 import { installCakeClientCapture } from "./browser/cake-client-capture.js";
 import {
@@ -104,7 +105,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.11";
+const bridgeVersion = "1.8.12";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -114,6 +115,7 @@ const PROFILE_MAINTENANCE_POLL_MS = 250;
 
 export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Promise<BridgeRuntime> {
   const log = deps.log ?? console;
+  log.info(`bridge_init:version:${bridgeVersion}:home_monitor_direct`);
   log.info("bridge_init:data_paths");
   const paths = bootstrapDataPaths(deps.config.dataDir, (stage) => {
     log.info(`bridge_init:data_paths:${stage}`);
@@ -416,10 +418,16 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     resolveRawDeviceId: (alias) => volatileIdentifiers.rawDeviceId(alias),
     resolveRawIdentifier: (alias) => volatileIdentifiers.rawIdentifier(alias)
   });
+  const locationSecurityExecutor = new LocationSecurityCommandExecutor({
+    getManager: () => currentKeeperManager,
+    resolveRawLocationId: (alias) => volatileIdentifiers.rawLocationId(alias),
+    onDiagnostic: (stage) => log.info(`home_monitor_direct:${stage}`)
+  });
   const commandExecutor = new AdvancedFirstCommandExecutor(
     advancedCommandExecutor,
     legacyCommandExecutor,
     {
+      locationExecutor: locationSecurityExecutor,
       domFallbackEnabled: deps.config.domFallbackEnabled ?? true,
       canUseAdvanced: () => false,
       onDiagnostic: ({ transport, stage, outcome, code }) =>

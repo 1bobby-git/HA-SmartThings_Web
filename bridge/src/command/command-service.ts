@@ -140,7 +140,7 @@ export interface SafeCommandExecutor {
     isDesiredStateCurrent?: () => boolean;
     disarmForTransition?: (dispatch: () => Promise<void>) => Promise<void>;
     remainingTransitionMs?: () => number;
-  }): Promise<void>;
+  }): Promise<void | "location_native">;
 }
 
 export interface CommandResyncEvidence {
@@ -190,6 +190,10 @@ export type SafeCommandErrorCode =
   | "command_transition_confirmation_unavailable"
   | "command_transition_disarm_failed"
   | "command_transition_rearm_failed"
+  | "command_security_unavailable"
+  | "command_security_busy"
+  | "command_security_permission_denied"
+  | "command_security_dispatch_uncertain"
   | "component_command_partial_failure"
   | "component_command_rollback_failed"
   | "command_execution_failed"
@@ -820,7 +824,7 @@ export class SafeCommandService {
     try {
       if (!this.options.executor.executeLocationAction) throw new SafeCommandError("command_execution_failed");
       diagnostic("dispatching");
-      await this.options.executor.executeLocationAction({
+      const executionResult = await this.options.executor.executeLocationAction({
         action: request.command as LocationAction,
         locationId: request.targetId, locationNames, waitForConfirmation,
         disarmForTransition, remainingTransitionMs,
@@ -833,7 +837,8 @@ export class SafeCommandService {
       await waitForConfirmation();
       const evidence = await confirmation.result;
       diagnostic("confirmed");
-      return confirmed(request.clientRequestId, evidence.sequence, "security_arm_state_event");
+      return confirmed(request.clientRequestId, evidence.sequence, "security_arm_state_event",
+        executionResult === "location_native" ? "location_native" : "smartthings_web_ui");
     } catch (error) {
       confirmation.cancel();
       const original = error instanceof SafeCommandError ? error : commandError(error);

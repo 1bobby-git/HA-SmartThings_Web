@@ -1,3 +1,7 @@
+## Home Monitor 1.8.12
+
+Home Monitor 모드 변경은 로그인된 웹앱의 직접 보안 요청을 사용합니다. 외출↔실내 전환에 중간 해제나 DOM 버튼 탐색을 사용하지 않습니다. 성공 여부는 실제 상태로 확인하며, 응답 불명확 시 재전송하지 않습니다.
+
 # SmartThings Web Bridge
 
 ## Home Monitor 1.8.11
