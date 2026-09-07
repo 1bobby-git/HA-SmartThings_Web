@@ -1,0 +1,190 @@
+name: Republish exact v1.8.20 assets
+on:
+  push:
+    branches: [ops/republish-v1.8.20-20260908]
+    paths: [.github/workflows/republish-v1.8.20.yml]
+permissions:
+  contents: write
+concurrency:
+  group: republish-exact-v1.8.20
+  cancel-in-progress: false
+jobs:
+  republish:
+    if: github.repository == '1bobby-git/HA-SmartThings_Web' && github.ref == 'refs/heads/ops/republish-v1.8.20-20260908'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_REPO: 1bobby-git/HA-SmartThings_Web
+      RELEASE_TAG: v1.8.20
+      RELEASE_SHA: c1092826c627d4abc55e168e97dc466aea40188d
+      WORK: ${{ runner.temp }}/republish-v1.8.20
+    steps:
+      - name: Check out the exact original 1.8.20 source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: c1092826c627d4abc55e168e97dc466aea40188d
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Download the two original assets before any write
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$WORK/before" "$WORK/after"
+          gh api "repos/$RELEASE_REPO/releases/tags/$RELEASE_TAG" > "$WORK/before/release.json"
+          gh api "repos/$RELEASE_REPO/git/ref/tags/$RELEASE_TAG" > "$WORK/before/tag.json"
+          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'smartthings-web-bridge-1.8.20.tgz' --dir "$WORK/before"
+          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'smartthings-web-integration-1.8.20.tgz' --dir "$WORK/before"
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path(os.environ['WORK']) / 'before'
+          release = json.loads((root / 'release.json').read_text())
+          tag = json.loads((root / 'tag.json').read_text())
+          assert release['id'] == 384154462 and release['tag_name'] == 'v1.8.20'
+          assert not release['draft'] and not release['prerelease'] and not release.get('immutable', False)
+          assert release['target_commitish'] == os.environ['RELEASE_SHA']
+          assert tag['object']['type'] == 'commit' and tag['object']['sha'] == os.environ['RELEASE_SHA']
+          expected = {
+              'smartthings-web-bridge-1.8.20.tgz': '1c05801f0ebc36432e6564f5b5696bb12da40127c57398c57942b37e84d60525',
+              'smartthings-web-integration-1.8.20.tgz': 'cecf1fc504601999cb1fb988ed8009b5ef3b023b1ed67ef21947b8aa06280c11'
+          }
+          assets = {a['name']: a for a in release['assets']}
+          for name, digest in expected.items():
+              data = (root / name).read_bytes()
+              assert assets[name]['state'] == 'uploaded' and len(data) == assets[name]['size'], name
+              assert hashlib.sha256(data).hexdigest() == digest, name
+              assert assets[name]['digest'] == 'sha256:' + digest, name
+          print('Original tag, release, both file sizes and both SHA-256 digests verified.')
+          PY
+      - name: Rebuild and compare all package contents with the original source
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run typecheck
+          npm run build
+          npm run package:addon
+          python - <<'PY'
+          import hashlib, json, os, subprocess, tarfile
+          from pathlib import Path, PurePosixPath
+          root = Path(os.environ['WORK']) / 'before'
+          digest = lambda data: hashlib.sha256(data).hexdigest()
+          def contents(name, prefix):
+              result = {}
+              with tarfile.open(root / name, 'r:gz') as archive:
+                  for member in archive.getmembers():
+                      path = PurePosixPath(member.name)
+                      assert not path.is_absolute() and '..' not in path.parts and path.parts[0] == prefix
+                      if member.isdir():
+                          continue
+                      assert member.isfile(), member.name
+                      relative = str(path.relative_to(prefix))
+                      assert relative not in result
+                      stream = archive.extractfile(member)
+                      assert stream is not None
+                      result[relative] = digest(stream.read())
+              return result
+          integration = contents('smartthings-web-integration-1.8.20.tgz', 'smartthings_web')
+          bridge = contents('smartthings-web-bridge-1.8.20.tgz', 'smartthings_web_bridge')
+          tracked = subprocess.check_output(['git', 'ls-files', '-z', 'custom_components/smartthings_web']).decode().split('\0')
+          expected_integration = {str(Path(p).relative_to('custom_components/smartthings_web')): digest(Path(p).read_bytes()) for p in tracked if p}
+          base = Path('dist-addon/smartthings_web_bridge')
+          expected_bridge = {str(p.relative_to(base)): digest(p.read_bytes()) for p in base.rglob('*') if p.is_file()}
+          assert integration == expected_integration, 'Integration package differs from released source'
+          assert bridge == expected_bridge, 'Bridge package differs from regenerated package'
+          (root / 'source-verification.json').write_text(json.dumps({'commit': os.environ['RELEASE_SHA'], 'integration_files': len(integration), 'bridge_files': len(bridge), 'all_contents_match': True}, indent=2) + '\n')
+          print('All published package files match the exact 1.8.20 source.')
+          PY
+      - name: Preserve verified originals before replacing release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: v1.8.20-original-assets-${{ github.run_id }}
+          path: ${{ runner.temp }}/republish-v1.8.20/before/
+          retention-days: 7
+          if-no-files-found: error
+      - name: Actually republish both assets without changing tags or release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, subprocess, time
+          from pathlib import Path
+          repo, tag = os.environ['RELEASE_REPO'], os.environ['RELEASE_TAG']
+          root = Path(os.environ['WORK'])
+          before = json.loads((root / 'before/release.json').read_text())
+          names = ['smartthings-web-bridge-1.8.20.tgz', 'smartthings-web-integration-1.8.20.tgz']
+          original = {a['name']: a for a in before['assets']}
+          def current():
+              data = json.loads(subprocess.check_output(['gh', 'api', f'repos/{repo}/releases/tags/{tag}'], text=True, timeout=45))
+              assert data['id'] == before['id'] and data['target_commitish'] == before['target_commitish']
+              assert not data['draft'] and not data['prerelease'] and not data.get('immutable', False)
+              return data
+          for name in names:
+              old = original[name]
+              present = next((a for a in current()['assets'] if a['name'] == name), None)
+              assert present is not None and present['id'] == old['id'] and present['digest'] == old['digest'], 'Asset changed concurrently; stopping before overwrite'
+              completed = False
+              for attempt in range(1, 4):
+                  try:
+                      file_arg = str(root / 'before' / name)
+                      if old.get('label'):
+                          file_arg += '#' + old['label']
+                      subprocess.run(['gh', 'release', 'upload', tag, file_arg, '--repo', repo, '--clobber'], check=True, timeout=90)
+                  except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                      print(f'Upload attempt {attempt} requires verification: {name}', flush=True)
+                  present = next((a for a in current()['assets'] if a['name'] == name), None)
+                  if present and present['id'] != old['id'] and present['state'] == 'uploaded' and present['size'] == old['size'] and present['digest'] == old['digest']:
+                      completed = True
+                      print(f'Republished {name}: asset {old["id"]} -> {present["id"]}', flush=True)
+                      break
+                  if present and present.get('digest') not in (None, old['digest']):
+                      raise RuntimeError('Unexpected concurrent asset content; refusing further overwrite')
+                  time.sleep(attempt * 2)
+              if not completed:
+                  raise RuntimeError(f'Republish not confirmed for {name}; originals preserved in the backup artifact')
+          (root / 'after/release.json').write_text(json.dumps(current(), indent=2) + '\n')
+          PY
+      - name: Download republished assets again and verify unchanged bytes and tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'smartthings-web-bridge-1.8.20.tgz' --dir "$WORK/after"
+          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'smartthings-web-integration-1.8.20.tgz' --dir "$WORK/after"
+          gh api "repos/$RELEASE_REPO/git/ref/tags/$RELEASE_TAG" > "$WORK/after/tag.json"
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path(os.environ['WORK'])
+          before = json.loads((root / 'before/release.json').read_text())
+          after = json.loads((root / 'after/release.json').read_text())
+          tag = json.loads((root / 'after/tag.json').read_text())
+          assert tag['object']['type'] == 'commit' and tag['object']['sha'] == os.environ['RELEASE_SHA']
+          for field in ('id', 'tag_name', 'target_commitish', 'name', 'body', 'draft', 'prerelease'):
+              assert before[field] == after[field], field
+          old = {a['name']: a for a in before['assets']}
+          new = {a['name']: a for a in after['assets']}
+          report = {'version': '1.8.20', 'commit': os.environ['RELEASE_SHA'], 'republished': True, 'tag_unchanged': True, 'release_metadata_unchanged': True, 'live_ha_installation_performed': False, 'assets': []}
+          for name in ('smartthings-web-bridge-1.8.20.tgz', 'smartthings-web-integration-1.8.20.tgz'):
+              original = (root / 'before' / name).read_bytes()
+              published = (root / 'after' / name).read_bytes()
+              assert published == original and old[name]['id'] != new[name]['id'], name
+              checksum = hashlib.sha256(published).hexdigest()
+              assert new[name]['digest'] == 'sha256:' + checksum and new[name]['state'] == 'uploaded', name
+              report['assets'].append({'name': name, 'old_asset_id': old[name]['id'], 'new_asset_id': new[name]['id'], 'size': len(published), 'sha256': checksum, 'created_at': new[name]['created_at']})
+          (root / 'republish-report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
+          print(json.dumps(report, ensure_ascii=False, indent=2))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('## v1.8.20 assets actually republished\n\nBoth asset IDs changed. Both downloaded packages remain byte-identical to the verified originals. The existing release, tag, source and other versions were not replaced. No live HA installation was performed.\n')
+          PY
+      - name: Preserve republish result and recovery copies
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v1.8.20-republish-result-${{ github.run_id }}
+          path: ${{ runner.temp }}/republish-v1.8.20/
+          retention-days: 7
+          if-no-files-found: error
