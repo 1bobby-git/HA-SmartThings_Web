@@ -3633,6 +3633,104 @@ function deviceCommand(
   };
 }
 
+describe("Light scalar catalog commands", () => {
+  const scalars = [
+    ["level", "setLevel", 60, 0, 100],
+    ["colorTemperature", "setColorTemperature", 3000, 2000, 6500],
+    ["hue", "setHue", 50, 0, 100],
+    ["saturation", "setSaturation", 70, 0, 100]
+  ] as const;
+
+  function fixture(attribute: string, command: string, value: number, minimum: number, maximum: number) {
+    const store = readyDeviceStore(false);
+    const component = "identifier_light_component";
+    const capability = `identifier_light_${attribute.toLowerCase()}`;
+    store.observe(received(deviceEventFrame(value, "2026-09-07T00:00:00Z", attribute,
+      "dev_001", capability, undefined, component)));
+    observeAdvancedCatalog(store, [advancedCommand(capability, command, {
+      component,
+      arguments: [
+        { name: "value", required: true, sensitive: false,
+          schema: { type: "integer", minimum, maximum } },
+        { name: "rate", required: false, sensitive: false,
+          schema: { type: "integer", minimum: 0, maximum: 100 } }
+      ]
+    })]);
+    return { store, component, capability,
+      request: { targetType: "device", targetId: "dev_001", component, capability, attribute,
+        command, arguments: [value], requireAdvanced: true, confirm: true, clientRequestId: "request_light_scalar" }
+    };
+  }
+
+  test.each(scalars)("confirms exact %s without a Web detail slider", async (attribute, command, value, minimum, maximum) => {
+    const f = fixture(attribute, command, minimum, minimum, maximum);
+    const executeDeviceAction = vi.fn(async (input: DeviceActionExecutionInput) => {
+      f.store.observe(received(deviceEventFrame(value, "2026-09-07T00:00:01Z", attribute,
+        input.deviceId, input.capability, undefined, input.component)));
+      return { state: "ACCEPTED" as const, transport: "advanced" as const, acceptedAtMs: Date.now() };
+    });
+    const service = new SafeCommandService({ devices: f.store, status: connectedStatus(),
+      executor: { executeDeviceAction }, timeoutMs: 30, resync: vi.fn(async () => undefined) });
+    const result = await service.execute({ ...f.request, arguments: [value] });
+    expect(result).toMatchObject({ status: "confirmed", confirmation: "device_event", transport: "advanced" });
+    expect(executeDeviceAction).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      component: f.component, capability: f.capability, attribute, command, arguments: [value], requireAdvanced: true
+    }));
+    f.store.close();
+  });
+
+  test.each(scalars.slice(1))("dispatches an unchanged %s to switch color mode, then verifies fresh evidence", async (attribute, command, value, minimum, maximum) => {
+    const f = fixture(attribute, command, value, minimum, maximum);
+    const executeDeviceAction = vi.fn(async () => {
+      f.store.observe(received(deviceEventFrame(value, "2026-09-07T00:00:01Z", attribute,
+        "dev_001", f.capability, undefined, f.component)));
+    });
+    const service = new SafeCommandService({ devices: f.store, status: connectedStatus(),
+      executor: { executeDeviceAction }, timeoutMs: 30, resync: vi.fn(async () => undefined) });
+    expect((await service.execute(f.request)).status).toBe("confirmed");
+    expect(executeDeviceAction).toHaveBeenCalledOnce();
+    f.store.close();
+  });
+
+  test("preserves the unchanged brightness no-op", async () => {
+    const f = fixture("level", "setLevel", 60, 0, 100);
+    const executeDeviceAction = vi.fn(async () => undefined);
+    const service = new SafeCommandService({ devices: f.store, status: connectedStatus(),
+      executor: { executeDeviceAction }, timeoutMs: 30, resync: vi.fn(async () => undefined) });
+    expect((await service.execute(f.request)).status).toBe("already_confirmed");
+    expect(executeDeviceAction).not.toHaveBeenCalled();
+    f.store.close();
+  });
+
+  test.each(["receipt_only", "sibling_component", "sibling_capability"])("%s cannot confirm a color change", async (scenario) => {
+    const f = fixture("hue", "setHue", 10, 0, 100);
+    const executeDeviceAction = vi.fn(async () => {
+      if (scenario !== "receipt_only") {
+        f.store.observe(received(deviceEventFrame(50, "2026-09-07T00:00:01Z", "hue", "dev_001",
+          scenario === "sibling_capability" ? "identifier_other_color" : f.capability,
+          undefined, scenario === "sibling_component" ? "identifier_other_component" : f.component)));
+      }
+      return { state: "ACCEPTED" as const, transport: "advanced" as const, acceptedAtMs: Date.now() };
+    });
+    const service = new SafeCommandService({ devices: f.store, status: connectedStatus(),
+      executor: { executeDeviceAction }, timeoutMs: 20, resync: vi.fn(async () => undefined) });
+    await expect(service.execute({ ...f.request, arguments: [50] })).rejects.toMatchObject({ code: "command_confirmation_timeout" });
+    expect(executeDeviceAction).toHaveBeenCalledOnce();
+    expect(f.store.snapshot().devices[0]?.states.find((s) => s.component === f.component && s.capability === f.capability && s.attribute === "hue")?.value).toBe(10);
+    f.store.close();
+  });
+
+  test.each(scalars)("rejects %s outside the current catalog range before sending", async (attribute, command, value, minimum, maximum) => {
+    const f = fixture(attribute, command, value, minimum, maximum);
+    const executeDeviceAction = vi.fn(async () => undefined);
+    const service = new SafeCommandService({ devices: f.store, status: connectedStatus(),
+      executor: { executeDeviceAction }, timeoutMs: 20, resync: vi.fn(async () => undefined) });
+    await expect(service.execute({ ...f.request, arguments: [maximum + 1] })).rejects.toMatchObject({ code: "invalid_arguments" });
+    expect(executeDeviceAction).not.toHaveBeenCalled();
+    f.store.close();
+  });
+});
+
 function observeAdvancedCatalog(
   store: DeviceStore,
   commands: Parameters<DeviceStore["observeAdvancedCommandCatalog"]>[1]

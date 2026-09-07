@@ -116,6 +116,31 @@ describe("capability command argument validation", () => {
     );
   });
 
+  test("honors SmartThings optional rate without making the level optional", () => {
+    const definition = parseCapabilityDefinition({
+      id: "switchLevel", version: 1, attributes: {},
+      commands: { setLevel: { arguments: [
+        { name: "level", optional: false, schema: { type: "integer", minimum: 0, maximum: 100 } },
+        { name: "rate", optional: true, schema: { type: "integer", minimum: 0, maximum: 100 } }
+      ] } }
+    });
+    expect(definition.commands.setLevel?.arguments.map((argument) => argument.required)).toEqual([true, false]);
+    expect(validateCommandArguments(definition, "setLevel", [60])).toEqual([60]);
+    expect(validateCommandArguments(definition, "setLevel", [60, 2])).toEqual([60, 2]);
+    expect(() => validateCommandArguments(definition, "setLevel", [])).toThrowError("missing_argument");
+    expect(() => validateCommandArguments(definition, "setLevel", [60, -1])).toThrowError("argument_out_of_range");
+  });
+
+  test("does not treat truthy strings as optional flags", () => {
+    const definition = parseCapabilityDefinition({
+      id: "switchLevel", version: 1, attributes: {},
+      commands: { setLevel: { arguments: [
+        { name: "level", optional: "true", schema: { type: "integer" } }
+      ] } }
+    });
+    expect(() => validateCommandArguments(definition, "setLevel", [])).toThrowError("missing_argument");
+  });
+
   test("rejects malformed capability definitions without exposing raw content", () => {
     expect(() => parseCapabilityDefinition({ id: "switch", version: 1, commands: [] })).toThrowError(
       "capability_definition_invalid"

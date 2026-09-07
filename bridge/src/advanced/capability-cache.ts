@@ -133,7 +133,7 @@ function parseArgument(value: unknown): AdvancedCapabilityArgumentDefinition {
   }
   return {
     name: value.name,
-    required: value.required !== false,
+    required: value.required !== false && value.optional !== true,
     sensitive: value.sensitive === true,
     schema: parseSchema(value.schema),
     ...(typeof value.unit === "string" && value.unit.length <= 64 ? { unit: value.unit } : {})

@@ -26,12 +26,14 @@ class ColorMode(str, Enum):
     ONOFF = "onoff"
     BRIGHTNESS = "brightness"
     COLOR_TEMP = "color_temp"
+    HS = "hs"
 
 
 class LightEntity:
     """Minimal HA light entity stub."""
 
 
+light_module.ATTR_HS_COLOR = "hs_color"
 light_module.ATTR_BRIGHTNESS = "brightness"  # type: ignore[attr-defined]
 light_module.ATTR_COLOR_TEMP_KELVIN = "color_temp_kelvin"  # type: ignore[attr-defined]
 light_module.ColorMode = ColorMode  # type: ignore[attr-defined]

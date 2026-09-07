@@ -474,7 +474,11 @@ export class SafeCommandService {
       }
       return await this.#executeComponentPlan(effective, componentPlan);
     }
-    if (state && desired !== undefined && stateValuesEqual(state.value, desired)) {
+    const changesColorMode = ["hue", "saturation", "colorTemperature"].includes(attribute) &&
+      (effective.command === "setNumber" ||
+        effective.advancedDescriptor?.command === ({ hue: "setHue", saturation: "setSaturation",
+          colorTemperature: "setColorTemperature" } as Record<string, string>)[attribute]);
+    if (!changesColorMode && state && desired !== undefined && stateValuesEqual(state.value, desired)) {
       return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
     }
     const roomName = device.roomId ? snapshot.rooms.find((room) => room.id === device.roomId)?.name : undefined;
