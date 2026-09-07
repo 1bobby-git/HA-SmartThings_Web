@@ -1,0 +1,46 @@
+name: Verify occupancy location isolation
+on:
+  push:
+    branches: [fix/occupancy-room-sync-1.8.16]
+    paths: [.github/workflows/occupancy-location-guard.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.repository == '1bobby-git/HA-SmartThings_Web'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/occupancy-room-sync-1.8.16
+      - name: Apply exact source and regression additions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          root = Path('custom_components/smartthings_web')
+          p = root / 'binary_sensor.py'
+          s = p.read_text()
+          start = s.index('class SmartThingsWebOccupancySensor')
+          head, tail = s[:start], s[start:]
+          old = '        if device is None:\n            return None\n        return next((state for state in occupancy_source_states(device)'
+          new = '        if device is None or device.location_id != self.runtime.location_id:\n            return None\n        return next((state for state in occupancy_source_states(device)'
+          assert tail.count(old) == 1
+          p.write_text(head + tail.replace(old, new))
+          p = root / 'tests/test_occupancy.py'
+          s = p.read_text()
+          old = '        async def test_device_subscription_tracks_new_source_and_unsubscribes(self):'
+          new = '        def test_device_moved_to_another_location_is_unavailable(self):\n            self.state.value = 3\n            self.device.location_id = "loc_002"\n            self.assertFalse(self.entity.available)\n            self.assertIsNone(self.entity.is_on)\n            self.assertIsNone(self.entity.extra_state_attributes["smartthings_occupancy_source"])\n\n' + old
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, new))
+          PY
+          python -m venv /tmp/location-tests
+          /tmp/location-tests/bin/python -m pip install --disable-pip-version-check 'aiohttp>=3.10,<4' 'voluptuous>=0.15,<1'
+          /tmp/location-tests/bin/python custom_components/smartthings_web/tests/test_occupancy.py --isolated
+          /tmp/location-tests/bin/python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add custom_components/smartthings_web/binary_sensor.py custom_components/smartthings_web/tests/test_occupancy.py
+          git commit -m 'fix: stop occupancy state exposure after a device changes location'
+          git push origin HEAD:refs/heads/fix/occupancy-room-sync-1.8.16
