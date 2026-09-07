@@ -171,6 +171,13 @@ def isolated_suite():
             self.assertFalse(self.entity.available)
             self.assertIsNone(self.entity.is_on)
 
+        def test_device_moved_to_another_location_is_unavailable(self):
+            self.state.value = 3
+            self.device.location_id = "loc_002"
+            self.assertFalse(self.entity.available)
+            self.assertIsNone(self.entity.is_on)
+            self.assertIsNone(self.entity.extra_state_attributes["smartthings_occupancy_source"])
+
         async def test_device_subscription_tracks_new_source_and_unsubscribes(self):
             await self.entity.async_added_to_hass()
             self.state.value = 2

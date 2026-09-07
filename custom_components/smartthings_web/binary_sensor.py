@@ -221,7 +221,7 @@ class SmartThingsWebOccupancySensor(SmartThingsWebEntity, BinarySensorEntity):
     @property
     def bridge_state(self) -> BridgeState | None:
         device = self.bridge_device
-        if device is None:
+        if device is None or device.location_id != self.runtime.location_id:
             return None
         return next((state for state in occupancy_source_states(device)
                      if state.component == self.component), None)
