@@ -1,0 +1,82 @@
+name: Apply control repair
+on:
+  push:
+    branches: [fix/control-repair-1.8.20]
+    paths: [.github/workflows/apply-control-repair.yml]
+permissions:
+  contents: write
+concurrency:
+  group: apply-control-repair-1.8.20
+  cancel-in-progress: false
+jobs:
+  apply:
+    if: github.repository == '1bobby-git/HA-SmartThings_Web' && github.ref == 'refs/heads/fix/control-repair-1.8.20'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/control-repair-1.8.20
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Apply reviewed source and verify file hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor 3e6f46bb897358125e12b37de8cff091a7d40e36 HEAD
+          python tools/prepare-control-repair.py
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          expected = {
+            'bridge/src/command/advanced-first-executor.ts': '5a032295e919c8b7c9bf3bc70201826874b3a79ac2bfef2d3b89f2b6d2b2359b',
+            'bridge/src/command/command-service.ts': 'c0bdf66b76baecba1827e04e2ff1bf64b5ea87b9644804ee721a76f0acb83015',
+            'bridge/src/command/device-command-diagnostics.ts': '27f93244950c461658823fe2ef8dc1c5fec7242cee698dcd40e0ea33fdf6013a',
+            'bridge/src/state/device-store.ts': 'e3cd87de97acbebf3e4d44e084c2cbaff34ef0ee6b38711fdf48f12e13b4b747',
+            'bridge/src/runtime.ts': 'd6fa387786f341fc74f5e66a7dde025b0821d9e11b3a08049dcbc19ed289c846',
+            'bridge/tests/command/control-repair.test.ts': 'c1fd6e2cc81606cd2e400a9d70192a7e09ecbc87be5407c15f358263f59b5569',
+            'custom_components/smartthings_web/fan.py': '326c188847f3da4263ef05ba157be9d8bdbdc7282d173b9cab5bcc695a6e96bf',
+            'custom_components/smartthings_web/light.py': 'a3d3e89e29d4e058538f667267db7a77d8a53b9f4c48743ffa096ec083c48fdf',
+            'custom_components/smartthings_web/tests/test_fan_power_binding.py': '24de8933f671c5903a481eee3fb3661d8496d736fa50f698226930f8e68b035f',
+            'custom_components/smartthings_web/tests/test_light_capabilities.py': 'b8d017f86a8e923dc2eabf51982f7cfa553ba2399d7bc12017b0939c64607422',
+            'docs/CONTROL_REPAIR_1.8.20.md': '2363b22faa65b1dc9892ca5d8f0096e20ad5f0f75f0782877a5913e235e6540b',
+            'README.md': '5c4dbcb76057baab92c92a0cf119d45a5124b67709300caab1b2664c5295038b',
+          }
+          for name, digest in expected.items():
+              actual = hashlib.sha256(Path(name).read_bytes()).hexdigest()
+              assert actual == digest, (name, actual)
+          PY
+          rm tools/prepare-control-repair.py tools/control-repair-light-tests.txt tools/control-repair-notes.txt
+          rm .github/workflows/control-repair-source.yml .github/workflows/apply-control-repair.yml
+          git diff --check
+      - name: Run full Node and Python checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run typecheck
+          npm test > /tmp/control-repair-node.log 2>&1 || { tail -120 /tmp/control-repair-node.log; exit 1; }
+          tail -12 /tmp/control-repair-node.log
+          npm run build
+          npm run audit:api-free
+          npm run audit:secrets
+          npm run audit:fixtures
+          python -m venv /tmp/control-repair-tests
+          source /tmp/control-repair-tests/bin/activate
+          python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.9,<4' 'voluptuous>=0.13,<1'
+          python -m compileall -q custom_components/smartthings_web
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+          python custom_components/smartthings_web/tests/test_light_capabilities.py --isolated
+          python custom_components/smartthings_web/tests/test_fan_power_binding.py --isolated
+      - name: Commit verified source on isolated branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: unify fan power controls and avoid redundant light power commands; release 1.8.20'
+          git push origin HEAD:refs/heads/fix/control-repair-1.8.20
