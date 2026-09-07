@@ -29,6 +29,7 @@ from .const import (
     CONF_BRIDGE_URL,
     CONF_CONTROL_MODE,
     CONF_LOCATION_ID,
+    CONF_SYNC_ROOMS,
     CONTROL_MODE_READ_ONLY,
     CONTROL_MODE_SAFE_CONTROL,
     DOMAIN,
@@ -61,7 +62,7 @@ from .models import (
     switch_name_overrides,
 )
 from .services import async_setup_services
-from .room_assignment import resolve_room_area, repair_missing_device_area
+from .room_assignment import resolve_room_area, sync_device_area
 from .naming import (
     canonical_entity_object_id,
     canonical_primary_control_object_id,
@@ -171,6 +172,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
         registry = dr.async_get(hass)
         area_registry = ar.async_get(hass)
         resolved_areas = {}
+        follow_room = entry.options.get(CONF_SYNC_ROOMS, False) is True
         for device in runtime.inventory.devices.values():
             if device.location_id != location_id:
                 continue
@@ -184,20 +186,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
                 device_info.get("hw_version"),
                 device_info.get("sw_version"),
                 room[1] if room and room[0] == location_id else None,
+                device.room_id,
+                device.room_source,
+                runtime.inventory.ready,
             )
             if registered_metadata.get(device.device_id) == metadata:
                 continue
             room_name = room[1] if room and room[0] == location_id else None
-            if room_name and room_name not in resolved_areas:
+            room_confirmed = (
+                runtime.inventory.ready and device.room_source == "advanced"
+                and (device.room_id is None or room_name is not None)
+            )
+            if room_name and (not follow_room or room_confirmed) and room_name not in resolved_areas:
                 resolved_areas[room_name] = resolve_room_area(area_registry, room_name)
-            area = resolved_areas.get(room_name)
+            area = resolved_areas.get(room_name) if not follow_room or room_confirmed else None
             registry_entry = registry.async_get_or_create(
                 config_entry_id=entry.entry_id,
                 suggested_area=area.name if area else None,
                 **device_info,
             )
-            repair_missing_device_area(
-                registry, registry_entry.id, entry.entry_id, area.id if area else None
+            sync_device_area(
+                registry, registry_entry.id, entry.entry_id, area.id if area else None,
+                follow_room=follow_room,
+                room_confirmed=room_confirmed and (device.room_id is None or area is not None),
             )
             if registry_entry.manufacturer == "SmartThings Web":
                 registry.async_update_device(registry_entry.id, manufacturer=None)

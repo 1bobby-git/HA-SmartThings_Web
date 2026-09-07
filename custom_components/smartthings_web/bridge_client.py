@@ -538,6 +538,11 @@ def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:
             device_id=device_id,
             location_id=location_id,
             room_id=room_id if isinstance(room_id, str) else None,
+            room_source=(
+                "advanced" if item.get("roomSource") == "advanced"
+                and "roomId" in item and (room_id is None or isinstance(room_id, str))
+                else None
+            ),
             name=name,
             device_type=device_type if isinstance(device_type, str) else None,
             online=item.get("online") is True,

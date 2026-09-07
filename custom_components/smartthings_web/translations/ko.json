@@ -41,8 +41,10 @@
     "step": {
       "init": {
         "title": "SmartThings Web 옵션",
+        "data_description": {"sync_rooms": "켜면 Advanced에서 확인한 방으로 기존 기기 영역도 덮어씁니다. 방이 명시적으로 해제되면 영역도 해제합니다. 엔티티별 영역 설정은 유지합니다. 끄면 기존 HA 기기 영역을 보존합니다."},
         "data": {
-          "control_mode": "제어 모드"
+          "control_mode": "제어 모드",
+          "sync_rooms": "SmartThings 방과 기기 영역 동기화"
         }
       }
     }

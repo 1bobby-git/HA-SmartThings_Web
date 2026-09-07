@@ -17,6 +17,7 @@ from .models import (
     device_model,
     device_software_version,
     entity_unique_id,
+    is_people_counter,
     room_free_display_name,
 )
 from .naming import (
@@ -84,6 +85,8 @@ def _entity_picture_for(device: BridgeDevice) -> str | None:
 
 def device_icon_for(device: BridgeDevice) -> str | None:
     """Return a safe fallback icon when SmartThings has no static picture."""
+    if is_people_counter(device):
+        return "mdi:counter"
     candidates = []
     if device.presentation is not None:
         candidates.append(device.presentation.asset_type)

@@ -268,6 +268,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             result["data"],
             {
+                "sync_rooms": False,
                 CONF_CONTROL_MODE: CONTROL_MODE_SAFE_CONTROL,
                 CONF_COMMAND_CONFIRMATION_TIMEOUT: 45,
                 CONF_STATUS_RECHECK_ENABLED: False,
@@ -277,6 +278,19 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertTrue(flow.automatic_reload)
+
+    async def test_room_follow_requires_explicit_opt_in_and_survives_options_save(self):
+        flow = SmartThingsWebOptionsFlow()
+        flow.config_entry = SimpleNamespace(options={})
+        form = await flow.async_step_init()
+        self.assertFalse(form["data_schema"]({})["sync_rooms"])
+        enabled = await flow.async_step_init({"sync_rooms": True})
+        self.assertTrue(enabled["data"]["sync_rooms"])
+        flow.config_entry = SimpleNamespace(options=enabled["data"])
+        saved = await flow.async_step_init({CONF_CONTROL_MODE: CONTROL_MODE_READ_ONLY})
+        self.assertTrue(saved["data"]["sync_rooms"])
+        disabled = await flow.async_step_init({"sync_rooms": False})
+        self.assertFalse(disabled["data"]["sync_rooms"])
 
     async def test_reauth_asks_only_for_pairing_code_and_updates_token(self) -> None:
         original_client = config_flow.SmartThingsWebBridgeClient

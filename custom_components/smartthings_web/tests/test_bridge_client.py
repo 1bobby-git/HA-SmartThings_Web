@@ -31,6 +31,17 @@ from smartthings_web.bridge_client import (  # noqa: E402
 class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
     """Keep HA's request open through browser actuation and push confirmation."""
 
+    def test_room_source_is_optional_and_cannot_turn_missing_room_into_removal(self):
+        base = {"id": "dev_001", "locationId": "loc_001", "name": "Device", "states": []}
+        for fields, expected in [({}, None), ({"roomId": "identifier_room"}, None),
+            ({"roomId": "identifier_room", "roomSource": "advanced"}, "advanced"),
+            ({"roomId": None, "roomSource": "advanced"}, "advanced"),
+            ({"roomSource": "advanced"}, None), ({"roomId": 42, "roomSource": "advanced"}, None),
+            ({"roomId": None, "roomSource": "web"}, None)]:
+            with self.subTest(fields=fields):
+                result = parse_inventory({"schemaVersion": 1, "devices": [{**base, **fields}]})
+                self.assertEqual(result.devices["dev_001"].room_source, expected)
+
     def test_accepts_only_local_bridge_addresses(self) -> None:
         accepted = (
             "http://8a97f131-smartthings-web-bridge:8100",

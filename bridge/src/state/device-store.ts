@@ -92,6 +92,7 @@ export interface BridgeDevice {
   id: string;
   locationId: string;
   roomId: string | null;
+  roomSource?: "advanced";
   name: string;
   type: string | null;
   online: boolean;
@@ -180,6 +181,7 @@ interface MutableDevice {
   id: string;
   locationId: string;
   roomId: string | null;
+  roomSource?: "advanced";
   name: string;
   type: string | null;
   online: boolean;
@@ -234,6 +236,7 @@ const CAMERA_IMAGE_ATTRIBUTES = new Set([
 export class DeviceStore {
   readonly #locations = new Map<string, BridgeLocation>();
   readonly #rooms = new Map<string, BridgeRoom>();
+  readonly #advancedRooms = new Set<string>();
   readonly #devices = new Map<string, MutableDevice>();
   readonly #scenes = new Map<string, BridgeScene>();
   readonly #pending = new Map<string, PendingSnapshot>();
@@ -385,6 +388,11 @@ export class DeviceStore {
         id: device.id,
         locationId: device.locationId,
         roomId: device.roomId,
+        // Both the device binding and its room must be observed in this session.
+        ...(device.roomSource === "advanced" && (device.roomId === null ||
+            (this.#advancedRooms.has(device.roomId) &&
+             this.#rooms.get(device.roomId)?.locationId === device.locationId))
+          ? { roomSource: "advanced" as const } : {}),
         name: device.name,
         type: device.type,
         online: device.online,
@@ -555,6 +563,15 @@ export class DeviceStore {
   }
 
   resetSnapshotSession(): void {
+    const hadRoomProof = this.#advancedRooms.size > 0 ||
+      [...this.#devices.values()].some((device) => device.roomSource === "advanced");
+    this.#advancedRooms.clear();
+    for (const device of this.#devices.values()) delete device.roomSource;
+    if (hadRoomProof) {
+      const sequence = this.#nextSequence();
+      this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
+      this.#schedulePersist();
+    }
     this.#sessionConsumerLocationIds.clear();
     this.#sessionAdvancedLocationIds.clear();
     this.#sessionConsumerDeviceSnapshotSeen = false;
@@ -717,6 +734,8 @@ export class DeviceStore {
         const locationId = safeId(row.locationId, "loc");
         const name = safeName(row.name);
         if (!id || !locationId || !name) continue;
+        // Consumer cards may arrive after a newer Advanced topology snapshot.
+        if (this.#advancedRooms.has(id)) continue;
         changed = setIfChanged(this.#rooms, id, { id, locationId, name }) || changed;
       }
       return changed;
@@ -728,15 +747,19 @@ export class DeviceStore {
         const id = safeId(source.deviceId, "dev");
         const locationId = safeId(source.locationId, "loc");
         if (!id || !locationId) continue;
-        const previousLocation = this.#devices.get(id)?.locationId;
+        const previousDevice = this.#devices.get(id);
+        const previousLocation = previousDevice?.locationId;
+        if (previousDevice?.roomSource === "advanced" && previousLocation !== locationId) continue;
         const locationChanged = previousLocation !== undefined && previousLocation !== locationId;
         const device = this.#ensureDevice(id, locationId);
         const nextName = safeName(source.deviceName) ?? device.name;
         // Card/health enrichment can omit roomId; absence is not a room removal.
         // Only an explicit null clears it. Ignore malformed non-null identifiers.
-        const nextRoomId = source.roomId === null
-          ? null
-          : safeId(source.roomId, "identifier") ?? device.roomId;
+        const nextRoomId = device.roomSource === "advanced"
+          ? device.roomId
+          : source.roomId === null
+            ? null
+            : safeId(source.roomId, "identifier") ?? device.roomId;
         const typeData = asRecord(source.deviceTypeData);
         const presentation = devicePresentation(source);
         const rawType = safeName(typeData?.type);
@@ -898,13 +921,18 @@ export class DeviceStore {
       const hasRoom =
         Object.prototype.hasOwnProperty.call(row, "roomId") ||
         Object.prototype.hasOwnProperty.call(row, "room_id");
-      const nextRoomId = hasRoom
-        ? normalizedAdvancedId(
-            row.roomId ?? row.room_id,
-            "identifier",
-            this.#normalizeAdvancedAlias
-          )
-        : device.roomId;
+      const rawRoomId = Object.prototype.hasOwnProperty.call(row, "roomId")
+        ? row.roomId : row.room_id;
+      const normalizedRoomId = normalizedAdvancedId(
+        rawRoomId, "identifier", this.#normalizeAdvancedAlias
+      );
+      // Absent/malformed room IDs are not removals; only explicit null clears.
+      const validRoom = hasRoom && (rawRoomId === null || normalizedRoomId !== null);
+      const nextRoomId = validRoom ? normalizedRoomId : device.roomId;
+      if (validRoom && device.roomSource !== "advanced") {
+        device.roomSource = "advanced";
+        changed = true;
+      }
       const nextType =
         safeName(row.deviceTypeName ?? row.deviceType ?? row.type ?? row.deviceTypeId) ??
         device.type;
@@ -984,6 +1012,10 @@ export class DeviceStore {
       );
       const name = safeName(row.name ?? row.roomName ?? row.label);
       if (!id || !locationId || !name) continue;
+      if (!this.#advancedRooms.has(id)) {
+        this.#advancedRooms.add(id);
+        changed = true;
+      }
       changed = setIfChanged(this.#rooms, id, { id, locationId, name }) || changed;
     }
     return changed;
@@ -1120,6 +1152,7 @@ export class DeviceStore {
       if (existing.locationId !== locationId) {
         existing.locationId = locationId;
         existing.roomId = null; // A room from the previous location must not leak.
+        delete existing.roomSource;
       }
       return existing;
     }
