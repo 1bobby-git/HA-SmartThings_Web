@@ -1,4 +1,4 @@
-# Home Monitor 1.8.12: 직접 보안 상태 요청
+# Home Monitor 직접 보안 상태 요청 (1.8.12 도입, 1.8.13 유지)
 
 ## 확인한 실제 계약
 
@@ -47,4 +47,4 @@ Home Monitor의 운영 경로는 `LocationSecurityCommandExecutor`이다. 일반
 
 실제 삼성 서버가 각 계정에서 외출↔실내 직접 변경을 승인하는지, 실제 지연이 얼마나 감소하는지는 별도의 실환경 확인 대상이다. 공개 웹앱 요청 계약 및 CI 성공을 사용자 계정의 실동작 성공으로 표현하지 않는다.
 
-Bridge 앱과 HA 통합을 함께 1.8.12로 업데이트한다. 로그인 프로필, 엔티티 ID, 영역, Scene, Advanced 장치 명령, Galaxy Home Mini speak 서비스와 wire protocol 5는 유지한다.
+Bridge 앱과 HA 통합을 함께 1.8.13으로 업데이트한다. 1.8.13에서는 1.8.12의 동작 코드를 변경하지 않는다. 로그인 프로필, 엔티티 ID, 영역, Scene, Advanced 장치 명령, Galaxy Home Mini speak 서비스와 wire protocol 5는 유지한다.

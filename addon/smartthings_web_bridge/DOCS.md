@@ -1,10 +1,10 @@
-## Home Monitor 1.8.12
+## Home Monitor 1.8.13
 
 Home Monitor 모드 변경은 로그인된 웹앱의 직접 보안 요청을 사용합니다. 외출↔실내 전환에 중간 해제나 DOM 버튼 탐색을 사용하지 않습니다. 성공 여부는 실제 상태로 확인하며, 응답 불명확 시 재전송하지 않습니다.
 
 # SmartThings Web Bridge
 
-## Home Monitor 1.8.11
+## 이전 버전 1.8.11의 동작 (현재 버전에는 적용되지 않음)
 
 실제 보안 카드의 버튼을 사용합니다. 경비 모드 간 전환은 **해제 → 해제 상태 확인 → 요청 모드 → 최종 확인** 순서입니다. 중간에 경비가 해제되며 재경비가 실패하면 해제 상태에 남을 수 있습니다. `command_transition_disarm_failed` / `command_transition_rearm_failed`가 나오면 실제 상태를 확인하세요. 문구·로고를 누르는 방식은 이 카드에서 사용하지 않습니다. Bridge와 HA 통합을 함께 업데이트하세요.
 
