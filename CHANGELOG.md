@@ -1,3 +1,10 @@
+## 1.8.18
+
+- Advanced 명령 스키마의 설명용 `title`·`description` 문자열을 검증 제약과 분리합니다. `PositiveInteger`·`PositiveNumber` 제목이 있는 밝기 `setLevel`과 색상 `setHue`·`setSaturation`이 `schema_invalid`로 빠지던 경로를 수정합니다. 설명 원문은 공개 카탈로그에 전달하지 않습니다.
+- 실제 숫자 타입·범위·필수 인수 검사는 유지하고, `optional: true` 속성은 원본/정규화 카탈로그 모두에서 일관되게 해석합니다. 처리하지 못하는 객체·배열·참조·추가 제약과 위험/민감 명령을 무조건 허용하지 않습니다.
+- 원본 형태 스키마 → 캐시 파서 → 카탈로그 → HA 파서 → 조명 엔티티를 공유 테스트 데이터로 검증합니다. 재시작 후에도 on/off만 남는 카탈로그 누락과 선택적 rate 인수, 기존 엔티티의 밝기·색상·색온도 복원을 검사합니다. 지원하지 않는 다른 명령의 `schema_invalid` 수는 남을 수 있습니다.
+- Bridge 앱과 HACS 통합을 모두 1.8.18로 업데이트하고 재시작하세요. 기존 로그인·기기 ID·전원 제어·방/재실·Home Monitor·Scene·TTS·짧은 README·의존성과 protocol 5는 유지합니다. 실제 사용자 전구 조작은 수행하지 않았습니다.
+
 ## 1.8.17
 
 - 조명의 밝기·색온도·색상 제어를 보완합니다. Web 상세 슬라이더가 아직 없더라도 실제 수신 상태와 같은 컴포넌트·기능의 Advanced 명령을 대조해 `setLevel`, `setColorTemperature`, `setHue`, `setSaturation`을 연결합니다. 실제 지원되는 조명에 HA 색상 선택(HS)과 색온도를 함께 제공합니다.

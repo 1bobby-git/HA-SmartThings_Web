@@ -94,6 +94,39 @@ def isolated_suite():
                 {"loc_001": "Home"}, {}, {self.device.device_id: self.device}))
             self.entity = SmartThingsWebLight(self.runtime, self.device, self.states[0])
 
+        async def test_raw_schema_catalog_contract_restores_brightness_and_color(self):
+            # The Node test produces exactly this catalog from title-bearing raw schemas.
+            import json
+            from smartthings_web.bridge_client import parse_command_catalog
+            fixture = json.loads((root / "tests/fixtures/light-schema-annotations.json").read_text())
+            catalog = parse_command_catalog(fixture["expectedCatalog"], self.device.device_id)
+            self.device.commands = tuple(d for d in catalog.commands if d.command == "setColorTemperature")
+            self.assertEqual(self.entity.supported_color_modes, {ColorMode.ONOFF})
+            original = (self.entity.entity_id, self.entity._attr_unique_id)
+            await self.entity.async_added_to_hass()
+            latest = deepcopy(self.runtime.inventory)
+            latest.sequence += 1
+            latest.devices[self.device.device_id].commands = catalog.commands
+            latest.devices[self.device.device_id].command_omissions = (
+                BridgeCommandOmission(C, capabilities["hue"], "setColor", "schema_invalid"),
+            )
+            self.runtime.apply_inventory(latest)
+            self.assertEqual(self.entity.supported_color_modes, {ColorMode.HS, ColorMode.COLOR_TEMP})
+            self.assertEqual((self.entity.entity_id, self.entity._attr_unique_id), original)
+            self.assertEqual(self.entity.writes, 1)
+            self.assertEqual(self.entity.brightness, 153)
+            self.assertEqual(self.entity.hs_color, (90, 80))
+            await self.entity.async_turn_on(brightness=128, hs_color=(180, 70))
+            calls = [call.kwargs for call in self.client.async_execute_command.await_args_list]
+            self.assertEqual([call["command"] for call in calls], ["on", "setLevel", "setHue", "setSaturation"])
+            self.assertEqual([call["arguments"] for call in calls], [[], [50], [50], [70]])
+            self.assertTrue(all(call["require_advanced"] and call["confirm"] for call in calls[1:]))
+            self.client.async_execute_command.reset_mock()
+            await self.entity.async_turn_on(color_temp_kelvin=3000)
+            self.assertEqual(self.client.async_execute_command.await_args.kwargs["command"], "setColorTemperature")
+            self.assertEqual(self.client.async_execute_command.await_args.kwargs["arguments"], [3000])
+            self.assertEqual(self.entity.hs_color, (90, 80))
+
         def test_hue_supports_color_temperature_and_color_without_web_sliders(self):
             self.assertEqual(self.entity.supported_color_modes, {ColorMode.HS, ColorMode.COLOR_TEMP})
             self.assertEqual(self.entity.brightness, 153)

@@ -1,0 +1,295 @@
+{
+  "note": "Synthetic schema regression, not a user device capture. Shared Node catalog / Python light contract.",
+  "definitions": [
+    {
+      "id": "switch",
+      "version": 1,
+      "attributes": {},
+      "commands": {
+        "on": {
+          "arguments": []
+        },
+        "off": {
+          "arguments": []
+        }
+      }
+    },
+    {
+      "id": "switchLevel",
+      "version": 1,
+      "attributes": {},
+      "commands": {
+        "setLevel": {
+          "arguments": [
+            {
+              "name": "level",
+              "optional": false,
+              "schema": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              }
+            },
+            {
+              "name": "rate",
+              "optional": true,
+              "schema": {
+                "title": "PositiveInteger",
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "colorTemperature",
+      "version": 1,
+      "attributes": {},
+      "commands": {
+        "setColorTemperature": {
+          "arguments": [
+            {
+              "name": "temperature",
+              "optional": false,
+              "schema": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 30000
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "colorControl",
+      "version": 1,
+      "attributes": {},
+      "commands": {
+        "setHue": {
+          "arguments": [
+            {
+              "name": "hue",
+              "optional": false,
+              "schema": {
+                "title": "PositiveNumber",
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          ]
+        },
+        "setSaturation": {
+          "arguments": [
+            {
+              "name": "saturation",
+              "optional": false,
+              "schema": {
+                "title": "PositiveNumber",
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          ]
+        },
+        "setColor": {
+          "arguments": [
+            {
+              "name": "color",
+              "optional": false,
+              "schema": {
+                "title": "ColorMap",
+                "type": "object",
+                "properties": {
+                  "hue": {
+                    "type": "number"
+                  },
+                  "saturation": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "deviceId": "dev_001",
+      "component": "identifier_main",
+      "componentRole": "main",
+      "capability": "identifier_power",
+      "rawCapability": "switch",
+      "version": 1
+    },
+    {
+      "deviceId": "dev_001",
+      "component": "identifier_main",
+      "componentRole": "main",
+      "capability": "identifier_level",
+      "rawCapability": "switchLevel",
+      "version": 1
+    },
+    {
+      "deviceId": "dev_001",
+      "component": "identifier_main",
+      "componentRole": "main",
+      "capability": "identifier_temperature",
+      "rawCapability": "colorTemperature",
+      "version": 1
+    },
+    {
+      "deviceId": "dev_001",
+      "component": "identifier_main",
+      "componentRole": "main",
+      "capability": "identifier_color",
+      "rawCapability": "colorControl",
+      "version": 1
+    }
+  ],
+  "expectedCatalog": {
+    "schemaVersion": 1,
+    "deviceId": "dev_001",
+    "commands": [
+      {
+        "component": "identifier_main",
+        "componentRole": "main",
+        "capability": "identifier_color",
+        "capabilityVersion": 1,
+        "command": "setHue",
+        "arguments": [
+          {
+            "name": "hue",
+            "required": true,
+            "sensitive": false,
+            "schema": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        ],
+        "transport": "advanced",
+        "confirmation": "state",
+        "label": "setHue",
+        "labelSource": "capability"
+      },
+      {
+        "component": "identifier_main",
+        "componentRole": "main",
+        "capability": "identifier_color",
+        "capabilityVersion": 1,
+        "command": "setSaturation",
+        "arguments": [
+          {
+            "name": "saturation",
+            "required": true,
+            "sensitive": false,
+            "schema": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        ],
+        "transport": "advanced",
+        "confirmation": "state",
+        "label": "setSaturation",
+        "labelSource": "capability"
+      },
+      {
+        "component": "identifier_main",
+        "componentRole": "main",
+        "capability": "identifier_level",
+        "capabilityVersion": 1,
+        "command": "setLevel",
+        "arguments": [
+          {
+            "name": "level",
+            "required": true,
+            "sensitive": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "rate",
+            "required": false,
+            "sensitive": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "transport": "advanced",
+        "confirmation": "state",
+        "label": "setLevel",
+        "labelSource": "capability"
+      },
+      {
+        "component": "identifier_main",
+        "componentRole": "main",
+        "capability": "identifier_power",
+        "capabilityVersion": 1,
+        "command": "off",
+        "arguments": [],
+        "transport": "advanced",
+        "confirmation": "state",
+        "label": "off",
+        "labelSource": "capability"
+      },
+      {
+        "component": "identifier_main",
+        "componentRole": "main",
+        "capability": "identifier_power",
+        "capabilityVersion": 1,
+        "command": "on",
+        "arguments": [],
+        "transport": "advanced",
+        "confirmation": "state",
+        "label": "on",
+        "labelSource": "capability"
+      },
+      {
+        "component": "identifier_main",
+        "componentRole": "main",
+        "capability": "identifier_temperature",
+        "capabilityVersion": 1,
+        "command": "setColorTemperature",
+        "arguments": [
+          {
+            "name": "temperature",
+            "required": true,
+            "sensitive": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30000
+            }
+          }
+        ],
+        "transport": "advanced",
+        "confirmation": "state",
+        "label": "setColorTemperature",
+        "labelSource": "capability"
+      }
+    ],
+    "omissions": {
+      "schema_invalid": 1
+    }
+  },
+  "expectedOmissions": [
+    {
+      "component": "identifier_main",
+      "capability": "identifier_color",
+      "command": "setColor",
+      "reason": "schema_invalid"
+    }
+  ]
+}
