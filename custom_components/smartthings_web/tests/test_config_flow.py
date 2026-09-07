@@ -268,7 +268,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             result["data"],
             {
-                "sync_rooms": False,
+                "sync_rooms": True,
                 CONF_CONTROL_MODE: CONTROL_MODE_SAFE_CONTROL,
                 CONF_COMMAND_CONFIRMATION_TIMEOUT: 45,
                 CONF_STATUS_RECHECK_ENABLED: False,
@@ -279,11 +279,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(flow.automatic_reload)
 
-    async def test_room_follow_requires_explicit_opt_in_and_survives_options_save(self):
+    async def test_room_follow_defaults_on_and_explicit_opt_out_survives_options_save(self):
         flow = SmartThingsWebOptionsFlow()
         flow.config_entry = SimpleNamespace(options={})
         form = await flow.async_step_init()
-        self.assertFalse(form["data_schema"]({})["sync_rooms"])
+        self.assertTrue(form["data_schema"]({})["sync_rooms"])
         enabled = await flow.async_step_init({"sync_rooms": True})
         self.assertTrue(enabled["data"]["sync_rooms"])
         flow.config_entry = SimpleNamespace(options=enabled["data"])

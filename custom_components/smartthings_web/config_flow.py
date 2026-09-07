@@ -23,6 +23,7 @@ from .const import (
     CONF_INVENTORY_RECONCILIATION_INTERVAL,
     CONF_LOCATION_ID,
     CONF_SYNC_ROOMS,
+    DEFAULT_SYNC_ROOMS,
     CONF_STATUS_RECHECK_ENABLED,
     CONTROL_MODE_READ_ONLY,
     CONTROL_MODE_SAFE_CONTROL,
@@ -241,7 +242,7 @@ class SmartThingsWebOptionsFlow(_OptionsFlowBase):
         )
         dom_fallback = entry.options.get(CONF_DOM_FALLBACK_ENABLED, True)
         debug_protocol = entry.options.get(CONF_DEBUG_PROTOCOL_LOGGING, False)
-        sync_rooms = entry.options.get(CONF_SYNC_ROOMS, False)
+        sync_rooms = entry.options.get(CONF_SYNC_ROOMS, DEFAULT_SYNC_ROOMS)
         if user_input is not None:
             return self.async_create_entry(
                 title="",

@@ -1018,13 +1018,31 @@ def _parse_advanced_metadata(raw: Any) -> BridgeAdvancedDeviceMetadata | None:
     execution_context = raw.get("executionContext")
     if execution_context not in {"CLOUD", "LOCAL"}:
         execution_context = None
-    if owner_id is None and parent_device_id is None and execution_context is None:
+    sensor_categories = _parse_sensor_categories(raw.get("sensorCategories"))
+    if owner_id is None and parent_device_id is None and execution_context is None and not sensor_categories:
         return None
     return BridgeAdvancedDeviceMetadata(
         owner_id=owner_id,
         parent_device_id=parent_device_id,
         execution_context=execution_context,
+        sensor_categories=sensor_categories,
     )
+
+
+def _parse_sensor_categories(raw: Any) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Carry public categories and pseudonymized component IDs, not raw profiles."""
+    if not isinstance(raw, dict) or len(raw) > 64:
+        return ()
+    result = []
+    allowed = {"MotionSensor", "PresenceSensor", "MobilePresence"}
+    for component, categories in raw.items():
+        if not _safe_alias(component, "identifier_") or not isinstance(categories, list) or len(categories) > 3:
+            return ()
+        if any(not isinstance(value, str) or value not in allowed for value in categories):
+            return ()
+        if categories:
+            result.append((component, tuple(sorted(set(categories)))))
+    return tuple(sorted(result))
 
 
 def _safe_alias(value: Any, prefix: str) -> str | None:

@@ -1,9 +1,9 @@
-"""Resolve observed Web rooms without replacing Home Assistant user assignments."""
+"""Match verified SmartThings rooms and reconcile device areas without entity rewrites."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from typing import Protocol
+from collections.abc import Callable, Iterable
+from typing import Any, Protocol
 import unicodedata
 
 
@@ -56,11 +56,7 @@ def repair_missing_device_area(
     device = device_registry.async_get(device_id)
     if device is None or device.area_id is not None:
         return False
-    owner = getattr(device, "config_entry_id", None)
-    if owner is not None:
-        if owner != config_entry_id:
-            return False
-    elif set(getattr(device, "config_entries", ())) != {config_entry_id}:
+    if not _owned_device(device, config_entry_id):
         return False
     device_registry.async_update_device(device_id, area_id=area_id)
     return True
@@ -116,11 +112,76 @@ def sync_device_area(
     device = device_registry.async_get(device_id)
     if device is None or device.area_id == area_id:
         return False
-    owner = getattr(device, "config_entry_id", None)
-    if owner is not None:
-        if owner != config_entry_id:
-            return False
-    elif set(getattr(device, "config_entries", ())) != {config_entry_id}:
+    if not _owned_device(device, config_entry_id):
         return False
     device_registry.async_update_device(device_id, area_id=area_id)
     return True
+
+
+def _owned_device(device: object, config_entry_id: str) -> bool:
+    """Refuse shared or contradictory ownership, on old and current registries."""
+    owners = getattr(device, "config_entries", None)
+    owner = getattr(device, "config_entry_id", None)
+    if owners is not None and set(owners) != {config_entry_id}:
+        return False
+    if owner is not None and owner != config_entry_id:
+        return False
+    return owners is not None or owner == config_entry_id
+
+
+def subscribe_room_registry_changes(
+    hass: Any, config_entry_id: str, reconcile: Callable[[], None], invalidate: Callable[[], None],
+) -> Callable[[], None]:
+    """Re-evaluate areas on relevant HA edits, coalescing self-generated events.
+
+    No network requests, polling, registry deletion, or entity-level area writes.
+    Disabling/unloading cancels a scheduled callback and both event subscriptions.
+    """
+    bus = getattr(hass, "bus", None)
+    if bus is None or not callable(getattr(bus, "async_listen", None)):
+        return lambda: None
+    from homeassistant.helpers import device_registry as dr
+
+    pending = None
+    active = True
+
+    def run():
+        nonlocal pending
+        pending = None
+        if active:
+            invalidate()
+            reconcile()
+
+    async def changed(event):
+        nonlocal pending
+        if not active:
+            return
+        if event.event_type == "device_registry_updated":
+            data = event.data
+            changes = data.get("changes")
+            if data.get("action") != "update" or not isinstance(changes, dict) or "area_id" not in changes:
+                return
+            device = dr.async_get(hass).async_get(data.get("device_id"))
+            if device is None:
+                return
+            owners = set(getattr(device, "config_entries", ()))
+            owner = getattr(device, "config_entry_id", None)
+            if config_entry_id not in owners and owner != config_entry_id:
+                return
+        if pending is None:
+            pending = hass.loop.call_soon(run)
+
+    unsubscribers = [bus.async_listen(event, changed) for event in (
+        "area_registry_updated", "device_registry_updated",
+    )]
+
+    def unsubscribe():
+        nonlocal active, pending
+        active = False
+        if pending is not None:
+            pending.cancel()
+            pending = None
+        for remove in unsubscribers:
+            remove()
+
+    return unsubscribe

@@ -86,6 +86,7 @@ export interface BridgeAdvancedDeviceMetadata {
   restricted?: boolean;
   group?: boolean;
   preferenceKeys?: string[];
+  sensorCategories?: Record<string, string[]>;
 }
 
 export interface BridgeDevice {
@@ -881,9 +882,12 @@ export class DeviceStore {
       const observedAdvanced = advancedDeviceMetadata(row, this.#normalizeAdvancedAlias);
       const advanced = observeRestoredPresence
         ? observedAdvanced
-        : observedAdvanced
+        : observedAdvanced || (device.advanced?.sensorCategories && Array.isArray(row.components))
           ? { ...device.advanced, ...observedAdvanced }
           : device.advanced;
+      if (advanced && Array.isArray(row.components) && !observedAdvanced?.sensorCategories) {
+        delete advanced.sensorCategories;
+      }
       if (JSON.stringify(device.advanced) !== JSON.stringify(advanced)) {
         if (advanced) device.advanced = advanced;
         else delete device.advanced;
@@ -1971,6 +1975,7 @@ function advancedDeviceMetadata(
   const preferenceKeys = preferences
     ? Object.keys(preferences).filter((key) => safeToken(key)).sort()
     : [];
+  const sensorCategories = Array.isArray(row.components) ? advancedSensorCategories(row.components, normalizeAdvancedAlias) : {};
   const metadata: BridgeAdvancedDeviceMetadata = {
     ...(ownerId ? { ownerId } : {}),
     ...(profileId ? { profileId } : {}),
@@ -1982,9 +1987,44 @@ function advancedDeviceMetadata(
     ...(executionContext ? { executionContext } : {}),
     ...(restricted === undefined ? {} : { restricted }),
     ...(group === undefined ? {} : { group }),
-    ...(preferenceKeys.length > 0 ? { preferenceKeys } : {})
+    ...(preferenceKeys.length > 0 ? { preferenceKeys } : {}),
+    ...(Object.keys(sensorCategories).length > 0 ? { sensorCategories } : {})
   };
   return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
+const SENSOR_CATEGORIES = new Set(["MotionSensor", "PresenceSensor", "MobilePresence"]);
+
+function advancedSensorCategories(
+  components: unknown[], normalize: AdvancedAliasNormalizer
+): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
+  // An oversized profile is not a reason to keep an arbitrary first subset.
+  if (components.length > 64) return result;
+  const seen = new Set<string>();
+  for (const item of components) {
+    const row = asRecord(item);
+    const component = normalizedAdvancedId(row?.id ?? row?.componentId, "identifier", normalize);
+    if (!component || !Array.isArray(row?.categories)) continue;
+    if (seen.has(component)) return {};
+    seen.add(component);
+    const names = row.categories.map((category) => asRecord(category)?.name)
+      .filter((name): name is string => typeof name === "string" && SENSOR_CATEGORIES.has(name));
+    if (names.length > 0) result[component] = [...new Set(names)].sort();
+  }
+  return result;
+}
+
+function storedSensorCategories(value: unknown): Record<string, string[]> | undefined {
+  const row = asRecord(value);
+  if (!row || Object.keys(row).length > 64) return undefined;
+  const result: Record<string, string[]> = {};
+  for (const [component, names] of Object.entries(row)) {
+    if (!safeId(component, "identifier") || !Array.isArray(names) || names.length > 3 ||
+        names.some((name) => typeof name !== "string" || !SENSOR_CATEGORIES.has(name))) return undefined;
+    if (names.length > 0) result[component] = [...new Set(names as string[])].sort();
+  }
+  return result;
 }
 
 function cloneAdvancedMetadata(
@@ -1993,7 +2033,8 @@ function cloneAdvancedMetadata(
   return {
     ...value,
     ...(value.childDeviceIds ? { childDeviceIds: [...value.childDeviceIds] } : {}),
-    ...(value.preferenceKeys ? { preferenceKeys: [...value.preferenceKeys] } : {})
+    ...(value.preferenceKeys ? { preferenceKeys: [...value.preferenceKeys] } : {}),
+    ...(value.sensorCategories ? { sensorCategories: Object.fromEntries(Object.entries(value.sensorCategories).map(([key, names]) => [key, [...names]])) } : {})
   };
 }
 
@@ -3003,6 +3044,8 @@ function parseStoredAdvancedMetadata(
   const childDeviceIds = parseStoredIdArray(row.childDeviceIds, "dev");
   const preferenceKeys = parseStoredTokenArray(row.preferenceKeys);
   if (childDeviceIds === null || preferenceKeys === null) return null;
+  const sensorCategories = storedSensorCategories(row.sensorCategories);
+  if (row.sensorCategories !== undefined && sensorCategories === undefined) return null;
   return {
     ...(ownerId ? { ownerId } : {}),
     ...(profileId ? { profileId } : {}),
@@ -3014,7 +3057,8 @@ function parseStoredAdvancedMetadata(
     ...(executionContext ? { executionContext } : {}),
     ...(typeof restricted === "boolean" ? { restricted } : {}),
     ...(typeof group === "boolean" ? { group } : {}),
-    ...(preferenceKeys ? { preferenceKeys } : {})
+    ...(preferenceKeys ? { preferenceKeys } : {}),
+    ...(sensorCategories ? { sensorCategories } : {})
   };
 }
 

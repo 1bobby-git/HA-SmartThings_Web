@@ -53,6 +53,7 @@ class BridgeAdvancedDeviceMetadata:
     parent_device_id: str | None = None
     execution_context: str | None = None
     linked_device_ids: tuple[str, ...] = ()
+    sensor_categories: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -605,6 +606,7 @@ BINARY_ATTRIBUTES = frozenset(
         "filterStatus",
         "gas",
         "motion",
+        "occupancy",
         "presence",
         "smoke",
         "sound",
@@ -1929,13 +1931,70 @@ def is_people_counter(device: BridgeDevice) -> bool:
     return False
 
 
+def people_count_value(state: BridgeState | None) -> int | None:
+    """Read a real non-negative integral count; never treat input/invalid data as zero."""
+    if state is None or state.attribute != "peopleCounter":
+        return None
+    value = state.value
+    if type(value) not in (int, float) or not 0 <= value <= 2**53 - 1:
+        return None
+    return int(value) if int(value) == value else None
+
+
+def occupancy_value(value: Any) -> bool | None:
+    """Decode explicit occupancy states only; null/unknown are not absence."""
+    if isinstance(value, bool):
+        return value
+    if type(value) in (int, float) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"occupied", "present", "detected", "on"}:
+            return True
+        if normalized in {"unoccupied", "not present", "clear", "off"}:
+            return False
+    return None
+
+
+def occupancy_source_states(device: BridgeDevice) -> list[BridgeState]:
+    """Select one real occupancy/count attribute per component, not command input.
+
+    Explicit occupancy takes precedence over count. Multiple explicit sources
+    are ambiguous: never pick the first, combine counts, or substitute motion.
+    """
+    components: dict[str, dict[str, list[BridgeState]]] = {}
+    for state in device.states.values():
+        if state.attribute in {"peopleCounter", "occupancy"}:
+            sources = components.setdefault(state.component, {"peopleCounter": [], "occupancy": []})
+            sources[state.attribute].append(state)
+    result = []
+    for component in sorted(components):
+        sources = components[component]
+        preferred = sources["occupancy"] or sources["peopleCounter"]
+        if len(preferred) == 1:
+            result.append(preferred[0])
+    return result
+
+
 def device_model(device: BridgeDevice) -> str | None:
     """Prefer a reported model, then observed function, before icon/type labels."""
     reported = _first_device_metadata_value(device, "mnmo", "model", "modelCode")
     if reported is not None:
         return reported
     if is_people_counter(device):
-        return "인원 카운터"
+        return "재실 센서 (인원 카운터)"
+    if any(state.attribute == "occupancy" for state in device.states.values()):
+        return "재실 센서"
+    category_rows = getattr(device.advanced, "sensor_categories", ())
+    main_components = {state.component for state in device.states.values()
+                       if state.component == "main" or state.component_role == "main"}
+    main_components.update(command.component for command in device.commands
+                           if command.component == "main" or command.component_role == "main")
+    categories = {category for component, values in category_rows
+                  if component in main_components or (len(category_rows) == 1 and not main_components)
+                  for category in values}
+    if "PresenceSensor" in categories and "MobilePresence" not in categories:
+        return "재실 센서"
     asset_type = device.presentation.asset_type if device.presentation else None
     if asset_type and _normalized_device_type(device.device_type) in {
         "",

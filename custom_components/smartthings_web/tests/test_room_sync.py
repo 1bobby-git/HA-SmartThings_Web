@@ -56,7 +56,7 @@ def registration(follow=True, source="advanced", ready=True):
     devices, areas = Devices(), Areas()
     scope = dict(dr=NS(async_get=lambda _: devices), ar=NS(async_get=lambda _: areas),
                  hass=object(), runtime=runtime, entry=NS(options={"sync_rooms": follow}, entry_id="entry"),
-                 location_id="loc_001", registered_metadata={}, CONF_SYNC_ROOMS="sync_rooms",
+                 location_id="loc_001", registered_metadata={}, CONF_SYNC_ROOMS="sync_rooms", DEFAULT_SYNC_ROOMS=True,
                  resolve_room_area=resolve_room_area, sync_device_area=sync_device_area,
                  room_free_display_name=lambda _r, d: d.name,
                  device_info_for=lambda d, **kw: {"name": d.name, "model": device_model(d)})
@@ -169,7 +169,7 @@ class CounterModelTests(unittest.TestCase):
         device=self.device()
         state=BridgeState("main", "custom", "peopleCounter", 0, None, None)
         device.states[state.key]=state
-        self.assertEqual(device_model(device), "인원 카운터")
+        self.assertEqual(device_model(device), "재실 센서 (인원 카운터)")
 
     def test_observed_counter_contract_precedes_motion_presentation(self):
         device=self.device()
@@ -178,7 +178,7 @@ class CounterModelTests(unittest.TestCase):
             "advanced", "state", "setPeopleCounter", "capability")
         device.commands=(command,)
         self.assertTrue(is_people_counter(device))
-        self.assertEqual(device_model(device), "인원 카운터")
+        self.assertEqual(device_model(device), "재실 센서 (인원 카운터)")
         self.assertEqual(device.states, {})  # No guessed reading/binding is created.
 
     def test_label_and_motion_icon_alone_are_not_counter_evidence(self):
@@ -192,6 +192,92 @@ class CounterModelTests(unittest.TestCase):
             state=BridgeState("main", "custom", "peopleCounter", value, None, None)
             device.states[state.key]=state
             self.assertFalse(is_people_counter(device))
+
+
+class RoomRegistryEventTests(unittest.IsolatedAsyncioTestCase):
+    async def make_subscription(self, follow=True):
+        import asyncio
+        from types import ModuleType
+        from unittest.mock import patch
+        from room_assignment import subscribe_room_registry_changes
+        run, runtime, devices, areas = registration(follow=follow)
+        handlers = {}
+        bus = NS(async_listen=lambda name, callback: (handlers.__setitem__(name, callback) or
+                                                    (lambda: handlers.pop(name, None))))
+        registry_module = ModuleType("homeassistant.helpers.device_registry")
+        registry_module.async_get = lambda _: devices
+        helpers = ModuleType("homeassistant.helpers")
+        helpers.device_registry = registry_module
+        hass = NS(loop=asyncio.get_running_loop(), bus=bus)
+        with patch.dict(sys.modules, {"homeassistant.helpers": helpers,
+                                     "homeassistant.helpers.device_registry": registry_module}):
+            remove = subscribe_room_registry_changes(hass, "entry", run,
+                            run.__globals__["registered_metadata"].clear)
+        self.addCleanup(remove)
+        run()
+        return run, runtime, devices, areas, handlers, remove
+
+    async def test_external_device_area_change_reconciles_unchanged_topology(self):
+        import asyncio
+        run, _, devices, _, handlers, _ = await self.make_subscription()
+        devices.device.area_id = "living"
+        run()  # Metadata cache still applies without an event.
+        self.assertEqual(devices.device.area_id, "living")
+        for _ in range(25):
+            await handlers["device_registry_updated"](NS(event_type="device_registry_updated",
+                data={"action": "update", "device_id": "ha_device", "changes": {"area_id": "bathroom"}}))
+        await asyncio.sleep(0)
+        self.assertEqual(devices.device.area_id, "bathroom")
+        self.assertEqual(len(devices.writes), 2)  # One initial write plus one coalesced repair.
+
+    async def test_area_edit_retries_previously_ambiguous_name(self):
+        import asyncio
+        run, runtime, devices, areas, handlers, _ = await self.make_subscription()
+        runtime.inventory.rooms["identifier_room"] = ("loc_001", " ROOM ")
+        areas.items.extend([NS(id="a", name="Room"), NS(id="b", name="room")])
+        run()
+        self.assertEqual(devices.device.area_id, "bathroom")
+        areas.items = [area for area in areas.items if area.id != "b"]
+        await handlers["area_registry_updated"](NS(event_type="area_registry_updated", data={"action": "remove"}))
+        await asyncio.sleep(0)
+        self.assertEqual(devices.device.area_id, "a")
+
+    async def test_explicit_opt_out_retains_manual_device_area_after_event(self):
+        import asyncio
+        _, _, devices, _, handlers, _ = await self.make_subscription(follow=False)
+        await handlers["device_registry_updated"](NS(event_type="device_registry_updated",
+            data={"action": "update", "device_id": "ha_device", "changes": {"area_id": None}}))
+        await asyncio.sleep(0)
+        self.assertEqual(devices.device.area_id, "living")
+        self.assertEqual(devices.writes, [])
+
+    async def test_unrelated_device_changes_and_self_events_do_not_write_again(self):
+        import asyncio
+        _, _, devices, _, handlers, _ = await self.make_subscription()
+        for data in [
+            {"action": "update", "device_id": "another", "changes": {"area_id": None}},
+            {"action": "update", "device_id": "ha_device", "changes": {"name": "Old"}},
+            {"action": "update", "device_id": "ha_device", "changes": {"area_id": "living"}},
+        ]:
+            await handlers["device_registry_updated"](NS(event_type="device_registry_updated", data=data))
+        await asyncio.sleep(0)
+        self.assertEqual(len(devices.writes), 1)
+
+    async def test_unload_cancels_pending_callback_and_listeners(self):
+        import asyncio
+        _, _, devices, _, handlers, remove = await self.make_subscription()
+        devices.device.area_id = "living"
+        await handlers["area_registry_updated"](NS(event_type="area_registry_updated", data={"action": "update"}))
+        remove()
+        await asyncio.sleep(0)
+        self.assertEqual(devices.device.area_id, "living")
+        self.assertEqual(handlers, {})
+
+    def test_absent_option_automatically_repairs_verified_room(self):
+        run, _, devices, _ = registration()
+        run.__globals__["entry"].options.clear()
+        run()
+        self.assertEqual(devices.device.area_id, "bathroom")
 
 
 if __name__ == "__main__":
