@@ -5,39 +5,61 @@ on:
     paths:
       - .github/workflows/prepare-home-monitor-1.8.12.yml
 permissions:
-  contents: read
+  contents: write
+concurrency:
+  group: prepare-home-monitor-1.8.12
+  cancel-in-progress: false
 jobs:
-  inspect:
+  prepare:
     runs-on: ubuntu-24.04
-    timeout-minutes: 3
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          persist-credentials: false
-      - name: Inspect public application source referenced in supplied screenshot
+          ref: fix/home-monitor-direct-1.8.12
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Apply guarded source and version updates
+        run: python tools/prepare-home-monitor-1.8.12.py
+      - name: Node tests, typecheck, build and audits
         shell: bash
         run: |
-          python - <<'PY'
-          import hashlib, re, urllib.request
-          url = 'https://d7zh21xt4294z.cloudfront.net/assets/2.57.0/main.js'
-          try:
-              with urllib.request.urlopen(url, timeout=20) as response:
-                  data = response.read(8000001)
-              if len(data) > 8000000:
-                  raise ValueError('public bundle exceeded bounded read')
-              text = data.decode('utf-8')
-              print('public_bundle_sha256=' + hashlib.sha256(data).hexdigest())
-              print('public_bundle_bytes=' + str(len(data)))
-              for term in ['armState', 'api/location', 'security/locations', 'ARMED_STAY']:
-                  matches = list(re.finditer(re.escape(term), text))
-                  print('TERM', term, 'COUNT', len(matches))
-                  for match in matches[:10]:
-                      print(text[max(0, match.start()-220):match.end()+320])
-          except Exception as error:
-              print('public_bundle_unavailable:' + type(error).__name__)
-          PY
-      - name: List focused source and test paths
+          set -euo pipefail
+          npm ci
+          npm test > /tmp/stw-node-tests.log 2>&1 || { tail -n 160 /tmp/stw-node-tests.log; exit 1; }
+          tail -n 12 /tmp/stw-node-tests.log
+          npm run typecheck
+          npm run build
+          npm run audit:api-free
+          npm run audit:fixtures
+          npm run audit:secrets
+      - name: Real Chromium legacy and direct transport regressions
         shell: bash
         run: |
-          find tests tools -type f | grep -E 'home-monitor|native|version|release|security|api-free' | head -80
-          cat package.json
+          set -euo pipefail
+          npx playwright-core install --with-deps chromium > /tmp/stw-browser-install.log 2>&1 || { tail -n 60 /tmp/stw-browser-install.log; exit 1; }
+          node tools/ci-home-monitor-native-smoke.mjs
+      - name: Python integration regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.9,<4' 'voluptuous>=0.13,<1'
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+          python -m compileall -q custom_components/smartthings_web
+      - name: Commit validated ordinary source changes only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git add bridge/src/runtime.ts bridge/src/command/command-service.ts bridge/src/command/advanced-first-executor.ts tools/ci-home-monitor-native-smoke.mjs package.json package-lock.json protocol/version.json custom_components/smartthings_web/manifest.json addon/smartthings_web_bridge/config.yaml tests/protocol-version-contract.test.ts README.md addon/smartthings_web_bridge/CHANGELOG.md
+          test ! -f CHANGELOG.md || git add CHANGELOG.md
+          test ! -f addon/smartthings_web_bridge/DOCS.md || git add addon/smartthings_web_bridge/DOCS.md
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: route Home Monitor directly through verified armStateChange service (1.8.12)'
+          git push origin HEAD:fix/home-monitor-direct-1.8.12
+          git rev-parse HEAD
