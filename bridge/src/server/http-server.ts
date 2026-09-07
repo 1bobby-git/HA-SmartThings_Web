@@ -260,6 +260,9 @@ function commandErrorStatus(code: SafeCommandError["code"]): number {
     code === "command_search_ambiguous" ||
     code === "command_control_not_found" ||
     code === "command_control_ambiguous" ||
+    code === "command_transition_confirmation_unavailable" ||
+    code === "command_transition_disarm_failed" ||
+    code === "command_transition_rearm_failed" ||
     code === "component_command_partial_failure" ||
     code === "component_command_rollback_failed" ||
     code === "command_execution_failed"

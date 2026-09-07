@@ -40,6 +40,7 @@ jobs:
           node tools/ci-home-monitor-latency-smoke.mjs
           node tools/home-monitor-selector-regression.mjs
           node tools/ci-home-monitor-linked-popup-smoke.mjs
+          node tools/ci-home-monitor-native-smoke.mjs
 
       - name: Run Python tests
         shell: bash

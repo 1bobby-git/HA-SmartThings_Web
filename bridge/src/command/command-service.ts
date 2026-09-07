@@ -138,6 +138,8 @@ export interface SafeCommandExecutor {
     locationNames?: Readonly<Record<string, string>>;
     waitForConfirmation?: () => Promise<void>;
     isDesiredStateCurrent?: () => boolean;
+    disarmForTransition?: (dispatch: () => Promise<void>) => Promise<void>;
+    remainingTransitionMs?: () => number;
   }): Promise<void>;
 }
 
@@ -185,6 +187,9 @@ export type SafeCommandErrorCode =
   | "command_search_ambiguous"
   | "command_control_not_found"
   | "command_control_ambiguous"
+  | "command_transition_confirmation_unavailable"
+  | "command_transition_disarm_failed"
+  | "command_transition_rearm_failed"
   | "component_command_partial_failure"
   | "component_command_rollback_failed"
   | "command_execution_failed"
@@ -206,7 +211,7 @@ interface SafeCommandServiceOptions {
   confirmationStabilityMs?: number;
   resync: (request?: CommandResyncRequest) => Promise<CommandResyncEvidence | undefined>;
   onLocationDiagnostic?: (diagnostic: {
-    phase: "dispatching" | "waiting" | "confirmed" | "failed";
+    phase: "dispatching" | "waiting" | "confirmed" | "failed" | "transition_disarming" | "transition_disarmed" | "transition_failed";
     action: LocationAction;
     elapsedMs: number;
     observedStateMatches: boolean;
@@ -749,65 +754,97 @@ export class SafeCommandService {
       }
     }
     const initialLocation = this.options.devices.location(request.targetId);
-    const initialSequence = this.options.devices.currentSequence();
     const startedAt = Date.now();
     const timeoutMs = request.timeout === undefined ? this.options.timeoutMs : request.timeout * 1_000;
-    const diagnostic = (phase: "dispatching" | "waiting" | "confirmed" | "failed", reason?: SafeCommandErrorCode) => {
+    const diagnostic = (phase: "dispatching" | "waiting" | "confirmed" | "failed" | "transition_disarming" | "transition_disarmed" | "transition_failed", reason?: SafeCommandErrorCode) => {
       try {
         this.options.onLocationDiagnostic?.({
-          phase,
-          action: request.command as LocationAction,
+          phase, action: request.command as LocationAction,
           elapsedMs: Math.max(0, Date.now() - startedAt),
           observedStateMatches: normalizeLocationArmState(this.options.devices.location(request.targetId)?.armState) === desired,
           ...(reason ? { reason } : {})
         });
-      } catch {
-        // Diagnostics must never change a security command's outcome.
-      }
+      } catch { /* Diagnostics cannot change a security command's outcome. */ }
     };
-    // Subscribe before dispatch so an event arriving during the click is retained.
-    const confirmation = waitForLocationArmState({
-      devices: this.options.devices,
-      locationId: request.targetId,
-      desired,
-      afterSequence: initialSequence,
+    const createConfirmation = (mode: string) => waitForLocationArmState({
+      devices: this.options.devices, locationId: request.targetId, desired: mode,
+      afterSequence: this.options.devices.currentSequence(),
       resync: () => this.options.resync({ locationId: request.targetId })
     });
+    // Each stage subscribes before its click; a prior stage can never finish the next stage.
+    let confirmation = createConfirmation(desired);
     let started = false;
+    let transitionUsed = false;
+    let transitionDisarmed = false;
+    let transitionDeadline: number | undefined;
+    const remainingTransitionMs = () => transitionDeadline === undefined
+      ? timeoutMs : Math.max(0, transitionDeadline - Date.now());
     const waitForConfirmation = async (): Promise<void> => {
       if (!started) {
         started = true;
+        const remaining = remainingTransitionMs();
+        if (remaining <= 0) throw new SafeCommandError("command_confirmation_timeout");
         diagnostic("waiting");
-        confirmation.startTimeout(timeoutMs, this.options.resyncAfterMs, Date.now());
+        confirmation.startTimeout(remaining, this.options.resyncAfterMs, Date.now());
       }
       await confirmation.result;
+    };
+    const disarmForTransition = async (dispatch: () => Promise<void>): Promise<void> => {
+      if (transitionUsed || request.command === "disarm") throw new SafeCommandError("command_transition_disarm_failed");
+      transitionUsed = true;
+      transitionDeadline = Date.now() + timeoutMs;
+      confirmation.cancel();
+      const intermediate = createConfirmation("DISARMED");
+      try {
+        diagnostic("transition_disarming");
+        const clickStarted = Date.now();
+        await dispatch();
+        const remaining = remainingTransitionMs();
+        if (remaining <= 0) throw new SafeCommandError("command_confirmation_timeout");
+        intermediate.startTimeout(remaining, this.options.resyncAfterMs, clickStarted);
+        await intermediate.result;
+        if (normalizeLocationArmState(this.options.devices.location(request.targetId)?.armState) !== "DISARMED") {
+          throw new SafeCommandError("command_confirmation_timeout");
+        }
+        transitionDisarmed = true;
+        // Drop any desired-mode evidence preceding the confirmed intermediate disarm.
+        confirmation = createConfirmation(desired);
+        started = false;
+        diagnostic("transition_disarmed");
+      } catch (error) {
+        const failure = error instanceof SafeCommandError ? error : commandError(error);
+        diagnostic("transition_failed", failure.code);
+        throw new SafeCommandError("command_transition_disarm_failed");
+      } finally { intermediate.cancel(); }
     };
     try {
       if (!this.options.executor.executeLocationAction) throw new SafeCommandError("command_execution_failed");
       diagnostic("dispatching");
       await this.options.executor.executeLocationAction({
         action: request.command as LocationAction,
-        locationId: request.targetId,
-        locationNames,
-        waitForConfirmation,
+        locationId: request.targetId, locationNames, waitForConfirmation,
+        disarmForTransition, remainingTransitionMs,
         isDesiredStateCurrent: () => {
           const current = this.options.devices.location(request.targetId);
           return normalizeLocationArmState(current?.armState) === desired &&
             (current?.armState !== initialLocation?.armState || current?.updatedAt !== initialLocation?.updatedAt);
         }
       });
-      // Test/custom executors may not own a browser page or consume the optional hook.
       await waitForConfirmation();
       const evidence = await confirmation.result;
       diagnostic("confirmed");
       return confirmed(request.clientRequestId, evidence.sequence, "security_arm_state_event");
     } catch (error) {
       confirmation.cancel();
-      const failure = error instanceof SafeCommandError ? error : commandError(error);
+      const original = error instanceof SafeCommandError ? error : commandError(error);
+      if (transitionDisarmed) diagnostic("transition_failed", original.code);
+      const failure = transitionDisarmed ? new SafeCommandError("command_transition_rearm_failed") : original;
       diagnostic("failed", failure.code);
+      // Never restore the previous mode optimistically or replay an uncertain action.
       throw failure;
     }
   }
+
 }
 
 function validateRequest(input: unknown): SafeCommandRequest {
@@ -2565,7 +2602,7 @@ function commandError(error: unknown): SafeCommandError {
 }
 
 function isExecutorErrorCode(value: string): value is SafeCommandErrorCode {
-  return ["command_queue_timeout", "command_browser_unavailable", "command_login_required", "command_location_mismatch", "command_location_unknown", "command_location_picker_not_found", "command_location_target_not_found", "command_location_change_failed", "command_room_not_found", "command_target_not_found", "command_target_ambiguous", "command_search_not_found", "command_search_ambiguous", "command_control_not_found", "command_control_ambiguous", "component_command_partial_failure", "component_command_rollback_failed"].includes(value);
+  return ["command_queue_timeout", "command_browser_unavailable", "command_login_required", "command_location_mismatch", "command_location_unknown", "command_location_picker_not_found", "command_location_target_not_found", "command_location_change_failed", "command_room_not_found", "command_target_not_found", "command_target_ambiguous", "command_search_not_found", "command_search_ambiguous", "command_control_not_found", "command_control_ambiguous", "command_transition_confirmation_unavailable", "command_transition_disarm_failed", "command_transition_rearm_failed", "component_command_partial_failure", "component_command_rollback_failed"].includes(value);
 }
 
 function jsonValue(value: unknown): BridgeJsonValue | undefined {

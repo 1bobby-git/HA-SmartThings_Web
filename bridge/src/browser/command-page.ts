@@ -1,3 +1,4 @@
+import { executeNativeSecurityAction, type NativeSecurityStage } from "./home-monitor-native.js";
 import { enqueueWithDeadline } from "../command/bounded-command-queue.js";
 import { runLocationCommandSession } from "../command/location-command-session.js";
 import type { BrowserPageLike, KeeperPageManager } from "./keeper-page.js";
@@ -50,6 +51,7 @@ type CommandPageManagerLike = Pick<KeeperPageManager, "openCommandPage"> &
   Partial<Pick<KeeperPageManager, "currentKeeper">>;
 
 type CommandDiagnosticStage =
+  | NativeSecurityStage
   | "foreground_requested"
   | "foreground_ready"
   | "home_monitor_keeper_reused"
@@ -563,6 +565,8 @@ export class SmartThingsWebUiCommandExecutor {
     action: "armAway" | "armStay" | "disarm";
     waitForConfirmation?: () => Promise<void>;
     isDesiredStateCurrent?: () => boolean;
+    disarmForTransition?: (dispatch: () => Promise<void>) => Promise<void>;
+    remainingTransitionMs?: () => number;
   }): Promise<void> {
     const queuedAt = Date.now();
     await this.#runForeground(async () => {
@@ -581,8 +585,18 @@ export class SmartThingsWebUiCommandExecutor {
     action: "armAway" | "armStay" | "disarm";
     waitForConfirmation?: () => Promise<void>;
     isDesiredStateCurrent?: () => boolean;
+    disarmForTransition?: (dispatch: () => Promise<void>) => Promise<void>;
+    remainingTransitionMs?: () => number;
   }): Promise<void> {
     const dispatchStartedAt = Date.now();
+    const nativeInput = {
+      action: input.action,
+      monitorLabels: homeMonitorLabels(input.locationNames?.[input.locationId]),
+      modeLabelGroups: [locationActionLabels("armAway"), locationActionLabels("armStay"), locationActionLabels("disarm")],
+      ...(input.disarmForTransition ? { disarmForTransition: input.disarmForTransition } : {}),
+      ...(input.remainingTransitionMs ? { remainingTransitionMs: input.remainingTransitionMs } : {}),
+      diagnostic: (stage: NativeSecurityStage) => this.#diagnostic(stage)
+    };
     const locationName = input.locationNames?.[input.locationId];
     const keeper = this.getManager()?.currentKeeper?.();
     const routeId = keeper && !keeper.isClosed() && isSmartThingsLocation(keeper.url())
@@ -593,6 +607,12 @@ export class SmartThingsWebUiCommandExecutor {
     if (keeper && exactKeeper) {
       // Borrow only an exact-location dashboard for a direct click. Never navigate or close it.
       await keeper.bringToFront?.();
+      if (await executeNativeSecurityAction(keeper, nativeInput, 350)) {
+        this.#diagnostic("home_monitor_keeper_reused");
+        this.#diagnostic(`home_monitor_dispatch_ms_${Date.now() - dispatchStartedAt}`);
+        await input.waitForConfirmation?.();
+        return;
+      }
       const result = await clickHomeMonitorCardAction(keeper, homeMonitorLabels(locationName),
         [locationActionLabels("armAway"), locationActionLabels("armStay"), locationActionLabels("disarm")],
         { armAway: 0, armStay: 1, disarm: 2 }[input.action], 350, this.#onHomeMonitorCardDiagnostic);
@@ -616,6 +636,7 @@ export class SmartThingsWebUiCommandExecutor {
     };
     await runLocationCommandSession(
       async () => {
+        if (await executeNativeSecurityAction(page, nativeInput)) return;
         const actionName = locationActionName(input.action);
         const actionLabels = locationActionLabels(input.action);
         const modeLabelGroups = [

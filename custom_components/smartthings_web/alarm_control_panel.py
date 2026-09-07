@@ -120,6 +120,19 @@ class SmartThingsWebHomeMonitor(AlarmControlPanelEntity):
                 arguments=[],
             )
         except BridgeClientError as err:
+            if str(err) in {"command_transition_disarm_failed", "command_transition_rearm_failed"}:
+                # An intermediate disarm may have succeeded. Read actual state once;
+                # never present the requested or previous mode as a substitute.
+                try:
+                    async with asyncio.timeout(3):
+                        latest = await self.runtime.client.async_get_inventory()
+                    self.runtime.apply_inventory(latest)
+                except (BridgeClientError, TimeoutError):
+                    pass
+                logging.getLogger(__name__).error(
+                    "Home Monitor mode transition incomplete; the location may be disarmed. Verify its actual security state (%s)",
+                    str(err),
+                )
             raise HomeAssistantError(bridge_error_message("Home Monitor command", err)) from err
         if getattr(result, "status", None) not in {"confirmed", "already_confirmed"}:
             return
