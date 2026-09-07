@@ -1,0 +1,99 @@
+name: Prepare brightness retry repair
+on:
+  push:
+    branches: [fix/brightness-retry-1.8.21]
+    paths: [.github/workflows/prepare-brightness-retry.yml]
+permissions:
+  contents: write
+concurrency:
+  group: prepare-brightness-retry-1.8.21
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.repository == '1bobby-git/HA-SmartThings_Web' && github.ref == 'refs/heads/fix/brightness-retry-1.8.21'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/brightness-retry-1.8.21
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Verify exact reviewed patch before applying
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --quiet c1092826c627d4abc55e168e97dc466aea40188d HEAD -- bridge custom_components addon package.json package-lock.json protocol README.md
+          python - <<'PY'
+          import base64, gzip, hashlib, json
+          from pathlib import Path
+          assert json.loads(Path('package.json').read_text())['version'] == '1.8.20'
+          encoded = Path('tools/brightness-retry.patch.b64').read_text().strip()
+          # Restore two identified text-transport omissions. Neither source nor
+          # tests can execute unless the complete reviewed patch digest matches.
+          encoded = encoded.replace('GrH/1go7UHEPS', 'GrH/1go7U7EzGEPS')
+          encoded = encoded.replace('N7vD0o995k', 'N7vD0o1o995k')
+          patch = gzip.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'eab01800d8f0e4e680c9985f48f04cf9ffa3fe53c457d0d4566fe5a9a2071f39'
+          Path('/tmp/brightness-retry.patch').write_bytes(patch)
+          PY
+          git apply --check /tmp/brightness-retry.patch
+          git apply /tmp/brightness-retry.patch
+          git diff --check
+      - name: Reproduce stale brightness on previous production code
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/brightness-verification
+          npm ci
+          cp bridge/src/command/command-service.ts /tmp/repaired-command-service.ts
+          git show c1092826c627d4abc55e168e97dc466aea40188d:bridge/src/command/command-service.ts > bridge/src/command/command-service.ts
+          set +e
+          npx vitest run bridge/tests/command/light-plan.test.ts -t 'a cached brightness cannot suppress' > /tmp/brightness-verification/baseline.log 2>&1
+          baseline_status=$?
+          set -e
+          cp /tmp/repaired-command-service.ts bridge/src/command/command-service.ts
+          cat /tmp/brightness-verification/baseline.log
+          test "$baseline_status" -eq 1
+          grep -q 'already_confirmed' /tmp/brightness-verification/baseline.log
+          grep -q 'AssertionError' /tmp/brightness-verification/baseline.log
+      - name: Validate fixed source with all regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run typecheck
+          npm test > /tmp/brightness-verification/node.log 2>&1 || { tail -120 /tmp/brightness-verification/node.log; exit 1; }
+          tail -12 /tmp/brightness-verification/node.log
+          npm run build
+          npm run package:addon
+          npm run audit:api-free
+          npm run audit:secrets
+          npm run audit:fixtures
+          python -m venv /tmp/brightness-tests
+          source /tmp/brightness-tests/bin/activate
+          python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.10,<4' 'voluptuous>=0.15,<1'
+          python -m compileall -q custom_components/smartthings_web
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py' > /tmp/brightness-verification/python.log 2>&1 || { cat /tmp/brightness-verification/python.log; exit 1; }
+          tail -6 /tmp/brightness-verification/python.log
+          git diff --exit-code -- README.md
+          git diff --check
+      - name: Commit tested source to isolated branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm tools/brightness-retry.patch.b64
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add CHANGELOG.md addon bridge custom_components docs package.json package-lock.json protocol tests tools/brightness-retry.patch.b64
+          git commit -m 'fix: verify cached brightness and scope command state reads; release 1.8.21'
+          git push origin HEAD:refs/heads/fix/brightness-retry-1.8.21
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: brightness-retry-verification
+          path: /tmp/brightness-verification/
+          retention-days: 1
+          if-no-files-found: ignore
