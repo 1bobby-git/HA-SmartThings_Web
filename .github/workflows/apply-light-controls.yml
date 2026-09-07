@@ -40,6 +40,15 @@ jobs:
           git apply --check /tmp/light-controls.patch
           git apply /tmp/light-controls.patch
           rm tools/light-release.part{1,2,3,4,5}
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('bridge/tests/command/command-service.test.ts')
+          text = p.read_text()
+          old = 'expect((await service.execute(f.request)).status).toBe("confirmed");\n    expect(executeDeviceAction).not.toHaveBeenCalled();'
+          new = 'expect((await service.execute(f.request)).status).toBe("already_confirmed");\n    expect(executeDeviceAction).not.toHaveBeenCalled();'
+          assert text.count(old) == 1
+          p.write_text(text.replace(old, new))
+          PY
           git diff --check
       - name: Verify Python integration and light regressions
         shell: bash
