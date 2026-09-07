@@ -29,6 +29,7 @@ jobs:
           git diff --quiet bbb252f97515a12d16fd8f5d7dedbc1ef193546f HEAD -- bridge/src custom_components package.json package-lock.json protocol/version.json addon README.md
           python tools/prepare-light-confirmation.py
           python tools/finish-light-followup.py
+          python tools/align-light-recheck-test.py
           python - <<'PY'
           import hashlib
           from pathlib import Path
@@ -36,7 +37,7 @@ jobs:
               'bridge/src/command/command-service.ts': '7e61a0a68801e56d236306e7d6bb5419913a118789b1c48773941346fbbf9e50',
               'bridge/src/state/device-store.ts': 'a4e75fcc1e87a00e182325ed09d6c198999215928a781b170c54f88b107218e4',
               'bridge/src/runtime.ts': '042c0ae7b9b2d511c3ec99a3240d084aac4ff81529091c1a77b86ea5245dc786',
-              'bridge/tests/command/command-service.test.ts': 'a250f18774da527b6be059227f08c00ccb7f86a084fc0344dfb3fe8ea57bcd37',
+              'bridge/tests/command/command-service.test.ts': '98e10761d7780253e22c9ae8fe6466df73e88692b68d6360168b47de676a3698',
               'bridge/tests/state/command-status-evidence.test.ts': '4551eba9d837253df24c20cf88e32d7f6d1ad6cda6e6a28e519ab24783acb753',
               'custom_components/smartthings_web/light.py': '3a4f789a1c0a7f4e0696f9eee5cb2e045044e0c8ee3ed89918ddd4a74ffe7e9c',
               'custom_components/smartthings_web/tests/test_light_capabilities.py': '8a466cdcfc219456f1727cc58f7f7c772198d45f85040de4b094a9bf03da01d8',
@@ -46,7 +47,7 @@ jobs:
           for name, digest in expected.items():
               assert hashlib.sha256(Path(name).read_bytes()).hexdigest() == digest, name
           PY
-          rm tools/prepare-light-confirmation.py tools/finish-light-followup.py tools/light-confirmation-node.txt tools/light-confirmation-python.txt tools/light-confirmation-notes.txt tools/light-confirmation.patch.part1
+          rm tools/prepare-light-confirmation.py tools/finish-light-followup.py tools/align-light-recheck-test.py tools/light-confirmation-node.txt tools/light-confirmation-python.txt tools/light-confirmation-notes.txt tools/light-confirmation.patch.part1
           rm .github/workflows/light-confirmation-source.yml .github/workflows/light-followup-source.yml .github/workflows/apply-light-followup.yml
           git diff --check
       - name: Run complete Node and Python regressions
