@@ -1,3 +1,4 @@
+import { deviceCommandTrace, type DeviceCommandPhase } from "./device-command-diagnostics.js";
 import { normalizeLocationArmState } from "../state/location-arm-state.js";
 import { enqueueWithDeadline } from "./bounded-command-queue.js";
 import { boundedLocationRead, scheduleLocationRechecks } from "./location-rechecks.js";
@@ -224,6 +225,7 @@ interface SafeCommandServiceOptions {
     reason?: SafeCommandErrorCode;
   }) => void;
   onPendingCountChange?: (count: number) => void;
+  onDeviceDiagnostic?: (message: string) => void;
   onResult?: (result: SafeCommandResult) => void;
 }
 
@@ -530,6 +532,43 @@ export class SafeCommandService {
         throw commandError(error);
       }
     }
+    const traceStartedAt = Date.now();
+    let reads = 0;
+    const trace = (phase: DeviceCommandPhase, counts: Readonly<Record<string, number>> = {}) => {
+      try {
+        this.options.onDeviceDiagnostic?.(deviceCommandTrace(
+          { ...effective, attribute }, phase,
+          { elapsed_ms: Math.max(0, Date.now() - traceStartedAt), ...counts }
+        ));
+      } catch {
+        // Logging must not change delivery, confirmation, or failure semantics.
+      }
+    };
+    const resyncTarget = async () => {
+      reads += 1;
+      let evidence: CommandResyncEvidence | undefined;
+      try {
+        evidence = await this.options.resync({ deviceId: effective.targetId });
+      } catch (error) {
+        trace("status_read_failed", { read: reads });
+        throw error;
+      }
+      try {
+        const observed = Array.isArray(evidence?.observedStates) ? evidence.observedStates : [];
+        const exact = observed.filter((entry) => entry.component === effective.component &&
+          entry.capability === effective.capability && entry.attribute === attribute);
+        const cached = this.options.devices.commandState(effective.targetId, device.locationId,
+          effective.component, effective.capability, attribute);
+        trace("status_read", {
+          read: reads, observed: observed.length, target: exact.length,
+          target_matches: Number(exact.length === 1 && desired !== undefined && stateValuesEqual(exact[0]!.value, desired)),
+          cache_matches: Number(cached !== undefined && desired !== undefined && stateValuesEqual(cached.value, desired))
+        });
+      } catch {
+        // An unexpected diagnostic shape must not discard the original read.
+      }
+      return evidence;
+    };
     let receiptCommandId: string | undefined;
     let advancedSentAtMs: number | undefined;
     let wait:
@@ -559,7 +598,7 @@ export class SafeCommandService {
         desired,
         afterSequence: snapshot.sequence,
         stabilityMs: this.options.confirmationStabilityMs ?? 0,
-        resync: () => this.options.resync({ deviceId: effective.targetId }),
+        resync: resyncTarget,
         minimumEventTimeMs: () =>
           advancedSentAtMs ??
           (state?.updatedAt ? Date.parse(state.updatedAt) : undefined),
@@ -569,7 +608,9 @@ export class SafeCommandService {
     let executionResult: void | CommandTransportReceipt | "location_native" | "dom";
     try {
       if (!this.options.executor.executeDeviceAction) throw new SafeCommandError("command_execution_failed");
+      trace("dispatch");
       executionResult = await this.options.executor.executeDeviceAction(executionInput);
+      trace("accepted");
       if (executionResult && typeof executionResult === "object") {
         receiptCommandId = executionResult.commandId;
         if (executionResult.transport === "advanced") {
@@ -577,6 +618,7 @@ export class SafeCommandService {
         }
       }
     } catch (error) {
+      trace("failed");
       wait.cancel();
       throw commandError(error);
     }
@@ -585,13 +627,19 @@ export class SafeCommandService {
       this.options.resyncAfterMs,
       Date.now()
     );
-    const evidence = await wait.result;
-    return confirmed(
-      request.clientRequestId,
-      evidence.sequence,
-      evidence.source === "inventory_snapshot" ? "inventory_snapshot" : "device_event",
-      transportForExecution(executionResult)
-    );
+    try {
+      const evidence = await wait.result;
+      trace("confirmed", { reads });
+      return confirmed(
+        request.clientRequestId,
+        evidence.sequence,
+        evidence.source === "inventory_snapshot" ? "inventory_snapshot" : "device_event",
+        transportForExecution(executionResult)
+      );
+    } catch (error) {
+      trace("failed", { reads });
+      throw error;
+    }
   }
 
   async #executeComponentPlan(
@@ -996,8 +1044,8 @@ function waitForState(options: { devices: DeviceStore; request: SafeCommandReque
     return matches.length === 1 ? matches[0] : undefined;
   };
   const currentState = () => {
-    const device = options.devices.snapshot().devices.find((entry) => entry.id === options.request.targetId);
-    return device?.locationId === options.locationId && device.online ? exactState(device.states) : undefined;
+    return options.devices.commandState(options.request.targetId, options.locationId,
+      options.request.component, options.request.capability, options.attribute);
   };
   const before = currentState();
   const matchesValue = (state: BridgeDeviceState | undefined) =>

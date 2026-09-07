@@ -130,11 +130,16 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
       command: input.nativeCommand ?? input.optionCommand ?? input.command,
       arguments: input.arguments
     };
+    this.#diagnostic({ transport: "advanced", stage: "dispatch", outcome: "attempt" });
     try {
-      return await new OrderedCommandRouter({
+      const receipt = await new OrderedCommandRouter({
         advanced: this.advanced
       }).execute(routed);
+      this.#diagnostic({ transport: "advanced", stage: "receipt", outcome: "accepted" });
+      return receipt;
     } catch (error) {
+      this.#diagnostic({ transport: "advanced", stage: "dispatch", outcome: "failed",
+        code: safeCommandCode(error) });
       if (error instanceof CommandTransportError) {
         if (error.code === "authentication") throw new Error("command_login_required");
         if (error.code === "unsupported") throw new Error("command_control_not_found");

@@ -261,7 +261,12 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
                 if self._control(attribute) is None:
                     raise HomeAssistantError(f"SmartThings Web light has no verified {attribute} control")
             try:
-                await self._async_command("on")
+                # Attribute updates on an observed-on light do not require a
+                # second ON transaction. Keep explicit ON and unknown/off states
+                # on the existing confirmed power path; never assume power from
+                # the requested brightness or color.
+                if not plan or self.is_on is not True:
+                    await self._async_command("on")
                 for attribute, value in plan:
                     await self._async_set_number(attribute, value)
                 if mode is not None:

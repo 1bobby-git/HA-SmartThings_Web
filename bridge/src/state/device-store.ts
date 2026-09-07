@@ -415,6 +415,23 @@ export class DeviceStore {
     };
   }
 
+  /** Read one exact online target without cloning the whole inventory per event. */
+  commandState(
+    deviceId: string, locationId: string,
+    component: string | undefined, capability: string | undefined, attribute: string
+  ): BridgeDeviceState | undefined {
+    const device = this.#devices.get(deviceId);
+    if (!device || !device.online || device.locationId !== locationId || !component || !capability) {
+      return undefined;
+    }
+    const state = device.states.get(`${component}\u0000${capability}\u0000${attribute}`);
+    if (!state) return undefined;
+    if (CAMERA_IMAGE_ATTRIBUTES.has(attribute) && !snapshotDeviceStates(device).includes(state)) {
+      return undefined;
+    }
+    return cloneState(state);
+  }
+
   /** Avoid cloning every device and capability while checking a location command. */
   location(locationId: string): BridgeLocation | undefined {
     const value = this.#locations.get(locationId);
