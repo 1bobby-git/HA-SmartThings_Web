@@ -22,7 +22,9 @@ jobs:
           node-version: 24.18.1
           cache: npm
       - name: Apply guarded source and version updates
-        run: python tools/prepare-home-monitor-1.8.12.py
+        run: |
+          python tools/prepare-home-monitor-1.8.12.py
+          python tools/prepare-home-monitor-1.8.12-tests.py
       - name: Node tests, typecheck, build and audits
         shell: bash
         run: |
@@ -55,7 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           git diff --check
-          git add bridge/src/runtime.ts bridge/src/command/command-service.ts bridge/src/command/advanced-first-executor.ts tools/ci-home-monitor-native-smoke.mjs package.json package-lock.json protocol/version.json custom_components/smartthings_web/manifest.json addon/smartthings_web_bridge/config.yaml tests/protocol-version-contract.test.ts README.md addon/smartthings_web_bridge/CHANGELOG.md
+          git add bridge/src/runtime.ts bridge/src/command/command-service.ts bridge/src/command/advanced-first-executor.ts tools/ci-home-monitor-native-smoke.mjs package.json package-lock.json protocol/version.json custom_components/smartthings_web/manifest.json addon/smartthings_web_bridge/config.yaml tests/protocol-version-contract.test.ts tests/addon-config.test.ts bridge/tests/runtime.test.ts README.md addon/smartthings_web_bridge/CHANGELOG.md
           test ! -f CHANGELOG.md || git add CHANGELOG.md
           test ! -f addon/smartthings_web_bridge/DOCS.md || git add addon/smartthings_web_bridge/DOCS.md
           git config user.name 'github-actions[bot]'
