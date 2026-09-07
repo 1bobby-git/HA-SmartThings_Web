@@ -54,6 +54,40 @@ jobs:
                   )'''
           assert text.count(old) == 1
           p.write_text(text.replace(old, new))
+          p = Path('bridge/tests/command/command-service.test.ts')
+          text = p.read_text()
+          marker = '  ])("does not let %s use the stateless refresh snapshot policy", async ({ setup, request }) => {'
+          start = text.index(marker)
+          end = text.index('\n  test.each([', start)
+          old = text[start:end]
+          assert old.count('expect(resync).toHaveBeenCalledTimes(1);') == 1
+          new = marker + '''
+              vi.useFakeTimers();
+              const store = setup(readyDeviceStore());
+              const resync = vi.fn(async () => inventoryEvidence());
+              const service = new SafeCommandService({
+                devices: store,
+                status: connectedStatus(),
+                executor: { executeDeviceAction: vi.fn(async () => undefined) },
+                timeoutMs: 10,
+                resyncAfterMs: 0,
+                resync
+              });
+              try {
+                const failed = expect(service.execute(request())).rejects.toMatchObject({
+                  code: "command_confirmation_timeout"
+                });
+                await vi.advanceTimersByTimeAsync(11);
+                await failed;
+                // Initial plus final-window read; neither metadata-only receipt is proof.
+                expect(resync).toHaveBeenCalledTimes(2);
+              } finally {
+                store.close();
+                vi.useRealTimers();
+              }
+            });
+          '''
+          p.write_text(text[:start] + new + text[end:])
           expected = {
               'bridge/src/command/command-service.ts': '7e61a0a68801e56d236306e7d6bb5419913a118789b1c48773941346fbbf9e50',
               'bridge/src/state/device-store.ts': 'a4e75fcc1e87a00e182325ed09d6c198999215928a781b170c54f88b107218e4',
