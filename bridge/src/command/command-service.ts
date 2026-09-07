@@ -389,6 +389,45 @@ export class SafeCommandService {
     if (!effective.component || !effective.capability) {
       throw new SafeCommandError("capability_not_found");
     }
+    // The catalog proves the command and argument contract, not a state binding.
+    // Explicit receipt-only requests and stateless commands must not require an
+    // invented "switch" attribute (or compare a relative input with device state).
+    if (
+      effective.advancedDescriptor &&
+      ((effective.confirm === false && !isSupportedDeviceCommand(effective.command)) ||
+        effective.advancedDescriptor.confirmation === "accepted_receipt")
+    ) {
+      const descriptor = effective.advancedDescriptor;
+      const roomName = device.roomId
+        ? snapshot.rooms.find((room) => room.id === device.roomId)?.name
+        : undefined;
+      try {
+        if (!this.options.executor.executeDeviceAction) {
+          throw new SafeCommandError("command_execution_failed");
+        }
+        const receipt = await this.options.executor.executeDeviceAction({
+          action: descriptor.command,
+          command: descriptor.command,
+          arguments: effective.arguments,
+          // Required transport diagnostic field; not a guessed state attribute.
+          attribute: effective.attribute ?? descriptor.command,
+          component: descriptor.component,
+          capability: descriptor.capability,
+          capabilityVersion: descriptor.capabilityVersion,
+          deviceId: device.id,
+          deviceName: device.name,
+          locationId: device.locationId,
+          locationNames,
+          ...(roomName ? { roomName } : {}),
+          requireAdvanced: true
+        });
+        return acceptedUnconfirmed(
+          effective.clientRequestId, snapshot.sequence, transportForExecution(receipt)
+        );
+      } catch (error) {
+        throw commandError(error);
+      }
+    }
     let attribute = effective.attribute;
     if (attribute === undefined) {
       attribute =

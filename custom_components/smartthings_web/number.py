@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from math import isfinite
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.core import HomeAssistant
@@ -10,6 +11,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SmartThingsWebConfigEntry
+from .command_controls import CatalogCommandEntityMixin, catalog_commands, command_suffix
 from .bridge_client import BridgeClientError, bridge_error_message
 from .entity import SmartThingsWebDeviceEntity
 from .models import (
@@ -57,6 +59,11 @@ async def async_setup_entry(
                         control,
                     )
                 )
+            for command in catalog_commands(device, "number"):
+                unique_id = f"{device.device_id}_{command_suffix('number', command)}"
+                if unique_id not in known:
+                    known.add(unique_id)
+                    entities.append(SmartThingsWebCommandNumber(runtime, device, command))
         if entities:
             async_add_entities(entities)
 
@@ -206,3 +213,32 @@ def _command_for(
     if attribute == "shadeLevel":
         return "setPosition"
     return "setNumber"
+
+
+class SmartThingsWebCommandNumber(CatalogCommandEntityMixin, SmartThingsWebDeviceEntity, NumberEntity):
+    """Bounded integer command input; no invented current counter value."""
+
+    _command_kind = "number"
+    _attr_mode = NumberMode.BOX
+    _attr_native_step = 1.0
+
+    @property
+    def native_min_value(self) -> float:
+        command = self._current_descriptor
+        return float(command.arguments[0].schema["minimum"]) if command else 0.0
+
+    @property
+    def native_max_value(self) -> float:
+        command = self._current_descriptor
+        return float(command.arguments[0].schema["maximum"]) if command else 0.0
+
+    @property
+    def native_value(self) -> None:
+        return None
+
+    async def async_set_native_value(self, value: float) -> None:
+        if (type(value) not in (int, float) or abs(value) > 2**53 - 1
+                or not isfinite(value) or not float(value).is_integer()
+                or not self.native_min_value <= value <= self.native_max_value):
+            raise HomeAssistantError("SmartThings Web command requires an integer within its advertised range")
+        await self._async_send([int(value)])

@@ -28,6 +28,7 @@ class NumberMode(str, Enum):
     """Minimal HA number mode stub."""
 
     SLIDER = "slider"
+    BOX = "box"
 
 
 number_module.NumberEntity = NumberEntity  # type: ignore[attr-defined]

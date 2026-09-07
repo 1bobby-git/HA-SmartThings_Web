@@ -12,6 +12,81 @@ import { DeviceStore, type BridgeStateSource } from "../../src/state/device-stor
 import { RuntimeStatusStore } from "../../src/state/runtime-state.js";
 
 describe("SafeCommandService", () => {
+  test.each([
+    ["setUpdown", { type: "string", enum: ["minus_2", "minus_1", "plus_1", "plus_2"] }, ["plus_1"], "state"],
+    ["setFreeze", { type: "string", enum: ["on", "off"] }, ["on"], "state"],
+    ["setPeopleCounter", { type: "integer", minimum: 0, maximum: 65535 }, [0], "state"],
+    ["setPeopleCounter", { type: "integer", minimum: 0, maximum: 65535 }, [65535], "state"],
+    ["refresh", undefined, [], "accepted_receipt"],
+    ["push", undefined, [], "accepted_receipt"]
+  ] as Array<[
+    string,
+    import("../../src/advanced/types.js").AdvancedCapabilitySchema | undefined,
+    import("../../src/state/device-store.js").BridgeJsonValue[],
+    "state" | "accepted_receipt"
+  ]>)("dispatches catalog %s without inventing a switch state", async (command, schema, args, confirmation) => {
+    const store = readyDeviceStore();
+    const component = "identifier_c9246e0ac435";
+    const capability = "identifier_catalog_counter";
+    observeAdvancedCatalog(store, [advancedCommand(capability, String(command), {
+      component, confirmation,
+      arguments: schema ? [{ name: "value", required: true, sensitive: false, schema }] : []
+    })]);
+    const before = store.snapshot();
+    const executeDeviceAction = vi.fn(async () => ({
+      state: "ACCEPTED" as const, transport: "advanced" as const, acceptedAtMs: Date.now()
+    }));
+    const resync = vi.fn(async () => undefined);
+    const service = new SafeCommandService({ devices: store, status: connectedStatus(),
+      executor: { executeDeviceAction }, timeoutMs: 20, resync });
+    const request = { targetType: "device", targetId: "dev_001", component, capability,
+      command, arguments: args, clientRequestId: "request_catalog_input", requireAdvanced: true,
+      ...(confirmation === "state" ? { confirm: false } : {}) };
+    const result = await service.execute(request);
+    expect(result).toMatchObject({ status: "accepted_unconfirmed", confirmation: "accepted_receipt",
+      lifecycle: "ACCEPTED_UNCONFIRMED", transport: "advanced" });
+    expect(executeDeviceAction).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      deviceId: "dev_001", component, capability, command, arguments: args, requireAdvanced: true
+    }));
+    expect(resync).not.toHaveBeenCalled();
+    expect(store.snapshot().devices).toEqual(before.devices);
+    store.close();
+  });
+
+  test.each([-1, 65536, 1.5, true, "3"])("rejects invalid catalog integer %s before dispatch", async (value) => {
+    const store = readyDeviceStore();
+    observeAdvancedCatalog(store, [advancedCommand("identifier_counter", "setPeopleCounter", {
+      confirmation: "state", arguments: [{ name: "value", required: true, sensitive: false,
+        schema: { type: "integer", minimum: 0, maximum: 65535 } }]
+    })]);
+    const executeDeviceAction = vi.fn(async () => undefined);
+    const service = new SafeCommandService({ devices: store, status: connectedStatus(),
+      executor: { executeDeviceAction }, timeoutMs: 20, resync: vi.fn(async () => undefined) });
+    await expect(service.execute({ targetType: "device", targetId: "dev_001", component: "main",
+      capability: "identifier_counter", command: "setPeopleCounter", arguments: [value],
+      clientRequestId: "request_invalid_counter", requireAdvanced: true, confirm: false
+    })).rejects.toMatchObject({ code: "invalid_arguments" });
+    expect(executeDeviceAction).not.toHaveBeenCalled();
+    store.close();
+  });
+
+  test("does not silently weaken a custom state-confirmation request", async () => {
+    const store = readyDeviceStore();
+    observeAdvancedCatalog(store, [advancedCommand("identifier_counter", "setPeopleCounter", {
+      confirmation: "state", arguments: [{ name: "value", required: true, sensitive: false,
+        schema: { type: "integer", minimum: 0, maximum: 65535 } }]
+    })]);
+    const executeDeviceAction = vi.fn(async () => undefined);
+    const service = new SafeCommandService({ devices: store, status: connectedStatus(),
+      executor: { executeDeviceAction }, timeoutMs: 20, resync: vi.fn(async () => undefined) });
+    await expect(service.execute({ targetType: "device", targetId: "dev_001", component: "main",
+      capability: "identifier_counter", command: "setPeopleCounter", arguments: [3],
+      clientRequestId: "request_confirm_counter", requireAdvanced: true, confirm: true
+    })).rejects.toMatchObject({ code: "unsupported_command" });
+    expect(executeDeviceAction).not.toHaveBeenCalled();
+    store.close();
+  });
+
   test.each(["main", "switch2", "switch3", "switch4"])("a concrete %s switch control never becomes a component aggregate", async (component) => {
     const fixture = multiSwitchFixture(["main", "switch2", "switch3", "switch4"]);
     const controlId = component === "main" ? "identifier_toggle_aggregate" : `identifier_toggle_${component}`;
