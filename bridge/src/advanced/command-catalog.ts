@@ -46,6 +46,9 @@ const DEFAULT_CONCURRENCY = 4;
 const STATELESS_COMMAND_PATTERN =
   /^(?:speak|refresh|press|push|momentary|ping|beep|identify|refresh[A-Z].*)$/u;
 const PUBLIC_SCHEMA_KEYS = new Set(["type", "enum", "minimum", "maximum", "minLength", "maxLength"]);
+// Descriptive JSON Schema annotations never change the accepted argument values.
+// Drop them before publishing the catalog; do not forward arbitrary descriptive text.
+const SCHEMA_TEXT_ANNOTATIONS = new Set(["title", "description"]);
 const MAX_PUBLIC_ENUM_VALUES = 128;
 const MAX_PUBLIC_ENUM_STRING_LENGTH = 1024;
 const MAX_PUBLIC_STRING_LENGTH = 2048;
@@ -184,7 +187,7 @@ function parseArguments(values: unknown[]): AdvancedCapabilityCommandDefinition[
     if (!name || !safeToken(name) || !schema) return undefined;
     parsed.push({
       name,
-      required: value.required !== false,
+      required: value.required !== false && value.optional !== true,
       sensitive: value.sensitive === true,
       schema,
       ...(typeof value.unit === "string" && value.unit.length <= 64
@@ -196,7 +199,9 @@ function parseArguments(values: unknown[]): AdvancedCapabilityCommandDefinition[
 }
 
 function parseSchema(value: Record<string, unknown>): AdvancedCapabilitySchema | undefined {
-  if (!Object.keys(value).every((key) => PUBLIC_SCHEMA_KEYS.has(key))) return undefined;
+  if (!Object.entries(value).every(([key, entry]) =>
+    PUBLIC_SCHEMA_KEYS.has(key) || (SCHEMA_TEXT_ANNOTATIONS.has(key) && typeof entry === "string")
+  )) return undefined;
   const type = value.type;
   if (
     type !== undefined &&
