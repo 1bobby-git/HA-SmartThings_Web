@@ -24,10 +24,15 @@ jobs:
         with:
           ref: fix/advanced-command-controls-1.8.14
           fetch-depth: 0
+      - name: Install isolated test dependencies
+        run: |
+          python -m venv /tmp/command-tests
+          /tmp/command-tests/bin/python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.9,<4' 'voluptuous>=0.13,<1'
       - name: Verify and apply reviewed source changes
         shell: bash
         run: |
           set -euo pipefail
+          source /tmp/command-tests/bin/activate
           git merge-base --is-ancestor 86565446f11044e32ca88b2543182ea65827e1fb HEAD
           python - <<'PY'
           import base64, gzip, hashlib, json
