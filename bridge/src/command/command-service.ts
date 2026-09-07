@@ -538,12 +538,17 @@ export class SafeCommandService {
         effective.advancedDescriptor?.command === ({ hue: "setHue", saturation: "setSaturation",
           colorTemperature: "setColorTemperature" } as Record<string, string>)[attribute]);
     if (!changesColorMode && state && desired !== undefined && stateValuesEqual(state.value, desired)) {
-      let verifiedPower = false;
-      if (attribute === "switch" && ["on", "off"].includes(effective.command)) {
-        try { verifiedPower = !!resolveAdvancedDescriptor(device, effective); } catch { /* Keep legacy no-op rules. */ }
+      let requiresFreshState = false;
+      const nativeCommand = effective.nativeCommand ?? effective.command;
+      if ((attribute === "switch" && ["on", "off"].includes(nativeCommand)) ||
+          (attribute === "level" && nativeCommand === "setLevel")) {
+        try {
+          const resolved = resolveAdvancedDescriptor(device, { ...effective, command: nativeCommand });
+          requiresFreshState = resolved?.advancedDescriptor?.confirmation === "state";
+        } catch { /* Unverified legacy controls retain their existing no-op rules. */ }
       }
-      if (!verifiedPower) return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
-      // A missed event must not turn a real OFF request into a cache-only no-op.
+      if (!requiresFreshState) return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
+      // A missed event must not turn a real power/brightness request into a cache-only no-op.
       const readStarted = Date.now();
       const proof = await boundedLocationRead(() => this.options.resync({ deviceId: device.id }));
       const current = this.options.devices.snapshot().devices.find((item) => item.id === device.id);
@@ -1074,20 +1079,20 @@ type CommandResync = () => Promise<CommandResyncEvidence | undefined>;
 
 function waitForLightPlan(options: { devices: DeviceStore; deviceId: string; locationId: string;
   expected: LightExpectedState[]; resync: CommandResync; stabilityMs: number }): ConfirmationWait {
-  const currentStates = () => {
-    const device = options.devices.snapshot().devices.find((entry) => entry.id === options.deviceId);
-    return device?.online && device.locationId === options.locationId ? device.states : [];
-  };
+  const currentStates = () => options.devices.commandStates(options.deviceId, options.locationId);
   const matches = () => lightPlanMatches(currentStates(), options.expected);
   const before = currentStates();
-  const changed = () => options.expected.every((target) => {
-    const key = (state: BridgeDeviceState) => state.component === target.component &&
-      state.capability === target.capability && state.attribute === target.attribute;
-    const old = before.find(key), current = currentStates().find(key);
-    // An unchanged target requires an exact fresh GET, never unrelated inventory.
-    return current && (!old || !stateValuesEqual(current.value, old.value) ||
-      (current.updatedAt !== null && (old.updatedAt === null || Date.parse(current.updatedAt) > Date.parse(old.updatedAt))));
-  });
+  const changed = () => {
+    const states = currentStates();
+    return options.expected.every((target) => {
+      const key = (state: BridgeDeviceState) => state.component === target.component &&
+        state.capability === target.capability && state.attribute === target.attribute;
+      const old = before.find(key), current = states.find(key);
+      // An unchanged target requires an exact fresh GET, never unrelated inventory.
+      return current && (!old || !stateValuesEqual(current.value, old.value) ||
+        (current.updatedAt !== null && (old.updatedAt === null || Date.parse(current.updatedAt) > Date.parse(old.updatedAt))));
+    });
+  };
   return waitForPredicate({ devices: options.devices, afterSequence: options.devices.currentSequence(),
     resync: options.resync, boundedStateRechecks: true, stabilityMs: options.stabilityMs,
     matches: (event) => (event.type === "inventory" || (event.type === "state" && event.deviceId === options.deviceId)) && changed() && matches(),
@@ -1106,10 +1111,8 @@ function waitForState(options: { devices: DeviceStore; request: SafeCommandReque
       state.capability === options.request.capability && state.attribute === options.attribute);
     return matches.length === 1 ? matches[0] : undefined;
   };
-  const currentState = () => {
-    const device = options.devices.snapshot().devices.find((entry) => entry.id === options.request.targetId);
-    return device?.locationId === options.locationId && device.online ? exactState(device.states) : undefined;
-  };
+  const currentState = () => options.devices.commandState(options.request.targetId,
+    options.locationId, options.request.component!, options.request.capability!, options.attribute);
   const before = currentState();
   const matchesValue = (state: BridgeDeviceState | undefined) =>
     state !== undefined && options.desired !== undefined && stateValuesEqual(state.value, options.desired);
@@ -1420,7 +1423,7 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
       await new Promise<void>((resolve) => setTimeout(resolve, stabilityMs));
       if (settled || options.matchesSnapshot?.() !== true) return settled;
     }
-    const sequence = options.devices.snapshot().sequence;
+    const sequence = options.devices.currentSequence();
     if (sequence <= minimumSequence) return false;
     cleanup();
     resolveResult({ sequence, source: "inventory_snapshot" });
@@ -1430,7 +1433,7 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
     if (settled || options.acceptsResyncEvidence?.(evidence, minStartedAtMs) !== true) return settled;
     cleanup();
     resolveResult({
-      sequence: options.devices.snapshot().sequence,
+      sequence: options.devices.currentSequence(),
       source: "inventory_snapshot"
     });
     return true;

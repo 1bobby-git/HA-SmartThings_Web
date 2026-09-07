@@ -3698,12 +3698,16 @@ describe("Light scalar catalog commands", () => {
     f.store.close();
   });
 
-  test("preserves the unchanged brightness no-op", async () => {
+  test("preserves the unchanged brightness no-op after fresh target verification", async () => {
     const f = fixture("level", "setLevel", 60, 0, 100);
     const executeDeviceAction = vi.fn(async () => undefined);
+    const resync = vi.fn(async () => ({ source: "advanced_device_status" as const,
+      deviceId: "dev_001", locationId: "loc_001", authoritativeSnapshot: false,
+      startedAtMs: Date.now(), observedStates: f.store.commandStates("dev_001", "loc_001") }));
     const service = new SafeCommandService({ devices: f.store, status: connectedStatus(),
-      executor: { executeDeviceAction }, timeoutMs: 30, resync: vi.fn(async () => undefined) });
+      executor: { executeDeviceAction }, timeoutMs: 30, resync });
     expect((await service.execute(f.request)).status).toBe("already_confirmed");
+    expect(resync).toHaveBeenCalledOnce();
     expect(executeDeviceAction).not.toHaveBeenCalled();
     f.store.close();
   });
