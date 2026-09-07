@@ -1,0 +1,85 @@
+
+        async def test_post_command_read_updates_real_states_when_sse_is_delayed(self):
+            latest = deepcopy(self.runtime.inventory); latest.sequence += 1
+            for attr, value in (("switch", "on"), ("level", 50)):
+                new = state(attr, value, at="2026-09-07T00:00:01Z")
+                latest.devices["dev_001"].states[new.key] = new
+            self.client.async_get_inventory.side_effect = None
+            self.client.async_get_inventory.return_value = latest
+            await self.entity.async_added_to_hass()
+            await self.entity.async_turn_on(brightness=128)
+            self.assertTrue(self.entity.is_on)
+            self.assertEqual(self.entity.brightness, 128)
+            self.assertEqual(self.entity.writes, 1)
+            self.client.async_get_inventory.assert_awaited_once()
+            self.assertEqual(self.client.async_execute_command.await_count, 2)
+
+        async def test_failed_later_step_catches_up_actual_state_but_keeps_error(self):
+            latest = deepcopy(self.runtime.inventory); latest.sequence += 1
+            new = state("switch", "on", at="2026-09-07T00:00:01Z")
+            latest.devices["dev_001"].states[new.key] = new
+            self.client.async_get_inventory.side_effect = None
+            self.client.async_get_inventory.return_value = latest
+            self.client.async_execute_command.side_effect = [None, BridgeClientError("command_confirmation_timeout")]
+            with self.assertRaisesRegex(HomeAssistantError, "light level command failed: command_confirmation_timeout"):
+                await self.entity.async_turn_on(brightness=128)
+            self.assertTrue(self.entity.is_on)
+            self.assertEqual(self.entity.brightness, 153)
+            self.assertIsNone(self.entity._confirmed_color_mode)
+            self.client.async_get_inventory.assert_awaited_once()
+            self.assertEqual(self.client.async_execute_command.await_count, 2)
+
+        async def test_catchup_failure_does_not_mask_original_error_or_retry(self):
+            self.client.async_execute_command.side_effect = BridgeClientError("command_confirmation_timeout")
+            self.client.async_get_inventory.side_effect = BridgeClientError("bridge_request_failed")
+            with self.assertRaisesRegex(HomeAssistantError, "light on command failed: command_confirmation_timeout"):
+                await self.entity.async_turn_on()
+            self.assertFalse(self.entity.is_on)
+            self.client.async_execute_command.assert_awaited_once()
+
+        async def test_hanging_catchup_is_bounded_and_does_not_change_state(self):
+            import asyncio
+            from unittest.mock import patch
+            async def stalled(): await asyncio.Future()
+            self.client.async_get_inventory.side_effect = stalled
+            with patch("smartthings_web.light._STATE_CATCHUP_TIMEOUT", 0.01):
+                await asyncio.wait_for(self.entity.async_turn_off(), timeout=1)
+            self.assertFalse(self.entity.is_on)
+            self.assertFalse(self.entity._command_lock.locked())
+
+        async def test_expired_ui_request_never_dispatches_after_the_lock_is_released(self):
+            from unittest.mock import patch
+            await self.entity._command_lock.acquire()
+            try:
+                with patch("smartthings_web.light._COMMAND_QUEUE_TIMEOUT", 0.01):
+                    with self.assertRaisesRegex(HomeAssistantError, "command_queue_timeout"):
+                        await self.entity.async_turn_on(brightness=128)
+                self.assertTrue(self.entity._command_lock.locked())
+            finally:
+                self.entity._command_lock.release()
+            self.client.async_execute_command.assert_not_awaited()
+            self.client.async_get_inventory.assert_not_awaited()
+
+        async def test_cancelled_waiter_does_not_release_running_command_lock(self):
+            import asyncio
+            await self.entity._command_lock.acquire()
+            task = asyncio.create_task(self.entity.async_turn_off())
+            await asyncio.sleep(0)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError): await task
+            self.assertTrue(self.entity._command_lock.locked())
+            self.entity._command_lock.release()
+            self.client.async_execute_command.assert_not_awaited()
+
+        async def test_older_catchup_snapshot_does_not_rollback_live_state(self):
+            older = deepcopy(self.runtime.inventory)
+            latest = deepcopy(older); latest.sequence += 2
+            new = state("level", 70, at="2026-09-07T00:00:02Z")
+            latest.devices["dev_001"].states[new.key] = new
+            self.runtime.apply_inventory(latest)
+            self.client.async_get_inventory.side_effect = None
+            self.client.async_get_inventory.return_value = older
+            await self.entity.async_turn_on(brightness=128)
+            self.assertEqual(self.entity.brightness, 178)
+            self.assertEqual(self.runtime.inventory.sequence, latest.sequence)
+
