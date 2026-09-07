@@ -1,3 +1,4 @@
+import { verifiedAdvancedControl } from "./command/verified-control-route.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -105,7 +106,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.19";
+const bridgeVersion = "1.8.20";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -432,7 +433,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     {
       locationExecutor: locationSecurityExecutor,
       domFallbackEnabled: deps.config.domFallbackEnabled ?? true,
-      canUseAdvanced: () => false,
+      canUseAdvanced: (input) => verifiedAdvancedControl(
+        devices.snapshot().devices.find((device) => device.id === input.deviceId), input),
       onDiagnostic: ({ transport, stage, outcome, code }) =>
         log.info(
           `command_route:${transport}:${stage}:${outcome}${code ? `:${code}` : ""}`
@@ -455,6 +457,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       `:matches_${Number(diagnostic.observedStateMatches)}:elapsed_ms_${diagnostic.elapsedMs}` +
       (diagnostic.reason ? `:reason_${diagnostic.reason}` : "")
     ),
+    onDeviceDiagnostic: (event) => log.info(`command_device:${JSON.stringify(event)}`),
     onPendingCountChange: (count) => status.update({ pendingCommandCount: count }),
     onResult: (result) => {
       const current = status.getSnapshot();

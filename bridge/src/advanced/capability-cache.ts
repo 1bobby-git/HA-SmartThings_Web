@@ -1,3 +1,4 @@
+import { validColorArgument } from "./color-argument.js";
 import type {
   AdvancedCapabilityArgumentDefinition,
   AdvancedCapabilityCommandDefinition,
@@ -180,6 +181,9 @@ function validateValue(schema: AdvancedCapabilitySchema, value: unknown): void {
     throw new CapabilityValidationError("argument_type_invalid");
   }
   if (schema.type === "array" && !Array.isArray(value)) {
+    throw new CapabilityValidationError("argument_type_invalid");
+  }
+  if (schema.type === "object" && "properties" in schema && !validColorArgument(schema, value)) {
     throw new CapabilityValidationError("argument_type_invalid");
   }
   if (schema.type === "object" && !isRecord(value)) {

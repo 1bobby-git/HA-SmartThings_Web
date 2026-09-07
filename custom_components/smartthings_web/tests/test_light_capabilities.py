@@ -95,6 +95,125 @@ def isolated_suite():
             self.client.async_get_inventory = AsyncMock(side_effect=lambda: deepcopy(self.runtime.inventory))
             self.entity = SmartThingsWebLight(self.runtime, self.device, self.states[0])
 
+        def enable_joint_catalog(self):
+            import json
+            from smartthings_web.bridge_client import parse_command_catalog
+            shared = json.loads((root / "tests/fixtures/light-plan.json").read_text())
+            catalog = parse_command_catalog(shared["expectedCatalog"], self.device.device_id)
+            self.assertEqual(len(catalog.commands), len(shared["expectedCatalog"]["commands"]))
+            self.runtime.inventory.light_plan_supported = True
+            self.device.commands = catalog.commands
+            self.assertEqual(catalog.omissions, {})
+            self.device.command_omissions = ()
+            return shared
+
+        async def test_joint_catalog_uses_one_power_level_setcolor_request(self):
+            shared = self.enable_joint_catalog()
+            original = (self.entity.entity_id, self.entity._attr_unique_id)
+            await self.entity.async_turn_on(brightness=128, hs_color=(0, 100))
+            self.client.async_execute_command.assert_awaited_once()
+            sent = self.client.async_execute_command.await_args.kwargs
+            self.assertEqual(sent["command"], "applyLight")
+            self.assertEqual(sent["arguments"], shared["request"]["arguments"])
+            self.assertTrue(sent["require_advanced"])
+            self.assertTrue(sent["confirm"])
+            self.assertEqual((sent["component"], sent["capability"]), (C, capabilities["switch"]))
+            # The request receipt is not a report: input does not overwrite state.
+            self.assertFalse(self.entity.is_on)
+            self.assertEqual(self.entity.brightness, 153)
+            self.assertEqual(self.entity.hs_color, (90, 80))
+            self.assertEqual((self.entity.entity_id, self.entity._attr_unique_id), original)
+
+        async def test_joint_catalog_color_only_does_not_wait_between_hue_and_saturation(self):
+            self.enable_joint_catalog()
+            await self.entity.async_turn_on(hs_color=(180, 70))
+            sent = self.client.async_execute_command.await_args.kwargs
+            self.assertEqual([item["command"] for item in sent["arguments"]], ["on", "setColor"])
+            self.assertEqual(sent["arguments"][1]["arguments"], [{"hue": 50, "saturation": 70}])
+            self.client.async_execute_command.assert_awaited_once()
+
+        async def test_joint_catalog_supports_setcolor_without_scalar_color_handlers(self):
+            self.enable_joint_catalog()
+            self.device.commands = tuple(c for c in self.device.commands if c.command not in {"setHue", "setSaturation"})
+            self.assertIn(ColorMode.HS, self.entity.supported_color_modes)
+            await self.entity.async_turn_on(hs_color=(90, 60))
+            self.assertEqual(self.client.async_execute_command.await_args.kwargs["command"], "applyLight")
+
+        async def test_joint_catalog_temperature_and_level_share_one_request(self):
+            self.enable_joint_catalog()
+            await self.entity.async_turn_on(brightness=128, color_temp_kelvin=3000)
+            sent = self.client.async_execute_command.await_args.kwargs
+            self.assertEqual([item["command"] for item in sent["arguments"]], ["on", "setLevel", "setColorTemperature"])
+            self.client.async_execute_command.assert_awaited_once()
+
+        async def test_joint_catalog_old_bridge_keeps_legacy_command_shape(self):
+            self.enable_joint_catalog()
+            self.runtime.inventory.light_plan_supported = False
+            await self.entity.async_turn_on(brightness=128, hs_color=(180, 70))
+            self.assertEqual([call.kwargs["command"] for call in self.client.async_execute_command.await_args_list],
+                             ["on", "setLevel", "setHue", "setSaturation"])
+
+        async def test_joint_catalog_missing_power_contract_does_not_guess(self):
+            self.enable_joint_catalog()
+            self.device.commands = tuple(c for c in self.device.commands if c.command != "on")
+            await self.entity.async_turn_on(brightness=128)
+            self.assertEqual([call.kwargs["command"] for call in self.client.async_execute_command.await_args_list], ["on", "setLevel"])
+
+        async def test_joint_catalog_changed_ranges_are_checked_before_power(self):
+            self.enable_joint_catalog()
+            commands = []
+            for command in self.device.commands:
+                if command.command == "setColor":
+                    schema = deepcopy(command.arguments[0].schema)
+                    schema["properties"]["hue"]["maximum"] = 40
+                    command = replace(command, arguments=(replace(command.arguments[0], schema=schema),))
+                commands.append(command)
+            self.device.commands = tuple(commands)
+            with self.assertRaisesRegex(HomeAssistantError, "outside"):
+                await self.entity.async_turn_on(hs_color=(180, 70))
+            self.client.async_execute_command.assert_not_awaited()
+
+        async def test_joint_catalog_failure_is_not_retried_on_other_transport(self):
+            self.enable_joint_catalog()
+            self.client.async_execute_command.side_effect = BridgeClientError("command_confirmation_timeout")
+            with self.assertRaisesRegex(HomeAssistantError, "light plan command failed: command_confirmation_timeout"):
+                await self.entity.async_turn_on(hs_color=(180, 70))
+            self.client.async_execute_command.assert_awaited_once()
+            self.assertIsNone(self.entity._confirmed_color_mode)
+            self.assertEqual(self.entity.hs_color, (90, 80))
+
+        async def test_joint_catalog_state_refresh_uses_real_quantized_report(self):
+            self.enable_joint_catalog()
+            latest = deepcopy(self.runtime.inventory); latest.sequence += 1
+            for attribute, value in (("switch", "on"), ("level", 49.8), ("hue", 99.9), ("saturation", 99.8)):
+                updated = state(attribute, value, at="2026-09-07T00:00:03Z")
+                latest.devices["dev_001"].states[updated.key] = updated
+            self.client.async_get_inventory.side_effect = None
+            self.client.async_get_inventory.return_value = latest
+            await self.entity.async_turn_on(brightness=128, hs_color=(0, 100))
+            self.assertTrue(self.entity.is_on)
+            self.assertEqual(self.entity.brightness, 127)
+            self.assertEqual(self.entity.hs_color, (359.64, 99.8))
+            self.client.async_execute_command.assert_awaited_once()
+            self.client.async_get_inventory.assert_awaited_once()
+
+        async def test_joint_catalog_feature_flag_survives_parser_and_runtime(self):
+            from smartthings_web.bridge_client import parse_inventory
+            for value, expected in ((True, True), (False, False), ("true", False)):
+                raw = {"schemaVersion": 1, "sequence": self.runtime.inventory.sequence + 1,
+                       "ready": True, "bridgeVersion": "1.8.20", "protocolVersion": "5",
+                       "locations": [], "rooms": [], "devices": [], "lightPlanSupported": value}
+                parsed = parse_inventory(raw)
+                self.runtime.apply_inventory(parsed)
+                self.assertIs(self.runtime.inventory.light_plan_supported, expected)
+
+        async def test_joint_catalog_readonly_still_blocks_every_member(self):
+            self.enable_joint_catalog()
+            self.runtime.client = ReadOnlyBridgeClient(self.client)
+            with self.assertRaises(Exception):
+                await self.entity.async_turn_on(brightness=128, hs_color=(180, 70))
+            self.client.async_execute_command.assert_not_awaited()
+
         async def test_raw_schema_catalog_contract_restores_brightness_and_color(self):
             # The Node test produces exactly this catalog from title-bearing raw schemas.
             import json

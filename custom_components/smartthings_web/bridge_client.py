@@ -16,6 +16,7 @@ from yarl import URL
 
 from .const import bridge_url_candidates, normalize_bridge_url
 from .device_identity import canonicalize_duplicate_devices
+from .color_schema import parse_color_schema
 from .models import (
     BridgeAdvancedDeviceMetadata,
     BridgeCommandArgument,
@@ -578,6 +579,7 @@ def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:
         devices=canonical.devices,
         scenes=scenes,
         device_aliases=canonical.aliases,
+        light_plan_supported=raw.get("lightPlanSupported") is True,
     )
 
 
@@ -730,6 +732,8 @@ def _parse_command_arguments(raw: Any) -> tuple[BridgeCommandArgument, ...] | No
 def _safe_command_schema(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
+    if raw.get("type") == "object" and "properties" in raw:
+        return parse_color_schema(raw)
     try:
         if len(json.dumps(raw, sort_keys=True, separators=(",", ":"))) > _MAX_SCHEMA_BYTES:
             return None

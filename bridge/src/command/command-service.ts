@@ -1,3 +1,6 @@
+import { LightPlanError, buildLightPlan, lightPlanMatches, type LightExpectedState } from "./light-plan.js";
+import { validColorArgument } from "../advanced/color-argument.js";
+import type { RoutedCommandRequest } from "./command-router.js";
 import { normalizeLocationArmState } from "../state/location-arm-state.js";
 import { enqueueWithDeadline } from "./bounded-command-queue.js";
 import { boundedLocationRead, scheduleLocationRechecks } from "./location-rechecks.js";
@@ -120,6 +123,7 @@ export interface ComponentTransactionExecutionInput {
 }
 
 export interface SafeCommandExecutor {
+  executeLightPlan?(actions: RoutedCommandRequest[]): Promise<CommandTransportReceipt>;
   executeDeviceAction?(
     input: DeviceActionExecutionInput
   ): Promise<void | CommandTransportReceipt | "location_native" | "dom">;
@@ -223,6 +227,8 @@ interface SafeCommandServiceOptions {
     observedStateMatches: boolean;
     reason?: SafeCommandErrorCode;
   }) => void;
+  onDeviceDiagnostic?: (event: { deviceId: string; stage: string; attribute: string;
+    elapsedMs: number; stateCount?: number; matches?: boolean; code?: string }) => void;
   onPendingCountChange?: (count: number) => void;
   onResult?: (result: SafeCommandResult) => void;
 }
@@ -376,7 +382,56 @@ export class SafeCommandService {
     );
     if (request.targetType === "scene") return await this.#executeScene(request, snapshot, locationNames);
     if (request.targetType === "location") return await this.#executeLocation(request, snapshot, locationNames);
-    return await this.#executeDevice(request, snapshot, locationNames);
+    const startedAt = Date.now();
+    this.#deviceDiagnostic(request, "start", startedAt);
+    try {
+      const result = await this.#executeDevice(request, snapshot, locationNames);
+      this.#deviceDiagnostic(request, result.status, startedAt);
+      return result;
+    } catch (error) {
+      this.#deviceDiagnostic(request, "failed", startedAt, { code: error instanceof SafeCommandError ? error.code : commandError(error).code });
+      throw error;
+    }
+  }
+
+  #deviceDiagnostic(request: SafeCommandRequest, stage: string, startedAt: number,
+    details: { stateCount?: number; matches?: boolean; code?: string } = {}): void {
+    try {
+      this.options.onDeviceDiagnostic?.({ deviceId: request.targetId, stage,
+        attribute: request.command === "applyLight" ? "light_plan" :
+          ["switch", "level", "hue", "saturation", "colorTemperature"].includes(request.attribute ?? "")
+            ? request.attribute! : "other", elapsedMs: Math.max(0, Date.now() - startedAt), ...details });
+    } catch { /* Diagnostics cannot change control outcomes. */ }
+  }
+
+  async #executeLight(request: SafeCommandRequest, device: BridgeDevice): Promise<SafeCommandResult> {
+    if (!this.options.executor.executeLightPlan || dangerousControlText(device.type ?? "") ||
+        (device.controls ?? []).some(dangerousControl)) throw new SafeCommandError("unsupported_command");
+    let plan;
+    try { plan = buildLightPlan(device, request, (item) => resolveAdvancedDescriptor(device, item)?.advancedDescriptor); }
+    catch (error) {
+      if (error instanceof SafeCommandError) throw error;
+      if (error instanceof LightPlanError) throw new SafeCommandError(error.code);
+      throw commandError(error);
+    }
+    const startedAt = Date.now();
+    const recheck = async () => {
+      const evidence = await this.options.resync({ deviceId: device.id });
+      this.#deviceDiagnostic(request, "read", startedAt, { stateCount: evidence?.observedStates?.length ?? 0,
+        matches: evidence?.observedStates ? lightPlanMatches(evidence.observedStates, plan.expected) : false });
+      return evidence;
+    };
+    const wait = waitForLightPlan({ devices: this.options.devices, deviceId: device.id,
+      locationId: device.locationId, expected: plan.expected, resync: recheck,
+      stabilityMs: this.options.confirmationStabilityMs ?? 0 });
+    let receipt;
+    try { receipt = await this.options.executor.executeLightPlan(plan.actions); }
+    catch (error) { wait.cancel(); throw commandError(error); }
+    wait.startTimeout(request.timeout === undefined ? this.options.timeoutMs : request.timeout * 1_000,
+      this.options.resyncAfterMs, Date.now());
+    const evidence = await wait.result;
+    return confirmed(request.clientRequestId, evidence.sequence,
+      evidence.source === "event" ? "device_event" : "inventory_snapshot", receipt.transport);
   }
 
   async #executeDevice(
@@ -387,6 +442,8 @@ export class SafeCommandService {
     const device = snapshot.devices.find((candidate) => candidate.id === request.targetId);
     if (!device) throw new SafeCommandError("device_not_found");
     if (!device.online) throw new SafeCommandError("device_offline");
+    if (request.command === "applyLight") return await this.#executeLight(request, device);
+    const deviceStartedAt = Date.now();
     const effective = resolveDeviceRequest(device, request);
     if (!effective.component || !effective.capability) {
       throw new SafeCommandError("capability_not_found");
@@ -481,7 +538,26 @@ export class SafeCommandService {
         effective.advancedDescriptor?.command === ({ hue: "setHue", saturation: "setSaturation",
           colorTemperature: "setColorTemperature" } as Record<string, string>)[attribute]);
     if (!changesColorMode && state && desired !== undefined && stateValuesEqual(state.value, desired)) {
-      return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
+      let verifiedPower = false;
+      if (attribute === "switch" && ["on", "off"].includes(effective.command)) {
+        try { verifiedPower = !!resolveAdvancedDescriptor(device, effective); } catch { /* Keep legacy no-op rules. */ }
+      }
+      if (!verifiedPower) return alreadyConfirmed(effective.clientRequestId, snapshot.sequence);
+      // A missed event must not turn a real OFF request into a cache-only no-op.
+      const readStarted = Date.now();
+      const proof = await boundedLocationRead(() => this.options.resync({ deviceId: device.id }));
+      const current = this.options.devices.snapshot().devices.find((item) => item.id === device.id);
+      if (!current?.online) throw new SafeCommandError("device_offline");
+      if (current.locationId !== device.locationId) throw new SafeCommandError("command_location_mismatch");
+      const observed = proof?.observedStates?.filter((item) => item.component === effective.component &&
+        item.capability === effective.capability && item.attribute === attribute) ?? [];
+      const currentState = findState(current, effective.component, effective.capability, attribute);
+      if (proof?.source === "advanced_device_status" && proof.deviceId === device.id &&
+          proof.locationId === device.locationId && proof.startedAtMs >= readStarted &&
+          observed.length === 1 && stateValuesEqual(observed[0]!.value, desired) &&
+          currentState && stateValuesEqual(currentState.value, desired)) {
+        return alreadyConfirmed(effective.clientRequestId, this.options.devices.currentSequence());
+      }
     }
     const roomName = device.roomId ? snapshot.rooms.find((room) => room.id === device.roomId)?.name : undefined;
     const capabilityVersion = this.options.devices.capabilityVersion(
@@ -559,7 +635,14 @@ export class SafeCommandService {
         desired,
         afterSequence: snapshot.sequence,
         stabilityMs: this.options.confirmationStabilityMs ?? 0,
-        resync: () => this.options.resync({ deviceId: effective.targetId }),
+        resync: async () => {
+          const evidence = await this.options.resync({ deviceId: effective.targetId });
+          const candidates = evidence?.observedStates?.filter((candidate) =>
+            candidate.component === effective.component && candidate.capability === effective.capability && candidate.attribute === attribute) ?? [];
+          this.#deviceDiagnostic(effective, "read", deviceStartedAt, { stateCount: candidates.length,
+            matches: candidates.length === 1 && stateValuesEqual(candidates[0]!.value, desired) });
+          return evidence;
+        },
         minimumEventTimeMs: () =>
           advancedSentAtMs ??
           (state?.updatedAt ? Date.parse(state.updatedAt) : undefined),
@@ -988,6 +1071,34 @@ function findState(device: BridgeDevice, component: string, capability: string, 
 }
 
 type CommandResync = () => Promise<CommandResyncEvidence | undefined>;
+
+function waitForLightPlan(options: { devices: DeviceStore; deviceId: string; locationId: string;
+  expected: LightExpectedState[]; resync: CommandResync; stabilityMs: number }): ConfirmationWait {
+  const currentStates = () => {
+    const device = options.devices.snapshot().devices.find((entry) => entry.id === options.deviceId);
+    return device?.online && device.locationId === options.locationId ? device.states : [];
+  };
+  const matches = () => lightPlanMatches(currentStates(), options.expected);
+  const before = currentStates();
+  const changed = () => options.expected.every((target) => {
+    const key = (state: BridgeDeviceState) => state.component === target.component &&
+      state.capability === target.capability && state.attribute === target.attribute;
+    const old = before.find(key), current = currentStates().find(key);
+    // An unchanged target requires an exact fresh GET, never unrelated inventory.
+    return current && (!old || !stateValuesEqual(current.value, old.value) ||
+      (current.updatedAt !== null && (old.updatedAt === null || Date.parse(current.updatedAt) > Date.parse(old.updatedAt))));
+  });
+  return waitForPredicate({ devices: options.devices, afterSequence: options.devices.currentSequence(),
+    resync: options.resync, boundedStateRechecks: true, stabilityMs: options.stabilityMs,
+    matches: (event) => (event.type === "inventory" || (event.type === "state" && event.deviceId === options.deviceId)) && changed() && matches(),
+    invalidates: () => !matches(), matchesSnapshot: () => changed() && matches(),
+    acceptsResyncEvidence: (proof, startedAt) => options.stabilityMs === 0 && !!proof &&
+      proof.source === "advanced_device_status" && proof.deviceId === options.deviceId &&
+      proof.locationId === options.locationId && Number.isFinite(proof.startedAtMs) && startedAt !== undefined &&
+      proof.startedAtMs >= startedAt && Array.isArray(proof.observedStates) &&
+      lightPlanMatches(proof.observedStates, options.expected) && matches()
+  });
+}
 
 function waitForState(options: { devices: DeviceStore; request: SafeCommandRequest; locationId: string; attribute: string; desired: BridgeJsonValue | undefined; afterSequence: number; stabilityMs: number; resync: CommandResync; minimumEventTimeMs?: () => number | undefined; expectedCommandId?: () => string | undefined }): ConfirmationWait {
   const exactState = (states: readonly BridgeDeviceState[]) => {
@@ -2131,6 +2242,9 @@ function validateAdvancedDescriptorValue(
     throw new SafeCommandError("invalid_arguments");
   }
   if (schema.type === "array" && !Array.isArray(value)) {
+    throw new SafeCommandError("invalid_arguments");
+  }
+  if (schema.type === "object" && "properties" in schema && !validColorArgument(schema, value)) {
     throw new SafeCommandError("invalid_arguments");
   }
   if (schema.type === "object" && !isRecord(value)) {

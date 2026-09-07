@@ -30,6 +30,8 @@ from .models import (
     control_kind,
     finite_number,
     light_scalar_control,
+    light_scalar_command,
+    light_color_command,
     light_state,
     primary_state_attributes,
     safe_observed_control,
@@ -113,7 +115,10 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
             if self._control("colorTemperature") is not None:
                 modes.add(ColorMode.COLOR_TEMP)
             hue, saturation = self._control("hue"), self._control("saturation")
-            if hue and saturation and hue.state.capability == saturation.state.capability:
+            if (hue and saturation and hue.state.capability == saturation.state.capability) or (
+                self.runtime.inventory.light_plan_supported
+                and light_color_command(self.bridge_device, self.state_key[0]) is not None
+            ):
                 modes.add(ColorMode.HS)
         return modes or {ColorMode.BRIGHTNESS if level else ColorMode.ONOFF}
 
@@ -257,13 +262,17 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
                     raise HomeAssistantError("SmartThings Web light has no verified color control")
                 plan.extend((("hue", hue * 100 / 360), ("saturation", saturation)))
                 mode = ColorMode.HS
+            batch = self._verified_plan(plan) if plan else None
             for attribute, value in plan:
-                if self._control(attribute) is None:
+                if batch is None and self._control(attribute) is None:
                     raise HomeAssistantError(f"SmartThings Web light has no verified {attribute} control")
             try:
-                await self._async_command("on")
-                for attribute, value in plan:
-                    await self._async_set_number(attribute, value)
+                if batch is not None:
+                    await self._async_apply_plan(batch)
+                else:
+                    await self._async_command("on")
+                    for attribute, value in plan:
+                        await self._async_set_number(attribute, value)
                 if mode is not None:
                     # A fallback mode hint only after confirmed commands, never a color value.
                     self._confirmed_color_mode = mode
@@ -271,6 +280,63 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
                         self.async_write_ha_state()
             finally:
                 await self._async_catch_up_state()
+
+    def _verified_plan(self, values: list[tuple[str, int | float]]) -> list[dict[str, object]] | None:
+        """Use the advertised batch feature only with exact current catalog contracts."""
+        device = self.bridge_device
+        if not self.runtime.inventory.light_plan_supported or device is None:
+            return None
+        component, capability, _ = self.state_key
+        power = [command for command in device.commands
+                 if (command.component, command.capability, command.command) == (component, capability, "on")]
+        if (len(power) != 1 or power[0].arguments or power[0].confirmation != "state"
+                or any(item.component == component and item.capability == capability
+                       and item.command in (None, "on") for item in device.command_omissions)):
+            return None
+        payload: list[dict[str, object]] = [
+            {"attribute": "switch", "capability": capability, "command": "on", "arguments": []}]
+        requested = dict(values)
+        color = light_color_command(device, component) if "hue" in requested else None
+        for attribute, value in values:
+            if color is not None and attribute in {"hue", "saturation"}:
+                if attribute == "saturation":
+                    continue
+                numbers = {}
+                properties = color.arguments[0].schema["properties"]
+                for name in ("hue", "saturation"):
+                    schema = properties[name]
+                    number = _input_number(requested[name], schema["minimum"], schema["maximum"])
+                    numbers[name] = round(number) if schema["type"] == "integer" else round(number, 4)
+                payload.append({"attribute": "color", "capability": color.capability,
+                                "command": "setColor", "arguments": [numbers]})
+                continue
+            state = light_state(device, component, attribute)
+            descriptor = light_scalar_command(device, state) if state is not None else None
+            binding = self._control(attribute)
+            if descriptor is None or binding is None:
+                return None
+            converted = binding.convert(value)
+            schema = descriptor.arguments[0].schema
+            # Web range and current Advanced range must both be satisfied.
+            _input_number(converted, schema.get("minimum", binding.minimum), schema.get("maximum", binding.maximum))
+            if schema["type"] == "integer" and int(converted) != converted:
+                return None
+            payload.append({"attribute": attribute, "capability": descriptor.capability,
+                            "command": descriptor.command, "arguments": [converted]})
+        return payload
+
+    async def _async_apply_plan(self, payload: list[dict[str, object]]) -> None:
+        """One POST, then one joint confirmation: hue cannot block saturation/brightness."""
+        if not self.available:
+            raise HomeAssistantError("SmartThings Web light has no observed power control")
+        try:
+            await self.runtime.client.async_execute_command(
+                target_type="device", target_id=self.device_id,
+                component=self.state_key[0], capability=self.state_key[1], attribute="switch",
+                command="applyLight", arguments=payload, require_advanced=True, confirm=True,
+            )
+        except BridgeClientError as err:
+            raise HomeAssistantError(bridge_error_message("light plan command", err)) from err
 
     async def async_turn_off(self, **kwargs: object) -> None:
         async with _command_slot(self._command_lock):

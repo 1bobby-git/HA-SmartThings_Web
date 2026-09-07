@@ -13,11 +13,13 @@ from .entity import SmartThingsWebDeviceEntity
 from .models import (
     BridgeControl,
     BridgeDevice,
+    BridgeState,
     SmartThingsWebRuntime,
     is_fan_device,
     primary_state_attributes,
     safe_observed_control,
     token_values,
+    toggle_control_for_state,
 )
 
 
@@ -85,9 +87,14 @@ class SmartThingsWebFan(SmartThingsWebDeviceEntity, FanEntity):
     @property
     def is_on(self) -> bool | None:
         """Return whether the fan-like device is on."""
-        switch = _state(self.bridge_device, "switch")
-        if isinstance(switch, str):
-            return switch.lower() == "on"
+        power = _power_binding(self.bridge_device)
+        states = _power_states(self.bridge_device)
+        state = power[0] if power is not None else states[0] if len(states) == 1 else None
+        if state is not None:
+            switch = state.value
+            if isinstance(switch, str) and switch.strip().lower() in {"on", "off"}:
+                return switch.strip().lower() == "on"
+            return None
         mode = self.preset_mode
         return None if mode is None else mode.lower() != "off"
 
@@ -200,12 +207,18 @@ class SmartThingsWebFan(SmartThingsWebDeviceEntity, FanEntity):
         self, command: str, arguments: list[object], attribute: str | None = None
     ) -> None:
         target_attribute = attribute or _attribute_for_command(command)
-        state = _state_obj(self.bridge_device, target_attribute)
-        control = _control_for(
-            self.bridge_device,
-            target_attribute,
-            state.component if state is not None else None,
-        )
+        if target_attribute == "switch":
+            # Use the same exact binding for feature flags, state, and dispatch.
+            # An action and its detail swatch are not two different switches.
+            power = _power_binding(self.bridge_device)
+            state, control = power if power is not None else (None, None)
+        else:
+            state = _state_obj(self.bridge_device, target_attribute)
+            control = _control_for(
+                self.bridge_device,
+                target_attribute,
+                state.component if state is not None else None,
+            )
         if control is None:
             raise HomeAssistantError(
                 f"SmartThings Web fan has no observed {target_attribute} control"
@@ -264,15 +277,30 @@ def _attribute_for_command(command: str) -> str:
     return "switch" if command in {"on", "off"} else command
 
 
-def _has_switch_power(device: BridgeDevice | None) -> bool:
+def _power_states(device: BridgeDevice | None) -> list[BridgeState]:
+    """Prefer an explicit main component, never the first inserted sibling."""
     if device is None:
-        return False
-    return any(
-        control.kind == "toggle"
-        and control.attribute == "switch"
-        and safe_observed_control(control)
-        for control in device.controls.values()
-    )
+        return []
+    states = [state for state in device.states.values() if state.attribute == "switch"]
+    main = [state for state in states
+            if (state.component_role or state.component).strip().lower() == "main"]
+    return main or states
+
+
+def _power_binding(device: BridgeDevice | None) -> tuple[BridgeState, BridgeControl] | None:
+    """Resolve one exact power state/control with the shared toggle policy."""
+    if device is None:
+        return None
+    bindings = []
+    for state in _power_states(device):
+        control = toggle_control_for_state(device, state)
+        if control is not None and safe_observed_control(control):
+            bindings.append((state, control))
+    return bindings[0] if len(bindings) == 1 else None
+
+
+def _has_switch_power(device: BridgeDevice | None) -> bool:
+    return _power_binding(device) is not None
 
 
 def _speed_control(device: BridgeDevice | None) -> BridgeControl | None:

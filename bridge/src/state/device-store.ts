@@ -1,3 +1,4 @@
+import { parseColorArgumentSchema } from "../advanced/color-argument.js";
 import { normalizeLocationArmState } from "./location-arm-state.js";
 import type { SanitizedCaptureRecord } from "./capture-store.js";
 import { decodeSocketIoTextFrame } from "../inspector/socketio-decoder.js";
@@ -2465,6 +2466,7 @@ function parseAdvancedArguments(
 function parseAdvancedSchema(value: unknown): AdvancedCommandDescriptor["arguments"][number]["schema"] | undefined {
   const record = asRecord(value);
   if (!record) return undefined;
+  if (record.type === "object" && "properties" in record) return parseColorArgumentSchema(record);
   if (!Object.keys(record).every((key) => ADVANCED_COMMAND_SCHEMA_KEYS.has(key))) return undefined;
   const copy = jsonValue(record);
   const copyRecord = asRecord(copy);
@@ -3231,10 +3233,7 @@ function cloneAdvancedCommandDescriptor(
     ...descriptor,
     arguments: descriptor.arguments.map((argument) => ({
       ...argument,
-      schema: {
-        ...argument.schema,
-        ...(argument.schema.enum ? { enum: [...argument.schema.enum] } : {})
-      }
+      schema: structuredClone(argument.schema)
     }))
   };
 }
