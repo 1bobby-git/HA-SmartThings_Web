@@ -1,8 +1,8 @@
 <!-- project-branding:start -->
 
-## Home Monitor 1.8.11
+## Home Monitor 1.8.12
 
-실제 보안 카드의 버튼을 사용합니다. 경비 모드 간 전환은 **해제 → 해제 상태 확인 → 요청 모드 → 최종 확인** 순서입니다. 중간에 경비가 해제되며 재경비가 실패하면 해제 상태에 남을 수 있습니다. `command_transition_disarm_failed` / `command_transition_rearm_failed`가 나오면 실제 상태를 확인하세요. 문구·로고를 누르는 방식은 이 카드에서 사용하지 않습니다. Bridge와 HA 통합을 함께 업데이트하세요.
+Home Monitor는 기존 로그인된 웹앱의 **직접 보안 상태 요청**을 사용합니다. 외출↔실내 전환에서도 중간 해제·화면 버튼 클릭 없이 목표 모드를 한 번 전송하고, 실제 보안 상태를 확인합니다. 응답이 불명확하면 자동 재전송하지 않습니다. Bridge와 HA 통합을 함께 업데이트하세요. [요청 계약·실패 처리·검증 범위](docs/home-monitor-direct-transport.md)를 확인하세요.
 
 <p align="center">
   <img src="custom_components/smartthings_web/brand/logo@2x.png" alt="SmartThings Web 로고" width="520">
@@ -30,7 +30,7 @@
 
 브라우저 로그인을 담당하는 **SmartThings Web Bridge 앱**과 Home Assistant 엔티티를 생성하는 **`smartthings_web` 커스텀 통합**으로 구성됩니다. Samsung 비밀번호·MFA·CAPTCHA를 소스나 설정 파일에 입력하지 않고, 사용자가 앱의 noVNC 브라우저에서 직접 로그인합니다.
 
-> **현재 버전: Bridge `1.8.10` / HA 통합 `1.8.10` · 기존 실환경 부분 검증, 새 개선분은 CI 검증**
+> **현재 버전: Bridge `1.8.12` / HA 통합 `1.8.12` · 기존 실환경 부분 검증, 새 개선분은 CI 검증**
 >
 > 실제 Home Assistant OS에서 앱 기동, Ingress/noVNC Samsung 로그인, Bridge 연결, 인벤토리 수신과 Home Assistant 엔티티 생성까지 확인했습니다. `0.1.182`는 `0.1.181` 실환경 진단으로 확인된 Home Monitor 현재 모드 pill, 중복 Supervisor discovery, `..._on`·`..._jaesil` ID와 상태 이벤트 폭주 경로를 수정했으며, 모든 계정과 기기에서 실기기 재검증이 끝난 상태는 아닙니다.
 

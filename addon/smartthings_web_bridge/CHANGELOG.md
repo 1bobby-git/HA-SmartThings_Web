@@ -7,6 +7,16 @@
 - 실제 버튼의 보임·활성·가림·중복을 검사합니다. 포인터를 보내지 않는 trial 검사만 재확인할 수 있고, 실제 클릭의 결과가 불확실하면 같은 명령을 다시 클릭하지 않습니다.
 - 기존 Scene/Advanced commands/speak, 로그인 프로필, 영역 연결, 개별 스위치, 엔티티 ID 및 protocol 5는 유지합니다. 새 네이티브 카드 회귀와 전체 CI는 합성 검증이며 실제 Samsung 계정의 성공률·지연은 별도 확인 대상입니다.
 
+
+## 1.8.12
+
+- Home Monitor를 화면 버튼 대신 기존 로그인된 웹앱의 `api/location.patch`와 검증된 `patchType: armStateChange` 요청으로 제어합니다. Advanced 일반 기기 명령이나 추측한 보안 URL을 사용하지 않습니다.
+- 외출↔실내 전환은 목표 `ARMED_AWAY` / `ARMED_STAY`를 한 번 전송하며 중간 해제나 DOM 클릭을 하지 않습니다. 요청 접수 이후 실제 위치 보안 이벤트·새 상태 조회가 확인돼야 완료합니다.
+- 클라이언트가 준비되기 전에는 제한된 정상 초기화만 기다리고, 응답이 불명확하거나 권한이 거절되면 DOM fallback·자동 재전송·자동 해제를 하지 않습니다. 미완료 요청은 같은 context에서 중복 전송을 차단합니다.
+- `home_monitor_direct` 단계와 실행 버전 로그를 추가했습니다. Scene, Advanced 장치 command, Galaxy Home Mini speak, 로그인 프로필, 영역, 엔티티 ID 및 protocol 5는 유지합니다.
+- 공개 SmartThings Web 2.57.0 요청 계약과 합성 Chromium/실제 명령 처리기 연결 검사를 기반으로 합니다. 사용자 삼성 계정에서의 모드 전환 승인·성공률·실제 지연은 별도 확인 대상입니다.
+
+
 ## 1.8.10
 
 - Home Monitor 카드에서 검증한 선택기와 aria-controls/aria-owns/aria-labelledby로 직접 연결된 팝업을 같은 요청 안에서 추적합니다. 제목 없이 현재 모드를 제외한 두 선택지만 표시하는 dialog/listbox/menu도 이 연결이 확인된 경우에만 처리합니다. 연결되지 않은 팝업, 중복 대상, 비활성 제어는 계속 차단합니다.

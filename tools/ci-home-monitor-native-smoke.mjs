@@ -184,3 +184,7 @@ try {
   });
   console.log(JSON.stringify({suite:"native-security-card",passed,timings,scope:"synthetic Chromium and real command service; not Samsung live account"}));
 } finally { await context.close(); await browser.close(); }
+
+
+// Verify the production direct-only Home Monitor route as well.
+await import("./ci-home-monitor-direct-smoke.mjs");
