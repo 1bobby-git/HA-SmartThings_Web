@@ -30,6 +30,7 @@ jobs:
           python tools/prepare-light-confirmation.py
           python tools/finish-light-followup.py
           python tools/align-light-recheck-test.py
+          python tools/align-light-client-test.py
           python - <<'PY'
           import hashlib
           from pathlib import Path
@@ -41,13 +42,14 @@ jobs:
               'bridge/tests/state/command-status-evidence.test.ts': '4551eba9d837253df24c20cf88e32d7f6d1ad6cda6e6a28e519ab24783acb753',
               'custom_components/smartthings_web/light.py': '3a4f789a1c0a7f4e0696f9eee5cb2e045044e0c8ee3ed89918ddd4a74ffe7e9c',
               'custom_components/smartthings_web/tests/test_light_capabilities.py': '8a466cdcfc219456f1727cc58f7f7c772198d45f85040de4b094a9bf03da01d8',
+              'custom_components/smartthings_web/tests/test_light.py': 'd7309cce9090ec6da3af17ef6cce2962c8d77e83225be2e63e80af819ce38bc7',
               'docs/LIGHT_CONFIRMATION_1.8.19.md': '75ca99852647705c6ba070b3d6dfd49df8860056fef5f83e1e2cdd75cd4c4da6',
               'README.md': '5c4dbcb76057baab92c92a0cf119d45a5124b67709300caab1b2664c5295038b'
           }
           for name, digest in expected.items():
               assert hashlib.sha256(Path(name).read_bytes()).hexdigest() == digest, name
           PY
-          rm tools/prepare-light-confirmation.py tools/finish-light-followup.py tools/align-light-recheck-test.py tools/light-confirmation-node.txt tools/light-confirmation-python.txt tools/light-confirmation-notes.txt tools/light-confirmation.patch.part1
+          rm tools/prepare-light-confirmation.py tools/finish-light-followup.py tools/align-light-recheck-test.py tools/align-light-client-test.py tools/light-confirmation-node.txt tools/light-confirmation-python.txt tools/light-confirmation-notes.txt tools/light-confirmation.patch.part1
           rm .github/workflows/light-confirmation-source.yml .github/workflows/light-followup-source.yml .github/workflows/apply-light-followup.yml
           git diff --check
       - name: Run complete Node and Python regressions
