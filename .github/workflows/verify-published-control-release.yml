@@ -1,0 +1,117 @@
+name: Verify published control release
+on:
+  push:
+    branches: [verify/control-release-1.8.20-20260908]
+    paths: [.github/workflows/verify-published-control-release.yml]
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.repository == '1bobby-git/HA-SmartThings_Web'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: c1092826c627d4abc55e168e97dc466aea40188d
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Download existing public release and rebuild from its exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p verification
+          git archive --format=tar.gz -o verification/source.tar.gz HEAD
+          gh api repos/1bobby-git/HA-SmartThings_Web/releases/tags/v1.8.20 > verification/release.json
+          gh api repos/1bobby-git/HA-SmartThings_Web/git/ref/tags/v1.8.20 > verification/tag.json
+          gh release download v1.8.20 --repo 1bobby-git/HA-SmartThings_Web --pattern '*.tgz' --dir verification
+          npm ci
+          npm run typecheck
+          npm run build
+          npm run package:addon
+      - name: Compare every published package file with the released source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, subprocess, tarfile
+          from pathlib import Path, PurePosixPath
+          root = Path('.')
+          dest = root / 'verification'
+          release = json.loads((dest / 'release.json').read_text())
+          tag = json.loads((dest / 'tag.json').read_text())
+          expected_commit = 'c1092826c627d4abc55e168e97dc466aea40188d'
+          assert tag['object']['type'] == 'commit' and tag['object']['sha'] == expected_commit
+          assert release['target_commitish'] == expected_commit
+          assert not release['draft'] and not release['prerelease']
+          sha = lambda data: hashlib.sha256(data).hexdigest()
+          assets = {a['name']: a for a in release['assets']}
+          def read_package(name, prefix):
+              path = dest / name
+              metadata = assets[name]
+              assert metadata['state'] == 'uploaded' and path.stat().st_size == metadata['size']
+              assert 'sha256:' + sha(path.read_bytes()) == metadata['digest']
+              contents = {}
+              with tarfile.open(path, 'r:gz') as archive:
+                  for entry in archive.getmembers():
+                      p = PurePosixPath(entry.name)
+                      assert not p.is_absolute() and '..' not in p.parts
+                      assert p.parts[0] == prefix
+                      if entry.isdir():
+                          continue
+                      assert entry.isfile(), entry.name
+                      relative = str(p.relative_to(prefix))
+                      assert relative not in contents
+                      stream = archive.extractfile(entry)
+                      assert stream is not None
+                      contents[relative] = sha(stream.read())
+              return contents
+          integration_name = 'smartthings-web-integration-1.8.20.tgz'
+          bridge_name = 'smartthings-web-bridge-1.8.20.tgz'
+          integration = read_package(integration_name, 'smartthings_web')
+          bridge = read_package(bridge_name, 'smartthings_web_bridge')
+          tracked = subprocess.check_output(['git', 'ls-files', '-z', 'custom_components/smartthings_web']).decode().split('\0')
+          expected_integration = {str(Path(p).relative_to('custom_components/smartthings_web')): sha(Path(p).read_bytes()) for p in tracked if p}
+          base = Path('dist-addon/smartthings_web_bridge')
+          expected_bridge = {str(p.relative_to(base)): sha(p.read_bytes()) for p in base.rglob('*') if p.is_file()}
+          assert integration == expected_integration, 'Published integration differs from tracked release source'
+          assert bridge == expected_bridge, 'Published Bridge differs from newly generated release package'
+          report = {
+              'version': '1.8.20', 'commit': expected_commit,
+              'published_integration_files_equal': len(integration),
+              'published_bridge_files_equal': len(bridge),
+              'tag_matches_commit': True, 'asset_digest_matches': True,
+              'package_content_matches': True,
+              'live_home_assistant_checked': False,
+              'physical_devices_checked': False
+          }
+          (dest / 'package-verification.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
+          print(json.dumps(report, indent=2))
+          PY
+      - name: Rerun full source regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test > verification/node-tests.log 2>&1 || { tail -100 verification/node-tests.log; exit 1; }
+          tail -12 verification/node-tests.log
+          npm run audit:api-free
+          npm run audit:secrets
+          npm run audit:fixtures
+          python -m venv /tmp/control-release-tests
+          source /tmp/control-release-tests/bin/activate
+          python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.10,<4' 'voluptuous>=0.15,<1'
+          python -m compileall -q custom_components/smartthings_web
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py' > verification/python-tests.log 2>&1 || { cat verification/python-tests.log; exit 1; }
+          tail -5 verification/python-tests.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verified-control-release-1.8.20
+          path: verification/
+          retention-days: 1
+          if-no-files-found: error
