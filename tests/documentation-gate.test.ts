@@ -65,23 +65,15 @@ describe("Phase 1 documentation gate", () => {
     expect(feasibility.trimEnd()).toMatch(/DECISION: (GO|LIMITED|STOP)$/);
     expect(feasibility).not.toContain("DECISION: PENDING");
     expect(feasibility).toContain("DECISION: LIMITED");
-    expect(readme).toContain("Current status is documented as live HAOS partially verified");
-    expect(readme).toContain("do not install or manage Docker yourself");
-    expect(readme).toContain("npm ci");
-    expect(readme).toContain("npm run package:addon");
-    expect(readme).toContain("dist-addon/smartthings_web_bridge");
-    expect(readme).toContain("/addons/smartthings_web_bridge");
-    expect(readme).toContain("Settings → Apps → Install app");
-    expect(readme).toContain("The folder path and add-on slug are different");
-    expect(readme).toContain("local_smartthings_web_bridge");
-    expect(readme).toContain("Do not copy the raw `addon/smartthings_web_bridge` source folder");
-    expect(readme).toContain("generated monorepo build inputs");
-    expect(readme).toContain("canonicalizes generated text files to UTF-8 with LF line endings");
-    expect(readme).toContain("/data/protocol-fingerprint.json");
-    expect(readme).toContain("same contract cannot self-heal");
-    expect(readme).toContain("numeric `protocol_version` bump");
-    expect(readme).toContain("npx tsx tools/haos-capture-origin-audit.ts");
+    // Installation and protocol internals belong in the linked detailed docs,
+    // not hidden compatibility text in the newcomer README.
+    expect(addonDocs).toContain("no separate Docker installation or Docker commands are required");
+    expect(addonDocs).toContain("Settings → Apps → Install app");
+    expect(addonDocs).toContain("The configured slug is `smartthings_web_bridge`");
+    expect(manual).toContain("npx tsx tools/haos-capture-origin-audit.ts");
     expect(readme).toContain("docs/smartthings-web-services-ui-guide.md");
+    expect(readme).toContain("addon/smartthings_web_bridge/DOCS.md");
+    expect(readme).toContain("[상세 문서](docs/)");
     expect(serviceGuide).toContain("개발자 도구");
     expect(serviceGuide).toContain("작업");
     expect(serviceGuide).toContain("smartthings_web.list_commands");
@@ -109,13 +101,11 @@ describe("Phase 1 documentation gate", () => {
     expect(feasibility).toContain("not a GO decision");
     expect(feasibility).toContain("not causally tied to a user-triggered physical action");
     expect(feasibility).toContain("Phase 2 remains closed");
-    expect(readme).toContain("Version 0.1.28 is deployed on Home Assistant 2026.8.3");
-    expect(readme).toContain("Live temperature, humidity, contact, motion, and power observations");
-    expect(readme).toContain("Manual physical-action attribution is verified");
-    expect(readme).toContain("sequence 642 through 672 with zero gaps");
-    expect(readme).toContain("The 72-hour passive HAOS soak remains explicitly deferred");
-    expect(readme).toContain(
-      "The probe adds no browser command, DOM state scraping, direct SmartThings API call, Home Assistant entity, or persistent event journal."
+    // Historical evidence and long-run limits stay in their original reports.
+    expect(feasibility).toContain("sequence 642 through 672 with zero gaps");
+    expect(session).toContain("The privacy-safe 72-hour passive soak is deferred");
+    expect(manual).toContain(
+      "The probe adds no DOM state source, direct SmartThings API call, Home Assistant entity, command path, or persistent event journal."
     );
     expect(feasibility).toContain("Version 0.1.28 is deployed to HAOS");
     expect(feasibility).toContain("exactly one passing candidate");
@@ -129,7 +119,6 @@ describe("Phase 1 documentation gate", () => {
       "npm run probe:physical-action:haos -- arm --action contact_open --window-seconds 60 --wait"
     );
     expect(manual).toContain("npm run probe:physical-action:haos -- reset");
-    expect(readme).toContain("npm run probe:physical-action:haos");
     expect(packageMetadata.scripts?.["probe:physical-action:haos"]).toBe(
       "tsx tools/haos-physical-action-probe.ts"
     );
@@ -140,7 +129,6 @@ describe("Phase 1 documentation gate", () => {
     expect(manual).toContain("--expected-bridge-version 0.1.26");
     expect(manual).toContain("--execute");
     expect(manual).toContain("Actual execute mode remains untested");
-    expect(readme).toContain("npx tsx tools/haos-core-restart-continuity.ts");
     expect(session).toContain("returning only `soak_gate_blocked`");
     expect(feasibility).toContain("did not send a restart");
     expect(packageMetadata.scripts?.["soak:deployment-gate"]).toBe(
@@ -162,7 +150,7 @@ describe("Phase 1 documentation gate", () => {
     expect(soakDocs).toContain("allows exactly one collector");
     expect(soakDocs).toContain("does not hide downtime");
     expect(manual).toContain("It does not copy files, reload Supervisor, rebuild");
-    expect(`${readme}\n${manual}\n${soakDocs}`).toContain(
+    expect(`${manual}\n${soakDocs}`).toContain(
       "final-summary.json.sha256"
     );
     expect(manual).toContain("Version 0.1.28 is deployed to HAOS");
@@ -171,7 +159,7 @@ describe("Phase 1 documentation gate", () => {
     expect(addonChangelog).toContain("## 0.1.27");
     expect(addonChangelog).toContain("## 0.1.26");
     expect(addonChangelog).toContain("in-memory physical-action correlation probe");
-    expect(`${readme}\n${feasibility}\n${protocol}\n${session}`).toContain(
+    expect(`${feasibility}\n${protocol}\n${session}`).toContain(
       "0.1.28 is deployed"
     );
     expect(feasibility).toContain("live Home Assistant OS 18.2 add-on");
@@ -654,5 +642,44 @@ describe("Phase 1 documentation gate", () => {
     };
     expect(baselines.project?.production_bridge_modules).toBe("phase-1-created");
     expect(baselines.project?.phase_2_gate).toBe("LIMITED");
+  });
+});
+
+
+describe("New user README", () => {
+  test("keeps a short introduction and the complete three-step installation", () => {
+    const readme = readFileSync("README.md", "utf8");
+    const visible = readme.replace(/<!--[\s\S]*?-->/g, "");
+    expect(visible).toContain("# HA SmartThings Web");
+    expect(visible).toContain("Home Assistant OS, HACS");
+    expect(visible).toContain("별도의 SmartThings API 키는 필요하지 않습니다");
+    expect(visible).toContain("Samsung 계정에 로그인");
+    expect(visible).toContain("Home Assistant를 재시작");
+    expect(visible).toContain("페어링 코드 생성");
+    expect(visible).toContain("SmartThings 위치 선택");
+    expect(visible).toContain("Bridge 앱과 HACS 통합을 모두 설치해야 합니다");
+    expect(visible).toContain("지원 기능은 기기에 따라");
+    expect(visible).toContain("비공식");
+    const stepHeadings = [...visible.matchAll(/^### ([123])\./gm)].map((match) => match[1]);
+    expect(stepHeadings).toEqual(["1", "2", "3"]);
+    expect(visible.split("\n").length).toBeLessThanOrEqual(80);
+    expect(visible).not.toMatch(/setPeopleCounter|peopleCounter|통신 프로토콜|안정적|동작 구조/);
+    expect(readme).not.toContain("documentation-gate compatibility");
+    for (const destination of [
+      "docs/smartthings-web-services-ui-guide.md",
+      "addon/smartthings_web_bridge/DOCS.md",
+      "docs/",
+      "CHANGELOG.md",
+      "LICENSE"
+    ]) {
+      expect(visible).toContain(`](${destination})`);
+      expect(existsSync(destination), destination).toBe(true);
+    }
+    for (const redirect of ["supervisor_addon", "hacs_repository", "config_flow_start"]) {
+      expect(visible).toContain(`https://my.home-assistant.io/redirect/${redirect}/?`);
+    }
+    expect(visible).toContain("addon=8a97f131_smartthings_web_bridge");
+    expect(visible).toContain("repository=HA-SmartThings_Web&category=integration");
+    expect(visible).toContain("domain=smartthings_web");
   });
 });
