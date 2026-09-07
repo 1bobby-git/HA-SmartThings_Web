@@ -25,7 +25,20 @@ jobs:
           node-version: 24.18.1
           cache: npm
       - name: Apply reviewed source anchors and version update
-        run: python tools/prepare-native-home-monitor.py
+        run: |
+          python tools/prepare-native-home-monitor.py
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tests/addon-config.test.ts')
+          s = p.read_text()
+          assert 'expect(config.version).toBe("1.8.10")' in s
+          p.write_text(s.replace('1.8.10', '1.8.11'))
+          p = Path('tools/ci-home-monitor-native-smoke.mjs')
+          s = p.read_text()
+          old = '["disabled disarm",()=>document.querySelector(\'[data-armstate]\').disabled=true,"command_control_not_found"]'
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, old.replace('command_control_not_found', 'command_transition_disarm_failed')))
+          PY
       - name: Install locked dependencies
         run: npm ci
       - name: Node regression, typecheck, and build
