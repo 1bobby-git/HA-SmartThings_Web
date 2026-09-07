@@ -18,7 +18,7 @@ jobs:
       RELEASE_REPO: 1bobby-git/HA-SmartThings_Web
       RELEASE_TAG: v1.8.20
       RELEASE_SHA: c1092826c627d4abc55e168e97dc466aea40188d
-      WORK: ${{ runner.temp }}/republish-v1.8.20
+      WORK: /tmp/republish-v1.8.20
     steps:
       - name: Check out the exact original 1.8.20 source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -103,7 +103,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: v1.8.20-original-assets-${{ github.run_id }}
-          path: ${{ runner.temp }}/republish-v1.8.20/before/
+          path: /tmp/republish-v1.8.20/before/
           retention-days: 7
           if-no-files-found: error
       - name: Actually republish both assets without changing tags or release metadata
@@ -185,6 +185,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: v1.8.20-republish-result-${{ github.run_id }}
-          path: ${{ runner.temp }}/republish-v1.8.20/
+          path: /tmp/republish-v1.8.20/
           retention-days: 7
           if-no-files-found: error
