@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
+from math import isfinite
 import logging
 import re
 from typing import Any, Literal
@@ -664,19 +665,152 @@ def control_kind(device: BridgeDevice, switch_state: BridgeState) -> ControlKind
         if state.component == switch_state.component
     }
     light_specific = (
-        "colorTemperatureRange" in attributes
+        "colorTemperature" in attributes
+        or "colorTemperatureRange" in attributes
         or {"hue", "saturation"}.issubset(attributes)
         or (
             "level" in attributes
-            and any(
-                control.kind == "slider"
-                and control.attribute == "level"
-                and safe_observed_control(control)
-                for control in device.controls.values()
-            )
+            and light_scalar_control(device, switch_state.component, "level") is not None
         )
     )
     return "light" if light_specific else "switch"
+
+
+LIGHT_SETTERS = {
+    "level": "setLevel",
+    "colorTemperature": "setColorTemperature",
+    "hue": "setHue",
+    "saturation": "setSaturation",
+}
+
+
+@dataclass(frozen=True)
+class LightScalarControl:
+    """A writable scalar with a verified exact state target, not a name guess."""
+
+    state: BridgeState
+    control: BridgeControl | None
+    descriptor: BridgeCommandDescriptor | None
+    minimum: float
+    maximum: float
+    step: float
+
+    def convert(self, value: float) -> int | float:
+        """Quantize to the reported command resolution and enforce its limits."""
+        value = min(self.maximum, max(self.minimum, value))
+        result = self.minimum + round((value - self.minimum) / self.step) * self.step
+        result = round(min(self.maximum, max(self.minimum, result)), 4)
+        return int(result) if float(result).is_integer() else result
+
+
+def finite_number(value: Any) -> bool:
+    """Exclude booleans, NaN and infinite or unsafe numeric values."""
+    return type(value) in (int, float) and abs(value) <= 2**53 - 1 and isfinite(value)
+
+
+def light_state(
+    device: BridgeDevice | None, component: str, attribute: str
+) -> BridgeState | None:
+    """Never borrow a sibling component's state or select an ambiguous value."""
+    if device is None:
+        return None
+    matches = [state for state in device.states.values()
+               if state.component == component and state.attribute == attribute]
+    return matches[0] if len(matches) == 1 else None
+
+
+def light_scalar_control(
+    device: BridgeDevice | None, component: str, attribute: str
+) -> LightScalarControl | None:
+    """Prefer Web sliders; fill missing ones using exact observed scalar setters."""
+    if device is None or attribute not in LIGHT_SETTERS:
+        return None
+    bindings = []
+    for state in device.states.values():
+        if state.component != component or state.attribute != attribute:
+            continue
+        controls = [control for control in device.controls.values()
+                    if control.kind == "slider"
+                    and (control.component, control.capability, control.attribute) == state.key
+                    and safe_observed_control(control)]
+        native = [control for control in controls if control.transport != "advanced"]
+        actions = [control for control in native if control.control_id.startswith("action:")]
+        preferred = actions if len(actions) == 1 else native if native else controls
+        control = preferred[0] if len(preferred) == 1 else None
+        descriptor = None if control is not None else _light_scalar_descriptor(device, state)
+        if control is None and descriptor is None:
+            continue
+        bounds = _light_bounds(device, state, control, descriptor)
+        if bounds is not None:
+            bindings.append(LightScalarControl(state, control, descriptor, *bounds))
+    return bindings[0] if len(bindings) == 1 else None
+
+
+def _light_scalar_descriptor(device: BridgeDevice, state: BridgeState) -> BridgeCommandDescriptor | None:
+    command_name = LIGHT_SETTERS[state.attribute]
+    matches = [command for command in device.commands
+               if (command.component, command.capability, command.command)
+               == (state.component, state.capability, command_name)]
+    if len(matches) != 1:
+        return None
+    command = matches[0]
+    if (command.transport != "advanced" or command.confirmation != "state"
+            or not command.arguments or not command.arguments[0].required
+            or any(arg.sensitive for arg in command.arguments)
+            or any(arg.required for arg in command.arguments[1:])):
+        return None
+    if any(omission.component == state.component and omission.capability == state.capability
+           and omission.command in (None, command_name) for omission in device.command_omissions):
+        return None
+    schema = command.arguments[0].schema
+    if (schema.get("type") not in {"integer", "number"} or "enum" in schema
+            or not set(schema).issubset({"type", "minimum", "maximum"})):
+        return None
+    safety_control = BridgeControl("catalog_light", "slider", command.label,
+                                  component=command.component, capability=command.capability,
+                                  attribute=state.attribute, commands=(command.command,))
+    return command if safe_observed_control(safety_control) else None
+
+
+def _light_bounds(
+    device: BridgeDevice, state: BridgeState, control: BridgeControl | None,
+    descriptor: BridgeCommandDescriptor | None,
+) -> tuple[float, float, float] | None:
+    schema = descriptor.arguments[0].schema if descriptor else {}
+    minimum = control.minimum if control else schema.get("minimum")
+    maximum = control.maximum if control else schema.get("maximum")
+    if any(value is not None and not finite_number(value) for value in (minimum, maximum)):
+        return None
+    if state.attribute == "colorTemperature":
+        minimum = float(minimum) if minimum is not None else 1500.0
+        maximum = float(maximum) if maximum is not None else 9000.0
+    else:
+        minimum = max(0.0, float(minimum)) if minimum is not None else 0.0
+        maximum = min(100.0, float(maximum)) if maximum is not None else 100.0
+    # Ranges belong to this exact capability, not another dimmer/temperature channel.
+    ranges = [sibling.value for sibling in device.states.values()
+              if sibling.component == state.component and sibling.capability == state.capability
+              and sibling.attribute == f"{state.attribute}Range"]
+    if len(ranges) > 1:
+        return None
+    if ranges:
+        value = ranges[0]
+        if isinstance(value, dict):
+            low = value.get("minimum", value.get("min"))
+            high = value.get("maximum", value.get("max"))
+        elif isinstance(value, (list, tuple)) and len(value) == 2:
+            low, high = value
+        else:
+            low = high = None
+        if finite_number(low) and finite_number(high) and low < high:
+            minimum, maximum = max(minimum, float(low)), min(maximum, float(high))
+    step = control.step if control and control.step is not None else 1.0
+    # Use whole native percentages unless an observed slider reports a finer step.
+    # Some bulb drivers quantize hue/saturation even though the schema allows numbers.
+    if (not finite_number(step) or step <= 0 or minimum >= maximum
+            or (state.attribute == "colorTemperature" and minimum <= 0)):
+        return None
+    return minimum, maximum, float(step)
 
 
 def toggle_control_for_state(
@@ -1491,10 +1625,11 @@ def _slider_owned_by_richer_domain(
         return True
     if attribute in {"coolingSetpoint", "heatingSetpoint", "targetTemperature"} and is_climate_device(device):
         return True
-    if attribute not in {"colorTemperature", "level"}:
+    if attribute not in {"colorTemperature", "level", "hue", "saturation"}:
         return False
     return any(
         state.attribute == "switch"
+        and state.component == control.component
         and control_kind(device, state) == "light"
         and (toggle := toggle_control_for_state(device, state)) is not None
         and safe_observed_control(toggle)
@@ -1802,6 +1937,7 @@ def sensor_state_owned_by_primary_domain(
         "supportedColorModes",
     } and any(
         candidate.attribute == "switch"
+        and candidate.component == state.component
         and control_kind(device, candidate) == "light"
         and toggle_control_for_state(device, candidate) is not None
         for candidate in device.states.values()
