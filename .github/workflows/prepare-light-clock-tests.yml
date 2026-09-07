@@ -1,0 +1,76 @@
+name: Prepare deterministic light recheck tests
+on:
+  push:
+    branches: [test/deterministic-light-rechecks-1.8.21]
+    paths: [.github/workflows/prepare-light-clock-tests.yml]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    if: github.repository == '1bobby-git/HA-SmartThings_Web'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: test/deterministic-light-rechecks-1.8.21
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Update only the two exact-count test clocks
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object bridge/tests/command/light-plan.test.ts)" = 5d3b42e6b3642aac65387cf3d239a42e3d188bea
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('bridge/tests/command/light-plan.test.ts')
+          s = p.read_text()
+          cases = [
+              ('an OFF cache cannot swallow a real OFF request when a fresh GET says ON', 'powerRequest(f,"off")'),
+              ('a cached brightness cannot suppress a command when the lamp changed without an event', 'levelRequest(f)'),
+          ]
+          for name, request in cases:
+              start = s.index(f'  test("{name}", async () => {{')
+              end = s.index('\n  });', start)
+              block = s[start:end]
+              before = f'    expect((await f.service.execute({request})).status).toBe("confirmed");'
+              after = f'    const confirmed = expect(f.service.execute({request}))\n      .resolves.toMatchObject({{ status: "confirmed" }});\n    await vi.advanceTimersByTimeAsync(5);\n    await confirmed;'
+              assert block.count(before) == 1
+              block = block.replace(before, after)
+              lines = block.splitlines()
+              prefix = []
+              if request.startswith('powerRequest'):
+                  prefix = ['    // Wall-clock scheduling can enter the final recheck window before this',
+                            '    // assertion. Drive the same production timers explicitly; keep exact counts.']
+              lines[1:1] = prefix + ['    vi.useFakeTimers();']
+              lines += ['    await vi.advanceTimersByTimeAsync(100);',
+                        '    expect(f.resync).toHaveBeenCalledTimes(2);',
+                        '    expect(f.send).toHaveBeenCalledOnce();']
+              s = s[:start] + '\n'.join(lines) + s[end:]
+          p.write_text(s)
+          PY
+          test "$(git hash-object bridge/tests/command/light-plan.test.ts)" = 83d22ccca8432dfadb88f2e2f789c98a69831ca8
+          git diff --check
+          git diff --exit-code -- bridge/src custom_components addon package.json package-lock.json protocol README.md
+      - name: Verify exact counts repeatedly and run the full suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run typecheck
+          for attempt in 1 2 3; do
+            npx vitest run bridge/tests/command/light-plan.test.ts
+          done
+          npm test
+          git diff --check
+      - name: Commit verified test-only changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add bridge/tests/command/light-plan.test.ts
+          git commit -m 'test: drive stale power and brightness rechecks with deterministic clocks'
+          git push origin HEAD:refs/heads/test/deterministic-light-rechecks-1.8.21
