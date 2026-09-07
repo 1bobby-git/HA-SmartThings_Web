@@ -145,6 +145,8 @@ export interface SafeCommandExecutor {
 
 export interface CommandResyncEvidence {
   source: "advanced_device_status" | "advanced_inventory" | "location_status";
+  deviceId?: string;
+  observedStates?: readonly BridgeDeviceState[];
   locationId?: string;
   armState?: string;
   authoritativeSnapshot: boolean;
@@ -343,7 +345,7 @@ export class SafeCommandService {
 
   #enqueue(request: SafeCommandRequest): Promise<SafeCommandResult> {
     const previous = this.#queues.get(request.targetId) ?? Promise.resolve();
-    const queued = request.targetType === "location"
+    const queued = request.targetType !== "scene"
       ? enqueueWithDeadline(previous, () => this.#execute(request), 10_000,
           () => new SafeCommandError("command_queue_timeout"))
       : undefined;
@@ -552,6 +554,7 @@ export class SafeCommandService {
       wait = waitForState({
         devices: this.options.devices,
         request: effective,
+        locationId: device.locationId,
         attribute,
         desired,
         afterSequence: snapshot.sequence,
@@ -986,34 +989,39 @@ function findState(device: BridgeDevice, component: string, capability: string, 
 
 type CommandResync = () => Promise<CommandResyncEvidence | undefined>;
 
-function waitForState(options: { devices: DeviceStore; request: SafeCommandRequest; attribute: string; desired: BridgeJsonValue | undefined; afterSequence: number; stabilityMs: number; resync: CommandResync; minimumEventTimeMs?: () => number | undefined; expectedCommandId?: () => string | undefined }): ConfirmationWait {
-  const snapshotMatches = () => {
-    if (options.desired === undefined) return false;
-    const device = options.devices
-      .snapshot()
-      .devices.find((candidate) => candidate.id === options.request.targetId);
-    const state = device?.states.find(
-      (candidate) =>
-        candidate.component === options.request.component &&
-        candidate.capability === options.request.capability &&
-        candidate.attribute === options.attribute
-    );
-    return state !== undefined && stateValuesEqual(state.value, options.desired);
+function waitForState(options: { devices: DeviceStore; request: SafeCommandRequest; locationId: string; attribute: string; desired: BridgeJsonValue | undefined; afterSequence: number; stabilityMs: number; resync: CommandResync; minimumEventTimeMs?: () => number | undefined; expectedCommandId?: () => string | undefined }): ConfirmationWait {
+  const exactState = (states: readonly BridgeDeviceState[]) => {
+    const matches = states.filter((state) => state.component === options.request.component &&
+      state.capability === options.request.capability && state.attribute === options.attribute);
+    return matches.length === 1 ? matches[0] : undefined;
+  };
+  const currentState = () => {
+    const device = options.devices.snapshot().devices.find((entry) => entry.id === options.request.targetId);
+    return device?.locationId === options.locationId && device.online ? exactState(device.states) : undefined;
+  };
+  const before = currentState();
+  const matchesValue = (state: BridgeDeviceState | undefined) =>
+    state !== undefined && options.desired !== undefined && stateValuesEqual(state.value, options.desired);
+  const snapshotMatches = () => matchesValue(currentState());
+  const targetUpdated = () => {
+    const current = currentState();
+    return current !== undefined && (!before || !stateValuesEqual(current.value, before.value) ||
+      (current.updatedAt !== null && (before.updatedAt === null || Date.parse(current.updatedAt) > Date.parse(before.updatedAt))));
   };
   return waitForPredicate({
     devices: options.devices,
     afterSequence: options.afterSequence,
     stabilityMs: options.stabilityMs,
     resync: options.resync,
+    boundedStateRechecks: true,
     matches: (event) =>
       (event.type === "state" &&
         event.deviceId === options.request.targetId &&
         event.state.component === options.request.component &&
         event.state.capability === options.request.capability &&
         event.state.attribute === options.attribute &&
-        (options.desired === undefined ||
-          stateValuesEqual(event.state.value, options.desired))) ||
-      (event.type === "inventory" && snapshotMatches()),
+        (options.desired === undefined || stateValuesEqual(event.state.value, options.desired))) ||
+      (event.type === "inventory" && targetUpdated() && snapshotMatches()),
     invalidates: (event) =>
       options.desired !== undefined &&
       ((event.type === "state" &&
@@ -1023,17 +1031,22 @@ function waitForState(options: { devices: DeviceStore; request: SafeCommandReque
         event.state.attribute === options.attribute &&
         !stateValuesEqual(event.state.value, options.desired)) ||
         (event.type === "inventory" && !snapshotMatches())),
-    matchesSnapshot: snapshotMatches,
+    // Another device's inventory change is not proof for this target.
+    matchesSnapshot: () => targetUpdated() && snapshotMatches(),
+    acceptsResyncEvidence: (evidence, minStartedAtMs) => {
+      if (options.stabilityMs > 0 || !evidence || evidence.source !== "advanced_device_status" ||
+          evidence.deviceId !== options.request.targetId || evidence.locationId !== options.locationId ||
+          !Array.isArray(evidence.observedStates) || minStartedAtMs === undefined ||
+          !Number.isFinite(evidence.startedAtMs) || evidence.startedAtMs < minStartedAtMs) return false;
+      // Successful POST receipt is not enough. Require the exact scalar in a
+      // post-dispatch GET and the current cache; never use missing/stale targets.
+      return matchesValue(exactState(evidence.observedStates)) && snapshotMatches();
+    },
     acceptsEvidence: (evidence) => {
       if (evidence.source !== "event") return true;
       const minimumEventTimeMs = options.minimumEventTimeMs?.();
-      if (
-        minimumEventTimeMs !== undefined &&
-        evidence.eventTime &&
-        Date.parse(evidence.eventTime) <= minimumEventTimeMs
-      ) {
-        return false;
-      }
+      if (minimumEventTimeMs !== undefined && evidence.eventTime &&
+          Date.parse(evidence.eventTime) <= minimumEventTimeMs) return false;
       const expectedCommandId = options.expectedCommandId?.();
       return !expectedCommandId || !evidence.commandId || expectedCommandId === evidence.commandId;
     }
@@ -1219,7 +1232,7 @@ interface ConfirmationEvidence {
   commandId?: string;
 }
 
-function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: CommandResync; matches: (event: BridgeDeviceStoreEvent) => boolean; invalidates?: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean; acceptsResyncEvidence?: (evidence: CommandResyncEvidence | undefined, minStartedAtMs?: number) => boolean; acceptsEvidence?: (evidence: ConfirmationEvidence) => boolean; stabilityMs?: number; forceFinalResync?: boolean; boundedLocationRechecks?: boolean }): ConfirmationWait {
+function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: CommandResync; matches: (event: BridgeDeviceStoreEvent) => boolean; invalidates?: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean; acceptsResyncEvidence?: (evidence: CommandResyncEvidence | undefined, minStartedAtMs?: number) => boolean; acceptsEvidence?: (evidence: ConfirmationEvidence) => boolean; stabilityMs?: number; forceFinalResync?: boolean; boundedLocationRechecks?: boolean; boundedStateRechecks?: boolean }): ConfirmationWait {
   let settled = false;
   let interactionComplete = false;
   let unsubscribe: () => void = () => undefined;
@@ -1340,7 +1353,7 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
         Number.isFinite(resyncAfterMs) &&
         resyncAfterMs >= 0 &&
         resyncAfterMs < timeoutMs;
-      if (options.boundedLocationRechecks === true) {
+      if (options.boundedLocationRechecks === true || options.boundedStateRechecks === true) {
         stopLocationRechecks = scheduleLocationRechecks(
           () => resyncAndCheck(minResyncStartedAtMs, true),
           { timeoutMs, ...(hasEarlyResync ? { firstDelayMs: resyncAfterMs } : {}) }

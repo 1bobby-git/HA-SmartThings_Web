@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from enum import Enum
 from pathlib import Path
 import sys
@@ -234,14 +235,20 @@ class SmartThingsWebLightTests(unittest.TestCase):
         class Client:
             def __init__(self) -> None:
                 self.calls: list[dict[str, object]] = []
+                self.inventory_reads = 0
 
             async def async_execute_command(self, **kwargs: object) -> None:
                 self.calls.append(kwargs)
 
+            async def async_get_inventory(self) -> BridgeInventory:
+                self.inventory_reads += 1
+                return deepcopy(runtime.inventory)
+
         client = Client()
-        runtime = SimpleNamespace(
-            client=client,
-            inventory=SimpleNamespace(devices={device.device_id: device}),
+        runtime = SmartThingsWebRuntime(
+            client, "loc_001",
+            BridgeInventory(1, True, "1.8.19", "5:test", {"loc_001": "Home"}, {},
+                            {device.device_id: device}),
         )
         entity = SmartThingsWebLight(runtime, device, states[0])
 
@@ -263,6 +270,10 @@ class SmartThingsWebLightTests(unittest.TestCase):
         )
         self.assertEqual(client.calls[1]["arguments"], [50])
         self.assertEqual(client.calls[2]["arguments"], [3200])
+
+        self.assertEqual(client.inventory_reads, 1)
+        self.assertEqual(entity.brightness, 102)
+        self.assertEqual(entity.color_temp_kelvin, 3000)
 
     def test_light_becomes_unavailable_when_reversible_control_is_lost(self) -> None:
         switch = BridgeState(

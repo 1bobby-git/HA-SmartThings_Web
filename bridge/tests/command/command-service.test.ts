@@ -2744,6 +2744,7 @@ describe("SafeCommandService", () => {
       })
     }
   ])("does not let %s use the stateless refresh snapshot policy", async ({ setup, request }) => {
+    vi.useFakeTimers();
     const store = setup(readyDeviceStore());
     const resync = vi.fn(async () => inventoryEvidence());
     const service = new SafeCommandService({
@@ -2755,10 +2756,15 @@ describe("SafeCommandService", () => {
       resync
     });
 
-    await expect(service.execute(request())).rejects.toMatchObject({
-      code: "command_confirmation_timeout"
-    });
-    expect(resync).toHaveBeenCalledTimes(1);
+    try {
+      const failed = expect(service.execute(request())).rejects.toMatchObject({
+        code: "command_confirmation_timeout"
+      });
+      await vi.advanceTimersByTimeAsync(11);
+      await failed;
+      // Early + final bounded read; neither metadata-only response confirms control.
+      expect(resync).toHaveBeenCalledTimes(2);
+    } finally { store.close(); vi.useRealTimers(); }
   });
 
   test.each([
@@ -3718,6 +3724,198 @@ describe("Light scalar catalog commands", () => {
     expect(executeDeviceAction).toHaveBeenCalledOnce();
     expect(f.store.snapshot().devices[0]?.states.find((s) => s.component === f.component && s.capability === f.capability && s.attribute === "hue")?.value).toBe(10);
     f.store.close();
+  });
+
+
+  test.each(scalars)("rechecks delayed %s state after the first stale GET without resending", async (attribute, command, value, minimum, maximum) => {
+    vi.useFakeTimers(); const f = fixture(attribute, command, minimum, minimum, maximum);
+    const start = Date.now(); const times: number[] = [];
+    const executeDeviceAction = vi.fn(async () => ({ state: "ACCEPTED" as const,
+      transport: "advanced" as const, sentAtMs: start, acceptedAtMs: start }));
+    const resync = vi.fn(async () => {
+      times.push(Date.now() - start);
+      if (Date.now() - start >= 8_000) f.store.observeAdvancedDeviceSnapshot({ items: [{
+        deviceId: "dev_001", locationId: "loc_001", status: { components: { [f.component]: {
+          [f.capability]: { [attribute]: { value, timestamp: new Date().toISOString() } }
+        } } }
+      }] }, { source: "COMMAND_STATUS_RECHECK" });
+      return undefined;
+    });
+    const service = new SafeCommandService({ devices: f.store, status: connectedStatus(),
+      executor: { executeDeviceAction }, timeoutMs: 30_000, resyncAfterMs: 1_000, resync });
+    try {
+      const result = service.execute({ ...f.request, arguments: [value] });
+      await vi.advanceTimersByTimeAsync(10_001);
+      await expect(result).resolves.toMatchObject({ status: "confirmed", confirmation: "inventory_snapshot" });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(times).toEqual([1_000, 2_000, 4_000, 7_000, 10_000]);
+      expect(executeDeviceAction).toHaveBeenCalledOnce();
+    } finally { f.store.close(); vi.useRealTimers(); }
+  });
+
+  function response(f: ReturnType<typeof fixture>, value: number, startedAtMs = Date.now()): CommandResyncEvidence {
+    const observedStates = f.store.observeCommandDeviceStatus({ items: [{ deviceId: "dev_001", locationId: "loc_001",
+      status: { components: { [f.component]: { [f.capability]: { [f.request.attribute]: {
+        value, timestamp: "2026-09-07T00:00:00Z"
+      } } } } }
+    }] }, "dev_001", "loc_001");
+    return { source: "advanced_device_status", deviceId: "dev_001", locationId: "loc_001",
+      authoritativeSnapshot: false, startedAtMs, observedStates };
+  }
+
+  test.each(scalars.slice(1))("confirms unchanged %s from a fresh exact GET without inventing an SSE event", async (attribute, command, value, minimum, maximum) => {
+    vi.useFakeTimers(); const f = fixture(attribute, command, value, minimum, maximum);
+    const before = f.store.snapshot(); const events = vi.fn(); f.store.subscribe(events);
+    const executeDeviceAction = vi.fn(async () => ({ state: "ACCEPTED" as const,
+      transport: "advanced" as const, sentAtMs: Date.now(), acceptedAtMs: Date.now() }));
+    const resync = vi.fn(async () => response(f, value));
+    const service = new SafeCommandService({ devices: f.store, status: connectedStatus(),
+      executor: { executeDeviceAction }, timeoutMs: 30_000, resyncAfterMs: 1_000, resync });
+    try {
+      const result = service.execute(f.request);
+      await vi.advanceTimersByTimeAsync(1_001);
+      await expect(result).resolves.toMatchObject({ status: "confirmed", confirmation: "inventory_snapshot",
+        sequence: before.sequence, lifecycle: "CONFIRMED_BY_STATUS" });
+      expect(events).not.toHaveBeenCalled();
+      expect(f.store.snapshot()).toEqual(before);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(resync).toHaveBeenCalledOnce(); expect(executeDeviceAction).toHaveBeenCalledOnce();
+    } finally { f.store.close(); vi.useRealTimers(); }
+  });
+
+  test.each(["wrong_device", "wrong_location", "missing_attribute", "wrong_component", "wrong_capability",
+    "wrong_value", "duplicate_attribute", "old_read", "metadata_only", "unrelated_inventory", "invalid_start"])("rejects %s as proof for unchanged hue", async (scenario) => {
+    vi.useFakeTimers(); const f = fixture("hue", "setHue", 50, 0, 100); const start = Date.now();
+    const executeDeviceAction = vi.fn(async () => undefined);
+    const resync = vi.fn(async (): Promise<CommandResyncEvidence> => {
+      const evidence = response(f, 50);
+      if (scenario === "wrong_device") evidence.deviceId = "dev_002";
+      if (scenario === "wrong_location") evidence.locationId = "loc_002";
+      if (scenario === "old_read") evidence.startedAtMs = start - 1;
+      if (scenario === "invalid_start") evidence.startedAtMs = NaN;
+      if (scenario === "metadata_only") evidence.source = "advanced_inventory";
+      if (scenario === "missing_attribute") evidence.observedStates = [];
+      if (scenario === "wrong_value") evidence.observedStates = evidence.observedStates!.map((s) => ({...s, value: 51}));
+      if (scenario === "wrong_component") evidence.observedStates = evidence.observedStates!.map((s) => ({...s, component: "identifier_other"}));
+      if (scenario === "wrong_capability") evidence.observedStates = evidence.observedStates!.map((s) => ({...s, capability: "identifier_other"}));
+      if (scenario === "duplicate_attribute") evidence.observedStates = [...evidence.observedStates!, ...evidence.observedStates!];
+      if (scenario === "unrelated_inventory") {
+        f.store.observeAdvancedInventorySnapshot({locations: [{locationId: "loc_002", name: String(Date.now())}], devices: [], rooms: []});
+        evidence.observedStates = [];
+      }
+      return evidence;
+    });
+    const service = new SafeCommandService({ devices: f.store, status: connectedStatus(),
+      executor: { executeDeviceAction }, timeoutMs: 30_000, resyncAfterMs: 1_000, resync });
+    try {
+      const rejected = expect(service.execute(f.request)).rejects.toMatchObject({code: "command_confirmation_timeout"});
+      await vi.advanceTimersByTimeAsync(30_001); await rejected;
+      expect(resync).toHaveBeenCalledTimes(8); expect(executeDeviceAction).toHaveBeenCalledOnce();
+    } finally { f.store.close(); vi.useRealTimers(); }
+  });
+
+  test("never confirms or overwrites newer contradictory push from an old status response", async () => {
+    vi.useFakeTimers(); const f = fixture("hue", "setHue", 50, 0, 100);
+    const resync = vi.fn(async () => {
+      const evidence = response(f, 50);
+      f.store.observe(received(deviceEventFrame(60, "2026-09-07T00:00:02Z", "hue", "dev_001", f.capability, undefined, f.component)));
+      return evidence;
+    });
+    const service = new SafeCommandService({ devices: f.store, status: connectedStatus(),
+      executor: {executeDeviceAction: vi.fn(async () => undefined)}, timeoutMs: 3_000, resyncAfterMs: 100, resync });
+    try {
+      const failed = expect(service.execute(f.request)).rejects.toMatchObject({code: "command_confirmation_timeout"});
+      await vi.advanceTimersByTimeAsync(3_001); await failed;
+      expect(f.store.snapshot().devices[0]!.states.find((s) => s.attribute === "hue")!.value).toBe(60);
+    } finally { f.store.close(); vi.useRealTimers(); }
+  });
+
+  test("slow status reads do not overlap; a hung final read cannot hold the command open", async () => {
+    vi.useFakeTimers(); const f = fixture("hue", "setHue", 50, 0, 100);
+    let active = 0, peak = 0, reads = 0;
+    const resync = vi.fn(async () => {
+      reads++; peak = Math.max(peak, ++active);
+      if (reads > 1) return await new Promise<undefined>(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 8_000)); active--; return undefined;
+    });
+    const service = new SafeCommandService({ devices: f.store, status: connectedStatus(),
+      executor: {executeDeviceAction: vi.fn(async () => undefined)}, timeoutMs: 30_000, resyncAfterMs: 1_000, resync });
+    try {
+      const failed = expect(service.execute(f.request)).rejects.toMatchObject({code: "command_confirmation_timeout"});
+      await vi.advanceTimersByTimeAsync(30_001); await failed; expect(peak).toBe(1);
+      const count = reads; await vi.advanceTimersByTimeAsync(120_000); expect(reads).toBe(count);
+    } finally { f.store.close(); vi.useRealTimers(); }
+  });
+
+  test("queued device requests expire without being dispatched after the first timeout", async () => {
+    vi.useFakeTimers(); const store = readyDeviceStore();
+    const executeDeviceAction = vi.fn(async () => undefined);
+    const service = new SafeCommandService({devices: store, status: connectedStatus(), executor: {executeDeviceAction},
+      timeoutMs: 30_000, resyncAfterMs: 1_000, resync: vi.fn(async () => undefined)});
+    try {
+      const first = expect(service.execute(command("on", "request_first_queue"))).rejects.toMatchObject({code: "command_confirmation_timeout"});
+      await vi.advanceTimersByTimeAsync(1);
+      const second = expect(service.execute(command("on", "request_second_queue"))).rejects.toMatchObject({code: "command_queue_timeout"});
+      await vi.advanceTimersByTimeAsync(10_001); await second;
+      expect(executeDeviceAction).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(20_001); await first;
+      expect(executeDeviceAction).toHaveBeenCalledOnce();
+    } finally { store.close(); vi.useRealTimers(); }
+  });
+
+  test.each(scalars)("continues from delayed power confirmation to %s without replaying either command", async (attribute, setter, desired, minimum, maximum) => {
+    vi.useFakeTimers();
+    const store = readyDeviceStore();
+    const capability = `identifier_plan_${attribute.toLowerCase()}`;
+    let power = "off", scalar: number = minimum;
+    let nextPower = power, nextScalar = scalar;
+    let visibleAfter = Infinity;
+    let stamp = new Date(Date.now() - 10_000).toISOString();
+    const body = () => ({ items: [{ deviceId: "dev_001", locationId: "loc_001", status: {
+      components: { main: {
+        identifier_switch: { switch: { value: power, timestamp: stamp } },
+        [capability]: { [attribute]: { value: scalar, timestamp: stamp } }
+      } }
+    } }] });
+    store.observeAdvancedDeviceSnapshot(body());
+    observeAdvancedCatalog(store, [advancedCommand(capability, setter, {
+      component: "main", arguments: [{ name: "value", required: true, sensitive: false,
+        schema: { type: "integer", minimum, maximum } }]
+    })]);
+    const executeDeviceAction = vi.fn(async (input: DeviceActionExecutionInput) => {
+      if (input.command === "on") nextPower = "on";
+      else if (input.command === setter) nextScalar = input.arguments[0] as number;
+      else throw new Error("unexpected_command");
+      visibleAfter = Date.now() + 1_500;
+      return { state: "ACCEPTED" as const, transport: "advanced" as const,
+        sentAtMs: Date.now(), acceptedAtMs: Date.now() };
+    });
+    const resync = vi.fn(async (): Promise<CommandResyncEvidence> => {
+      if (Date.now() >= visibleAfter) {
+        power = nextPower; scalar = nextScalar; stamp = new Date().toISOString();
+      }
+      const observedStates = store.observeCommandDeviceStatus(body(), "dev_001", "loc_001");
+      return { source: "advanced_device_status", deviceId: "dev_001", locationId: "loc_001",
+        authoritativeSnapshot: false, startedAtMs: Date.now(), observedStates };
+    });
+    const service = new SafeCommandService({ devices: store, status: connectedStatus(),
+      executor: { executeDeviceAction }, timeoutMs: 30_000, resyncAfterMs: 1_000, resync });
+    try {
+      const plan = (async () => {
+        const first = await service.execute(command("on", "request_plan_power"));
+        const second = await service.execute({ targetType: "device", targetId: "dev_001",
+          component: "main", capability, attribute, command: setter, arguments: [desired],
+          requireAdvanced: true, confirm: true, clientRequestId: "request_plan_scalar" });
+        return [first.status, second.status];
+      })();
+      const completed = expect(plan).resolves.toEqual(["confirmed", "confirmed"]);
+      await vi.advanceTimersByTimeAsync(4_001); await completed;
+      expect(executeDeviceAction.mock.calls.map(([input]) => input.command)).toEqual(["on", setter]);
+      expect(power).toBe("on"); expect(scalar).toBe(desired);
+      expect(resync).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(resync).toHaveBeenCalledTimes(4);
+    } finally { store.close(); vi.useRealTimers(); }
   });
 
   test.each(scalars)("rejects %s outside the current catalog range before sending", async (attribute, command, value, minimum, maximum) => {

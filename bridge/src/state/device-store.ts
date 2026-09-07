@@ -579,6 +579,23 @@ export class DeviceStore {
     this.#sessionWholeAdvancedDeviceSnapshotSeen = false;
   }
 
+  observeCommandDeviceStatus(
+    body: unknown, deviceId: string, locationId: string
+  ): BridgeDeviceState[] {
+    // Preserve the exact response separately from the merged cache. A read can
+    // confirm an unchanged scalar without inventing an event or advancing SSE.
+    const device = this.#devices.get(deviceId);
+    const rows = advancedDeviceRows(body);
+    if (!device || device.locationId !== locationId || rows?.length !== 1) return [];
+    const row = rows[0]!;
+    if (normalizedAdvancedId(row.deviceId ?? row.id, "device", this.#normalizeAdvancedAlias) !== deviceId ||
+        normalizedAdvancedId(row.locationId, "location", this.#normalizeAdvancedAlias) !== locationId) return [];
+    const states = advancedDeviceStates(row, this.#identifierRole, this.#normalizeStateToken,
+      this.#normalizeAdvancedAlias, "COMMAND_STATUS_RECHECK");
+    this.observeAdvancedDeviceSnapshot({ items: [row] }, { source: "COMMAND_STATUS_RECHECK" });
+    return states.map(cloneState);
+  }
+
   observeAdvancedDeviceSnapshot(body: unknown, options: AdvancedDeviceSnapshotOptions = {}): void {
     const authoritativeWholeSnapshot = options.authoritativeWholeSnapshot === true;
     const changed = this.#applyAdvancedDeviceSnapshot(
