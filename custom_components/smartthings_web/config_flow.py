@@ -22,6 +22,7 @@ from .const import (
     CONF_DOM_FALLBACK_ENABLED,
     CONF_INVENTORY_RECONCILIATION_INTERVAL,
     CONF_LOCATION_ID,
+    CONF_SYNC_ROOMS,
     CONF_STATUS_RECHECK_ENABLED,
     CONTROL_MODE_READ_ONLY,
     CONTROL_MODE_SAFE_CONTROL,
@@ -240,11 +241,13 @@ class SmartThingsWebOptionsFlow(_OptionsFlowBase):
         )
         dom_fallback = entry.options.get(CONF_DOM_FALLBACK_ENABLED, True)
         debug_protocol = entry.options.get(CONF_DEBUG_PROTOCOL_LOGGING, False)
+        sync_rooms = entry.options.get(CONF_SYNC_ROOMS, False)
         if user_input is not None:
             return self.async_create_entry(
                 title="",
                 data={
                     CONF_CONTROL_MODE: user_input.get(CONF_CONTROL_MODE, current),
+                    CONF_SYNC_ROOMS: user_input.get(CONF_SYNC_ROOMS, sync_rooms),
                     CONF_COMMAND_CONFIRMATION_TIMEOUT: user_input.get(
                         CONF_COMMAND_CONFIRMATION_TIMEOUT, confirmation_timeout
                     ),
@@ -267,6 +270,7 @@ class SmartThingsWebOptionsFlow(_OptionsFlowBase):
             step_id="init",
             data_schema=vol.Schema(
                 {
+                    vol.Required(CONF_SYNC_ROOMS, default=sync_rooms): bool,
                     vol.Required(CONF_CONTROL_MODE, default=current): vol.In(
                         CONTROL_MODE_OPTIONS
                     ),

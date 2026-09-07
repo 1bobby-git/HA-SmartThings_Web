@@ -90,3 +90,37 @@ def resolve_room_area(registry: RoomAreaRegistry, room_name: str) -> NamedArea |
     if any(room_name_key(area.name) == key for area in areas):
         return None
     return registry.async_get_or_create(" ".join(unicodedata.normalize("NFC", room_name).split()))
+
+
+def sync_device_area(
+    device_registry: object,
+    device_id: str,
+    config_entry_id: str,
+    area_id: str | None,
+    *,
+    follow_room: bool = False,
+    room_confirmed: bool = False,
+) -> bool:
+    """Follow a verified room only after explicit opt-in, retaining safe defaults.
+
+    Older assignments have no reliable automatic/manual provenance. Never infer
+    ownership from an area's name. Entity-level area overrides are not touched.
+    A confirmed null room may clear a device area only in follow mode.
+    """
+    if not follow_room:
+        return repair_missing_device_area(
+            device_registry, device_id, config_entry_id, area_id
+        )
+    if not room_confirmed:
+        return False
+    device = device_registry.async_get(device_id)
+    if device is None or device.area_id == area_id:
+        return False
+    owner = getattr(device, "config_entry_id", None)
+    if owner is not None:
+        if owner != config_entry_id:
+            return False
+    elif set(getattr(device, "config_entries", ())) != {config_entry_id}:
+        return False
+    device_registry.async_update_device(device_id, area_id=area_id)
+    return True

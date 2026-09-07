@@ -110,6 +110,7 @@ class BridgeDevice:
     command_omissions: tuple[BridgeCommandOmission, ...] = ()
     advanced: BridgeAdvancedDeviceMetadata | None = None
     health_updated_at: str | None = None
+    room_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -359,6 +360,7 @@ class SmartThingsWebRuntime:
                 device_id=latest_device.device_id,
                 location_id=latest_device.location_id,
                 room_id=latest_device.room_id,
+                room_source=latest_device.room_source,
                 name=latest_device.name,
                 device_type=latest_device.device_type,
                 online=latest_device.online,
@@ -1903,8 +1905,37 @@ _DEVICE_TYPE_MODELS_KO = {
 }
 
 
+def is_people_counter(device: BridgeDevice) -> bool:
+    """Recognize a counter from observed data, never from its label or icon."""
+    if any(state.attribute == "peopleCounter" and type(state.value) is int
+           and state.value >= 0 for state in device.states.values()):
+        return True
+    for command in device.commands:
+        if command.command != "setPeopleCounter" or command.transport != "advanced":
+            continue
+        if len(command.arguments) != 1:
+            continue
+        argument = command.arguments[0]
+        schema = argument.schema
+        minimum, maximum = schema.get("minimum"), schema.get("maximum")
+        if (argument.required and not argument.sensitive and schema.get("type") == "integer"
+            and type(minimum) in (int, float) and type(maximum) in (int, float)
+            and 0 <= minimum <= maximum <= 2**53 - 1
+            and not any(omission.component == command.component
+                        and omission.capability == command.capability
+                        and omission.command in (None, command.command)
+                        for omission in device.command_omissions)):
+            return True
+    return False
+
+
 def device_model(device: BridgeDevice) -> str | None:
-    """Return a readable localized SmartThings device type for the registry."""
+    """Prefer a reported model, then observed function, before icon/type labels."""
+    reported = _first_device_metadata_value(device, "mnmo", "model", "modelCode")
+    if reported is not None:
+        return reported
+    if is_people_counter(device):
+        return "인원 카운터"
     asset_type = device.presentation.asset_type if device.presentation else None
     if asset_type and _normalized_device_type(device.device_type) in {
         "",
@@ -2356,6 +2387,7 @@ def _device_visible_payload(device: BridgeDevice) -> tuple[Any, ...]:
     return (
         device.location_id,
         device.room_id,
+        device.room_source,
         device.name,
         device.device_type,
         device.online,
@@ -2434,6 +2466,7 @@ def _device_discovery_payload(device: BridgeDevice) -> tuple[Any, ...]:
     return (
         device.location_id,
         device.room_id,
+        device.room_source,
         device.name,
         device.device_type,
         device.presentation,

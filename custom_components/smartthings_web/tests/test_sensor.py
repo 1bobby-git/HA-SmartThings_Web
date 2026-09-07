@@ -130,6 +130,21 @@ from smartthings_web.sensor import (  # noqa: E402
 class SmartThingsWebSensorTests(unittest.TestCase):
     """Keep string status content without violating HA numeric sensor contracts."""
 
+    def test_people_counter_is_numeric_measurement_not_motion_or_total(self):
+        state = BridgeState("main", "identifier_counter", "peopleCounter", 3, None, None)
+        device = BridgeDevice("dev_001", "loc_001", None, "Counter", "motion_sensor_1", True,
+                              states={state.key: state})
+        runtime = SmartThingsWebRuntime(object(), "loc_001",
+            BridgeInventory(1, True, "test", "5", {}, {}, {device.device_id: device}))
+        entity = SmartThingsWebSensor(runtime, device, state, SENSOR_STATES["peopleCounter"])
+        self.assertIsNone(entity.device_class)
+        self.assertEqual(entity.state_class, SensorStateClass.MEASUREMENT)
+        self.assertEqual(entity.native_value, 3)
+        state.value = 2
+        self.assertEqual(entity.native_value, 2)
+        state.value = "unknown"
+        self.assertIsNone(entity.native_value)
+
     def test_known_numeric_attribute_keeps_capabilities_stable(self) -> None:
         state = BridgeState(
             "main",

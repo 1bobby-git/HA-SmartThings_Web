@@ -41,8 +41,10 @@
     "step": {
       "init": {
         "title": "SmartThings Web options",
+        "data_description": {"sync_rooms": "When enabled, confirmed Advanced rooms replace existing device areas, including explicit room removal. Entity area overrides remain unchanged. When disabled, existing HA device areas are preserved."},
         "data": {
-          "control_mode": "Control mode"
+          "control_mode": "Control mode",
+          "sync_rooms": "Sync device areas with SmartThings rooms"
         }
       }
     }
