@@ -9,6 +9,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SmartThingsWebConfigEntry
+from .command_controls import CatalogCommandEntityMixin, catalog_commands, command_suffix
 from .bridge_client import BridgeClientError, bridge_error_message
 from .entity import SmartThingsWebDeviceEntity, suggested_entity_object_id
 from .models import (
@@ -49,6 +50,11 @@ async def async_setup_entry(
                         continue
                     known.add(unique_id)
                     entities.append(SmartThingsWebButton(runtime, device, control))
+            for command in catalog_commands(device, "button"):
+                unique_id = f"{device.device_id}_{command_suffix('button', command)}"
+                if unique_id not in known:
+                    known.add(unique_id)
+                    entities.append(SmartThingsWebCommandButton(runtime, device, command))
         if entities:
             async_add_entities(entities)
 
@@ -151,3 +157,12 @@ class SmartThingsWebButton(SmartThingsWebDeviceEntity, ButtonEntity):
             )
         except BridgeClientError as err:
             raise HomeAssistantError(bridge_error_message("button command", err)) from err
+
+
+class SmartThingsWebCommandButton(CatalogCommandEntityMixin, SmartThingsWebDeviceEntity, ButtonEntity):
+    """One stateless catalog action, acknowledged but not state-confirmed."""
+
+    _command_kind = "button"
+
+    async def async_press(self) -> None:
+        await self._async_send([])

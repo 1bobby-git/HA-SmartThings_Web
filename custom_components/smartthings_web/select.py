@@ -8,6 +8,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SmartThingsWebConfigEntry
+from .command_controls import CatalogCommandEntityMixin, catalog_commands, command_suffix
 from .bridge_client import BridgeClientError, bridge_error_message
 from .entity import SmartThingsWebDeviceEntity
 from .models import (
@@ -40,6 +41,11 @@ async def async_setup_entry(
                     continue
                 known.add(unique_id)
                 entities.append(SmartThingsWebSelect(runtime, device, control))
+            for command in catalog_commands(device, "select"):
+                unique_id = f"{device.device_id}_{command_suffix('select', command)}"
+                if unique_id not in known:
+                    known.add(unique_id)
+                    entities.append(SmartThingsWebCommandSelect(runtime, device, command))
         if entities:
             async_add_entities(entities)
 
@@ -129,3 +135,23 @@ class SmartThingsWebSelect(SmartThingsWebDeviceEntity, SelectEntity):
             and safe_observed_control(control)
             else None
         )
+
+
+class SmartThingsWebCommandSelect(CatalogCommandEntityMixin, SmartThingsWebDeviceEntity, SelectEntity):
+    """Exact enum command input, separate from observed device state."""
+
+    _command_kind = "select"
+
+    @property
+    def options(self) -> list[str]:
+        command = self._current_descriptor
+        return list(command.arguments[0].schema["enum"]) if command else []
+
+    @property
+    def current_option(self) -> None:
+        return None
+
+    async def async_select_option(self, option: str) -> None:
+        if not isinstance(option, str) or option not in self.options:
+            raise HomeAssistantError("SmartThings Web catalog option is invalid")
+        await self._async_send([option])

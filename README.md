@@ -1,6 +1,13 @@
+> [!WARNING]
+> **개발 중인 ALPHA 프로젝트입니다.** 동작이 불안정하거나 예기치 않은 문제가 발생할 수 있으므로 일반 사용자의 설치를 권장하지 않습니다. 설치·사용 및 그 결과는 사용자 본인의 책임이며, 개발자는 설치·사용으로 발생하는 문제에 책임을 지지 않습니다.
+
 <!-- project-branding:start -->
 
-## Home Monitor 1.8.13
+## 1.8.14 Advanced 명령 전용 제어
+
+Web 제어가 없는 `setUpdown`·`setFreeze` enum은 선택 항목으로, `setPeopleCounter`는 카탈로그의 0~65535 정수 입력으로 보완합니다. 실제 카탈로그에 있는 `refresh`·`push`도 기존 버튼과 중복되지 않을 때 노출합니다. 새 제어는 **요청 접수만 확인**하며 현재값을 추측하지 않습니다. 입력 후에도 숫자·선택 항목은 `unknown`일 수 있고 실제 상태는 기존 센서로 확인합니다. [구현 범위·예제·업데이트 안내](docs/ADVANCED_COMMAND_CONTROLS_1.8.14.md)를 참고하세요.
+
+## Home Monitor (1.8.14에서도 기존 직접 제어 유지)
 
 1.8.13은 1.8.12의 직접 제어 코드를 유지하는 버전·문서 정리 릴리스입니다. 이번 발행으로 새로운 실환경 전환 개선을 검증했다는 의미는 아닙니다.
 
@@ -32,7 +39,7 @@ Home Monitor는 기존 로그인된 웹앱의 **직접 보안 상태 요청**을
 
 브라우저 로그인을 담당하는 **SmartThings Web Bridge 앱**과 Home Assistant 엔티티를 생성하는 **`smartthings_web` 커스텀 통합**으로 구성됩니다. Samsung 비밀번호·MFA·CAPTCHA를 소스나 설정 파일에 입력하지 않고, 사용자가 앱의 noVNC 브라우저에서 직접 로그인합니다.
 
-> **현재 버전: Bridge `1.8.13` / HA 통합 `1.8.13` · 기존 실환경 부분 검증, 새 개선분은 CI 검증**
+> **현재 버전: Bridge `1.8.14` / HA 통합 `1.8.14` · 기존 실환경 부분 검증, 새 개선분은 CI 검증**
 >
 > 실제 Home Assistant OS에서 앱 기동, Ingress/noVNC Samsung 로그인, Bridge 연결, 인벤토리 수신과 Home Assistant 엔티티 생성까지 확인했습니다. `0.1.182`는 `0.1.181` 실환경 진단으로 확인된 Home Monitor 현재 모드 pill, 중복 Supervisor discovery, `..._on`·`..._jaesil` ID와 상태 이벤트 폭주 경로를 수정했으며, 모든 계정과 기기에서 실기기 재검증이 끝난 상태는 아닙니다.
 
