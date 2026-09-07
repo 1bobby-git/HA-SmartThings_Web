@@ -203,3 +203,46 @@ describe("Verified power transport and stale-cache protection", () => {
     expect(verifiedAdvancedControl(device,input)).toBe(false);
   });
 });
+
+
+describe("Fresh brightness retries", () => {
+  const levelRequest = (f: Awaited<ReturnType<typeof fixture>>) => ({ ...f.request,
+    command: "setLevel", attribute: "level", capability: "identifier_level", arguments: [shared.initial.level] });
+  test("a cached brightness cannot suppress a command when the lamp changed without an event", async () => {
+    const f = await fixture();
+    f.setDesired({ ...shared.initial, level: 80 });
+    expect((await f.service.execute(levelRequest(f))).status).toBe("confirmed");
+    expect(f.resync).toHaveBeenCalledTimes(2);
+    expect(f.send).toHaveBeenCalledOnce();
+    expect((f.requests[0]!.body as any).commands).toEqual([
+      { component: "main", capability: "switchLevel", command: "setLevel", arguments: [shared.initial.level] }
+    ]);
+  });
+  test("a fresh exact brightness can avoid a redundant write", async () => {
+    const f = await fixture();
+    expect((await f.service.execute(levelRequest(f))).status).toBe("already_confirmed");
+    expect(f.resync).toHaveBeenCalledOnce();
+    expect(f.send).not.toHaveBeenCalled();
+  });
+  test("a failed brightness read cannot confirm a stale cached value", async () => {
+    const f = await fixture();
+    f.resync.mockRejectedValue(new Error("read unavailable"));
+    await expect(f.service.execute(levelRequest(f))).rejects.toMatchObject({ code: "command_confirmation_timeout" });
+    expect(f.send).toHaveBeenCalledOnce();
+    expect(f.legacy.executeDeviceAction).not.toHaveBeenCalled();
+  });
+  test.each(["wrong_device", "wrong_location", "missing_level", "old_read"])("%s is not current brightness proof", async (failure) => {
+    const f = await fixture();
+    const read = f.resync.getMockImplementation()!;
+    f.resync.mockImplementation(async () => {
+      const proof = await read();
+      if (failure === "wrong_device") proof.deviceId = "dev_002";
+      if (failure === "wrong_location") proof.locationId = "loc_002";
+      if (failure === "missing_level") proof.observedStates = proof.observedStates.filter(item => item.attribute !== "level");
+      if (failure === "old_read") proof.startedAtMs = 0;
+      return proof;
+    });
+    await f.service.execute(levelRequest(f)).catch(() => undefined);
+    expect(f.send).toHaveBeenCalledOnce();
+  });
+});

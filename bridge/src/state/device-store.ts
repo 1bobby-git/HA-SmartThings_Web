@@ -455,6 +455,25 @@ export class DeviceStore {
     return true;
   }
 
+  /** Read only the target, retaining snapshot filtering and detached values. */
+  commandStates(deviceId: string, locationId: string): BridgeDeviceState[] {
+    const device = this.#devices.get(deviceId);
+    if (!device?.online || device.locationId !== locationId) return [];
+    return snapshotDeviceStates(device).sort(byState).map(cloneState);
+  }
+
+  /** Exact state lookup for command confirmation; never expose mutable cache objects. */
+  commandState(deviceId: string, locationId: string, component: string,
+    capability: string, attribute: string): BridgeDeviceState | undefined {
+    const device = this.#devices.get(deviceId);
+    if (!device?.online || device.locationId !== locationId) return undefined;
+    const state = device.states.get(`${component}\u0000${capability}\u0000${attribute}`);
+    if (!state || (CAMERA_IMAGE_ATTRIBUTES.has(attribute) && !snapshotDeviceStates(device).includes(state))) {
+      return undefined;
+    }
+    return cloneState(state);
+  }
+
   currentSequence(): number {
     return this.#sequence;
   }
