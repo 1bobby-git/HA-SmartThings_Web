@@ -12,7 +12,8 @@ import {
   CommandTransportError,
   OrderedCommandRouter,
   type CommandTransport,
-  type CommandTransportReceipt
+  type CommandTransportReceipt,
+  type RoutedCommandRequest
 } from "./command-router.js";
 
 type LegacyDeviceActionExecutionInput = Omit<
@@ -117,6 +118,20 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
     return await this.#executeVerifiedWeb(input);
   }
 
+  async executeLightPlan(actions: RoutedCommandRequest[]): Promise<CommandTransportReceipt> {
+    if (!this.advanced.executeBatch) throw new Error("command_control_not_found");
+    this.#diagnostic({ transport: "advanced", stage: "dispatch", outcome: "attempt" });
+    try {
+      const receipt = await this.advanced.executeBatch(actions);
+      this.#diagnostic({ transport: "advanced", stage: "receipt", outcome: "accepted" });
+      return receipt;
+    } catch (error) {
+      this.#diagnostic({ transport: "advanced", stage: "dispatch", outcome: "failed", code: safeCommandCode(error) });
+      throw new Error(error instanceof CommandTransportError && error.code === "authentication"
+        ? "command_login_required" : "command_execution_failed");
+    }
+  }
+
   async #executeAdvanced(
     input: DeviceActionExecutionInput
   ): Promise<CommandTransportReceipt> {
@@ -130,11 +145,13 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
       command: input.nativeCommand ?? input.optionCommand ?? input.command,
       arguments: input.arguments
     };
+    this.#diagnostic({ transport: "advanced", stage: "dispatch", outcome: "attempt" });
     try {
-      return await new OrderedCommandRouter({
-        advanced: this.advanced
-      }).execute(routed);
+      const receipt = await new OrderedCommandRouter({ advanced: this.advanced }).execute(routed);
+      this.#diagnostic({ transport: "advanced", stage: "receipt", outcome: "accepted" });
+      return receipt;
     } catch (error) {
+      this.#diagnostic({ transport: "advanced", stage: "dispatch", outcome: "failed", code: safeCommandCode(error) });
       if (error instanceof CommandTransportError) {
         if (error.code === "authentication") throw new Error("command_login_required");
         if (error.code === "unsupported") throw new Error("command_control_not_found");

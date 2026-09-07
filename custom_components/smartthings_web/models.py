@@ -177,6 +177,7 @@ class BridgeInventory:
     devices: dict[str, BridgeDevice]
     scenes: dict[str, BridgeScene] = field(default_factory=dict)
     device_aliases: dict[str, str] = field(default_factory=dict)
+    light_plan_supported: bool = False
 
 
 @dataclass(frozen=True)
@@ -391,6 +392,7 @@ class SmartThingsWebRuntime:
             ready=latest.ready,
             bridge_version=latest.bridge_version,
             protocol_version=latest.protocol_version,
+            light_plan_supported=latest.light_plan_supported,
             locations=(
                 _merge_locations(
                     {
@@ -737,7 +739,7 @@ def light_scalar_control(
         actions = [control for control in native if control.control_id.startswith("action:")]
         preferred = actions if len(actions) == 1 else native if native else controls
         control = preferred[0] if len(preferred) == 1 else None
-        descriptor = None if control is not None else _light_scalar_descriptor(device, state)
+        descriptor = None if control is not None else light_scalar_command(device, state)
         if control is None and descriptor is None:
             continue
         bounds = _light_bounds(device, state, control, descriptor)
@@ -746,7 +748,32 @@ def light_scalar_control(
     return bindings[0] if len(bindings) == 1 else None
 
 
-def _light_scalar_descriptor(device: BridgeDevice, state: BridgeState) -> BridgeCommandDescriptor | None:
+def light_color_command(device: BridgeDevice | None, component: str) -> BridgeCommandDescriptor | None:
+    """Find a verified joint color setter, not just capability-level scalar names."""
+    from .color_schema import parse_color_schema
+
+    hue = light_state(device, component, "hue")
+    sat = light_state(device, component, "saturation")
+    if device is None or hue is None or sat is None or hue.capability != sat.capability:
+        return None
+    candidates = [command for command in device.commands
+                  if (command.component, command.capability, command.command)
+                  == (component, hue.capability, "setColor")]
+    if len(candidates) != 1:
+        return None
+    command = candidates[0]
+    if (command.transport != "advanced" or command.confirmation != "state"
+            or len(command.arguments) != 1 or not command.arguments[0].required
+            or command.arguments[0].sensitive or parse_color_schema(command.arguments[0].schema) is None
+            or any(omission.component == component and omission.capability == hue.capability
+                   and omission.command in (None, "setColor") for omission in device.command_omissions)):
+        return None
+    safety = BridgeControl("catalog_color", "slider", command.label, component,
+                           hue.capability, "hue", commands=("setColor",))
+    return command if safe_observed_control(safety) else None
+
+
+def light_scalar_command(device: BridgeDevice, state: BridgeState) -> BridgeCommandDescriptor | None:
     command_name = LIGHT_SETTERS[state.attribute]
     matches = [command for command in device.commands
                if (command.component, command.capability, command.command)

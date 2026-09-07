@@ -40,6 +40,7 @@ export class CommandTransportError extends Error {
 export interface CommandTransport {
   name: CommandTransportName;
   execute(request: RoutedCommandRequest): Promise<CommandTransportReceipt>;
+  executeBatch?(requests: RoutedCommandRequest[]): Promise<CommandTransportReceipt>;
 }
 
 export interface OrderedCommandRouterOptions {

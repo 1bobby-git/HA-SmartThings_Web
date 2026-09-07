@@ -67,6 +67,9 @@ export class AuthenticatedSmartThingsSession implements AuthenticatedAdvancedSes
     if (keeper?.evaluate && !keeper.isClosed()) {
       const keeperResult = await executePageRequest(keeper, safeRequest);
       if (keeperResult.ok) return parseResult(keeperResult, request.endpoint, parser);
+      if (safeRequest.method === "POST" && !knownNotSent(keeperResult)) {
+        throw classifyFailure(request.endpoint, keeperResult);
+      }
       if (keeperResult.status === 401) {
         throw new AdvancedSessionError(
           "advanced_authentication_failed",
@@ -79,6 +82,9 @@ export class AuthenticatedSmartThingsSession implements AuthenticatedAdvancedSes
     if (this.options.requestJson) {
       const contextResult = await this.options.requestJson(safeRequest);
       if (contextResult?.ok) return parseResult(contextResult, request.endpoint, parser);
+      if (safeRequest.method === "POST" && contextResult && !knownNotSent(contextResult)) {
+        throw classifyFailure(request.endpoint, contextResult);
+      }
       if (contextResult?.status === 401) {
         throw new AdvancedSessionError(
           "advanced_authentication_failed",
@@ -101,6 +107,10 @@ export class AuthenticatedSmartThingsSession implements AuthenticatedAdvancedSes
       await page?.close().catch(() => undefined);
     }
   }
+}
+
+function knownNotSent(result: BrowserFetchResult): boolean {
+  return result.status === 0 && ["csrf_token_unavailable", "evaluate_unavailable"].includes(result.error ?? "");
 }
 
 async function executePageRequest(

@@ -127,6 +127,15 @@ describe("AdvancedCommandAdapter", () => {
     expect(session.requestMock).not.toHaveBeenCalled();
   });
 
+
+  test("does not retry an uncertain POST under production default options", async () => {
+    const session = new FakeSession({results:[{status:"ACCEPTED"}]});
+    session.nextErrors.push(new AdvancedSessionError("advanced_timeout", "commands"));
+    const adapter = new AdvancedCommandAdapter({session, resolveRawDeviceId:()=>"fixture", resolveRawIdentifier:()=>"main"});
+    await expect(adapter.execute({deviceId:"dev_001",component:"main",capability:"switch",command:"on",arguments:[]})).rejects.toThrow();
+    expect(session.requestMock).toHaveBeenCalledOnce();
+  });
+
   test("retries a transient request failure once without converting it to unsupported", async () => {
     const session = new FakeSession({ results: [{ status: "ACCEPTED" }] });
     session.nextErrors.push(

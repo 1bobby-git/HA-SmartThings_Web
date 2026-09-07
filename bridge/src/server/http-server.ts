@@ -174,6 +174,7 @@ async function handleBridgeApiRequest(
       return writeJson(response, 200, {
         ...options.devices.snapshot(),
         ready: report.ready,
+        lightPlanSupported: true,
         bridgeVersion: report.details.bridgeVersion,
         protocolVersion: report.details.protocolVersion
       });

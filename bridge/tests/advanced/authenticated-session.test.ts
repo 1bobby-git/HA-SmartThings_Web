@@ -212,4 +212,32 @@ describe("AuthenticatedSmartThingsSession", () => {
     ).rejects.toThrowError("advanced_request_unavailable");
     expect(fetchMock).not.toHaveBeenCalled();
   });
+  test.each([{status:0,error:"request_timeout"}, {status:0,error:"request_failed"},
+    {status:403,error:"origin_rejected"}, {status:401,error:"login_required"},
+    {status:200,error:"response_invalid"}])("never replays an attempted POST after %j", async (failure) => {
+    const keeper = new FakePage("https://my.smartthings.com/location", { ok:false, ...failure });
+    const context = vi.fn(), open = vi.fn();
+    const session = new AuthenticatedSmartThingsSession({currentKeeper:()=>keeper, requestJson:context, openAdvancedPage:open});
+    await expect(session.request({endpoint:"commands",method:"POST",path:"/advanced/cupcake-api/api/devices/fixture/commands",
+      body:{commands:[]}}, value=>value)).rejects.toThrow();
+    expect(keeper.evaluateCalls).toHaveBeenCalledOnce();
+    expect(context).not.toHaveBeenCalled(); expect(open).not.toHaveBeenCalled();
+  });
+
+  test("permits a fallback only when the POST was not sent because CSRF was missing", async () => {
+    const keeper = new FakePage("https://my.smartthings.com/location", {ok:false,status:0,error:"csrf_token_unavailable"});
+    const context = vi.fn(async()=>({ok:true,status:200,value:{results:[{status:"ACCEPTED"}]}})), open = vi.fn();
+    const session = new AuthenticatedSmartThingsSession({currentKeeper:()=>keeper, requestJson:context, openAdvancedPage:open});
+    await expect(session.request({endpoint:"commands",method:"POST",path:"/advanced/cupcake-api/api/devices/fixture/commands",
+      body:{commands:[]}}, value=>value)).resolves.toEqual({results:[{status:"ACCEPTED"}]});
+    expect(context).toHaveBeenCalledOnce(); expect(open).not.toHaveBeenCalled();
+  });
+
+  test("a failed context POST cannot be replayed on an auxiliary page", async () => {
+    const open = vi.fn(), context = vi.fn(async()=>({ok:false,status:0,error:"request_timeout"}));
+    const session = new AuthenticatedSmartThingsSession({currentKeeper:()=>undefined, requestJson:context, openAdvancedPage:open});
+    await expect(session.request({endpoint:"commands",method:"POST",path:"/advanced/cupcake-api/api/devices/fixture/commands"}, v=>v)).rejects.toThrow();
+    expect(context).toHaveBeenCalledOnce(); expect(open).not.toHaveBeenCalled();
+  });
+
 });

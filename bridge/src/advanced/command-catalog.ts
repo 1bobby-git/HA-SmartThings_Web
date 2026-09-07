@@ -1,3 +1,4 @@
+import { parseColorArgumentSchema } from "./color-argument.js";
 import {
   CapabilityDefinitionCache,
   CapabilityValidationError,
@@ -168,7 +169,7 @@ function commandDefinitions(definition: AdvancedCapabilityDefinition): {
       invalid.push(name);
       continue;
     }
-    const parsedArguments = parseArguments(rawArguments);
+    const parsedArguments = parseArguments(rawArguments, name === "setColor");
     if (!parsedArguments) {
       invalid.push(name);
       continue;
@@ -178,12 +179,13 @@ function commandDefinitions(definition: AdvancedCapabilityDefinition): {
   return { valid, invalid };
 }
 
-function parseArguments(values: unknown[]): AdvancedCapabilityCommandDefinition["arguments"] | undefined {
+function parseArguments(values: unknown[], allowColor = false): AdvancedCapabilityCommandDefinition["arguments"] | undefined {
   const parsed: AdvancedCapabilityCommandDefinition["arguments"] = [];
   for (const value of values) {
     if (!isRecord(value)) return undefined;
     const name = typeof value.name === "string" ? value.name : undefined;
-    const schema = isRecord(value.schema) ? parseSchema(value.schema) : undefined;
+    const schema = isRecord(value.schema) ? (allowColor && values.length === 1 && value.schema.type === "object"
+      ? parseColorArgumentSchema(value.schema) : parseSchema(value.schema)) : undefined;
     if (!name || !safeToken(name) || !schema) return undefined;
     parsed.push({
       name,
@@ -293,14 +295,9 @@ function descriptorFor(
 function cloneSchema(
   schema: AdvancedCapabilityCommandDefinition["arguments"][number]["schema"]
 ): AdvancedCapabilityCommandDefinition["arguments"][number]["schema"] {
-  const clone: AdvancedCapabilityCommandDefinition["arguments"][number]["schema"] = {};
-  if (schema.type !== undefined) clone.type = schema.type;
-  if (schema.enum) clone.enum = [...schema.enum];
-  if (schema.minimum !== undefined) clone.minimum = schema.minimum;
-  if (schema.maximum !== undefined) clone.maximum = schema.maximum;
-  if (schema.minLength !== undefined) clone.minLength = schema.minLength;
-  if (schema.maxLength !== undefined) clone.maxLength = schema.maxLength;
-  return clone;
+  // Only already-validated public schemas reach this serializer. Keep the
+  // bounded setColor property contract and isolate nested callers.
+  return structuredClone(schema);
 }
 
 function omission(

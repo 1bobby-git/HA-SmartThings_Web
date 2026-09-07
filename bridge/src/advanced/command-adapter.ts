@@ -51,7 +51,7 @@ export class AdvancedCommandAdapter implements CommandTransport {
   readonly #now: () => number;
 
   constructor(private readonly options: AdvancedCommandAdapterOptions) {
-    this.#maxAttempts = options.maxAttempts ?? 2;
+    this.#maxAttempts = options.maxAttempts ?? 1;
     if (!Number.isSafeInteger(this.#maxAttempts) || this.#maxAttempts < 1 || this.#maxAttempts > 3) {
       throw new Error("advanced_command_attempts_invalid");
     }
@@ -111,6 +111,39 @@ export class AdvancedCommandAdapter implements CommandTransport {
       }
     }
     throw new AdvancedCommandError("request_failed");
+  }
+
+  async executeBatch(requests: RoutedCommandRequest[]): Promise<CommandTransportReceipt> {
+    if (requests.length < 2 || requests.length > 4 || requests.some((entry) =>
+        entry.deviceId !== requests[0]!.deviceId || entry.component !== requests[0]!.component ||
+        !["on", "setLevel", "setHue", "setSaturation", "setColor", "setColorTemperature"].includes(entry.command) ||
+        entry.capabilityVersion === undefined) || !this.options.capabilityCache) {
+      throw new AdvancedCommandError("invalid_arguments");
+    }
+    const deviceId = this.options.resolveRawDeviceId(requests[0]!.deviceId);
+    if (!deviceId) throw new AdvancedCommandError("unsupported");
+    const commands: AdvancedCommandBody["commands"] = [];
+    try {
+      for (const request of requests) {
+        const component = resolveIdentifier(request.component, this.options.resolveRawIdentifier);
+        const capability = resolveIdentifier(request.capability, this.options.resolveRawIdentifier);
+        if (!component || !capability) throw new AdvancedCommandError("unsupported");
+        const arguments_ = await this.validateArguments(capability, request);
+        assertJsonArguments(arguments_);
+        commands.push({ component, capability, command: request.command, arguments: arguments_ });
+      }
+      const sentAtMs = this.#now();
+      return await this.options.session.request({ endpoint: "commands", method: "POST",
+        path: advancedEndpoints.deviceCommands(deviceId), body: { commands } }, (value) => {
+        if (!isRecord(value) || !Array.isArray(value.results) || value.results.length !== commands.length) {
+          throw new AdvancedCommandError("response_invalid");
+        }
+        // One rejection (including partial execution) fails the plan. Never retry
+        // an ambiguous POST or invent an automatic rollback of a physical light.
+        for (const result of value.results) parseReceipt({ results: [result] }, sentAtMs, this.#now());
+        return { state: "ACCEPTED", transport: "advanced", sentAtMs, acceptedAtMs: this.#now() };
+      });
+    } catch (error) { throw classifyError(error); }
   }
 
   private async validateArguments(
