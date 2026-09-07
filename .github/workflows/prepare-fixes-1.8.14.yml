@@ -1,0 +1,37 @@
+name: Prepare fixes 1.8.14
+on:
+  push:
+    branches: [fix/areas-number-rapid-state-1.8.14]
+    paths: [.github/workflows/prepare-fixes-1.8.14.yml]
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Export exact source and locked test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          mkdir -p /tmp/stw-review
+          git archive HEAD | tar -x -C /tmp/stw-review
+          cp -a node_modules /tmp/stw-review/node_modules
+          mkdir -p /tmp/stw-review/.test-runtime
+          cp "$(command -v node)" /tmp/stw-review/.test-runtime/node
+          git rev-parse HEAD > /tmp/stw-review/REVIEW_BASE_SHA
+          tar -C /tmp/stw-review -czf /tmp/stw-review.tar.gz .
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: stw-review-1.8.14
+          path: /tmp/stw-review.tar.gz
+          retention-days: 2
+          if-no-files-found: error
