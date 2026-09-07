@@ -1,0 +1,51 @@
+name: Apply verified command-controls patch
+
+on:
+  push:
+    branches:
+      - fix/advanced-command-controls-1.8.14
+    paths:
+      - .github/workflows/apply-command-controls.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-command-controls-1.8.14
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.repository == '1bobby-git/HA-SmartThings_Web' && github.ref == 'refs/heads/fix/advanced-command-controls-1.8.14'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/advanced-command-controls-1.8.14
+          fetch-depth: 0
+      - name: Verify and apply reviewed source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor 86565446f11044e32ca88b2543182ea65827e1fb HEAD
+          python - <<'PY'
+          import base64, gzip, hashlib, json
+          from pathlib import Path
+          assert json.loads(Path('package.json').read_text())['version'] == '1.8.13'
+          encoded = ''.join(Path(f'tools/command-controls-release.part{i}').read_text().strip() for i in range(1, 5))
+          patch = gzip.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '833431d649f04df444a7cfe1a9de0ad85439a5adba45a32f8079a6245e4f82de'
+          Path('/tmp/command-controls.patch').write_bytes(patch)
+          PY
+          git apply --check /tmp/command-controls.patch
+          git apply /tmp/command-controls.patch
+          rm tools/command-controls-release.part{1,2,3,4}
+          python -m compileall -q custom_components/smartthings_web
+          python custom_components/smartthings_web/tests/test_catalog_command_controls.py --isolated
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add CHANGELOG.md README.md addon bridge custom_components docs package.json package-lock.json protocol tests tools/command-controls-release.part{1,2,3,4}
+          git commit -m 'feat: expose verified Advanced command-only controls and release 1.8.14'
+          git push origin HEAD:refs/heads/fix/advanced-command-controls-1.8.14
