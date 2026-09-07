@@ -1,0 +1,178 @@
+name: Prepare release 1.8.13
+
+on:
+  push:
+    branches: [release/1.8.13]
+    paths: [.github/workflows/prepare-release-1.8.13.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prepare-release-1.8.13
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: release/1.8.13
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Prepare version and release documentation only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          git merge-base --is-ancestor 00d5c941f2c786ee23ebc5a9bce63daaa3b915b2 HEAD
+          python - <<'PY'
+          import json
+          import re
+          import subprocess
+          from pathlib import Path
+
+          old, new = '1.8.12', '1.8.13'
+          changed = []
+          def save(name, text):
+              p = Path(name)
+              before = p.read_text(encoding='utf-8')
+              if before != text:
+                  p.write_text(text, encoding='utf-8')
+                  changed.append(name)
+
+          for name in ['package.json', 'package-lock.json', 'custom_components/smartthings_web/manifest.json']:
+              p = Path(name)
+              text = p.read_text(encoding='utf-8')
+              data = json.loads(text)
+              assert data['version'] == old, name
+              count = 2 if name == 'package-lock.json' else 1
+              if count == 2:
+                  assert data['packages']['']['version'] == old
+              token = f'"version": "{old}"'
+              assert text.count(token) == count, name
+              updated = text.replace(token, f'"version": "{new}"')
+              after = json.loads(updated)
+              after['version'] = old
+              if count == 2:
+                  after['packages']['']['version'] = old
+              assert after == data, name
+              save(name, updated)
+
+          name = 'protocol/version.json'
+          text = Path(name).read_text(encoding='utf-8')
+          data = json.loads(text)
+          assert data['bridge_version'] == old and data['protocol_version'] == 5
+          token = f'"bridge_version": "{old}"'
+          assert text.count(token) == 1
+          save(name, text.replace(token, f'"bridge_version": "{new}"'))
+
+          name = 'addon/smartthings_web_bridge/config.yaml'
+          text = Path(name).read_text(encoding='utf-8')
+          text, count = re.subn(r'^version: 1\.8\.12$', 'version: ' + new, text, flags=re.M)
+          assert count == 1
+          save(name, text)
+
+          name = 'bridge/src/runtime.ts'
+          original_runtime = Path(name).read_text(encoding='utf-8')
+          before = f'const bridgeVersion = "{old}";'
+          after = f'const bridgeVersion = "{new}";'
+          assert original_runtime.count(before) == 1
+          save(name, original_runtime.replace(before, after))
+
+          test_files = subprocess.check_output(['git', 'grep', '-l', '-F', old, '--', 'tests', 'bridge/tests'], text=True).splitlines()
+          assert 'tests/addon-config.test.ts' in test_files
+          assert 'tests/protocol-version-contract.test.ts' in test_files
+          for name in test_files:
+              assert name.endswith('.test.ts'), name
+              text = Path(name).read_text(encoding='utf-8').replace(old, new)
+              if name == 'tests/addon-config.test.ts':
+                  needle = '    expect(changelog).toContain("## 1.8.13");'
+                  assert text.count(needle) == 1
+                  text = text.replace(needle, needle + '\n    expect(changelog).toContain("## 1.8.12");')
+              save(name, text)
+
+          notes = '''## 1.8.13
+
+          - 사용자 요청에 따라 Bridge 앱과 HA 통합을 1.8.13으로 함께 발행합니다. 1.8.12의 Home Monitor 직접 제어 동작은 변경하지 않습니다.
+          - 로그인된 웹앱의 위치 보안 변경 요청, 외출↔실내 전환 시 중간 해제·DOM 클릭 없음, 실제 상태 확인 및 불명확한 응답의 자동 재전송 차단을 유지합니다.
+          - 패키지·런타임·통합·앱의 버전 정보와 회귀 검사의 기대 버전을 동기화하고, 변경 이력을 최신 버전 순으로 정리합니다. 문서에서 1.8.11의 이전 버튼 방식과 현재 직접 요청 방식을 구분합니다.
+          - Scene, Advanced 기기 명령, Galaxy Home Mini speak, 로그인 프로필, 영역, 엔티티 ID, 의존성 및 wire protocol 5는 변경하지 않습니다.
+          - 이번 발행은 버전·배포 메타데이터와 문서 정리입니다. 새로운 실환경 동작 수정이나 삼성 계정의 전환 성공률·지연 검증을 완료했다는 의미가 아닙니다.
+
+          '''
+          notes = '\n'.join(line.strip() if line.strip() else '' for line in notes.splitlines()) + '\n'
+          for name in ['CHANGELOG.md', 'addon/smartthings_web_bridge/CHANGELOG.md']:
+              text = Path(name).read_text(encoding='utf-8')
+              assert f'## {new}\n' not in text
+              headings = list(re.finditer(r'^## (\d+\.\d+\.\d+)\s*$', text, re.M))
+              assert headings and any(m.group(1) == old for m in headings), name
+              preamble = text[:headings[0].start()]
+              sections = [(m.group(1), text[m.start():headings[i+1].start() if i+1<len(headings) else len(text)].strip()) for i,m in enumerate(headings)]
+              assert len({v for v,_ in sections}) == len(sections), name
+              sections.sort(key=lambda item: tuple(map(int,item[0].split('.'))), reverse=True)
+              save(name, preamble + notes + '\n'.join(section + '\n' for _,section in sections))
+
+          name = 'README.md'
+          text = Path(name).read_text(encoding='utf-8')
+          assert '## Home Monitor 1.8.12' in text
+          text = text.replace('## Home Monitor 1.8.12', '## Home Monitor 1.8.13', 1)
+          text = text.replace('현재 버전: Bridge `1.8.12` / HA 통합 `1.8.12`', '현재 버전: Bridge `1.8.13` / HA 통합 `1.8.13`', 1)
+          text = text.replace('## Home Monitor 1.8.13\n', '## Home Monitor 1.8.13\n\n1.8.13은 1.8.12의 직접 제어 코드를 유지하는 버전·문서 정리 릴리스입니다. 이번 발행으로 새로운 실환경 전환 개선을 검증했다는 의미는 아닙니다.\n', 1)
+          save(name, text)
+
+          name = 'addon/smartthings_web_bridge/DOCS.md'
+          text = Path(name).read_text(encoding='utf-8')
+          assert text.startswith('## Home Monitor 1.8.12')
+          text = text.replace('## Home Monitor 1.8.12', '## Home Monitor 1.8.13', 1)
+          text = text.replace('## Home Monitor 1.8.11\n', '## 이전 버전 1.8.11의 동작 (현재 버전에는 적용되지 않음)\n', 1)
+          save(name, text)
+
+          name = 'docs/home-monitor-direct-transport.md'
+          text = Path(name).read_text(encoding='utf-8')
+          text = text.replace('# Home Monitor 1.8.12: 직접 보안 상태 요청', '# Home Monitor 직접 보안 상태 요청 (1.8.12 도입, 1.8.13 유지)', 1)
+          text = text.replace('Bridge 앱과 HA 통합을 함께 1.8.12로 업데이트한다.', 'Bridge 앱과 HA 통합을 함께 1.8.13으로 업데이트한다. 1.8.13에서는 1.8.12의 동작 코드를 변경하지 않는다.', 1)
+          save(name, text)
+
+          # Prove that release preparation has not altered any functional source.
+          tracked = subprocess.check_output(['git', 'ls-files', 'bridge/src', 'custom_components/smartthings_web', 'protocol'], text=True).splitlines()
+          exceptions = {'bridge/src/runtime.ts', 'custom_components/smartthings_web/manifest.json', 'protocol/version.json'}
+          for name in tracked:
+              if name in exceptions:
+                  continue
+              expected = subprocess.check_output(['git', 'show', 'HEAD:' + name])
+              assert Path(name).read_bytes() == expected, 'Unexpected functional change: ' + name
+          assert Path('bridge/src/runtime.ts').read_text(encoding='utf-8').replace(after,before) == original_runtime
+          Path('/tmp/release-1.8.13-files.json').write_text(json.dumps(changed), encoding='utf-8')
+          print('Prepared files:', json.dumps(changed, ensure_ascii=False))
+          PY
+          git diff --check
+          git diff --stat
+      - name: Validate version contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npx vitest run tests/addon-config.test.ts tests/protocol-version-contract.test.ts
+      - name: Commit prepared files without changing workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin release/1.8.13
+          test "$(git rev-parse origin/release/1.8.13)" = "${GITHUB_SHA}"
+          python - <<'PY'
+          import json, subprocess
+          names=json.load(open('/tmp/release-1.8.13-files.json', encoding='utf-8'))
+          assert names and all(not n.startswith('.github/') for n in names)
+          subprocess.run(['git','add','--',*names], check=True)
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "chore: publish 1.8.13 preserving direct Home Monitor behavior"
+          git push origin HEAD:release/1.8.13
+          git rev-parse HEAD
