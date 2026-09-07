@@ -170,7 +170,7 @@ try {
     ["blocking modal",()=>{const d=document.createElement('div');d.setAttribute('role','dialog');d.textContent='Other dialog';document.body.append(d);},"command_control_not_found"],
     ["unknown state caption",()=>document.querySelector('.status').textContent='System transitioning',"command_control_not_found"],
     ["conflicting action attribute",()=>document.querySelector('[data-armstate]').setAttribute('data-armstate','ARMED_STAY'),"command_control_not_found"],
-    ["disabled disarm",()=>document.querySelector('[data-armstate]').disabled=true,"command_control_not_found"]
+    ["disabled disarm",()=>document.querySelector('[data-armstate]').disabled=true,"command_transition_disarm_failed"]
   ]) await test(name+" never sends a speculative control",async()=>{
     const f=await fixture("ARMED_AWAY");
     try {await f.actual.evaluate(mutate);await assert.rejects(f.run("ARMED_STAY"),new RegExp(code));assert.deepEqual(f.issued,[]);}

@@ -1,5 +1,10 @@
 # SmartThings Web Bridge 앱
 
+## Home Monitor 1.8.11
+
+실제 보안 카드의 버튼을 사용합니다. 경비 모드 간 전환은 **해제 → 해제 상태 확인 → 요청 모드 → 최종 확인** 순서입니다. 중간에 경비가 해제되며 재경비가 실패하면 해제 상태에 남을 수 있습니다. `command_transition_disarm_failed` / `command_transition_rearm_failed`가 나오면 실제 상태를 확인하세요. 문구·로고를 누르는 방식은 이 카드에서 사용하지 않습니다. Bridge와 HA 통합을 함께 업데이트하세요.
+
+
 SmartThings Web Bridge는 Home Assistant Ingress의 noVNC Chromium에서 사용자가 Samsung 계정에 직접 로그인하고, SmartThings Web 상태와 허용된 제어를 Home Assistant 통합에 전달하는 브리지 앱입니다.
 
 앱은 Ingress 포트 `8099`를 사용하고, VNC/noVNC는 컨테이너 내부에만 바인딩합니다. Supervisor watchdog에는 `/health/live`를 제공하며 Home Assistant Core에서만 접근하는 브리지 프록시는 `8100` 포트를 사용합니다.
