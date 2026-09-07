@@ -171,11 +171,20 @@ describe("Verified power transport and stale-cache protection", () => {
     expect((f.requests[0]!.body as any).commands).toEqual([{component:"main",capability:"switch",command:"on",arguments:[]}]);
   });
   test("an OFF cache cannot swallow a real OFF request when a fresh GET says ON", async () => {
+    // Wall-clock scheduling can enter the final recheck window before this
+    // assertion. Drive the same production timers explicitly; keep exact counts.
+    vi.useFakeTimers();
     const f = await fixture(); f.setDesired({...shared.initial,switch:"on"});
-    expect((await f.service.execute(powerRequest(f,"off"))).status).toBe("confirmed");
+    const confirmed = expect(f.service.execute(powerRequest(f,"off")))
+      .resolves.toMatchObject({ status: "confirmed" });
+    await vi.advanceTimersByTimeAsync(5);
+    await confirmed;
     expect(f.resync).toHaveBeenCalledTimes(2);
     expect(f.send).toHaveBeenCalledOnce();
     expect((f.requests[0]!.body as any).commands[0].command).toBe("off");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(f.resync).toHaveBeenCalledTimes(2);
+    expect(f.send).toHaveBeenCalledOnce();
   });
   test("already-confirmed power needs a fresh exact state and avoids unnecessary POST", async () => {
     const f = await fixture();
@@ -209,14 +218,21 @@ describe("Fresh brightness retries", () => {
   const levelRequest = (f: Awaited<ReturnType<typeof fixture>>) => ({ ...f.request,
     command: "setLevel", attribute: "level", capability: "identifier_level", arguments: [shared.initial.level] });
   test("a cached brightness cannot suppress a command when the lamp changed without an event", async () => {
+    vi.useFakeTimers();
     const f = await fixture();
     f.setDesired({ ...shared.initial, level: 80 });
-    expect((await f.service.execute(levelRequest(f))).status).toBe("confirmed");
+    const confirmed = expect(f.service.execute(levelRequest(f)))
+      .resolves.toMatchObject({ status: "confirmed" });
+    await vi.advanceTimersByTimeAsync(5);
+    await confirmed;
     expect(f.resync).toHaveBeenCalledTimes(2);
     expect(f.send).toHaveBeenCalledOnce();
     expect((f.requests[0]!.body as any).commands).toEqual([
       { component: "main", capability: "switchLevel", command: "setLevel", arguments: [shared.initial.level] }
     ]);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(f.resync).toHaveBeenCalledTimes(2);
+    expect(f.send).toHaveBeenCalledOnce();
   });
   test("a fresh exact brightness can avoid a redundant write", async () => {
     const f = await fixture();
