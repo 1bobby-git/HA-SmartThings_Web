@@ -446,6 +446,25 @@ def isolated_suite():
             self.assertEqual(self.entity.hs_color, (90, 80))
 
 
+        async def test_optional_colormap_catalog_selects_combined_color_for_reported_values(self):
+            import json
+            from smartthings_web.bridge_client import parse_command_catalog
+            fixture = json.loads((root / "tests/fixtures/light-schema-annotations.json").read_text())
+            catalog = parse_command_catalog(fixture["expectedCatalog"], self.device.device_id)
+            self.runtime.inventory.light_plan_supported = True
+            self.runtime.inventory.light_latest_wins_supported = True
+            self.device.commands = catalog.commands
+            self.device.command_omissions = ()
+            self.client.async_execute_command.return_value = NS(status="confirmed", sequence=1)
+            for hue, saturation in ((99, 92), (34, 96)):
+                await self.entity.async_turn_on(hs_color=(hue * 3.6, saturation))
+                request = self.client.async_execute_command.await_args.kwargs
+                self.assertTrue(request["replace_pending"])
+                self.assertEqual(request["command"], "applyLight")
+                self.assertEqual([x["command"] for x in request["arguments"]], ["on", "setColor"])
+                self.assertEqual(request["arguments"][1]["arguments"], [{"hue": hue, "saturation": saturation}])
+            self.assertEqual(self.entity.hs_color, (90, 80))  # No requested-value state fabrication.
+
         async def test_post_command_read_updates_real_states_when_sse_is_delayed(self):
             latest = deepcopy(self.runtime.inventory); latest.sequence += 1
             for attr, value in (("switch", "on"), ("level", 50)):

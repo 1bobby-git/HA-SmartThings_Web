@@ -1,5 +1,5 @@
 {
-  "note": "Synthetic schema regression, not a user device capture. Shared Node catalog / Python light contract.",
+  "note": "Synthetic schema regression, not a user device capture. Optional ColorMap fields reproduce the published colorControl schema shape; the public catalog sends only bounded hue and saturation. Shared Node catalog / Python light contract.",
   "definitions": [
     {
       "id": "switch",
@@ -108,6 +108,17 @@
                   },
                   "saturation": {
                     "type": "number"
+                  },
+                  "hex": {
+                    "type": "string",
+                    "maxLength": 7
+                  },
+                  "level": {
+                    "type": "integer"
+                  },
+                  "switch": {
+                    "type": "string",
+                    "maxLength": 3
                   }
                 },
                 "additionalProperties": false
@@ -156,6 +167,44 @@
     "schemaVersion": 1,
     "deviceId": "dev_001",
     "commands": [
+      {
+        "component": "identifier_main",
+        "componentRole": "main",
+        "capability": "identifier_color",
+        "capabilityVersion": 1,
+        "command": "setColor",
+        "arguments": [
+          {
+            "name": "color",
+            "required": true,
+            "sensitive": false,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "hue": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "saturation": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100
+                }
+              },
+              "required": [
+                "hue",
+                "saturation"
+              ],
+              "additionalProperties": false
+            }
+          }
+        ],
+        "transport": "advanced",
+        "confirmation": "state",
+        "label": "setColor",
+        "labelSource": "capability"
+      },
       {
         "component": "identifier_main",
         "componentRole": "main",
@@ -280,16 +329,7 @@
         "labelSource": "capability"
       }
     ],
-    "omissions": {
-      "schema_invalid": 1
-    }
+    "omissions": {}
   },
-  "expectedOmissions": [
-    {
-      "component": "identifier_main",
-      "capability": "identifier_color",
-      "command": "setColor",
-      "reason": "schema_invalid"
-    }
-  ]
+  "expectedOmissions": []
 }
