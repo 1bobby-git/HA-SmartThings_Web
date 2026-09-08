@@ -8,15 +8,26 @@ permissions:
 jobs:
   snapshot:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Archive tracked source only
-        run: git archive --format=tar HEAD | gzip > control-repair-source.tar.gz
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Prepare lockfile dependencies and runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          mkdir -p .repair-runtime/bin .repair-runtime/wheels
+          cp "$(command -v node)" .repair-runtime/bin/node
+          python -m pip download --no-deps --dest .repair-runtime/wheels 'voluptuous>=0.13,<1'
+          tar -czf control-repair-runtime.tar.gz node_modules .repair-runtime
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: control-repair-source
-          path: control-repair-source.tar.gz
+          name: control-repair-runtime
+          path: control-repair-runtime.tar.gz
           retention-days: 1
