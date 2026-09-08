@@ -43,6 +43,7 @@ export interface KeeperPageManagerOptions {
   sessionReauthRecoveryDelayMs?: number;
   loginRecoveryDelayMs?: number;
   sessionRecoveryRetryMs?: number;
+  onRecovery?: (phase: "attempt" | "verified" | "login_required" | "failed" | "stale") => void;
 }
 
 export async function fetchAdvancedDeviceSnapshots(
@@ -117,12 +118,16 @@ export class KeeperPageManager {
   #sessionRecoveryInFlight: Promise<void> | undefined;
   #touchInFlight: { page: BrowserPageLike; url: string; result: Promise<SessionTouchOutcome> } | undefined;
   readonly #canNavigate: () => boolean;
+  readonly #onRecovery: KeeperPageManagerOptions["onRecovery"];
+  #authenticatedOnce = false;
+  #touchGeneration = 0;
 
   constructor(
     private readonly context: BrowserContextLike,
     options: KeeperPageManagerOptions = {}
   ) {
     this.#now = options.now ?? Date.now;
+    this.#onRecovery = options.onRecovery;
     this.#canNavigate = options.canNavigate ?? (() => true);
     this.#sessionReauthRecoveryDelayMs = validDelay(
       options.sessionReauthRecoveryDelayMs,
@@ -140,6 +145,22 @@ export class KeeperPageManager {
 
   currentKeeper(): BrowserPageLike | undefined {
     return this.#keeper && !this.#keeper.isClosed() ? this.#keeper : undefined;
+  }
+
+  /** A definitive rejection of THIS page's protected request. No request is replayed. */
+  reportAuthenticationFailure(page: BrowserPageLike, url: string): boolean {
+    if (this.currentKeeper() !== page || page.isClosed() || page.url() !== url || !isKeeperSettledUrl(url)) return false;
+    this.observeSessionTouchOutcome("reauth", url);
+    return true;
+  }
+
+  private invalidateTouch(): void {
+    this.#touchGeneration++;
+    this.#touchInFlight = undefined;
+  }
+
+  private recoveryDiagnostic(phase: Parameters<NonNullable<KeeperPageManagerOptions["onRecovery"]>>[0]): void {
+    try { this.#onRecovery?.(phase); } catch { /* Observers cannot break recovery. */ }
   }
 
   authenticationRecoveryPending(): boolean {
@@ -213,7 +234,7 @@ export class KeeperPageManager {
     const completedLogin = previousKeeper && isSamsungLoginUrl(previousKeeper.url())
       ? candidates.find((page) => isKeeperSettledUrl(page.url()))
       : undefined;
-    const keeper = completedLogin ?? previousKeeper ?? candidates[0] ?? loginPage ??
+    let keeper = completedLogin ?? previousKeeper ?? candidates[0] ?? loginPage ??
       this.findReusableBlankPage() ?? (await this.createKeeperPage());
     this.#keeper = keeper;
     if (completedLogin) {
@@ -226,12 +247,14 @@ export class KeeperPageManager {
     }
 
     await this.recoverRememberedSessionIfDue(keeper);
+    keeper = this.currentKeeper() ?? keeper;
     const currentUrl = keeper.url();
     if (isKeeperSettledUrl(currentUrl)) {
       this.#loginObservedAtMs = undefined;
     } else if (isSamsungLoginUrl(currentUrl)) {
       this.#loginObservedAtMs ??= this.#now();
     } else {
+      this.invalidateTouch();
       await keeper.goto(KEEPER_URL, { waitUntil: "domcontentloaded" });
       if (isKeeperSettledUrl(keeper.url())) {
         this.clearRecoveryState();
@@ -251,9 +274,11 @@ export class KeeperPageManager {
     const keeper = await this.ensureKeeper();
     if (!this.#canNavigate() || isSamsungLoginUrl(keeper.url())) throw new Error("keeper_recovery_deferred");
     const target = isConcreteLocationUrl(keeper.url()) ? keeper.url() : KEEPER_URL;
+    this.invalidateTouch();
     await keeper.goto(target, { waitUntil: "domcontentloaded" });
     if (isKeeperSettledUrl(keeper.url())) {
-      this.clearRecoveryState();
+      if (this.authenticationRecoveryPending()) await this.touchAuthenticatedSession();
+      else this.clearRecoveryState();
     } else if (isSamsungLoginUrl(keeper.url())) {
       this.#loginObservedAtMs ??= this.#now();
     }
@@ -275,6 +300,7 @@ export class KeeperPageManager {
     if (running?.page === keeper && running.url === url) return running.result;
     const timeout = Number.isFinite(timeoutMs)
       ? Math.max(1, Math.min(SESSION_TOUCH_TIMEOUT_MS, Math.floor(timeoutMs))) : SESSION_TOUCH_TIMEOUT_MS;
+    const generation = this.#touchGeneration;
     const flight = { page: keeper, url, result: Promise.resolve("failed" as SessionTouchOutcome) };
     this.#touchInFlight = flight;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -336,7 +362,7 @@ export class KeeperPageManager {
         timer.unref?.();
       })
     ]).then((outcome) => {
-      if (this.currentKeeper() !== keeper || keeper.isClosed() || keeper.url() !== url) return "stale";
+      if (generation !== this.#touchGeneration || this.currentKeeper() !== keeper || keeper.isClosed() || keeper.url() !== url) return "stale";
       const result = ["ok", "reauth", "failed"].includes(outcome) ? outcome : "failed";
       this.observeSessionTouchOutcome(result as SessionTouchOutcome, url);
       return result as SessionTouchOutcome;
@@ -402,7 +428,7 @@ export class KeeperPageManager {
     }
     const observedAt = this.#sessionReauthObservedAtMs ?? this.#loginObservedAtMs;
     if (observedAt === undefined) return;
-    const recoveryDelay = this.#sessionReauthObservedAtMs === undefined
+    const recoveryDelay = this.#sessionReauthObservedAtMs === undefined && !this.#authenticatedOnce
       ? this.#loginRecoveryDelayMs
       : this.#sessionReauthRecoveryDelayMs;
     if (now - observedAt < recoveryDelay) return;
@@ -419,7 +445,13 @@ export class KeeperPageManager {
 
     this.#lastRecoveryAttemptAtMs = now;
     const recovery = (async () => {
+      if (loginPage) {
+        await this.recoverLoginInSeparatePage(keeper);
+        return;
+      }
+      this.recoveryDiagnostic("attempt");
       try {
+        this.invalidateTouch();
         await keeper.goto(KEEPER_URL, { waitUntil: "domcontentloaded" });
       } catch {
         return;
@@ -427,7 +459,8 @@ export class KeeperPageManager {
       if (isKeeperSettledUrl(keeper.url())) {
         // A loaded application shell does not prove an authenticated session.
         // Preserve the pending state until the protected read succeeds.
-        await this.touchAuthenticatedSession();
+        const outcome = await this.touchAuthenticatedSession();
+        this.recoveryDiagnostic(outcome === "ok" ? "verified" : outcome === "reauth" ? "login_required" : "failed");
       } else if (isSamsungLoginUrl(keeper.url())) {
         this.#sessionReauthObservedAtMs = undefined;
         this.#loginObservedAtMs = this.#now();
@@ -443,8 +476,52 @@ export class KeeperPageManager {
     }
   }
 
+  /** Use the existing profile's ordinary SSO redirect chain without touching the
+   * user's sign-in/MFA form. Promote only after an actual protected read succeeds.
+   */
+  private async recoverLoginInSeparatePage(original: BrowserPageLike): Promise<void> {
+    const originalUrl = original.url();
+    let probe: BrowserPageLike | undefined;
+    this.recoveryDiagnostic("attempt");
+    try {
+      probe = await this.context.newPage();
+      // Exclude this managed tab from concurrent keeper/command page adoption.
+      this.#commandPages.add(probe);
+      await probe.goto(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });
+      if (!isKeeperSettledUrl(probe.url())) {
+        this.recoveryDiagnostic(isSamsungLoginUrl(probe.url()) ? "login_required" : "failed");
+        return;
+      }
+      const candidate = probe;
+      const verifier = new KeeperPageManager({ pages: () => [candidate], newPage: async () => candidate });
+      await verifier.reconcileRestoredPages();
+      const outcome = await verifier.touchAuthenticatedSession();
+      if (outcome !== "ok") {
+        this.recoveryDiagnostic(outcome === "reauth" ? "login_required" : "failed");
+        return;
+      }
+      if (!this.#canNavigate() || this.currentKeeper() !== original || original.url() !== originalUrl ||
+          candidate.isClosed() || !isKeeperSettledUrl(candidate.url())) {
+        this.recoveryDiagnostic("stale"); return;
+      }
+      this.invalidateTouch();
+      this.#keeper = candidate;
+      this.#commandPages.delete(candidate);
+      this.#authenticatedOnce = true;
+      this.clearRecoveryState();
+      probe = undefined;
+      await original.close().catch(() => undefined);
+      this.recoveryDiagnostic("verified");
+    } catch {
+      this.recoveryDiagnostic("failed");
+    } finally {
+      await probe?.close().catch(() => undefined);
+    }
+  }
+
   private observeSessionTouchOutcome(outcome: SessionTouchOutcome, url: string): void {
     if (outcome === "ok") {
+      this.#authenticatedOnce = true;
       this.clearRecoveryState();
       return;
     }

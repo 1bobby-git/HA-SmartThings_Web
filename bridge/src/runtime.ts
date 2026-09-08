@@ -106,7 +106,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.31";
+const bridgeVersion = "1.8.32";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -194,6 +194,13 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   let browserRetryDelayMs = 60_000;
   const authenticatedSession = new AuthenticatedSmartThingsSession({
     onRequestTiming: (event) => log.info(`advanced_request_timing:${JSON.stringify(event)}`),
+    onAuthenticationFailure: (page, url) => {
+      if (currentKeeperManager?.reportAuthenticationFailure(page, url)) {
+        status.update({ authenticated: false, state: "LOGIN_REQUIRED" });
+        nextSessionTouchAtMs = 0;
+        log.warn("session_authentication_rejected");
+      }
+    },
     currentKeeper: () => currentKeeperManager?.currentKeeper(),
     openAdvancedPage: async () => {
       const manager = currentKeeperManager;
@@ -430,12 +437,13 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     legacyCommandExecutor,
     {
       locationExecutor: locationSecurityExecutor,
+      lightCommandBatchEnabled: deps.config.lightCommandBatchEnabled ?? false,
       domFallbackEnabled: deps.config.domFallbackEnabled ?? true,
       canUseAdvanced: (input) => verifiedAdvancedControl(
         devices.snapshot().devices.find((device) => device.id === input.deviceId), input),
-      onDiagnostic: ({ transport, stage, outcome, code }) =>
+      onDiagnostic: ({ transport, stage, outcome, code, mode, commandCount }) =>
         log.info(
-          `command_route:${transport}:${stage}:${outcome}${code ? `:${code}` : ""}`
+          `command_route:${transport}:${stage}:${outcome}${code ? `:${code}` : ""}${mode ? `:mode_${mode}:commands_${commandCount}` : ""}`
         ),
       onComponentDiagnostic: ({ phase, ordinal, outcome, code }) =>
         log.info(
@@ -451,7 +459,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     ...(deps.config.statusRecheckEnabled === false ? {} : { resyncAfterMs: 250 }),
     resync: refreshCommandSnapshot,
     lightDispatchScope: () => currentKeeperManager?.currentKeeper(),
-    lightDispatchPreview: async (deviceId, locationId) => {
+    ...(deps.config.lightCommandBatchEnabled === true ? {} : { lightDispatchPreview: async (deviceId: string, locationId: string): Promise<CommandResyncEvidence | undefined> => {
       if (deps.config.statusRecheckEnabled === false) return undefined;
       const startedAtMs = Date.now();
       const rawDeviceId = volatileIdentifiers.rawDeviceId(deviceId);
@@ -465,7 +473,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       return { source: "advanced_device_status", authoritativeSnapshot: false,
         deviceId, locationId, startedAtMs,
         observedStates: devices.commandStatusStates(sanitized, deviceId, locationId) };
-    },
+    } }),
     onLocationDiagnostic: (diagnostic) => log.info(
       `home_monitor_command:${diagnostic.phase}:action_${diagnostic.action}` +
       `:matches_${Number(diagnostic.observedStateMatches)}:elapsed_ms_${diagnostic.elapsedMs}` +
@@ -654,6 +662,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           log.warn("cake_client_capture_unavailable");
         }
         const keeperManager = new KeeperPageManager(context, {
+          onRecovery: (phase) => log.info(`session_recovery:${JSON.stringify({ phase })}`),
           canNavigate: () => !stopped && status.getSnapshot().pendingCommandCount === 0 &&
             !legacyCommandExecutor.hasForegroundOperation() && !legacyCommandExecutor.hasWarmCommandPage()
         });
@@ -1032,7 +1041,7 @@ async function attachContext(
     recover: async () => {
       const keeper = await keeperManager.recoverKeeper();
       if (canRecoverSocket()) {
-        status.update({ keeperPresent: true, ...statusForKeeperUrl(keeper.url()) });
+        status.update({ keeperPresent: true, ...statusForManagedKeeper(keeperManager, keeper) });
       }
     },
     onRecoveryFailed: () => log.warn("smartthings_websocket_recovery_failed"),
@@ -1106,7 +1115,7 @@ async function attachContext(
   status.update({
     browserVersion: safeBrowserVersion(context.browser?.()?.version?.()),
     keeperPresent: true,
-    ...statusForKeeperUrl(keeper.url())
+    ...statusForManagedKeeper(keeperManager, keeper)
   });
   return recoverSmartThingsWebSocket;
 }
@@ -1645,6 +1654,12 @@ function protocolMismatchSurfaceFor(
   snapshot: ProtocolIntegritySnapshot | undefined
 ): ProtocolMismatchSurface | undefined {
   return snapshot?.lastMismatch?.kind === "surface" ? snapshot.lastMismatch.surface : undefined;
+}
+
+function statusForManagedKeeper(manager: KeeperPageManager, keeper: BrowserPageLike): RuntimeStatusPatch {
+  return manager.authenticationRecoveryPending()
+    ? { authenticated: false, state: "LOGIN_REQUIRED", urlCategory: classifySmartThingsUrl(keeper.url()) }
+    : statusForKeeperUrl(keeper.url());
 }
 
 function statusForKeeperUrl(value: string): RuntimeStatusPatch {

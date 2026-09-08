@@ -16,6 +16,8 @@ let phase = 'initial';
 let responseStatus = 200;
 let htmlAuth = false;
 let touches = 0;
+let clock = Date.now();
+const recoveryPhases = [];
 const paths = { dataDir: root, profileDir: join(root, 'chromium-profile'), downloadDir: join(root, 'downloads') };
 const launch = async () => {
   context = await launchSmartThingsPersistentContext({
@@ -28,6 +30,9 @@ const launch = async () => {
   await context.route('**/*', async route => {
     const url = new URL(route.request().url());
     assert.equal(route.request().method(), 'GET');
+    if (url.origin === 'https://account.samsung.com') {
+      return route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Fixture login</title><input id="mfa" value="unsent-fixture">' });
+    }
     if (url.origin !== 'https://my.smartthings.com') return route.abort();
     if (url.pathname === new URL(SESSION_TOUCH_AUTH_PATH, KEEPER_URL).pathname) {
       touches++;
@@ -60,7 +65,7 @@ try {
   const saved = (await context.cookies(KEEPER_URL)).find(cookie => cookie.name === 'fixture_session');
   assert.equal(saved?.value, 'rotated');
   assert.equal(saved?.expires, -1); // Session cookie, not artificially extended.
-  keeper = new KeeperPageManager(context);
+  keeper = new KeeperPageManager(context, { now: () => clock, onRecovery: phase => recoveryPhases.push(phase) });
   page = await keeper.ensureKeeper();
   // A restored error tab is allowed; load the intercepted application afresh.
   await page.goto(KEEPER_URL, { waitUntil: 'domcontentloaded' });
@@ -79,6 +84,29 @@ try {
   responseStatus = 200;
   assert.equal(await keeper.touchAuthenticatedSession(), 'ok');
   assert.equal(keeper.authenticationRecoveryPending(), false);
+  // A remembered-session attempt must not overwrite the user's pending form.
+  const original = page;
+  await original.goto('https://account.samsung.com/accounts/v1/ST/signInGate');
+  await original.locator('#mfa').fill('fixture-in-progress');
+  await keeper.ensureKeeper(); clock += 30_001;
+  responseStatus = 401;
+  const denied = await keeper.ensureKeeper();
+  assert.equal(denied, original);
+  assert.equal(await original.locator('#mfa').inputValue(), 'fixture-in-progress');
+  assert.equal(original.isClosed(), false);
+  assert.equal(context.pages().length, 1);
+  assert.equal(keeper.authenticationRecoveryPending(), true);
+  assert.ok(recoveryPhases.includes('login_required'));
+  // A later protected success may replace the original, using this SAME profile.
+  clock += 300_001; responseStatus = 200;
+  const recovered = await keeper.ensureKeeper();
+  assert.notEqual(recovered, original);
+  assert.equal(original.isClosed(), true);
+  assert.equal(context.pages().length, 1);
+  assert.equal(keeper.authenticationRecoveryPending(), false);
+  assert.equal(await recovered.evaluate(() => localStorage.getItem('fixture-state')), 'preserved');
+  assert.ok(recoveryPhases.includes('verified'));
+  console.log('PASS isolated SSO recovery: pending form preserved on 401; protected GET required; verified same-profile promotion; no network access');
   console.log('PASS session continuity: cookie rotation, persistent session-cookie/localStorage restore, bounded tab count, auth proof and transient failure classification (synthetic only)');
 } finally {
   await context?.close();

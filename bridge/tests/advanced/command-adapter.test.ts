@@ -187,3 +187,29 @@ describe("AdvancedCommandAdapter", () => {
       .rejects.toThrowError(new AdvancedCommandError("response_invalid"));
   });
 });
+
+describe("opt-in multi-command validation and cancellation", () => {
+  const commands: RoutedCommandRequest[] = ["on", "setLevel"].map((command, index) => ({
+    deviceId: "dev_001", component: "main", capability: index ? "switchLevel" : "switch",
+    capabilityVersion: 1, command, arguments: index ? [42] : []
+  }));
+  const definition = (id: string) => parseCapabilityDefinition({ id, version: 1, attributes: {}, commands: {
+    on: { arguments: [] }, setLevel: { arguments: [{ name: "level", schema: { type: "integer", minimum: 0, maximum: 100 } }] }
+  } });
+  test("a superseded plan while definitions load sends no POST", async () => {
+    const controller = new AbortController(); const session = new FakeSession({ results: [] });
+    const cache = new CapabilityDefinitionCache(async id => { controller.abort(); return definition(id); });
+    const adapter = new AdvancedCommandAdapter({ session, capabilityCache: cache,
+      resolveRawDeviceId: () => "fixture-device", resolveRawIdentifier: id => id });
+    await expect(adapter.executeBatch(commands, controller.signal)).rejects.toThrow();
+    expect(session.requestMock).not.toHaveBeenCalled();
+  });
+  test("an invalid later argument prevents all commands, including the earlier on", async () => {
+    const session = new FakeSession({ results: [] });
+    const adapter = new AdvancedCommandAdapter({ session, capabilityCache: new CapabilityDefinitionCache(async id => definition(id)),
+      resolveRawDeviceId: () => "fixture-device", resolveRawIdentifier: id => id });
+    const invalid = structuredClone(commands); invalid[1]!.arguments = [101];
+    await expect(adapter.executeBatch(invalid)).rejects.toThrow("invalid_arguments");
+    expect(session.requestMock).not.toHaveBeenCalled();
+  });
+});

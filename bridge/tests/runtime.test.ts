@@ -832,7 +832,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
 
     expect(log.info.mock.calls.slice(0, 14)).toEqual([
-      ["bridge_init:version:1.8.31:home_monitor_direct"],
+      ["bridge_init:version:1.8.32:home_monitor_direct"],
       ["bridge_init:data_paths"],
       ["bridge_init:data_paths:data_dir"],
       ["bridge_init:data_paths:profile_dir"],
@@ -3099,7 +3099,7 @@ function capabilityDefinition(
   };
 }
 
-test("runtime light preview reads the exact aliased device and skips only matching on/level", async () => {
+test.each([false, true])("runtime verifies exact light delivery and immediate auth rejection (batch=%s)", async batch => {
   const shared = JSON.parse(readFileSync("custom_components/smartthings_web/tests/fixtures/light-plan.json", "utf8"));
   const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
   const statusPayload = { components: { main: {
@@ -3113,10 +3113,10 @@ test("runtime light preview reads the exact aliased device and skips only matchi
     components: [{ id: "main", label: "Main", capabilities: ["switch", "switchLevel", "colorControl"].map((id) => ({ id, version: 1 })) }] }] }];
   keeper.advancedStatusResponse = structuredClone(statusPayload);
   for (const def of shared.definitions) keeper.advancedResponses.set(`/advanced/cupcake-api/api/capabilities/${def.id}/1`, def);
-  keeper.advancedCommandResponse = { results: [{ status: "ACCEPTED" }] };
+  keeper.advancedCommandResponse = { results: Array.from({ length: batch ? 3 : 1 }, () => ({ status: "ACCEPTED" })) };
   keeper.onAdvancedCommand = () => {
     const req = keeper.advancedRequestCalls.at(-1) as { body: { commands: { command: string }[] } };
-    expect(req.body.commands.map((c) => c.command)).toEqual(["setColor"]);
+    expect(req.body.commands.map((c) => c.command)).toEqual(batch ? ["on", "setLevel", "setColor"] : ["setColor"]);
     keeper.advancedStatusResponse = { components: { main: { ...statusPayload.components.main,
       colorControl: { hue: { value: 34, timestamp: new Date().toISOString() },
         saturation: { value: 96, timestamp: new Date().toISOString() } }
@@ -3125,6 +3125,7 @@ test("runtime light preview reads the exact aliased device and skips only matchi
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const root = createTempRoot();
   const runtime = await createBridgeRuntime(createDeps(root, { log,
+    config: { ...createDeps(root).config, lightCommandBatchEnabled: batch },
     chromium: { launchPersistentContext: vi.fn(async () => new FakeContext([keeper])) } }));
   runtimes.push(runtime); await runtime.browserStartup;
   const now = Date.now();
@@ -3155,9 +3156,9 @@ test("runtime light preview reads the exact aliased device and skips only matchi
   expect(keeper.advancedRequestCalls.filter((r: any) => r.endpoint === "capability")).toHaveLength(definitionReads);
   const posts = keeper.advancedRequestCalls.filter((r: any) => r.method === "POST");
   expect(posts).toHaveLength(1);
-  expect(keeper.advancedRequestCalls.some((r: any) => r.path.endsWith("/runtime-fixture-lamp/status") && r.timeoutMs === 350)).toBe(true);
+  expect(keeper.advancedRequestCalls.some((r: any) => r.path.endsWith("/runtime-fixture-lamp/status") && r.timeoutMs === 350)).toBe(!batch);
   const diagnostics = log.info.mock.calls.filter(([s]) => s.startsWith("command_device:")).map(([s]) => JSON.parse(s.slice("command_device:".length)));
-  expect(diagnostics).toContainEqual(expect.objectContaining({ stage: "dispatch", commands: ["setColor"], skippedCommands: ["on", "setLevel"] }));
+  expect(diagnostics).toContainEqual(expect.objectContaining({ stage: "dispatch", commands: batch ? ["on", "setLevel", "setColor"] : ["setColor"], skippedCommands: batch ? [] : ["on", "setLevel"] }));
   const previewsBefore = keeper.advancedRequestCalls.filter((r: any) => r.timeoutMs === 350).length;
   const repeated = await fetch(`${baseUrl}/api/v1/commands`, { method: "POST", headers, body: JSON.stringify({
     targetType: "device", targetId: lamp.id, component: sw.component, capability: sw.capability, attribute: "switch",
@@ -3171,6 +3172,20 @@ test("runtime light preview reads the exact aliased device and skips only matchi
   expect({ code: repeated.status, body: await repeated.json() }).toMatchObject({ code: 200, body: { status: "confirmed" } });
   expect(keeper.advancedRequestCalls.filter((r: any) => r.timeoutMs === 350)).toHaveLength(previewsBefore);
   expect(keeper.advancedRequestCalls.filter((r: any) => r.method === "POST")).toHaveLength(2);
-  expect(log.info.mock.calls.filter(([s]) => s.startsWith("command_device:")).map(([s]) => JSON.parse(s.slice("command_device:".length))))
+  if (!batch) expect(log.info.mock.calls.filter(([s]) => s.startsWith("command_device:")).map(([s]) => JSON.parse(s.slice("command_device:".length))))
     .toContainEqual(expect.objectContaining({ stage: "dispatch", preflightSource: "recent_read", preflightMs: 0, commands: ["setColor"] }));
+  else expect(log.info).toHaveBeenCalledWith("command_route:advanced:dispatch:attempt:mode_batch:commands_3");
+  // Reject a subsequent transport request. The real runtime callback should
+  // immediately revoke readiness, rather than waiting for periodic keepalive.
+  keeper.evaluate.mockResolvedValueOnce({ ok: false, status: 401, value: undefined });
+  const rejected = await fetch(`${baseUrl}/api/v1/commands`, { method: "POST", headers, body: JSON.stringify({
+    targetType: "device", targetId: lamp.id, component: sw.component, capability: sw.capability, attribute: "switch",
+    command: "applyLight", confirm: true, requireAdvanced: true, replacePending: true, timeout: 1,
+    clientRequestId: "runtime_auth_rejected_003", arguments: [
+      { attribute: "switch", capability: sw.capability, command: "off", arguments: [] }
+    ]
+  }) });
+  expect(rejected.ok).toBe(false);
+  expect(runtime.status.getSnapshot()).toMatchObject({ authenticated: false, state: "LOGIN_REQUIRED" });
+  expect(log.warn).toHaveBeenCalledWith("session_authentication_rejected");
 });

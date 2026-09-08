@@ -387,3 +387,17 @@ describe("AdvancedFirstCommandExecutor", () => {
     expect(fallback.executeLocationAction).toHaveBeenCalledOnce();
   });
 });
+
+describe("light batch is opt-in and excludes split color setters", () => {
+  test.each([false, true])("split color controls stay sequential with batch=%s", async enabled => {
+    const receipt = { state: "ACCEPTED" as const, transport: "advanced" as const, acceptedAtMs: 100 };
+    const adapter = { ...advanced(async () => receipt), executeBatch: vi.fn(async () => receipt), executeSequence: vi.fn(async () => receipt) };
+    const fallback = legacy(); const diagnostic = vi.fn();
+    const executor = new AdvancedFirstCommandExecutor(adapter, fallback, { lightCommandBatchEnabled: enabled, onDiagnostic: diagnostic });
+    const actions = ["on", "setHue", "setSaturation"].map(command => ({ deviceId: "dev_001", component: "main",
+      capability: "colorControl", capabilityVersion: 1, command, arguments: [] }));
+    expect(await executor.executeLightPlan(actions)).toEqual(receipt);
+    expect(adapter.executeSequence).toHaveBeenCalledOnce(); expect(adapter.executeBatch).not.toHaveBeenCalled();
+    expect(diagnostic).toHaveBeenCalledWith(expect.objectContaining({ mode: "sequence", commandCount: 3 }));
+  });
+});

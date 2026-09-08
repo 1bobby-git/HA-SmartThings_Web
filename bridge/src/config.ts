@@ -8,6 +8,7 @@ export interface BridgeConfig {
   browserMaxRestarts: number;
   browserRetryDelayMs?: number;
   domFallbackEnabled?: boolean;
+  lightCommandBatchEnabled?: boolean;
   commandConfirmationTimeoutMs?: number;
   statusRecheckEnabled?: boolean;
   inventoryReconciliationIntervalMs?: number;
@@ -29,6 +30,10 @@ export function readBridgeConfig(
     domFallbackEnabled: parseBoolean(
       env.STW_DOM_FALLBACK_ENABLED ?? String(options.dom_fallback_enabled ?? true),
       "STW_DOM_FALLBACK_ENABLED"
+    ),
+    lightCommandBatchEnabled: parseBoolean(
+      env.STW_LIGHT_COMMAND_BATCH_ENABLED ?? String(options.light_command_batch_enabled ?? false),
+      "STW_LIGHT_COMMAND_BATCH_ENABLED"
     ),
     commandConfirmationTimeoutMs:
       parseBoundedSeconds(
