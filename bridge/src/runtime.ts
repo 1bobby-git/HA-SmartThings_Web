@@ -12,8 +12,7 @@ import {
   ADVANCED_DEVICE_SNAPSHOT_URLS,
   KeeperPageManager,
   fetchAdvancedDeviceSnapshotEntries,
-  fetchAdvancedDeviceSnapshots,
-  type SessionTouchOutcome
+  fetchAdvancedDeviceSnapshots
 } from "./browser/keeper-page.js";
 import { BrowserSupervisor } from "./browser/browser-supervisor.js";
 import { SmartThingsWebUiCommandExecutor } from "./browser/command-page.js";
@@ -107,7 +106,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.29";
+const bridgeVersion = "1.8.30";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -188,8 +187,11 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   let currentKeeperManager: KeeperPageManager | undefined;
   let recoverCurrentPushSocket: (() => void) | undefined;
   let sessionTouchInFlight = false;
-  let sessionTouchReadySinceMs: number | undefined;
-  let lastSessionTouchAttemptAtMs = 0;
+  let nextSessionTouchAtMs: number | undefined;
+  let sessionTouchFailures = 0;
+  let sessionTouchOperation: symbol | undefined;
+  let nextBrowserRetryAtMs = Number.POSITIVE_INFINITY;
+  let browserRetryDelayMs = 60_000;
   const authenticatedSession = new AuthenticatedSmartThingsSession({
     onRequestTiming: (event) => log.info(`advanced_request_timing:${JSON.stringify(event)}`),
     currentKeeper: () => currentKeeperManager?.currentKeeper(),
@@ -561,8 +563,14 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       log.warn("smartthings_websocket_stale_recovery");
       recoverCurrentPushSocket();
     }
-    void reconcileActiveKeeper();
-    void touchAuthenticatedSessionIfDue();
+    if (snapshot.state === "BROWSER_FAILED" && Date.now() >= nextBrowserRetryAtMs) {
+      void restartBrowser();
+      return;
+    }
+    // Serial maintenance avoids an SSO navigation racing its own auth probe.
+    void reconcileActiveKeeper().then(touchAuthenticatedSessionIfDue).catch(() => {
+      log.warn("session_maintenance_failed");
+    });
   }, deps.config.heartbeatIntervalMs);
   const detailDiscoveryInterval = setInterval(() => {
     void detailDiscovery.runOne().then((result) => {
@@ -630,6 +638,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   const supervisor = new BrowserSupervisor({
     maxRestarts: deps.config.browserMaxRestarts,
     retryDelayMs: deps.config.browserRetryDelayMs ?? 1_000,
+    shouldStop: () => stopped,
     launch: async () => {
       let context: ObservableContext | undefined;
       let assigned = false;
@@ -644,7 +653,10 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         if (!(await installCakeClientCapture(context))) {
           log.warn("cake_client_capture_unavailable");
         }
-        const keeperManager = new KeeperPageManager(context);
+        const keeperManager = new KeeperPageManager(context, {
+          canNavigate: () => !stopped && status.getSnapshot().pendingCommandCount === 0 &&
+            !legacyCommandExecutor.hasForegroundOperation() && !legacyCommandExecutor.hasWarmCommandPage()
+        });
         volatileIdentifiers.reset();
         const recoverSmartThingsWebSocket = await attachContext(
           context,
@@ -695,6 +707,12 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         );
         currentContext = context;
         currentKeeperManager = keeperManager;
+        nextSessionTouchAtMs = undefined;
+        sessionTouchFailures = 0;
+        sessionTouchOperation = undefined;
+        sessionTouchInFlight = false;
+        status.update({ sessionTouchConsecutiveFailures: 0, sessionTouchLastOutcome: undefined,
+          lastSessionTouchAtMs: undefined, lastSessionTouchSuccessAtMs: undefined });
         recoverCurrentPushSocket = recoverSmartThingsWebSocket;
         detailDiscovery.reset();
         await reconciliation.request("startup").catch(() => {
@@ -721,7 +739,14 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     restarting = true;
     try {
       const context = (await supervisor.start()) as ObservableContext | undefined;
+      if (!context && !stopped) {
+        nextBrowserRetryAtMs = Date.now() + browserRetryDelayMs;
+        log.warn(`browser_recovery_scheduled:${browserRetryDelayMs}`);
+        browserRetryDelayMs = Math.min(300_000, browserRetryDelayMs * 2);
+      }
       if (context && !stopped) {
+        nextBrowserRetryAtMs = Number.POSITIVE_INFINITY;
+        browserRetryDelayMs = 60_000;
         const protocolSnapshot = safeProtocolSnapshot(protocolIntegrity);
         if (protocolSnapshot?.compatible === false) {
           status.update(protocolBlockedPatch(protocolSnapshot));
@@ -733,6 +758,10 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
             return;
           }
           recoverCurrentPushSocket = undefined;
+          currentContext = undefined;
+          currentKeeperManager = undefined;
+          sessionTouchOperation = undefined;
+          sessionTouchInFlight = false;
           capturePipeline.reset();
           status.update({
             chromiumRunning: false,
@@ -802,55 +831,49 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     const snapshot = status.getSnapshot();
     const now = Date.now();
     const keeper = keeperManager?.currentKeeper();
-    const readyForTouch =
-      !stopped &&
-      keeperManager !== undefined &&
-      context !== undefined &&
-      generation === activeContextGeneration &&
-      snapshot.authenticated &&
-      snapshot.keeperPresent &&
-      classifySmartThingsUrl(keeper?.url() ?? "") === "smartthings_location";
-    if (!readyForTouch) {
-      sessionTouchReadySinceMs = undefined;
-      return;
-    }
-    sessionTouchReadySinceMs ??= now;
-    if (
-      now - sessionTouchReadySinceMs < SESSION_TOUCH_INTERVAL_MS ||
-      now - lastSessionTouchAttemptAtMs < SESSION_TOUCH_INTERVAL_MS ||
-      sessionTouchInFlight
-    ) {
-      return;
-    }
-    lastSessionTouchAttemptAtMs = now;
+    if (stopped || !keeperManager || !context || !snapshot.chromiumRunning ||
+        !snapshot.keeperPresent || classifySmartThingsUrl(keeper?.url() ?? "") !== "smartthings_location" ||
+        !(snapshot.authenticated || keeperManager.authenticationRecoveryPending())) return;
+    nextSessionTouchAtMs ??= now + SESSION_TOUCH_INTERVAL_MS;
+    // A backwards wall-clock correction must not suspend maintenance indefinitely.
+    if (nextSessionTouchAtMs - now > SESSION_TOUCH_INTERVAL_MS) nextSessionTouchAtMs = now + SESSION_TOUCH_INTERVAL_MS;
+    if (now < nextSessionTouchAtMs || sessionTouchInFlight) return;
+    const operation = Symbol();
+    sessionTouchOperation = operation;
     sessionTouchInFlight = true;
+    status.update({ lastSessionTouchAtMs: now, sessionTouchCount: (snapshot.sessionTouchCount ?? 0) + 1 });
     try {
       const outcome = await keeperManager.touchAuthenticatedSession();
-      if (
-        stopped ||
-        generation !== activeContextGeneration ||
-        context !== currentContext ||
-        keeperManager !== currentKeeperManager
-      ) {
+      if (stopped || generation !== activeContextGeneration || context !== currentContext ||
+          keeperManager !== currentKeeperManager || sessionTouchOperation !== operation) return;
+      if (outcome === "stale") {
+        nextSessionTouchAtMs = Date.now() + 30_000;
+        status.update({ sessionTouchLastOutcome: "stale" });
         return;
       }
-      handleSessionTouchOutcome(outcome);
+      const finished = Date.now();
+      sessionTouchFailures = outcome === "failed" ? sessionTouchFailures + 1 : 0;
+      const retryMs = outcome === "ok" ? SESSION_TOUCH_INTERVAL_MS : outcome === "reauth" ? 30_000 :
+        Math.min(SESSION_TOUCH_INTERVAL_MS, 30_000 * 2 ** Math.min(4, sessionTouchFailures - 1));
+      nextSessionTouchAtMs = finished + retryMs;
+      status.update({ sessionTouchLastOutcome: outcome, sessionTouchConsecutiveFailures: sessionTouchFailures,
+        ...(outcome === "ok" ? { lastSessionTouchSuccessAtMs: finished } : {}) });
+      log.info(`session_keepalive:${JSON.stringify({ outcome, durationMs: Math.max(0, finished - now),
+        consecutiveFailures: sessionTouchFailures, nextCheckInMs: retryMs })}`);
+      if (outcome === "reauth") {
+        status.update({ authenticated: false, state: "LOGIN_REQUIRED" });
+      } else if (outcome === "failed") {
+        // Network/permission/invalid payload failures are NOT a logout signal.
+        log.warn("session_touch_failed");
+      } else if (!snapshot.authenticated) {
+        await reconcileActiveKeeper();
+      }
     } finally {
-      sessionTouchInFlight = false;
+      if (sessionTouchOperation === operation) {
+        sessionTouchOperation = undefined;
+        sessionTouchInFlight = false;
+      }
     }
-  };
-
-  const handleSessionTouchOutcome = (outcome: SessionTouchOutcome) => {
-    if (outcome === "ok") return;
-    if (outcome === "reauth") {
-      sessionTouchReadySinceMs = undefined;
-      status.update({
-        authenticated: false,
-        state: "LOGIN_REQUIRED"
-      });
-      return;
-    }
-    log.warn("session_touch_failed");
   };
 
   const browserStartup = waitForProfileMaintenance(

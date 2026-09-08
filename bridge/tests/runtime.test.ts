@@ -832,7 +832,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
 
     expect(log.info.mock.calls.slice(0, 14)).toEqual([
-      ["bridge_init:version:1.8.29:home_monitor_direct"],
+      ["bridge_init:version:1.8.30:home_monitor_direct"],
       ["bridge_init:data_paths"],
       ["bridge_init:data_paths:data_dir"],
       ["bridge_init:data_paths:profile_dir"],
@@ -1281,6 +1281,124 @@ describe("createBridgeRuntime", () => {
     });
   });
 
+
+  test("maintains a quiet session over a synthetic day without accumulating pages or navigation", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(10_000);
+    const root = createTempRoot();
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    const context = new FakeContext([keeper]);
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const runtime = await createBridgeRuntime(createDeps(root, { log,
+      chromium: { launchPersistentContext: vi.fn(async () => context) },
+      config: { dataDir: root, host: "127.0.0.1", port: 0, heartbeatIntervalMs: 10_000,
+        browserMaxRestarts: 0, browserRetryDelayMs: 0 }
+    }));
+    runtimes.push(runtime); await runtime.browserStartup;
+    keeper.goto.mockClear();
+    runtime.status.update({ authenticated: true, keeperPresent: true, state: "STALE" });
+    const pages = context.pages().length;
+    await vi.advanceTimersByTimeAsync(86_410_000);
+    expect(runtime.status.getSnapshot()).toMatchObject({ sessionTouchCount: 288,
+      sessionTouchLastOutcome: "ok", sessionTouchConsecutiveFailures: 0, authenticated: true });
+    expect(context.pages()).toHaveLength(pages);
+    expect(keeper.goto).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalledWith("session_touch_failed");
+    const details = createHealthReport(runtime.status.getSnapshot()).details;
+    expect(details.sessionTouchSuccessAgeMs).toBeLessThan(10_001);
+    await runtime.stop();
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(runtime.status.getSnapshot().sessionTouchCount).toBe(288);
+  });
+
+  test("session maintenance retries transient failures at 30/60 seconds then resumes normal cadence", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(10_000);
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    keeper.sessionTouchOutcome = "failed";
+    const context = new FakeContext([keeper]);
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const root = createTempRoot();
+    const runtime = await createBridgeRuntime(createDeps(root, {
+      chromium: { launchPersistentContext: vi.fn(async () => context) }, log,
+      config: { dataDir: root, host: "127.0.0.1", port: 0, browserMaxRestarts: 0, heartbeatIntervalMs: 1_000, browserRetryDelayMs: 0 }
+    }));
+    runtimes.push(runtime); await runtime.browserStartup; keeper.goto.mockClear();
+    runtime.status.update({ authenticated: true, keeperPresent: true, state: "STALE" });
+    await vi.advanceTimersByTimeAsync(301_000);
+    expect(runtime.status.getSnapshot()).toMatchObject({ sessionTouchCount: 1, sessionTouchLastOutcome: "failed",
+      sessionTouchConsecutiveFailures: 1, authenticated: true });
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(runtime.status.getSnapshot().sessionTouchCount).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(runtime.status.getSnapshot()).toMatchObject({ sessionTouchCount: 2, sessionTouchConsecutiveFailures: 2 });
+    keeper.sessionTouchOutcome = "ok";
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runtime.status.getSnapshot()).toMatchObject({ sessionTouchCount: 3, sessionTouchLastOutcome: "ok",
+      sessionTouchConsecutiveFailures: 0, lastSessionTouchSuccessAtMs: Date.now(), authenticated: true });
+    await vi.advanceTimersByTimeAsync(299_000);
+    expect(runtime.status.getSnapshot().sessionTouchCount).toBe(3);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(runtime.status.getSnapshot().sessionTouchCount).toBe(4);
+    expect(log.info.mock.calls.filter(([message]) => message.startsWith("session_keepalive:"))).toHaveLength(4);
+    expect(keeper.goto).not.toHaveBeenCalled();
+  });
+
+  test("reauth recovery verifies the protected endpoint again before permitting authentication", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(10_000);
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    keeper.sessionTouchOutcome = "reauth";
+    const root = createTempRoot();
+    const runtime = await createBridgeRuntime(createDeps(root, {
+      chromium: { launchPersistentContext: vi.fn(async () => new FakeContext([keeper])) },
+      config: { dataDir: root, host: "127.0.0.1", port: 0, browserMaxRestarts: 0, heartbeatIntervalMs: 1_000, browserRetryDelayMs: 0 }
+    }));
+    runtimes.push(runtime); await runtime.browserStartup; keeper.goto.mockClear();
+    runtime.status.update({ authenticated: true, keeperPresent: true, state: "STALE" });
+    await vi.advanceTimersByTimeAsync(301_000);
+    expect(runtime.status.getSnapshot().authenticated).toBe(false);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(keeper.goto).toHaveBeenCalledTimes(1);
+    expect(runtime.status.getSnapshot().authenticated).toBe(false);
+    keeper.sessionTouchOutcome = "ok";
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(runtime.status.getSnapshot()).toMatchObject({ authenticated: true, sessionTouchLastOutcome: "ok" });
+  });
+
+  test("browser startup recovers after exhausted immediate retries without deleting the profile", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(10_000);
+    const root = createTempRoot();
+    const context = new FakeContext([new FakePage("https://my.smartthings.com/location/test-home")]);
+    const launch = vi.fn().mockRejectedValueOnce(new Error("synthetic offline"))
+      .mockRejectedValueOnce(new Error("synthetic offline")).mockResolvedValue(context);
+    const runtime = await createBridgeRuntime(createDeps(root, {
+      chromium: { launchPersistentContext: launch },
+      config: { dataDir: root, host: "127.0.0.1", port: 0, heartbeatIntervalMs: 1_000, browserMaxRestarts: 0, browserRetryDelayMs: 0 }
+    }));
+    runtimes.push(runtime); await runtime.browserStartup;
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(runtime.status.getSnapshot().state).toBe("BROWSER_FAILED");
+    await vi.advanceTimersByTimeAsync(59_999); expect(launch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_001); expect(launch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(119_000); expect(launch).toHaveBeenCalledTimes(3);
+    expect(runtime.status.getSnapshot()).toMatchObject({ chromiumRunning: true, keeperPresent: true });
+    for (const [profile] of launch.mock.calls) expect(profile).toBe(join(root, "chromium-profile"));
+    await runtime.stop();
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(launch).toHaveBeenCalledTimes(3);
+  });
+
+  test("stopping cancels deferred browser recovery while leaving the failure visible", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(10_000);
+    const launch = vi.fn(async () => { throw new Error("synthetic offline"); });
+    const root = createTempRoot();
+    const runtime = await createBridgeRuntime(createDeps(root, {
+      chromium: { launchPersistentContext: launch },
+      config: { dataDir: root, host: "127.0.0.1", port: 0, heartbeatIntervalMs: 1_000, browserMaxRestarts: 0, browserRetryDelayMs: 0 }
+    }));
+    runtimes.push(runtime); await runtime.browserStartup; await runtime.stop();
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(runtime.status.getSnapshot().state).toBe("BROWSER_FAILED");
+  });
   test("periodically touches a ready authenticated keeper without navigation or state churn", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);

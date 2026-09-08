@@ -10,6 +10,18 @@ import {
 } from "../../src/state/runtime-state.js";
 
 describe("RuntimeStatusStore", () => {
+  test("accepts only bounded session diagnostics, never arbitrary auth data", () => {
+    const store = new RuntimeStatusStore({ now: () => 100_000 });
+    store.update({ sessionTouchCount: 1, sessionTouchConsecutiveFailures: 0, sessionTouchLastOutcome: "ok",
+      lastSessionTouchAtMs: 99_000, lastSessionTouchSuccessAtMs: 100_000 });
+    for (const value of [-1, 0.5, NaN, Infinity]) {
+      expect(() => store.update({ sessionTouchCount: value })).toThrow();
+      expect(() => store.update({ sessionTouchConsecutiveFailures: value })).toThrow();
+    }
+    expect(() => store.update({ sessionTouchLastOutcome: "private=value" as never })).toThrow();
+    expect(() => store.update({ lastSessionTouchSuccessAtMs: 106_000 })).toThrow();
+  });
+
   test("starts with the exact runtime states and safe default snapshot", () => {
     const store = new RuntimeStatusStore({ now: () => 1_000 });
 
@@ -38,6 +50,8 @@ describe("RuntimeStatusStore", () => {
       "error"
     ]);
     expect(store.getSnapshot()).toEqual({
+      sessionTouchCount: 0,
+      sessionTouchConsecutiveFailures: 0,
       state: "STARTING",
       urlCategory: "none",
       chromiumRunning: false,

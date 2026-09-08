@@ -112,6 +112,8 @@ describe("createHealthReport", () => {
     expect(missingSnapshotProof.ready).toBe(false);
     expect(JSON.stringify(ready.details)).not.toMatch(/https?:|deviceId|locationId|token|secret|raw-/i);
     expect(ready.details).toEqual({
+      sessionTouchCount: 0,
+      sessionTouchConsecutiveFailures: 0,
       state: "CONNECTED",
       urlCategory: "smartthings_advanced",
       activeConnections: 3,

@@ -53,6 +53,11 @@ export interface RuntimeStatusSnapshot {
   detailDiscoveryFailureCount: number;
   protocolChangeCount: number;
   protocolMismatchSurface: ProtocolMismatchSurface | undefined;
+  sessionTouchCount?: number;
+  sessionTouchConsecutiveFailures?: number;
+  sessionTouchLastOutcome?: "ok" | "failed" | "reauth" | "stale" | undefined;
+  lastSessionTouchAtMs?: number | undefined;
+  lastSessionTouchSuccessAtMs?: number | undefined;
   restartCount: number;
   architectureVersion: string;
   advancedInventoryDeviceCount: number;
@@ -115,6 +120,11 @@ const snapshotKeys = new Set<keyof RuntimeStatusSnapshot>([
   "detailDiscoveryFailureCount",
   "protocolChangeCount",
   "protocolMismatchSurface",
+  "sessionTouchCount",
+  "sessionTouchConsecutiveFailures",
+  "sessionTouchLastOutcome",
+  "lastSessionTouchAtMs",
+  "lastSessionTouchSuccessAtMs",
   "restartCount",
   "architectureVersion",
   "advancedInventoryDeviceCount",
@@ -154,6 +164,8 @@ const counterKeys = new Set<keyof RuntimeStatusSnapshot>([
   "protocolInvalidFrameCount",
   "detailDiscoveryFailureCount",
   "protocolChangeCount",
+  "sessionTouchCount",
+  "sessionTouchConsecutiveFailures",
   "restartCount"
   ,"advancedInventoryDeviceCount"
   ,"advancedInventoryLocationCount"
@@ -176,6 +188,8 @@ const booleanKeys = new Set<keyof RuntimeStatusSnapshot>([
 ]);
 
 const timestampKeys = new Set<keyof RuntimeStatusSnapshot>([
+  "lastSessionTouchAtMs",
+  "lastSessionTouchSuccessAtMs",
   "heartbeatAtMs",
   "updatedAtMs",
   "initialSnapshotCompletedAtMs",
@@ -245,6 +259,8 @@ export class RuntimeStatusStore {
       protocolChangeCount: 0,
       protocolMismatchSurface: undefined,
       restartCount: 0,
+      sessionTouchCount: 0,
+      sessionTouchConsecutiveFailures: 0,
       architectureVersion: "unknown",
       advancedInventoryDeviceCount: 0,
       advancedInventoryLocationCount: 0,
@@ -332,6 +348,10 @@ function validatePatch(patch: RuntimeStatusPatch, now: number): void {
     }
     if (value !== undefined && booleanKeys.has(key) && typeof value !== "boolean") {
       throw new Error(`runtime status flag must be boolean: ${String(key)}`);
+    }
+    if (key === "sessionTouchLastOutcome" && value !== undefined &&
+        !["ok", "failed", "reauth", "stale"].includes(value as string)) {
+      throw new Error("invalid session touch outcome");
     }
     if (key === "state" && value !== undefined && !isRuntimeState(value)) {
       throw new Error(`invalid runtime state: ${String(value)}`);

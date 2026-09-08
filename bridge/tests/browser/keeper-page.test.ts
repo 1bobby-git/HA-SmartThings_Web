@@ -286,7 +286,7 @@ describe("KeeperPageManager", () => {
   });
 
   test("touches an authenticated keeper with a same-origin non-navigation GET", async () => {
-    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, type: "basic" }));
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, type: "basic", headers: new Headers({ "content-type": "application/json" }), json: async () => ({ items: [] }) }));
     vi.stubGlobal("fetch", fetchMock);
     const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
     keeper.executeEvaluate = true;
@@ -336,7 +336,7 @@ describe("KeeperPageManager", () => {
   ])("uses the authenticated endpoint after an ambiguous location response: %j", async (response) => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response)
-      .mockResolvedValueOnce({ ok: true, status: 200, type: "basic" });
+      .mockResolvedValueOnce({ ok: true, status: 200, type: "basic", headers: new Headers({ "content-type": "application/json" }), json: async () => ({ items: [] }) });
     vi.stubGlobal("fetch", fetchMock);
     const keeper = new FakePage(`${KEEPER_URL}/home`);
     keeper.executeEvaluate = true;
@@ -353,7 +353,7 @@ describe("KeeperPageManager", () => {
     [403, "failed"]
   ] as const)("classifies authenticated endpoint status %i as %s", async (status, outcome) => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce({ ok: true, status: 200, type: "basic" })
+      .mockResolvedValueOnce({ ok: true, status: 200, type: "basic", headers: new Headers({ "content-type": "application/json" }), json: async () => ({ items: [] }) })
       .mockResolvedValueOnce({ ok: false, status, type: "basic" });
     vi.stubGlobal("fetch", fetchMock);
     const keeper = new FakePage(`${KEEPER_URL}/home`);
@@ -369,8 +369,9 @@ describe("KeeperPageManager", () => {
     let now = 10_000;
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce({ ok: true, status: 200, type: "basic" })
-      .mockResolvedValueOnce({ ok: false, status: 302, type: "opaqueredirect" });
+      .mockResolvedValueOnce({ ok: true, status: 200, type: "basic", headers: new Headers({ "content-type": "application/json" }), json: async () => ({ items: [] }) })
+      .mockResolvedValueOnce({ ok: false, status: 302, type: "opaqueredirect" })
+      .mockResolvedValue({ ok: true, status: 200, type: "basic", headers: new Headers({ "content-type": "application/json" }), json: async () => ({ items: [] }) });
     vi.stubGlobal("fetch", fetchMock);
     const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
     keeper.executeEvaluate = true;
