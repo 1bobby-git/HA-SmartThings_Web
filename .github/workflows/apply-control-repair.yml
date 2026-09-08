@@ -28,8 +28,9 @@ jobs:
           root = pathlib.Path('.')
           expected = '805f43b6287f885c9edab1c61930c699429937901fac82449806b3a55f297a3b'
           encoded = ''.join((root / f'.github/control-repair.patch.b64.{n}').read_text().strip() for n in (1, 2))
-          # Repair one known transport transcription; the full SHA256 remains mandatory.
+          # Correct two known transport transcription errors. Full SHA256 is mandatory.
           encoded = encoded.replace('VmvVpuVV30', 'VmvVpuV30')
+          encoded = encoded.replace('/2o8wWs49Nr3c8eis7W92dTQRdLczDEYx4fa', '/2o8wWs49Nr3c8eis7jW92dTQRdLczDEYx4fa')
           patch = zlib.decompress(base64.b64decode(encoded, validate=True))
           if hashlib.sha256(patch).hexdigest() != expected:
               raise SystemExit('Reviewed patch checksum mismatch; refusing all changes')
