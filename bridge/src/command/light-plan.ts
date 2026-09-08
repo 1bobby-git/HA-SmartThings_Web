@@ -77,6 +77,51 @@ export function buildLightPlan(
   return { actions, expected };
 }
 
+/** A light plan may keep power, level or one color channel unchanged. Require
+ * fresh evidence for the changed members, plus a fresh observation of the
+ * requested color mode. A cache-only no-op still needs an exact post-command GET.
+ */
+export function lightPlanHasFreshEvidence(
+  before: readonly BridgeDeviceState[],
+  current: readonly BridgeDeviceState[],
+  expected: readonly LightExpectedState[]
+): boolean {
+  const stateFor = (states: readonly BridgeDeviceState[], target: LightExpectedState) =>
+    states.find((state) => state.component === target.component &&
+      state.capability === target.capability && state.attribute === target.attribute);
+  const relevant = expected.filter((target) => target.attribute !== "hue" ||
+    !expected.some((item) => item.component === target.component &&
+      item.capability === target.capability && item.attribute === "saturation" && item.value === 0));
+  const fresh = (target: LightExpectedState) => {
+    const old = stateFor(before, target), now = stateFor(current, target);
+    return now !== undefined && (!old || JSON.stringify(now.value) !== JSON.stringify(old.value) ||
+      (now.updatedAt !== null && (old.updatedAt === null || Date.parse(now.updatedAt) > Date.parse(old.updatedAt))));
+  };
+  const mode = relevant.filter((target) => ["hue", "saturation", "colorTemperature"].includes(target.attribute));
+  const modeChanged = mode.length > 0 && current.some((state) => state.component === expected[0]?.component &&
+    state.attribute === "colorMode" && lightReportedMode(state.value) !== undefined &&
+    fresh({ component: state.component, capability: state.capability,
+      attribute: state.attribute, value: String(state.value) }));
+  if (!relevant.some(fresh) && !modeChanged) return false;
+  if (!relevant.every((target) => {
+    const old = stateFor(before, target);
+    return (old !== undefined && lightValueMatches(target.attribute, old.value, target.value)) || fresh(target);
+  })) return false;
+  // Brightness/power alone must not prove a same-value color-mode change.
+  if (mode.length === 0 || mode.some(fresh)) return true;
+  // Some lamps report only colorMode when switching to the same numeric value.
+  return modeChanged;
+}
+
+function lightReportedMode(value: unknown): "color" | "temperature" | undefined {
+  if (typeof value !== "string") return undefined;
+  switch (value.toLowerCase().replaceAll("_", "")) {
+    case "color": case "hs": case "rgb": return "color";
+    case "colortemperature": case "temperature": case "ct": return "temperature";
+    default: return undefined;
+  }
+}
+
 /** UI color resolution only. Generic controls/security retain their exact comparisons. */
 export function lightValueMatches(attribute: string, actual: unknown, desired: string | number): boolean {
   if (attribute === "switch") return typeof actual === "string" && actual.trim().toLowerCase() === desired;
@@ -91,6 +136,11 @@ export function lightValueMatches(attribute: string, actual: unknown, desired: s
 }
 
 export function lightPlanMatches(states: readonly BridgeDeviceState[], expected: readonly LightExpectedState[]): boolean {
+  const requestedMode = expected.some((target) => target.attribute === "colorTemperature") ? "temperature" :
+    expected.some((target) => target.attribute === "hue" || target.attribute === "saturation") ? "color" : undefined;
+  if (requestedMode && states.some((state) => state.component === expected[0]?.component &&
+      state.attribute === "colorMode" && lightReportedMode(state.value) !== undefined &&
+      lightReportedMode(state.value) !== requestedMode)) return false;
   return expected.every((target) => {
     const matches = states.filter((state) => state.component === target.component &&
       state.capability === target.capability && state.attribute === target.attribute);

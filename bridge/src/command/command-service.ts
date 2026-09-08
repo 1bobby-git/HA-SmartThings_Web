@@ -1,4 +1,4 @@
-import { LightPlanError, buildLightPlan, lightPlanMatches, type LightExpectedState } from "./light-plan.js";
+import { LightPlanError, buildLightPlan, lightPlanMatches, lightPlanHasFreshEvidence, lightValueMatches, type LightExpectedState } from "./light-plan.js";
 import { validColorArgument } from "../advanced/color-argument.js";
 import type { RoutedCommandRequest } from "./command-router.js";
 import { normalizeLocationArmState } from "../state/location-arm-state.js";
@@ -533,6 +533,13 @@ export class SafeCommandService {
       }
       return await this.#executeComponentPlan(effective, componentPlan);
     }
+    const lightScalar = ["level", "hue", "saturation", "colorTemperature"].includes(attribute) &&
+      device.states.some((item) => item.component === effective.component &&
+        ["hue", "saturation", "colorTemperature"].includes(item.attribute)) &&
+      !dangerousControlText(device.type ?? "") && !(device.controls ?? []).some(dangerousControl);
+    const matchesValue = (actual: BridgeJsonValue, wanted: BridgeJsonValue | undefined) =>
+      lightScalar && typeof wanted === "number"
+        ? lightValueMatches(attribute, actual, wanted) : stateValuesEqual(actual, wanted);
     const changesColorMode = ["hue", "saturation", "colorTemperature"].includes(attribute) &&
       (effective.command === "setNumber" ||
         effective.advancedDescriptor?.command === ({ hue: "setHue", saturation: "setSaturation",
@@ -645,13 +652,14 @@ export class SafeCommandService {
           const candidates = evidence?.observedStates?.filter((candidate) =>
             candidate.component === effective.component && candidate.capability === effective.capability && candidate.attribute === attribute) ?? [];
           this.#deviceDiagnostic(effective, "read", deviceStartedAt, { stateCount: candidates.length,
-            matches: candidates.length === 1 && stateValuesEqual(candidates[0]!.value, desired) });
+            matches: candidates.length === 1 && matchesValue(candidates[0]!.value, desired) });
           return evidence;
         },
         minimumEventTimeMs: () =>
           advancedSentAtMs ??
           (state?.updatedAt ? Date.parse(state.updatedAt) : undefined),
-        expectedCommandId: () => receiptCommandId
+        expectedCommandId: () => receiptCommandId,
+        valuesMatch: matchesValue
       });
     }
     let executionResult: void | CommandTransportReceipt | "location_native" | "dom";
@@ -1082,22 +1090,12 @@ function waitForLightPlan(options: { devices: DeviceStore; deviceId: string; loc
   const currentStates = () => options.devices.commandStates(options.deviceId, options.locationId);
   const matches = () => lightPlanMatches(currentStates(), options.expected);
   const before = currentStates();
-  const changed = () => {
-    const states = currentStates();
-    return options.expected.every((target) => {
-      const key = (state: BridgeDeviceState) => state.component === target.component &&
-        state.capability === target.capability && state.attribute === target.attribute;
-      const old = before.find(key), current = states.find(key);
-      // An unchanged target requires an exact fresh GET, never unrelated inventory.
-      return current && (!old || !stateValuesEqual(current.value, old.value) ||
-        (current.updatedAt !== null && (old.updatedAt === null || Date.parse(current.updatedAt) > Date.parse(old.updatedAt))));
-    });
-  };
+  const changed = () => lightPlanHasFreshEvidence(before, currentStates(), options.expected);
   return waitForPredicate({ devices: options.devices, afterSequence: options.devices.currentSequence(),
     resync: options.resync, boundedStateRechecks: true, stabilityMs: options.stabilityMs,
     matches: (event) => (event.type === "inventory" || (event.type === "state" && event.deviceId === options.deviceId)) && changed() && matches(),
     invalidates: () => !matches(), matchesSnapshot: () => changed() && matches(),
-    acceptsResyncEvidence: (proof, startedAt) => options.stabilityMs === 0 && !!proof &&
+    acceptsResyncEvidence: (proof, startedAt) => !!proof &&
       proof.source === "advanced_device_status" && proof.deviceId === options.deviceId &&
       proof.locationId === options.locationId && Number.isFinite(proof.startedAtMs) && startedAt !== undefined &&
       proof.startedAtMs >= startedAt && Array.isArray(proof.observedStates) &&
@@ -1105,7 +1103,8 @@ function waitForLightPlan(options: { devices: DeviceStore; deviceId: string; loc
   });
 }
 
-function waitForState(options: { devices: DeviceStore; request: SafeCommandRequest; locationId: string; attribute: string; desired: BridgeJsonValue | undefined; afterSequence: number; stabilityMs: number; resync: CommandResync; minimumEventTimeMs?: () => number | undefined; expectedCommandId?: () => string | undefined }): ConfirmationWait {
+function waitForState(options: { devices: DeviceStore; request: SafeCommandRequest; locationId: string; attribute: string; desired: BridgeJsonValue | undefined; afterSequence: number; stabilityMs: number; resync: CommandResync; minimumEventTimeMs?: () => number | undefined; expectedCommandId?: () => string | undefined; valuesMatch?: (actual: BridgeJsonValue, desired: BridgeJsonValue | undefined) => boolean }): ConfirmationWait {
+  const valuesMatch = options.valuesMatch ?? stateValuesEqual;
   const exactState = (states: readonly BridgeDeviceState[]) => {
     const matches = states.filter((state) => state.component === options.request.component &&
       state.capability === options.request.capability && state.attribute === options.attribute);
@@ -1115,7 +1114,7 @@ function waitForState(options: { devices: DeviceStore; request: SafeCommandReque
     options.locationId, options.request.component!, options.request.capability!, options.attribute);
   const before = currentState();
   const matchesValue = (state: BridgeDeviceState | undefined) =>
-    state !== undefined && options.desired !== undefined && stateValuesEqual(state.value, options.desired);
+    state !== undefined && options.desired !== undefined && valuesMatch(state.value, options.desired);
   const snapshotMatches = () => matchesValue(currentState());
   const targetUpdated = () => {
     const current = currentState();
@@ -1134,7 +1133,7 @@ function waitForState(options: { devices: DeviceStore; request: SafeCommandReque
         event.state.component === options.request.component &&
         event.state.capability === options.request.capability &&
         event.state.attribute === options.attribute &&
-        (options.desired === undefined || stateValuesEqual(event.state.value, options.desired))) ||
+        (options.desired === undefined || valuesMatch(event.state.value, options.desired))) ||
       (event.type === "inventory" && targetUpdated() && snapshotMatches()),
     invalidates: (event) =>
       options.desired !== undefined &&
@@ -1143,12 +1142,12 @@ function waitForState(options: { devices: DeviceStore; request: SafeCommandReque
         event.state.component === options.request.component &&
         event.state.capability === options.request.capability &&
         event.state.attribute === options.attribute &&
-        !stateValuesEqual(event.state.value, options.desired)) ||
+        !valuesMatch(event.state.value, options.desired)) ||
         (event.type === "inventory" && !snapshotMatches())),
     // Another device's inventory change is not proof for this target.
     matchesSnapshot: () => targetUpdated() && snapshotMatches(),
     acceptsResyncEvidence: (evidence, minStartedAtMs) => {
-      if (options.stabilityMs > 0 || !evidence || evidence.source !== "advanced_device_status" ||
+      if (!evidence || evidence.source !== "advanced_device_status" ||
           evidence.deviceId !== options.request.targetId || evidence.locationId !== options.locationId ||
           !Array.isArray(evidence.observedStates) || minStartedAtMs === undefined ||
           !Number.isFinite(evidence.startedAtMs) || evidence.startedAtMs < minStartedAtMs) return false;
@@ -1377,7 +1376,9 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
       return;
     }
     if ((options.stabilityMs ?? 0) > 0) {
-      if (stabilityTimer) clearTimeout(stabilityTimer);
+      // Repeated matching observations do not restart an uninterrupted stable period.
+      // An actual contradictory event still clears the timer in the subscriber.
+      if (stabilityTimer) return;
       stabilityTimer = setTimeout(() => {
         stabilityTimer = undefined;
         if (settled || !pendingEvidence) return;
@@ -1431,11 +1432,9 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
   };
   const settleFromResyncEvidence = (evidence: CommandResyncEvidence | undefined, minStartedAtMs: number | undefined): boolean => {
     if (settled || options.acceptsResyncEvidence?.(evidence, minStartedAtMs) !== true) return settled;
-    cleanup();
-    resolveResult({
-      sequence: options.devices.currentSequence(),
-      source: "inventory_snapshot"
-    });
+    pendingEvidence = { sequence: options.devices.currentSequence(), source: "inventory_snapshot" };
+    // Exact GET evidence obeys the same stability/invalidation window as push.
+    resolvePending();
     return true;
   };
   const resyncAndCheck = (

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from enum import IntFlag
+from enum import IntFlag, StrEnum
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
@@ -25,6 +25,11 @@ class AlarmControlPanelEntity:
 
     _attr_code_arm_required = True
     _attr_code_format = None
+
+    @property
+    def state(self) -> str | None:
+        value = self.alarm_state
+        return value.value if value is not None else None
 
     @property
     def code_arm_required(self) -> bool:
@@ -52,6 +57,17 @@ class AlarmControlPanelEntityFeature(IntFlag):
     ARM_AWAY = 2
 
 
+class AlarmControlPanelState(StrEnum):
+    DISARMED = "disarmed"
+    ARMED_HOME = "armed_home"
+    ARMED_AWAY = "armed_away"
+    ARMING = "arming"
+    DISARMING = "disarming"
+    PENDING = "pending"
+    TRIGGERED = "triggered"
+
+
+alarm_module.AlarmControlPanelState = AlarmControlPanelState
 alarm_module.AlarmControlPanelEntity = AlarmControlPanelEntity  # type: ignore[attr-defined]
 alarm_module.AlarmControlPanelEntityFeature = AlarmControlPanelEntityFeature  # type: ignore[attr-defined]
 sys.modules["homeassistant.components.alarm_control_panel"] = alarm_module
@@ -138,6 +154,71 @@ def _runtime(location: BridgeLocation | str | None) -> SmartThingsWebRuntime:
 
 
 class SmartThingsWebHomeMonitorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_home_and_away_show_progress_without_claiming_confirmed_mode(self) -> None:
+        import asyncio
+        for command, expected in (("armStay", "armed_home"), ("armAway", "armed_away")):
+            runtime = _runtime(BridgeLocation("loc_001", "Home", "disarmed"))
+            entered, release = asyncio.Event(), asyncio.Event()
+            async def execute(**payload):
+                entered.set()
+                await release.wait()
+                return SimpleNamespace(status="confirmed", sequence=2)
+            runtime.client = SimpleNamespace(async_execute_command=AsyncMock(side_effect=execute),
+                async_get_inventory=AsyncMock())
+            entity = SmartThingsWebHomeMonitor(runtime)
+            task = asyncio.create_task(entity._async_arm(command))
+            await entered.wait()
+            self.assertEqual(entity.alarm_state, AlarmControlPanelState.ARMING)
+            self.assertEqual(entity.extra_state_attributes["confirmed_state"], "disarmed")
+            self.assertEqual(runtime.inventory.locations["loc_001"].arm_state, "disarmed")
+            runtime.inventory.locations["loc_001"] = BridgeLocation("loc_001", "Home", expected)
+            runtime.inventory.sequence = 2
+            # An authoritative push wins immediately, even before the HTTP result returns.
+            self.assertEqual(entity.state, expected)
+            release.set(); await task
+            self.assertIsNone(entity.extra_state_attributes["command_pending"])
+            runtime.client.async_get_inventory.assert_not_awaited()
+
+    async def test_failure_clears_progress_without_assigning_the_requested_mode(self) -> None:
+        import asyncio
+        runtime = _runtime(BridgeLocation("loc_001", "Home", "disarmed"))
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def execute(**payload):
+            entered.set(); await release.wait()
+            raise BridgeClientError("command_confirmation_timeout")
+        runtime.client = SimpleNamespace(async_execute_command=AsyncMock(side_effect=execute))
+        entity = SmartThingsWebHomeMonitor(runtime)
+        task = asyncio.create_task(entity.async_alarm_arm_home()); await entered.wait()
+        self.assertEqual(entity.state, "arming")
+        release.set()
+        with self.assertRaises(Exception): await task
+        self.assertEqual(entity.state, "disarmed")
+        self.assertIsNone(entity.extra_state_attributes["command_pending"])
+
+    async def test_older_completion_does_not_clear_newer_disarm_progress_and_cancel_clears_it(self) -> None:
+        import asyncio
+        runtime = _runtime(BridgeLocation("loc_001", "Home", "armed_away"))
+        started = {name: asyncio.Event() for name in ("armStay", "disarm")}
+        release = {name: asyncio.Event() for name in ("armStay", "disarm")}
+        async def execute(**payload):
+            name = payload["command"]
+            started[name].set(); await release[name].wait()
+            return SimpleNamespace(status="accepted_unconfirmed")
+        runtime.client = SimpleNamespace(async_execute_command=AsyncMock(side_effect=execute))
+        entity = SmartThingsWebHomeMonitor(runtime)
+        first = asyncio.create_task(entity.async_alarm_arm_home()); await started["armStay"].wait()
+        second = asyncio.create_task(entity.async_alarm_disarm()); await started["disarm"].wait()
+        self.assertEqual(entity.state, "disarming")
+        release["armStay"].set(); await first
+        self.assertEqual(entity.state, "disarming", "an older completion must not clear the new command")
+        runtime.inventory.locations["loc_001"] = BridgeLocation("loc_001", "Home", "triggered")
+        self.assertEqual(entity.state, "triggered", "never hide a triggered alarm behind command progress")
+        second.cancel()
+        with self.assertRaises(asyncio.CancelledError): await second
+        self.assertEqual(entity.state, "triggered")
+        self.assertIsNone(entity.extra_state_attributes["command_pending"])
+        self.assertEqual(runtime.client.async_execute_command.await_count, 2, "each user request is sent once")
+
     async def test_current_confirmed_sse_skips_redundant_inventory_read(self) -> None:
         runtime = _runtime(BridgeLocation("loc_001", "Home", "armed_home"))
         runtime.inventory.sequence = 9
