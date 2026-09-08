@@ -113,13 +113,14 @@ export class AdvancedCommandAdapter implements CommandTransport {
     throw new AdvancedCommandError("request_failed");
   }
 
-  async executeBatch(requests: RoutedCommandRequest[]): Promise<CommandTransportReceipt> {
+  async executeBatch(requests: RoutedCommandRequest[], signal?: AbortSignal): Promise<CommandTransportReceipt> {
     if (requests.length < 2 || requests.length > 4 || requests.some((entry) =>
         entry.deviceId !== requests[0]!.deviceId || entry.component !== requests[0]!.component ||
         !["on", "setLevel", "setHue", "setSaturation", "setColor", "setColorTemperature"].includes(entry.command) ||
         entry.capabilityVersion === undefined) || !this.options.capabilityCache) {
       throw new AdvancedCommandError("invalid_arguments");
     }
+    if (signal?.aborted) throw new Error("command_superseded");
     const deviceId = this.options.resolveRawDeviceId(requests[0]!.deviceId);
     if (!deviceId) throw new AdvancedCommandError("unsupported");
     const commands: AdvancedCommandBody["commands"] = [];
@@ -132,6 +133,7 @@ export class AdvancedCommandAdapter implements CommandTransport {
         assertJsonArguments(arguments_);
         commands.push({ component, capability, command: request.command, arguments: arguments_ });
       }
+      if (signal?.aborted) throw new Error("command_superseded");
       const sentAtMs = this.#now();
       return await this.options.session.request({ endpoint: "commands", method: "POST",
         path: advancedEndpoints.deviceCommands(deviceId), body: { commands } }, (value) => {

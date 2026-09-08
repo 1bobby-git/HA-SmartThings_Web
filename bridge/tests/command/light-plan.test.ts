@@ -16,7 +16,7 @@ import type { DeviceActionExecutionInput } from "../../src/command/command-servi
 const shared = JSON.parse(readFileSync("custom_components/smartthings_web/tests/fixtures/light-plan.json", "utf8"));
 const stores: DeviceStore[] = [];
 afterEach(() => { stores.splice(0).forEach((store) => store.close()); vi.useRealTimers(); });
-async function fixture(options: { stabilityMs?: number; timeoutMs?: number; colorSchema?: Record<string, unknown>; preview?: boolean; initial?: Record<string, unknown>; postDelayMs?: number; disableRechecks?: boolean } = {}) {
+async function fixture(options: { batch?: boolean; stabilityMs?: number; timeoutMs?: number; colorSchema?: Record<string, unknown>; preview?: boolean; initial?: Record<string, unknown>; postDelayMs?: number; disableRechecks?: boolean } = {}) {
   const store = new DeviceStore(); stores.push(store);
   const row = (values: Record<string, unknown>, timestamp = "2026-09-07T00:00:00Z") => ({
     deviceId: "dev_001", locationId: "loc_001", label: "Fixture lamp", type: "light",
@@ -53,6 +53,7 @@ async function fixture(options: { stabilityMs?: number; timeoutMs?: number; colo
     resolveRawIdentifier: (id) => shared.rawIdentifiers[id] });
   const legacy = { executeDeviceAction: vi.fn(async () => "location_native" as const) };
   const executor = new AdvancedFirstCommandExecutor(adapter, legacy, {
+    lightCommandBatchEnabled: options.batch ?? false,
     canUseAdvanced: (input) => verifiedAdvancedControl(store.snapshot().devices.find((d) => d.id === input.deviceId), input)
   });
   const resync = vi.fn(async () => {
@@ -706,5 +707,45 @@ describe("Mixed-source light preview through service/catalog/adapter", () => {
     expect(f.send).toHaveBeenCalledTimes(1);
     expect((f.send.mock.calls[0]![0].body as any).commands[0].command).toBe("setColor");
     expect(f.preview).toHaveBeenCalledTimes(2);
+  });
+});
+
+
+describe("opt-in Advanced multi-command transport keeps real state confirmation", () => {
+  test("three verified light commands use a single POST without changing the commands or expected state", async () => {
+    const f = await fixture({ batch: true });
+    expect(await f.service.execute(f.request)).toMatchObject({ status: "confirmed", transport: "advanced" });
+    expect(f.requests).toHaveLength(1);
+    expect((f.requests[0]!.body as any).commands).toEqual(shared.expectedCommands);
+    expect(f.resync).toHaveBeenCalled(); expect(f.legacy.executeDeviceAction).not.toHaveBeenCalled();
+  });
+  test("accepted multi-command receipt with no actual light change still times out", async () => {
+    const f = await fixture({ batch: true, timeoutMs: 15 });
+    f.send.mockImplementation(async (_req, parser) => parser({ results: shared.expectedCommands.map(() => ({ status: "ACCEPTED" })) }));
+    await expect(f.service.execute(f.request)).rejects.toThrow("command_confirmation_timeout");
+    expect(f.send).toHaveBeenCalledOnce(); expect(f.legacy.executeDeviceAction).not.toHaveBeenCalled();
+  });
+  test("partial receipt is an error, not an automatic sequential replay", async () => {
+    const f = await fixture({ batch: true });
+    f.send.mockImplementation(async (_req, parser) => parser({ results: [{ status: "ACCEPTED" }] }));
+    await expect(f.service.execute(f.request)).rejects.toThrow();
+    expect(f.send).toHaveBeenCalledOnce(); expect(f.legacy.executeDeviceAction).not.toHaveBeenCalled();
+  });
+  test.each([false, true])("single power operation remains one request with batch=%s", async batch => {
+    const f = await fixture({ batch });
+    f.request.arguments = [{ ...f.request.arguments[0], command: "off" }];
+    expect(await f.service.execute(f.request)).toMatchObject({ status: "confirmed" });
+    expect(f.requests).toHaveLength(1); expect((f.requests[0]!.body as any).commands[0].command).toBe("off");
+  });
+  test("synthetic sequential versus batch wait uses 3 versus 1 800ms request (not a real device benchmark)", async () => {
+    vi.useFakeTimers();
+    const measured: number[] = [];
+    for (const batch of [false, true]) {
+      const f = await fixture({ batch, postDelayMs: 800, timeoutMs: 3000 });
+      const at = Date.now(); const task = f.service.execute(f.request).then(result => { measured.push(Date.now() - at); return result; });
+      await vi.advanceTimersByTimeAsync(2500); expect(await task).toMatchObject({ status: "confirmed" });
+      expect(f.requests).toHaveLength(batch ? 1 : 3);
+    }
+    expect(measured[0]! - measured[1]!).toBe(1600);
   });
 });

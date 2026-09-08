@@ -1,7 +1,7 @@
 name: SmartThings Web Bridge
 slug: smartthings_web_bridge
 description: Headed Chromium bridge for observing SmartThings Web traffic from Home Assistant.
-version: 1.8.31
+version: 1.8.32
 url: https://github.com/1bobby-git/HA-SmartThings_Web
 startup: services
 boot: auto
@@ -21,6 +21,7 @@ arch:
 options:
   log_level: info
   dom_fallback_enabled: true
+  light_command_batch_enabled: false
   command_confirmation_timeout: 30
   status_recheck_enabled: true
   inventory_reconciliation_interval: 21600
@@ -28,6 +29,7 @@ options:
 schema:
   log_level: list(trace|debug|info|warning|error)
   dom_fallback_enabled: bool
+  light_command_batch_enabled: bool
   command_confirmation_timeout: int(1,120)
   status_recheck_enabled: bool
   inventory_reconciliation_interval: int(900,604800)

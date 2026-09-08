@@ -66,6 +66,7 @@ export interface AuthenticatedSmartThingsSessionOptions extends SessionPageManag
   requestJson?: (request: AdvancedRequest) => Promise<BrowserFetchResult | undefined>;
   defaultTimeoutMs?: number;
   onRequestTiming?: (event: AdvancedRequestTiming) => void;
+  onAuthenticationFailure?: (page: BrowserPageLike, url: string) => void;
 }
 
 const SMARTTHINGS_ORIGIN = "https://my.smartthings.com";
@@ -82,9 +83,16 @@ export class AuthenticatedSmartThingsSession implements AuthenticatedAdvancedSes
     if (request.keeperOnly !== undefined && (request.keeperOnly !== true || safeRequest.method !== "GET")) {
       throw new AdvancedSessionError("advanced_request_path_invalid", request.endpoint);
     }
+    const requestKeeper = this.options.currentKeeper();
+    const requestKeeperUrl = requestKeeper?.url();
     const measured = async (route: AdvancedRequestTiming["route"], run: () => Promise<BrowserFetchResult | undefined>) => {
       const start = performance.now();
       const result = await run();
+      if (result?.status === 401 && requestKeeper && requestKeeperUrl !== undefined &&
+          this.options.currentKeeper() === requestKeeper && !requestKeeper.isClosed() && requestKeeper.url() === requestKeeperUrl) {
+        try { this.options.onAuthenticationFailure?.(requestKeeper, requestKeeperUrl); }
+        catch { /* Recovery notifications cannot change delivery or replay a POST. */ }
+      }
       if (safeRequest.method === "POST" && safeRequest.endpoint === "commands") {
         const totalMs = Math.max(0, Math.round(performance.now() - start));
         const timing = result?.timing;

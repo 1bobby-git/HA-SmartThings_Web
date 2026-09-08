@@ -15,6 +15,7 @@ describe("readBridgeConfig", () => {
       browserMaxRestarts: 3,
       browserRetryDelayMs: 1_000,
       domFallbackEnabled: true,
+      lightCommandBatchEnabled: false,
       commandConfirmationTimeoutMs: 30_000,
       statusRecheckEnabled: true,
       inventoryReconciliationIntervalMs: 21_600_000,
@@ -62,6 +63,7 @@ describe("readBridgeConfig", () => {
       { STW_BROWSER_RETRY_DELAY_MS: "99" },
       { STW_BROWSER_RETRY_DELAY_MS: "10001" },
       { STW_DOM_FALLBACK_ENABLED: "yes" },
+      { STW_LIGHT_COMMAND_BATCH_ENABLED: "yes" },
       { STW_COMMAND_CONFIRMATION_TIMEOUT_SECONDS: "0" },
       { STW_STATUS_RECHECK_ENABLED: "yes" },
       { STW_INVENTORY_RECONCILIATION_SECONDS: "60" },
@@ -123,4 +125,10 @@ describe("readBridgeConfig", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+// Explicit opt-in; installs retain the working serial light transport.
+test("batch light commands require an explicit true setting", () => {
+  expect(readBridgeConfig({}).lightCommandBatchEnabled).toBe(false);
+  expect(readBridgeConfig({ STW_LIGHT_COMMAND_BATCH_ENABLED: "true" }).lightCommandBatchEnabled).toBe(true);
 });

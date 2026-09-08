@@ -41,7 +41,7 @@ export interface CommandTransport {
   name: CommandTransportName;
   execute(request: RoutedCommandRequest): Promise<CommandTransportReceipt>;
   executeSequence?(requests: RoutedCommandRequest[], signal?: AbortSignal): Promise<CommandTransportReceipt>;
-  executeBatch?(requests: RoutedCommandRequest[]): Promise<CommandTransportReceipt>;
+  executeBatch?(requests: RoutedCommandRequest[], signal?: AbortSignal): Promise<CommandTransportReceipt>;
 }
 
 export interface OrderedCommandRouterOptions {

@@ -67,12 +67,15 @@ export interface CommandRouteDiagnostic {
   stage: "dispatch" | "receipt";
   outcome: "attempt" | "accepted" | "failed";
   code?: string;
+  mode?: "batch" | "sequence";
+  commandCount?: number;
 }
 
 export interface AdvancedFirstCommandExecutorOptions {
   locationExecutor?: Pick<SafeCommandExecutor, "executeLocationAction">;
   now?: () => number;
   domFallbackEnabled?: boolean;
+  lightCommandBatchEnabled?: boolean;
   canUseAdvanced?: (input: DeviceActionExecutionInput) => boolean;
   onDiagnostic?: (event: CommandRouteDiagnostic) => void;
   onComponentDiagnostic?: (event: ComponentCommandDiagnostic) => void;
@@ -120,11 +123,18 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
 
   async executeLightPlan(actions: RoutedCommandRequest[], signal?: AbortSignal): Promise<CommandTransportReceipt> {
     if (!this.advanced.executeSequence && !this.advanced.executeBatch) throw new Error("command_control_not_found");
-    this.#diagnostic({ transport: "advanced", stage: "dispatch", outcome: "attempt" });
+    if (signal?.aborted) throw new Error("command_superseded");
+    // Opt-in only until this bulb's multi-command handling has been observed.
+    // Separate hue/saturation setters keep the established serial path.
+    const batch = this.options.lightCommandBatchEnabled === true && this.advanced.executeBatch && actions.length > 1 &&
+      actions.every(action => ["on", "setLevel", "setColor", "setColorTemperature"].includes(action.command));
+    this.#diagnostic({ transport: "advanced", stage: "dispatch", outcome: "attempt",
+      mode: batch ? "batch" : "sequence", commandCount: actions.length });
     try {
-      const receipt = this.advanced.executeSequence
-        ? await this.advanced.executeSequence(actions, signal)
-        : await this.advanced.executeBatch!(actions);
+      const receipt = batch
+        ? await this.advanced.executeBatch!(actions, signal)
+        : this.advanced.executeSequence ? await this.advanced.executeSequence(actions, signal)
+        : await this.advanced.executeBatch!(actions, signal);
       this.#diagnostic({ transport: "advanced", stage: "receipt", outcome: "accepted" });
       return receipt;
     } catch (error) {
