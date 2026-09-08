@@ -1,0 +1,28 @@
+name: Light hot path workspace
+on:
+  push:
+    branches: [perf/light-hot-path-1.8.29]
+    paths: [.github/workflows/light-hot-path-workspace.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 277a19390ec4775609f57a23c55638608a3eee97
+          persist-credentials: false
+      - name: Archive tracked baseline and Python test wheels
+        run: |
+          git archive --format=tar HEAD | gzip > light-hot-path-baseline.tar.gz
+          mkdir wheels
+          python -m pip download --dest wheels --python-version 3.13 --implementation cp --abi cp313 --platform manylinux2014_x86_64 --only-binary=:all: 'aiohttp>=3.10,<4' 'yarl>=1.9,<2' 'voluptuous>=0.15,<1'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: light-hot-path-baseline
+          path: |
+            light-hot-path-baseline.tar.gz
+            wheels
+          retention-days: 1
