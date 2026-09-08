@@ -35,7 +35,7 @@ export function buildLightPlan(
   const invalid = (): never => { throw new LightPlanError("invalid_arguments"); };
   if (request.requireAdvanced !== true || request.confirm !== true || !request.component ||
       request.attribute !== "switch" || !request.capability || request.controlId || request.controlLabel ||
-      request.arguments.length < 2 || request.arguments.length > 4) invalid();
+      request.arguments.length < 1 || request.arguments.length > 4) invalid();
   const component = request.component!;
   const actions: RoutedCommandRequest[] = [], expected: LightExpectedState[] = [];
   const seen = new Set<string>();
@@ -49,14 +49,16 @@ export function buildLightPlan(
     if (!record(item) || Object.keys(item).sort().join() !== "arguments,attribute,capability,command" ||
         typeof item.attribute !== "string" || typeof item.capability !== "string" ||
         typeof item.command !== "string" || !Array.isArray(item.arguments) ||
-        SETTERS[item.attribute] !== item.command || (index === 0) !== (item.attribute === "switch")) invalid();
+        (SETTERS[item.attribute] !== item.command && !(item.attribute === "switch" && item.command === "off")) ||
+        (index === 0) !== (item.attribute === "switch")) invalid();
     const entry = item as { attribute: string; capability: string; command: string; arguments: BridgeJsonValue[] };
     if (index === 0 && (entry.capability !== request.capability || entry.arguments.length !== 0)) invalid();
     const descriptor = resolve({ ...request, component, capability: entry.capability,
       attribute: entry.attribute, command: entry.command, arguments: entry.arguments });
     if (!descriptor || descriptor.confirmation !== "state") throw new LightPlanError("unsupported_command");
     if (entry.attribute === "switch") {
-      addExpected(entry.capability, "switch", "on");
+      if (entry.command === "off" && request.arguments.length !== 1) invalid();
+      addExpected(entry.capability, "switch", entry.command);
     } else if (entry.attribute === "color") {
       if (descriptor.arguments.length !== 1 || !validColorArgument(descriptor.arguments[0]!.schema, entry.arguments[0])) invalid();
       const color = entry.arguments[0] as { hue: number; saturation: number };

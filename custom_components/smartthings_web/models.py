@@ -29,6 +29,7 @@ class BridgeState:
     updated_at: str | None
     component_role: str | None = None
     capability_role: str | None = None
+    command_read_verified: bool = False
 
     @property
     def key(self) -> tuple[str, str, str]:
@@ -178,6 +179,7 @@ class BridgeInventory:
     scenes: dict[str, BridgeScene] = field(default_factory=dict)
     device_aliases: dict[str, str] = field(default_factory=dict)
     light_plan_supported: bool = False
+    light_latest_wins_supported: bool = False
 
 
 @dataclass(frozen=True)
@@ -355,7 +357,15 @@ class SmartThingsWebRuntime:
             states = {} if authoritative else deepcopy(existing.states)
             for key, candidate in latest_device.states.items():
                 present = existing.states.get(key)
-                if present is None or _state_is_newer(candidate, present):
+                verified_light_read = (
+                    authoritative and latest.light_latest_wins_supported
+                    and candidate.command_read_verified
+                    and candidate.attribute in {"switch", "level", "hue", "saturation", "colorTemperature", "colorMode"}
+                    and present is not None
+                    and candidate.updated_at == present.updated_at
+                    and latest_device.location_id == existing.location_id
+                )
+                if present is None or _state_is_newer(candidate, present) or verified_light_read:
                     states[key] = deepcopy(candidate)
                 elif authoritative:
                     states[key] = deepcopy(present)
@@ -393,6 +403,7 @@ class SmartThingsWebRuntime:
             bridge_version=latest.bridge_version,
             protocol_version=latest.protocol_version,
             light_plan_supported=latest.light_plan_supported,
+            light_latest_wins_supported=latest.light_latest_wins_supported,
             locations=(
                 _merge_locations(
                     {
@@ -2532,6 +2543,8 @@ def parse_state(raw: dict[str, Any]) -> BridgeState | None:
         updated_at=updated_at,
         component_role=_safe_role(raw.get("componentRole")),
         capability_role=_safe_role(raw.get("capabilityRole")),
+        command_read_verified=(raw.get("commandReadVerified") is True
+                               and raw.get("source") == "COMMAND_STATUS_RECHECK"),
     )
 
 

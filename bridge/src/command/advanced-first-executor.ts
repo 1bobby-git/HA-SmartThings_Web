@@ -118,15 +118,18 @@ export class AdvancedFirstCommandExecutor implements SafeCommandExecutor {
     return await this.#executeVerifiedWeb(input);
   }
 
-  async executeLightPlan(actions: RoutedCommandRequest[]): Promise<CommandTransportReceipt> {
-    if (!this.advanced.executeBatch) throw new Error("command_control_not_found");
+  async executeLightPlan(actions: RoutedCommandRequest[], signal?: AbortSignal): Promise<CommandTransportReceipt> {
+    if (!this.advanced.executeSequence && !this.advanced.executeBatch) throw new Error("command_control_not_found");
     this.#diagnostic({ transport: "advanced", stage: "dispatch", outcome: "attempt" });
     try {
-      const receipt = await this.advanced.executeBatch(actions);
+      const receipt = this.advanced.executeSequence
+        ? await this.advanced.executeSequence(actions, signal)
+        : await this.advanced.executeBatch!(actions);
       this.#diagnostic({ transport: "advanced", stage: "receipt", outcome: "accepted" });
       return receipt;
     } catch (error) {
       this.#diagnostic({ transport: "advanced", stage: "dispatch", outcome: "failed", code: safeCommandCode(error) });
+      if (signal?.aborted) throw new Error("command_superseded");
       throw new Error(error instanceof CommandTransportError && error.code === "authentication"
         ? "command_login_required" : "command_execution_failed");
     }

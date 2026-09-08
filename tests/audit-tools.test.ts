@@ -64,6 +64,16 @@ describe("api-free production audit", () => {
     expect(findings.filter((finding) => finding.rule === "direct-smartthings-socket").length).toBeGreaterThanOrEqual(4);
   });
 
+  test.each([
+    ["bridge/src/command/command-service.ts", "if (prior instanceof AbortController) prior.abort();", false],
+    ["bridge/src/command/command-service.ts", "prior.abort();", true],
+    ["bridge/src/command/command-service.ts", "if (prior instanceof AbortController) prior.abort(); route.abort();", true],
+    ["bridge/src/other.ts", "if (prior instanceof AbortController) prior.abort();", true],
+  ])("distinguishes guarded local cancellation from browser interception: %s %s", (path, line, flagged) => {
+    const root = seededTempDir(); write(root, path, line);
+    expect(auditSmartThingsApiFree({ cwd: root }).some((item) => item.rule === "playwright-network-mutation")).toBe(flagged);
+  });
+
   test("ignores legitimate local heartbeat timers", () => {
     const root = seededTempDir();
     write(root, "bridge/src/health.ts", `

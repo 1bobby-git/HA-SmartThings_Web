@@ -31,6 +31,22 @@ from smartthings_web.bridge_client import (  # noqa: E402
 class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
     """Keep HA's request open through browser actuation and push confirmation."""
 
+    def test_latest_light_capability_requires_boolean_true(self):
+        for value in (None, False, "true", 1, True):
+            result = parse_inventory({"schemaVersion": 1, "devices": [], "lightLatestWinsSupported": value})
+            self.assertIs(result.light_latest_wins_supported, value is True)
+
+    async def test_explicit_latest_light_flag_is_forwarded_only_when_requested(self):
+        client = SmartThingsWebBridgeClient(object(), "http://localhost:8099", "x" * 32)
+        async def response(*_args, **kwargs):
+            return {"schemaVersion": 1, "clientRequestId": kwargs["json_body"]["clientRequestId"],
+                "status": "confirmed", "sequence": 1, "transport": "advanced", "confirmation": "inventory_snapshot",
+                "lifecycle": "CONFIRMED_BY_STATUS"}
+        client._request_json = AsyncMock(side_effect=response)
+        await client.async_execute_command(target_type="device", target_id="dev_001", component="main",
+            capability="switch", command="applyLight", arguments=[], replace_pending=True)
+        self.assertTrue(client._request_json.await_args.kwargs["json_body"]["replacePending"])
+
     def test_room_source_is_optional_and_cannot_turn_missing_room_into_removal(self):
         base = {"id": "dev_001", "locationId": "loc_001", "name": "Device", "states": []}
         for fields, expected in [({}, None), ({"roomId": "identifier_room"}, None),

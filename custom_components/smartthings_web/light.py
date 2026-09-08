@@ -97,6 +97,9 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
         )
         self._command_lock = asyncio.Lock()
         self._confirmed_color_mode: ColorMode | None = None
+        self._intent_generation = 0
+        self._pending_light_values: dict[str, int | float] = {}
+        self._intent_pending = False
 
     def _control(self, attribute: str) -> LightScalarControl | None:
         return light_scalar_control(self.bridge_device, self.state_key[0], attribute)
@@ -233,41 +236,52 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
             component=self.state_key[0],
         )
 
-    async def async_turn_on(self, **kwargs: object) -> None:
-        """Validate all requested features before dispatch; keep pushed values intact."""
-        async with _command_slot(self._command_lock):
-            plan: list[tuple[str, int | float]] = []
-            mode = None
-            if ATTR_BRIGHTNESS in kwargs:
-                value = _input_number(kwargs[ATTR_BRIGHTNESS], 0, 255)
-                if value == 0:
-                    result = None
-                    try:
-                        result = await self._async_command("off")
-                    finally:
-                        await self._async_catch_up_state(result, {"switch": "off"})
-                    return
-                # HA brightness 1 must not round to a native OFF level of zero.
-                plan.append(("level", max(1, round(value * 100 / 255))))
-            if ATTR_COLOR_TEMP_KELVIN in kwargs:
-                value = _input_number(kwargs[ATTR_COLOR_TEMP_KELVIN], self.min_color_temp_kelvin,
-                                      self.max_color_temp_kelvin)
-                plan.append(("colorTemperature", round(value)))
-                mode = ColorMode.COLOR_TEMP
-            if ATTR_HS_COLOR in kwargs:
-                hs = kwargs[ATTR_HS_COLOR]
-                if (not isinstance(hs, (tuple, list)) or len(hs) != 2
-                        or ATTR_COLOR_TEMP_KELVIN in kwargs):
-                    raise HomeAssistantError("SmartThings Web light received an invalid color")
-                hue, saturation = _input_number(hs[0], 0, 360), _input_number(hs[1], 0, 100)
-                if ColorMode.HS not in self.supported_color_modes:
-                    raise HomeAssistantError("SmartThings Web light has no verified color control")
-                plan.extend((("hue", hue * 100 / 360), ("saturation", saturation)))
-                mode = ColorMode.HS
-            batch = self._verified_plan(plan) if plan else None
-            for attribute, value in plan:
-                if batch is None and self._control(attribute) is None:
+    def _prepare_values(self, kwargs: dict[str, object]) -> tuple[str, list[tuple[str, int | float]], ColorMode | None]:
+        """Validate the complete UI intent before it may replace another one."""
+        plan: list[tuple[str, int | float]] = []
+        mode = None
+        if ATTR_BRIGHTNESS in kwargs:
+            value = _input_number(kwargs[ATTR_BRIGHTNESS], 0, 255)
+            if value == 0:
+                return "off", [], None
+            plan.append(("level", max(1, round(value * 100 / 255))))
+        if ATTR_COLOR_TEMP_KELVIN in kwargs:
+            value = _input_number(kwargs[ATTR_COLOR_TEMP_KELVIN], self.min_color_temp_kelvin,
+                                  self.max_color_temp_kelvin)
+            plan.append(("colorTemperature", round(value)))
+            mode = ColorMode.COLOR_TEMP
+        if ATTR_HS_COLOR in kwargs:
+            hs = kwargs[ATTR_HS_COLOR]
+            if (not isinstance(hs, (tuple, list)) or len(hs) != 2
+                    or ATTR_COLOR_TEMP_KELVIN in kwargs):
+                raise HomeAssistantError("SmartThings Web light received an invalid color")
+            hue, saturation = _input_number(hs[0], 0, 360), _input_number(hs[1], 0, 100)
+            if ColorMode.HS not in self.supported_color_modes:
+                raise HomeAssistantError("SmartThings Web light has no verified color control")
+            plan.extend((("hue", hue * 100 / 360), ("saturation", saturation)))
+            mode = ColorMode.HS
+        if self._verified_plan(plan) is None:
+            for attribute, _ in plan:
+                if self._control(attribute) is None:
                     raise HomeAssistantError(f"SmartThings Web light has no verified {attribute} control")
+        return "on", plan, mode
+
+    def _supports_latest_intent(self, values: list[tuple[str, int | float]], power: str) -> bool:
+        return (self.runtime.inventory.light_latest_wins_supported
+                and self._control("level") is not None
+                and self._verified_plan(values, power) is not None)
+
+    async def async_turn_on(self, **kwargs: object) -> None:
+        """Use Advanced for verified light intents; retain the legacy compatibility path."""
+        power, plan, mode = self._prepare_values(kwargs)
+        if self._supports_latest_intent(plan, power):
+            await self._async_latest_intent(power, plan)
+            return
+        if power == "off":
+            await self.async_turn_off()
+            return
+        async with _command_slot(self._command_lock):
+            batch = self._verified_plan(plan) if plan else None
             result = None
             expected: dict[str, object] = {"switch": "on", **dict(plan)}
             try:
@@ -276,31 +290,89 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
                 else:
                     result = await self._async_command("on")
                     for attribute, value in plan:
-                        # A failure must still catch up even after an earlier confirmed step.
                         result = None
                         result = await self._async_set_number(attribute, value)
                 if mode is not None:
-                    # A fallback mode hint only after confirmed commands, never a color value.
                     self._confirmed_color_mode = mode
                     if getattr(self, "hass", None) is not None:
                         self.async_write_ha_state()
             finally:
                 await self._async_catch_up_state(result, expected)
 
-    def _verified_plan(self, values: list[tuple[str, int | float]]) -> list[dict[str, object]] | None:
-        """Use the advertised batch feature only with exact current catalog contracts."""
+    async def _async_latest_intent(self, power: str, values: list[tuple[str, int | float]]) -> None:
+        """Coalesce slider bursts and explicitly supersede obsolete confirmation waits.
+
+        Pending values are instructions, never HA state. The Bridge serializes the
+        physical POSTs; a timeout is still an error for the newest actual request.
+        """
+        pending = self._intent_pending
+        merged = dict(self._pending_light_values) if pending and power == "on" else {}
+        requested = dict(values)
+        if "hue" in requested:
+            merged.pop("colorTemperature", None)
+        elif "colorTemperature" in requested:
+            merged.pop("hue", None)
+            merged.pop("saturation", None)
+        merged.update(requested)
+        # Validate before advancing the generation, including previously pending members.
+        payload = self._verified_plan(list(merged.items()), power)
+        if payload is None or not self.available:
+            raise HomeAssistantError("SmartThings Web light has no verified Advanced control")
+        self._intent_generation += 1
+        generation = self._intent_generation
+        self._pending_light_values = merged
+        self._intent_pending = True
+        result = None
+        submitted = False
+        try:
+            # First control is immediate. A burst has one trailing intent, not N queued timers.
+            if pending:
+                await asyncio.sleep(0.075)
+            if generation != self._intent_generation:
+                return
+            submitted = True
+            try:
+                result = await self.runtime.client.async_execute_command(
+                    target_type="device", target_id=self.device_id,
+                    component=self.state_key[0], capability=self.state_key[1], attribute="switch",
+                    command="applyLight", arguments=payload, require_advanced=True,
+                    confirm=True, replace_pending=True,
+                )
+            except BridgeClientError as err:
+                if str(err) == "command_superseded":
+                    # A replacement is not a successful device confirmation or a failed control.
+                    return
+                raise HomeAssistantError(bridge_error_message("light plan command", err)) from err
+            if getattr(result, "status", None) not in {"confirmed", "already_confirmed"}:
+                raise HomeAssistantError("SmartThings Web light plan command failed: bridge_command_unconfirmed")
+            if generation == self._intent_generation:
+                if "colorTemperature" in merged:
+                    self._confirmed_color_mode = ColorMode.COLOR_TEMP
+                elif "hue" in merged:
+                    self._confirmed_color_mode = ColorMode.HS
+                if getattr(self, "hass", None) is not None:
+                    self.async_write_ha_state()
+        finally:
+            if generation == self._intent_generation:
+                self._intent_pending = False
+                self._pending_light_values = {}
+                if submitted:
+                    await self._async_catch_up_state(result, {"switch": power, **merged})
+
+    def _verified_plan(self, values: list[tuple[str, int | float]], power_command: str = "on") -> list[dict[str, object]] | None:
+        """Use the advertised light-plan feature only with exact current catalog contracts."""
         device = self.bridge_device
         if not self.runtime.inventory.light_plan_supported or device is None:
             return None
         component, capability, _ = self.state_key
         power = [command for command in device.commands
-                 if (command.component, command.capability, command.command) == (component, capability, "on")]
+                 if (command.component, command.capability, command.command) == (component, capability, power_command)]
         if (len(power) != 1 or power[0].arguments or power[0].confirmation != "state"
                 or any(item.component == component and item.capability == capability
-                       and item.command in (None, "on") for item in device.command_omissions)):
+                       and item.command in (None, power_command) for item in device.command_omissions)):
             return None
         payload: list[dict[str, object]] = [
-            {"attribute": "switch", "capability": capability, "command": "on", "arguments": []}]
+            {"attribute": "switch", "capability": capability, "command": power_command, "arguments": []}]
         requested = dict(values)
         color = light_color_command(device, component) if "hue" in requested else None
         for attribute, value in values:
@@ -332,7 +404,7 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
         return payload
 
     async def _async_apply_plan(self, payload: list[dict[str, object]]) -> BridgeCommandResult:
-        """One POST, then one joint confirmation: hue cannot block saturation/brightness."""
+        """One local Bridge request, then joint confirmation of the Advanced light plan."""
         if not self.available:
             raise HomeAssistantError("SmartThings Web light has no observed power control")
         try:
@@ -345,6 +417,9 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
             raise HomeAssistantError(bridge_error_message("light plan command", err)) from err
 
     async def async_turn_off(self, **kwargs: object) -> None:
+        if self._supports_latest_intent([], "off"):
+            await self._async_latest_intent("off", [])
+            return
         async with _command_slot(self._command_lock):
             result = None
             try:
