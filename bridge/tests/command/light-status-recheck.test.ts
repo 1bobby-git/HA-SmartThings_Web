@@ -63,3 +63,66 @@ test("normal newer timestamp uses one GET and no exceptional proof marker", asyn
   expect(read).toHaveBeenCalledOnce(); expect(current().value).toBe(60);
   expect(current().commandReadVerified).toBeUndefined();
 });
+
+const exact = (value: unknown, timestamp: string | null = t) => {
+  const payload = row(value, timestamp);
+  const { label: _label, type: _type, ...device } = payload.items[0]!;
+  return { items: [device] };
+};
+
+test.each([null, t, "2026-09-08T00:00:01Z"])("exact light status %s emits a delta instead of requesting the entire inventory", async (timestamp) => {
+  const { store, current } = setup(); const events: any[] = [];
+  const sequence = store.currentSequence(); store.subscribe((event) => events.push(event));
+  const read = vi.fn(async () => exact(60, timestamp));
+  await readLightCommandStatus(store, "dev_001", "loc_001", read, "main");
+  expect(events).toHaveLength(1);
+  expect(events[0]).toMatchObject({ type: "state", deviceId: "dev_001", sequence: sequence + 1,
+    state: { attribute: "level", value: 60, source: "COMMAND_STATUS_RECHECK" } });
+  expect(events[0].eventTime).toBeUndefined(); expect(events[0].commandId).toBeUndefined();
+  expect(current().value).toBe(60);
+  expect(read).toHaveBeenCalledTimes(timestamp === "2026-09-08T00:00:01Z" ? 1 : 2);
+});
+
+test("unchanged command reads are silent and generic reads retain inventory delivery", async () => {
+  const { store } = setup(); const events: any[] = []; store.subscribe((event) => events.push(event));
+  await readLightCommandStatus(store, "dev_001", "loc_001", async () => exact(10, "2026-09-08T00:00:01Z"), "main");
+  expect(events).toEqual([]);
+  await readLightCommandStatus(store, "dev_001", "loc_001", async () => exact(70, "2026-09-08T00:00:02Z"));
+  expect(events.map((event) => event.type)).toEqual(["inventory"]);
+});
+
+test("metadata-bearing reads keep the existing full inventory path", async () => {
+  const { store } = setup(); const events: any[] = []; store.subscribe((event) => events.push(event));
+  await readLightCommandStatus(store, "dev_001", "loc_001", async () => row(60, "2026-09-08T00:00:01Z"), "main");
+  expect(events.map((event) => event.type)).toEqual(["inventory"]);
+});
+
+test("new state keys retain inventory discovery instead of assuming HA knows the topology", async () => {
+  const { store } = setup(); const events: any[] = []; store.subscribe((event) => events.push(event));
+  const payload = exact(60, "2026-09-08T00:00:01Z");
+  (payload.items[0]!.status.components.main!.switchLevel as any).new_attribute = { value: 1, timestamp: t };
+  await readLightCommandStatus(store, "dev_001", "loc_001", async () => payload, "main");
+  expect(events.map((event) => event.type)).toEqual(["inventory"]);
+});
+
+test("two channel repairs have contiguous sequences and never deliver an uncorroborated value", async () => {
+  const { store } = setup();
+  const initial = exact(10); (initial.items[0]!.status.components.main!.switchLevel as any).hue = { value: 0, timestamp: t };
+  store.observeAdvancedDeviceSnapshot(initial);
+  const events: any[] = []; store.subscribe((event) => events.push(event)); const seq = store.currentSequence();
+  const payload = exact(60, null); (payload.items[0]!.status.components.main!.switchLevel as any).hue = { value: 34, timestamp: null };
+  await readLightCommandStatus(store, "dev_001", "loc_001", async () => payload, "main");
+  expect(events.map((event) => event.sequence)).toEqual([seq + 1, seq + 2]);
+  expect(events.every((event) => event.type === "state" && event.state.commandReadVerified)).toBe(true);
+  expect(events.map((event) => event.state.attribute).sort()).toEqual(["hue", "level"]);
+});
+
+test("a new command between corroborating reads cannot leak a stale delta", async () => {
+  const { store, current } = setup(); const events: any[] = []; store.subscribe((event) => events.push(event));
+  let count = 0;
+  await readLightCommandStatus(store, "dev_001", "loc_001", async () => {
+    if (++count === 2) store.beginLightCommand("dev_001");
+    return exact(60, null);
+  }, "main");
+  expect(events).toEqual([]); expect(current().value).toBe(10);
+});

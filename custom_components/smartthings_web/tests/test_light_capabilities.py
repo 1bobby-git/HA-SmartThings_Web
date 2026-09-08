@@ -465,6 +465,32 @@ def isolated_suite():
                 self.assertEqual(request["arguments"][1]["arguments"], [{"hue": hue, "saturation": saturation}])
             self.assertEqual(self.entity.hs_color, (90, 80))  # No requested-value state fabrication.
 
+        async def test_observed_light_deltas_reach_ha_before_confirmation_response_without_full_get(self):
+            import asyncio
+            self.enable_latest_catalog()
+            await self.entity.async_added_to_hass()
+            response = asyncio.get_running_loop().create_future()
+            started = asyncio.Event()
+            async def execute(**kwargs):
+                started.set()
+                return await response
+            self.client.async_execute_command.side_effect = execute
+            task = asyncio.create_task(self.entity.async_turn_on(hs_color=(122.4, 96)))
+            await started.wait()
+            for sequence, (attr, value) in enumerate((("switch", "on"), ("hue", 34), ("saturation", 96)), start=2):
+                await self.runtime.handle_event({"type": "state", "sequence": sequence, "deviceId": "dev_001",
+                    "state": {"component": C, "capability": capabilities[attr], "attribute": attr,
+                              "value": value, "unit": None, "updatedAt": "2026-09-07T00:00:00Z",
+                              "componentRole": "main", "source": "COMMAND_STATUS_RECHECK", "commandReadVerified": True}})
+            self.assertFalse(task.done())
+            self.assertTrue(self.entity.is_on)
+            self.assertAlmostEqual(self.entity.hs_color[0], 122.4)
+            self.assertEqual(self.entity.hs_color[1], 96)
+            self.assertGreaterEqual(self.entity.writes, 1)
+            response.set_result(NS(status="confirmed", sequence=4))
+            await task
+            self.client.async_get_inventory.assert_not_awaited()
+
         async def test_post_command_read_updates_real_states_when_sse_is_delayed(self):
             latest = deepcopy(self.runtime.inventory); latest.sequence += 1
             for attr, value in (("switch", "on"), ("level", 50)):

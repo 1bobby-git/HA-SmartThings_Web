@@ -634,16 +634,29 @@ export class DeviceStore {
   }
 
   observeCommandDeviceStatus(body: unknown, deviceId: string, locationId: string,
-    proof?: { component: string; beforeRevision: number | undefined; corroboratedStates: readonly BridgeDeviceState[] }
+    proof?: { component: string; beforeRevision: number | undefined; corroboratedStates: readonly BridgeDeviceState[] },
+    lightComponent?: string
   ): BridgeDeviceState[] {
     const states = this.commandStatusStates(body, deviceId, locationId);
     if (!states.length) return [];
     const device = this.#devices.get(deviceId)!;
+    const row = advancedDeviceRows(body)![0]!;
+    // Only an exact status envelope for an existing topology can take the delta
+    // path. Metadata/new state keys still use the authoritative inventory path.
+    const stateOnly = !!lightComponent &&
+      Object.keys(row).every((key) => ["deviceId", "locationId", "status"].includes(key)) &&
+      states.every((state) => {
+        const current = device.states.get(stateKey(state));
+        return !!current && current.componentRole === state.componentRole &&
+          current.capabilityRole === state.capabilityRole && current.unit === state.unit;
+      });
+    const before = stateOnly ? new Map(device.states) : undefined;
     // Capture the revision before the ordinary merge changes it. A push or a new
     // command occurring during either GET invalidates the entire exceptional proof.
     const canRepair = proof !== undefined && proof.beforeRevision !== undefined &&
       proof.beforeRevision === this.commandStateRevision(deviceId, locationId);
-    this.observeAdvancedDeviceSnapshot(body, { source: "COMMAND_STATUS_RECHECK" });
+    if (stateOnly) this.#applyAdvancedDeviceSnapshot(body, false, "COMMAND_STATUS_RECHECK");
+    else this.observeAdvancedDeviceSnapshot(body, { source: "COMMAND_STATUS_RECHECK" });
     let repaired = false;
     if (canRepair) for (const state of states) {
       if (state.component !== proof.component) continue;
@@ -658,7 +671,18 @@ export class DeviceStore {
       this.#commandReadRevisions.set(device, (this.#commandReadRevisions.get(device) ?? 0) + 1);
       repaired = true;
     }
-    if (repaired) {
+    if (before) {
+      let published = false;
+      for (const [key, current] of device.states) {
+        if (sameStatePayload(before.get(key)!, current)) continue;
+        // This is a Bridge status delta, NOT a fabricated Samsung push/event.
+        // Preserve source and upstream timestamp; no eventTime or commandId.
+        this.#publish({ schemaVersion: 1, sequence: this.#nextSequence(), type: "state",
+          deviceId, state: cloneState(current) });
+        published = true;
+      }
+      if (published) this.#schedulePersist();
+    } else if (repaired) {
       this.#publish({ schemaVersion: 1, sequence: this.#nextSequence(), type: "inventory" });
       this.#schedulePersist();
     }

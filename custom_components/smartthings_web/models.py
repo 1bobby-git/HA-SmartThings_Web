@@ -496,7 +496,13 @@ class SmartThingsWebRuntime:
             and state.attribute in EVENT_ATTRIBUTES
             and _timestamp(state.updated_at) == _timestamp(current.updated_at)
         )
-        if current is not None and not _state_is_newer(state, current) and not repeated_event:
+        verified_light_read = (
+            self.inventory.light_latest_wins_supported and state.command_read_verified
+            and state.attribute in {"switch", "level", "hue", "saturation", "colorTemperature", "colorMode"}
+            and current is not None and state.updated_at == current.updated_at
+            and event.get("state", {}).get("source") == "COMMAND_STATUS_RECHECK"
+        )
+        if current is not None and not _state_is_newer(state, current) and not repeated_event and not verified_light_read:
             return False
         semantic_duplicate = (
             current is not None
