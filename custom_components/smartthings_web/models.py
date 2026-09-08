@@ -2231,7 +2231,7 @@ def sensor_native_value(value: Any) -> Any:
     if isinstance(value, bool):
         return str(value).lower()
     if isinstance(value, (int, float)):
-        return value
+        return value if finite_number(value) else None
     if isinstance(value, str):
         return value if len(value) <= 255 else "data"
     if isinstance(value, list):
@@ -2803,7 +2803,7 @@ def _parse_numeric_range(value: Any) -> tuple[float, float, float] | None:
 def _number_from_keys(value: dict[str, Any], *keys: str) -> float | None:
     for key in keys:
         candidate = value.get(key)
-        if isinstance(candidate, (int, float)) and not isinstance(candidate, bool):
+        if finite_number(candidate):
             return float(candidate)
     return None
 

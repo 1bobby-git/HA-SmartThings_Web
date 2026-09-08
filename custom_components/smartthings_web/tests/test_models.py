@@ -1525,6 +1525,17 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(sensor_extra_attributes(structured), {"value": structured})
 
+    def test_sensor_values_reject_nonfinite_and_unsafe_numbers(self) -> None:
+        for value in (float("nan"), float("inf"), -float("inf"), 10**400):
+            with self.subTest(value_type=type(value).__name__):
+                self.assertIsNone(sensor_native_value(value))
+                self.assertEqual(
+                    signal_metrics_native_value({"lqi": value, "rssi": -61}),
+                    "RSSI: -61dbm",
+                )
+        for value in (0, -61, 23.5):
+            self.assertEqual(sensor_native_value(value), value)
+
     def test_play_track_control_label_does_not_match_plain_play(self) -> None:
         play = BridgeControl("play", "button", "Play", commands=("play",))
         play_track = BridgeControl(
