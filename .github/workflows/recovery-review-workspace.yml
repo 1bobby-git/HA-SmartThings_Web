@@ -1,0 +1,22 @@
+name: Recovery review workspace
+on:
+  push:
+    branches: [fix/session-recovery-light-evidence-1.8.32]
+    paths: [.github/workflows/recovery-review-workspace.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: c2793e35f9b2786c24500f0f6ec160a0e20b3115
+          persist-credentials: false
+      - run: git archive --format=tar HEAD | gzip > recovery-review-source.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: recovery-review-source
+          path: recovery-review-source.tar.gz
+          retention-days: 1
