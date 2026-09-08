@@ -175,6 +175,7 @@ async function handleBridgeApiRequest(
         ...options.devices.snapshot(),
         ready: report.ready,
         lightPlanSupported: true,
+        lightLatestWinsSupported: true,
         bridgeVersion: report.details.bridgeVersion,
         protocolVersion: report.details.protocolVersion
       });
@@ -247,7 +248,7 @@ function commandErrorStatus(code: SafeCommandError["code"]): number {
     return 503;
   }
   if (code === "device_not_found") return 404;
-  if (code === "client_request_conflict" || code === "device_offline") return 409;
+  if (code === "client_request_conflict" || code === "device_offline" || code === "command_superseded") return 409;
   if (
     code === "command_target_not_found" ||
     code === "command_location_mismatch" ||

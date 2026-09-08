@@ -3,6 +3,7 @@ import { validColorArgument } from "../advanced/color-argument.js";
 import type { RoutedCommandRequest } from "./command-router.js";
 import { normalizeLocationArmState } from "../state/location-arm-state.js";
 import { enqueueWithDeadline } from "./bounded-command-queue.js";
+import { enqueueLightIntent } from "./latest-light-queue.js";
 import { boundedLocationRead, scheduleLocationRechecks } from "./location-rechecks.js";
 import type {
   BridgeDevice,
@@ -35,6 +36,7 @@ export interface SafeCommandRequest {
   controlLabel?: string;
   confirm?: boolean;
   requireAdvanced?: boolean;
+  replacePending?: boolean;
   timeout?: number;
 }
 
@@ -123,7 +125,7 @@ export interface ComponentTransactionExecutionInput {
 }
 
 export interface SafeCommandExecutor {
-  executeLightPlan?(actions: RoutedCommandRequest[]): Promise<CommandTransportReceipt>;
+  executeLightPlan?(actions: RoutedCommandRequest[], signal?: AbortSignal): Promise<CommandTransportReceipt>;
   executeDeviceAction?(
     input: DeviceActionExecutionInput
   ): Promise<void | CommandTransportReceipt | "location_native" | "dom">;
@@ -160,6 +162,8 @@ export interface CommandResyncEvidence {
 export interface CommandResyncRequest {
   locationId?: string;
   deviceId?: string;
+  /** Internal, prevalidated light-only target for bounded corroborating status reads. */
+  lightComponent?: string;
 }
 
 export type SafeCommandErrorCode =
@@ -178,6 +182,7 @@ export type SafeCommandErrorCode =
   | "device_offline"
   | "capability_not_found"
   | "client_request_conflict"
+  | "command_superseded"
   | "command_queue_timeout"
   | "command_browser_unavailable"
   | "command_login_required"
@@ -228,7 +233,8 @@ interface SafeCommandServiceOptions {
     reason?: SafeCommandErrorCode;
   }) => void;
   onDeviceDiagnostic?: (event: { deviceId: string; stage: string; attribute: string;
-    elapsedMs: number; stateCount?: number; matches?: boolean; code?: string }) => void;
+    elapsedMs: number; stateCount?: number; matches?: boolean; code?: string;
+    lightStatus?: { attribute: string; requested: string | number; observed: string | number | null }[] }) => void;
   onPendingCountChange?: (count: number) => void;
   onResult?: (result: SafeCommandResult) => void;
 }
@@ -312,7 +318,8 @@ const newRequestKeys = [
   "controlLabel",
   "confirm",
   "timeout",
-  "requireAdvanced"
+  "requireAdvanced",
+  "replacePending"
 ] as const;
 const tokenPattern = /^[A-Za-z0-9_.:-]{1,160}$/u;
 const devicePattern = /^dev_[0-9]{3,32}$/u;
@@ -323,6 +330,7 @@ const dedupeLimit = 1_000;
 export class SafeCommandService {
   readonly #dedupe = new Map<string, DedupeEntry>();
   readonly #queues = new Map<string, Promise<void>>();
+  readonly #lightIntents = new Map<string, AbortController>();
 
   constructor(private readonly options: SafeCommandServiceOptions) {}
 
@@ -351,7 +359,34 @@ export class SafeCommandService {
 
   #enqueue(request: SafeCommandRequest): Promise<SafeCommandResult> {
     const previous = this.#queues.get(request.targetId) ?? Promise.resolve();
-    const queued = request.targetType !== "scene"
+    let signal: AbortSignal | undefined;
+    let lightKey: string | undefined;
+    if (request.replacePending === true) {
+      // An invalid/unsafe request must never cancel someone else's valid control.
+      const runtime = this.options.status.getSnapshot();
+      if (runtime.state !== "CONNECTED" || !createHealthReport(runtime).ready) {
+        throw new SafeCommandError("bridge_not_connected");
+      }
+      const device = this.options.devices.snapshot().devices.find((item) => item.id === request.targetId);
+      if (!device) throw new SafeCommandError("device_not_found");
+      if (!device.online) throw new SafeCommandError("device_offline");
+      this.#lightPlan(request, device);
+      if (!device.states.some((state) => state.component === request.component &&
+          ["level", "hue", "saturation", "colorTemperature"].includes(state.attribute))) {
+        throw new SafeCommandError("unsupported_command");
+      }
+      lightKey = `${request.targetId}\0${request.component}`;
+      const prior = this.#lightIntents.get(lightKey);
+      const controller = new AbortController();
+      this.#lightIntents.set(lightKey, controller);
+      signal = controller.signal;
+      if (prior instanceof AbortController) prior.abort();
+    }
+    const activeSignal = signal;
+    const queued = activeSignal
+      ? enqueueLightIntent(previous, () => this.#execute(request, activeSignal), activeSignal, 10_000,
+          (code) => new SafeCommandError(code))
+      : request.targetType !== "scene"
       ? enqueueWithDeadline(previous, () => this.#execute(request), 10_000,
           () => new SafeCommandError("command_queue_timeout"))
       : undefined;
@@ -363,6 +398,9 @@ export class SafeCommandService {
     this.#queues.set(request.targetId, queueTail);
     this.options.onPendingCountChange?.(this.#queues.size);
     void queueTail.finally(() => {
+      if (lightKey && this.#lightIntents.get(lightKey)?.signal === activeSignal) {
+        this.#lightIntents.delete(lightKey);
+      }
       if (this.#queues.get(request.targetId) === queueTail) {
         this.#queues.delete(request.targetId);
         this.options.onPendingCountChange?.(this.#queues.size);
@@ -371,7 +409,8 @@ export class SafeCommandService {
     return operation;
   }
 
-  async #execute(request: SafeCommandRequest): Promise<SafeCommandResult> {
+  async #execute(request: SafeCommandRequest, signal?: AbortSignal): Promise<SafeCommandResult> {
+    if (signal?.aborted) throw new SafeCommandError("command_superseded");
     const runtime = this.options.status.getSnapshot();
     if (runtime.state !== "CONNECTED" || !createHealthReport(runtime).ready) {
       throw new SafeCommandError("bridge_not_connected");
@@ -385,17 +424,19 @@ export class SafeCommandService {
     const startedAt = Date.now();
     this.#deviceDiagnostic(request, "start", startedAt);
     try {
-      const result = await this.#executeDevice(request, snapshot, locationNames);
+      const result = await this.#executeDevice(request, snapshot, locationNames, signal);
       this.#deviceDiagnostic(request, result.status, startedAt);
       return result;
     } catch (error) {
-      this.#deviceDiagnostic(request, "failed", startedAt, { code: error instanceof SafeCommandError ? error.code : commandError(error).code });
+      const code = error instanceof SafeCommandError ? error.code : commandError(error).code;
+      this.#deviceDiagnostic(request, code === "command_superseded" ? "superseded" : "failed", startedAt, { code });
       throw error;
     }
   }
 
   #deviceDiagnostic(request: SafeCommandRequest, stage: string, startedAt: number,
-    details: { stateCount?: number; matches?: boolean; code?: string } = {}): void {
+    details: { stateCount?: number; matches?: boolean; code?: string;
+      lightStatus?: { attribute: string; requested: string | number; observed: string | number | null }[] } = {}): void {
     try {
       this.options.onDeviceDiagnostic?.({ deviceId: request.targetId, stage,
         attribute: request.command === "applyLight" ? "light_plan" :
@@ -404,45 +445,71 @@ export class SafeCommandService {
     } catch { /* Diagnostics cannot change control outcomes. */ }
   }
 
-  async #executeLight(request: SafeCommandRequest, device: BridgeDevice): Promise<SafeCommandResult> {
+  #lightPlan(request: SafeCommandRequest, device: BridgeDevice) {
     if (!this.options.executor.executeLightPlan || dangerousControlText(device.type ?? "") ||
         (device.controls ?? []).some(dangerousControl)) throw new SafeCommandError("unsupported_command");
-    let plan;
-    try { plan = buildLightPlan(device, request, (item) => resolveAdvancedDescriptor(device, item)?.advancedDescriptor); }
+    try { return buildLightPlan(device, request, (item) => resolveAdvancedDescriptor(device, item)?.advancedDescriptor); }
     catch (error) {
       if (error instanceof SafeCommandError) throw error;
       if (error instanceof LightPlanError) throw new SafeCommandError(error.code);
       throw commandError(error);
     }
+  }
+
+  async #executeLight(request: SafeCommandRequest, device: BridgeDevice, signal?: AbortSignal): Promise<SafeCommandResult> {
+    const plan = this.#lightPlan(request, device);
+    this.options.devices.beginLightCommand(device.id);
     const startedAt = Date.now();
     const recheck = async () => {
-      const evidence = await this.options.resync({ deviceId: device.id });
+      const evidence = await this.options.resync({ deviceId: device.id, lightComponent: request.component! });
       this.#deviceDiagnostic(request, "read", startedAt, { stateCount: evidence?.observedStates?.length ?? 0,
-        matches: evidence?.observedStates ? lightPlanMatches(evidence.observedStates, plan.expected) : false });
+        matches: evidence?.observedStates ? lightPlanMatches(evidence.observedStates, plan.expected) : false,
+        lightStatus: plan.expected.map((target) => {
+          const states = evidence?.observedStates?.filter((state) => state.component === target.component &&
+            state.capability === target.capability && state.attribute === target.attribute) ?? [];
+          const value = states.length === 1 ? states[0]!.value : undefined;
+          return { attribute: target.attribute, requested: target.value,
+            observed: typeof value === "number" && Number.isFinite(value) ? value :
+              target.attribute === "switch" && (value === "on" || value === "off") ? value : null };
+        }) });
       return evidence;
     };
     const wait = waitForLightPlan({ devices: this.options.devices, deviceId: device.id,
       locationId: device.locationId, expected: plan.expected, resync: recheck,
       stabilityMs: this.options.confirmationStabilityMs ?? 0 });
-    let receipt;
-    try { receipt = await this.options.executor.executeLightPlan(plan.actions); }
-    catch (error) { wait.cancel(); throw commandError(error); }
-    wait.startTimeout(request.timeout === undefined ? this.options.timeoutMs : request.timeout * 1_000,
-      this.options.resyncAfterMs, Date.now());
-    const evidence = await wait.result;
-    return confirmed(request.clientRequestId, evidence.sequence,
-      evidence.source === "event" ? "device_event" : "inventory_snapshot", receipt.transport);
+    const supersede = () => wait.cancel("command_superseded");
+    // Confirmation can be cancelled while the POST is still in flight. Observe
+    // this promise immediately and hold the serialization lane until it settles.
+    void wait.result.catch(() => undefined);
+    signal?.addEventListener("abort", supersede, { once: true });
+    try {
+      if (signal?.aborted) throw new SafeCommandError("command_superseded");
+      const receipt = await this.options.executor.executeLightPlan!(plan.actions, signal);
+      if (signal?.aborted) throw new SafeCommandError("command_superseded");
+      wait.startTimeout(request.timeout === undefined ? this.options.timeoutMs : request.timeout * 1_000,
+        this.options.resyncAfterMs, Date.now());
+      const evidence = await wait.result;
+      return confirmed(request.clientRequestId, evidence.sequence,
+        evidence.source === "event" ? "device_event" : "inventory_snapshot", receipt.transport);
+    } catch (error) {
+      wait.cancel();
+      if (signal?.aborted) throw new SafeCommandError("command_superseded");
+      throw error instanceof SafeCommandError ? error : commandError(error);
+    } finally {
+      signal?.removeEventListener("abort", supersede);
+    }
   }
 
   async #executeDevice(
     request: SafeCommandRequest,
     snapshot: ReturnType<DeviceStore["snapshot"]>,
-    locationNames: Readonly<Record<string, string>>
+    locationNames: Readonly<Record<string, string>>,
+    signal?: AbortSignal
   ): Promise<SafeCommandResult> {
     const device = snapshot.devices.find((candidate) => candidate.id === request.targetId);
     if (!device) throw new SafeCommandError("device_not_found");
     if (!device.online) throw new SafeCommandError("device_offline");
-    if (request.command === "applyLight") return await this.#executeLight(request, device);
+    if (request.command === "applyLight") return await this.#executeLight(request, device, signal);
     const deviceStartedAt = Date.now();
     const effective = resolveDeviceRequest(device, request);
     if (!effective.component || !effective.capability) {
@@ -1061,9 +1128,15 @@ function normalizeRequest(targetType: SafeCommandRequest["targetType"], targetId
   ) {
     throw new SafeCommandError("invalid_arguments");
   }
+  if (input.replacePending !== undefined &&
+      (input.replacePending !== true || targetType !== "device" || input.command !== "applyLight" ||
+       input.requireAdvanced !== true || input.confirm !== true)) {
+    throw new SafeCommandError("invalid_arguments");
+  }
   return {
     targetType,
     targetId,
+    ...(input.replacePending === true ? { replacePending: true } : {}),
     ...(deviceId ? { deviceId } : {}),
     ...(typeof input.component === "string" ? { component: input.component } : {}),
     ...(typeof input.capability === "string" ? { capability: input.capability } : {}),
@@ -1334,7 +1407,7 @@ function waitForComponentVector(options: {
 
 interface ConfirmationWait {
   result: Promise<ConfirmationEvidence>;
-  cancel: () => void;
+  cancel: (code?: SafeCommandErrorCode) => void;
   startTimeout: (timeoutMs: number, resyncAfterMs?: number, minResyncStartedAtMs?: number) => void;
 }
 
@@ -1520,9 +1593,9 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
         });
       }, timeoutMs);
     },
-    cancel: () => {
+    cancel: (code = "command_execution_failed") => {
       cleanup();
-      rejectResult(new SafeCommandError("command_execution_failed"));
+      rejectResult(new SafeCommandError(code));
       void result.catch(() => undefined);
     }
   };

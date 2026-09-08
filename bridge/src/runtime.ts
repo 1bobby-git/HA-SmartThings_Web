@@ -1,3 +1,4 @@
+import { readLightCommandStatus } from "./command/light-status-recheck.js";
 import { verifiedAdvancedControl } from "./command/verified-control-route.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -106,7 +107,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.24";
+const bridgeVersion = "1.8.25";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -341,21 +342,14 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         if (!device || !rawDeviceId || !rawLocationId) {
           throw new Error("advanced_status_identifier_unavailable");
         }
-        const statusPayload = await advancedInventory.getDeviceStatus(rawDeviceId);
-        devices.observeOnlineEvidence(request.deviceId, Date.now());
-        const rawSnapshot = {
-          items: [
-            {
-              deviceId: rawDeviceId,
-              locationId: rawLocationId,
-              status: statusPayload
-            }
-          ]
-        };
-        volatileIdentifiers.observeRawAdvancedDeviceSnapshot(rawSnapshot);
-        const observedStates = devices.observeCommandDeviceStatus(
-          redactor(rawSnapshot), request.deviceId, device.locationId
-        );
+        const observedStates = await readLightCommandStatus(devices, request.deviceId, device.locationId,
+          async () => {
+            const statusPayload = await advancedInventory.getDeviceStatus(rawDeviceId);
+            devices.observeOnlineEvidence(request.deviceId!, Date.now());
+            const rawSnapshot = { items: [{ deviceId: rawDeviceId, locationId: rawLocationId, status: statusPayload }] };
+            volatileIdentifiers.observeRawAdvancedDeviceSnapshot(rawSnapshot);
+            return redactor(rawSnapshot);
+          }, request.lightComponent);
         cameraImages.observeInventory(devices.snapshot());
         log.info("command_diag:advanced_status_refreshed");
         return {

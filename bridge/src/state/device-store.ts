@@ -42,6 +42,8 @@ export interface BridgeDeviceState {
   componentRole?: string;
   capabilityRole?: string;
   source?: BridgeStateSource;
+  /** Two agreeing command-scoped reads; updatedAt remains the upstream replay watermark. */
+  commandReadVerified?: boolean;
 }
 
 export type BridgeStateSource =
@@ -240,6 +242,7 @@ export class DeviceStore {
   readonly #rooms = new Map<string, BridgeRoom>();
   readonly #advancedRooms = new Set<string>();
   readonly #devices = new Map<string, MutableDevice>();
+  readonly #commandReadRevisions = new WeakMap<MutableDevice, number>();
   readonly #scenes = new Map<string, BridgeScene>();
   readonly #pending = new Map<string, PendingSnapshot>();
   readonly #listeners = new Set<Listener>();
@@ -599,21 +602,67 @@ export class DeviceStore {
     this.#sessionWholeAdvancedDeviceSnapshotSeen = false;
   }
 
-  observeCommandDeviceStatus(
-    body: unknown, deviceId: string, locationId: string
-  ): BridgeDeviceState[] {
-    // Preserve the exact response separately from the merged cache. A read can
-    // confirm an unchanged scalar without inventing an event or advancing SSE.
+  /** Invalidate older read proofs when a newer light intent begins dispatching. */
+  beginLightCommand(deviceId: string): void {
+    const device = this.#devices.get(deviceId);
+    if (device) this.#commandReadRevisions.set(device, (this.#commandReadRevisions.get(device) ?? 0) + 1);
+  }
+
+  commandStateRevision(deviceId: string, locationId: string): number | undefined {
+    const device = this.#devices.get(deviceId);
+    return device?.online && device.locationId === locationId
+      ? this.#commandReadRevisions.get(device) ?? 0 : undefined;
+  }
+
+  /** Parse exact, identity-bound response evidence without merging it into the cache. */
+  commandStatusStates(body: unknown, deviceId: string, locationId: string): BridgeDeviceState[] {
     const device = this.#devices.get(deviceId);
     const rows = advancedDeviceRows(body);
     if (!device || device.locationId !== locationId || rows?.length !== 1) return [];
     const row = rows[0]!;
     if (normalizedAdvancedId(row.deviceId ?? row.id, "device", this.#normalizeAdvancedAlias) !== deviceId ||
         normalizedAdvancedId(row.locationId, "location", this.#normalizeAdvancedAlias) !== locationId) return [];
-    const states = advancedDeviceStates(row, this.#identifierRole, this.#normalizeStateToken,
-      this.#normalizeAdvancedAlias, "COMMAND_STATUS_RECHECK");
-    this.observeAdvancedDeviceSnapshot({ items: [row] }, { source: "COMMAND_STATUS_RECHECK" });
-    return states.map(cloneState);
+    return advancedDeviceStates(row, this.#identifierRole, this.#normalizeStateToken,
+      this.#normalizeAdvancedAlias, "COMMAND_STATUS_RECHECK").map(cloneState);
+  }
+
+  needsLightStatusProof(states: readonly BridgeDeviceState[], deviceId: string,
+    locationId: string, component: string): boolean {
+    return states.some((state) => state.component === component &&
+      repairableLightStatus(state, this.commandState(deviceId, locationId,
+        state.component, state.capability, state.attribute)));
+  }
+
+  observeCommandDeviceStatus(body: unknown, deviceId: string, locationId: string,
+    proof?: { component: string; beforeRevision: number | undefined; corroboratedStates: readonly BridgeDeviceState[] }
+  ): BridgeDeviceState[] {
+    const states = this.commandStatusStates(body, deviceId, locationId);
+    if (!states.length) return [];
+    const device = this.#devices.get(deviceId)!;
+    // Capture the revision before the ordinary merge changes it. A push or a new
+    // command occurring during either GET invalidates the entire exceptional proof.
+    const canRepair = proof !== undefined && proof.beforeRevision !== undefined &&
+      proof.beforeRevision === this.commandStateRevision(deviceId, locationId);
+    this.observeAdvancedDeviceSnapshot(body, { source: "COMMAND_STATUS_RECHECK" });
+    let repaired = false;
+    if (canRepair) for (const state of states) {
+      if (state.component !== proof.component) continue;
+      const key = stateKey(state);
+      const current = device.states.get(key);
+      if (!repairableLightStatus(state, current)) continue;
+      const corroborated = proof.corroboratedStates.filter((item) => stateKey(item) === key);
+      if (corroborated.length !== 1 || JSON.stringify(corroborated[0]!.value) !== JSON.stringify(state.value) ||
+          corroborated[0]!.updatedAt !== state.updatedAt || corroborated[0]!.unit !== state.unit) continue;
+      device.states.set(key, { ...cloneState(state), updatedAt: state.updatedAt ?? current!.updatedAt,
+        commandReadVerified: true });
+      this.#commandReadRevisions.set(device, (this.#commandReadRevisions.get(device) ?? 0) + 1);
+      repaired = true;
+    }
+    if (repaired) {
+      this.#publish({ schemaVersion: 1, sequence: this.#nextSequence(), type: "inventory" });
+      this.#schedulePersist();
+    }
+    return states;
   }
 
   observeAdvancedDeviceSnapshot(body: unknown, options: AdvancedDeviceSnapshotOptions = {}): void {
@@ -1261,6 +1310,7 @@ export class DeviceStore {
       return false;
     }
     device.states.set(key, cloneState(state));
+    this.#commandReadRevisions.set(device, (this.#commandReadRevisions.get(device) ?? 0) + 1);
     return true;
   }
 
@@ -3261,6 +3311,20 @@ function cloneAdvancedCommandOmission(
   omission: AdvancedCommandOmission
 ): AdvancedCommandOmission {
   return { ...omission };
+}
+
+/** No older dated values, metadata, or security capabilities can use this exception. */
+function repairableLightStatus(candidate: BridgeDeviceState, current: BridgeDeviceState | undefined): boolean {
+  if (!current || !current.updatedAt || JSON.stringify(candidate.value) === JSON.stringify(current.value)) return false;
+  if (candidate.updatedAt !== null && Date.parse(candidate.updatedAt) !== Date.parse(current.updatedAt)) return false;
+  if (candidate.attribute === "switch") return candidate.value === "on" || candidate.value === "off";
+  if (candidate.attribute === "colorMode") return typeof candidate.value === "string" &&
+    ["color", "colour", "rgb", "hs", "hue", "ct", "cct", "colortemperature", "color_temperature", "temperature", "white"]
+      .includes(candidate.value.toLowerCase());
+  if (!["level", "hue", "saturation", "colorTemperature"].includes(candidate.attribute) ||
+      typeof candidate.value !== "number" || !Number.isFinite(candidate.value)) return false;
+  return candidate.attribute === "colorTemperature" ? candidate.value >= 1 && candidate.value <= 30_000
+    : candidate.value >= 0 && candidate.value <= 100;
 }
 
 function cloneState(state: BridgeDeviceState): BridgeDeviceState {

@@ -89,6 +89,7 @@ _SAFE_BRIDGE_ERROR_CODES = {
     "client_request_conflict",
     "command_api_unavailable",
     "command_queue_timeout",
+    "command_superseded",
     "command_browser_unavailable",
     "command_confirmation_timeout",
     "command_control_ambiguous",
@@ -282,6 +283,7 @@ class SmartThingsWebBridgeClient:
         control_label: str | None = None,
         arguments: list[Any] | None = None,
         require_advanced: bool | None = None,
+        replace_pending: bool | None = None,
         confirm: bool | None = None,
         timeout: int | None = None,
     ) -> BridgeCommandResult:
@@ -306,6 +308,8 @@ class SmartThingsWebBridgeClient:
             body["controlLabel"] = control_label
         if require_advanced is not None:
             body["requireAdvanced"] = require_advanced
+        if replace_pending is not None:
+            body["replacePending"] = replace_pending
         if confirm is not None:
             body["confirm"] = confirm
         if timeout is not None:
@@ -484,6 +488,7 @@ class ReadOnlyBridgeClient:
         control_label: str | None = None,
         arguments: list[Any] | None = None,
         require_advanced: bool | None = None,
+        replace_pending: bool | None = None,
         confirm: bool | None = None,
         timeout: int | None = None,
     ) -> BridgeCommandResult:
@@ -580,6 +585,7 @@ def parse_inventory(raw: dict[str, Any]) -> BridgeInventory:
         scenes=scenes,
         device_aliases=canonical.aliases,
         light_plan_supported=raw.get("lightPlanSupported") is True,
+        light_latest_wins_supported=raw.get("lightLatestWinsSupported") is True,
     )
 
 

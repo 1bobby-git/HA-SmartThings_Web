@@ -69,15 +69,16 @@ async function fixture(options: { stabilityMs?: number; timeoutMs?: number } = {
 }
 
 describe("Verified same-component light plans through real catalog/store/adapter", () => {
-  test("retains bounded setColor and sends power/level/color once before waiting", async () => {
+  test("retains bounded setColor and serializes Advanced power/level/color before waiting", async () => {
     const f = await fixture();
     expect(f.catalog.omissions).toEqual([]);
     expect(f.catalog.commandsByDevice.get("dev_001")).toEqual(shared.expectedCatalog.commands);
     expect(f.store.snapshot().devices[0]!.advancedCommands?.some((item) => item.command === "setColor")).toBe(true);
     const result = await f.service.execute(f.request);
     expect(result).toMatchObject({ status: "confirmed", transport: "advanced" });
-    expect(f.send).toHaveBeenCalledOnce(); expect(f.legacy.executeDeviceAction).not.toHaveBeenCalled();
-    expect((f.requests[0]!.body as any).commands).toEqual(shared.expectedCommands);
+    expect(f.send).toHaveBeenCalledTimes(3); expect(f.legacy.executeDeviceAction).not.toHaveBeenCalled();
+    expect(f.requests.every((item) => (item.body as any).commands.length === 1)).toBe(true);
+    expect(f.requests.flatMap((item) => (item.body as any).commands)).toEqual(shared.expectedCommands);
     expect(f.resync).toHaveBeenCalledOnce();
     expect(f.store.snapshot().devices[0]!.states.find((item) => item.attribute === "level")!.value).toBe(50);
     expect(f.diagnostics.mock.calls.some(([entry]) => entry.stage === "read" && entry.matches)).toBe(true);
@@ -87,7 +88,7 @@ describe("Verified same-component light plans through real catalog/store/adapter
     const f = await fixture();
     f.store.observeAdvancedDeviceSnapshot({ items: [f.row({ ...shared.initial, switch: "on" }, "2026-09-07T00:00:01Z")] });
     expect((await f.service.execute(f.request)).status).toBe("confirmed");
-    expect((f.requests[0]!.body as any).commands).toHaveLength(3);
+    expect(f.requests.flatMap((item) => (item.body as any).commands)).toHaveLength(3);
   });
 
   test.each(["receipt_only", "wrong_device", "wrong_location", "missing_hue", "stale_read", "wrong_color"])("%s never completes a plan", async (failure) => {
@@ -107,7 +108,7 @@ describe("Verified same-component light plans through real catalog/store/adapter
     f.store.observeAdvancedDeviceSnapshot({ items: [f.row({ switch: "on", level: 50, hue: 0, saturation: 100, colorTemperature: 3000 }, "2099-01-01T00:00:00Z")] });
     if (failure === "wrong_color") f.store.observeAdvancedDeviceSnapshot({ items: [f.row(shared.initial, "2099-02-01T00:00:00Z")] });
     await expect(f.service.execute(f.request)).rejects.toMatchObject({ code: "command_confirmation_timeout" });
-    expect(f.send).toHaveBeenCalledOnce();
+    expect(f.send).toHaveBeenCalledTimes(3);
   });
 
   test.each(["range", "mixed_component", "extra_key", "missing_color_member", "mixed_modes", "unknown_setter", "unconfirmed", "too_many"])("rejects %s before any POST", async (kind) => {
@@ -293,7 +294,7 @@ describe("Light delivery regressions (1.8.24)", () => {
     });
     expect((await f.service.execute(f.request)).status).toBe("confirmed");
     expect(f.resync).not.toHaveBeenCalled();
-    expect(f.send).toHaveBeenCalledOnce();
+    expect(f.send).toHaveBeenCalledTimes(3);
   });
   test("zero-saturation color does not wait for an irrelevant unchanged hue", async () => {
     const f = await fixture();
@@ -355,7 +356,7 @@ describe("Light delivery regressions (1.8.24)", () => {
     await vi.advanceTimersByTimeAsync(10); expect(done).toBe(false);
     await vi.advanceTimersByTimeAsync(15); expect(done).toBe(true);
     expect((await result).status).toBe("confirmed");
-    expect(f.send).toHaveBeenCalledOnce();
+    expect(f.send).toHaveBeenCalledTimes(3);
   });
   test("a contradictory event during GET stability still prevents confirmation", async () => {
     vi.useFakeTimers();
@@ -366,5 +367,114 @@ describe("Light delivery regressions (1.8.24)", () => {
     await vi.advanceTimersByTimeAsync(10);
     push(f, "level", 20, new Date(Date.now()+1).toISOString());
     await vi.advanceTimersByTimeAsync(60); await result;
+  });
+});
+
+
+describe("Opt-in latest light intent transport", () => {
+  test("legacy FIFO reproduces the 10-second queue timeout behind a 30-second confirmation", async () => {
+    vi.useFakeTimers();
+    const f = await fixture({ timeoutMs: 30_000 });
+    f.resync.mockImplementation(async () => undefined as any);
+    const old = f.service.execute(f.request).catch((error) => error.code);
+    await vi.advanceTimersByTimeAsync(0);
+    const next = f.service.execute({ ...f.request, clientRequestId: "legacy_next_001" }).catch((error) => error.code);
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(await next).toBe("command_queue_timeout");
+    expect(f.requests).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(await old).toBe("command_confirmation_timeout");
+    expect(f.requests).toHaveLength(3);
+  });
+
+  test("a newer light bypasses an obsolete 30-second confirmation, not its POST", async () => {
+    vi.useFakeTimers();
+    const f = await fixture({ timeoutMs: 30_000 });
+    f.resync.mockImplementation(async () => undefined as any);
+    const old = f.service.execute({ ...f.request, replacePending: true, clientRequestId: "old_intent_001" });
+    const oldResult = old.catch((error) => error.code);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.requests).toHaveLength(3);
+    const current = f.service.execute({ ...f.request, replacePending: true, clientRequestId: "new_intent_002",
+      arguments: [{ ...f.request.arguments[0], command: "off" }] });
+    const currentResult = current.catch((error) => error.code);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await oldResult).toBe("command_superseded");
+    expect(f.requests).toHaveLength(4);
+    expect((f.requests[3]!.body as any).commands[0].command).toBe("off");
+    // No synthetic success: the final missing device proof still produces ONE real error.
+    await vi.advanceTimersByTimeAsync(30_010);
+    expect(await currentResult).toBe("command_confirmation_timeout");
+    expect(f.requests).toHaveLength(4);
+  });
+
+  test("a burst keeps one trailing intent and never overlaps or resumes an obsolete POST", async () => {
+    vi.useFakeTimers();
+    const f = await fixture({ timeoutMs: 30_000 });
+    const original = f.send.getMockImplementation()!;
+    let release!: () => void;
+    const dispatched = new Promise<void>((resolve) => { release = resolve; });
+    let active = 0, maxActive = 0;
+    f.send.mockImplementation(async (request, parser) => {
+      active++; maxActive = Math.max(maxActive, active);
+      try {
+        if (f.send.mock.calls.length === 1) await dispatched;
+        return await original(request, parser);
+      } finally { active--; }
+    });
+    const old = f.service.execute({ ...f.request, replacePending: true, clientRequestId: "slow_intent_001" })
+      .catch((error) => error.code);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.send).toHaveBeenCalledOnce();
+    const replaced = Array.from({ length: 12 }, (_, index) => f.service.execute({ ...f.request,
+      replacePending: true, clientRequestId: `slider_intent_${index}`,
+      arguments: [f.request.arguments[0], { ...f.request.arguments[1], arguments: [index + 10] }] })
+      .catch((error) => error.code));
+    const latest = f.service.execute({ ...f.request, replacePending: true, clientRequestId: "final_off_001",
+      arguments: [{ ...f.request.arguments[0], command: "off" }] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await old).toBe("command_superseded");
+    expect(await Promise.all(replaced)).toEqual(Array(12).fill("command_superseded"));
+    expect(f.send).toHaveBeenCalledOnce();
+    release();
+    await vi.advanceTimersByTimeAsync(5);
+    expect((await latest).status).toBe("confirmed");
+    expect(maxActive).toBe(1);
+    expect(f.requests.map((item) => (item.body as any).commands[0].command)).toEqual(["on", "off"]);
+  });
+
+  test("invalid replacement cannot cancel a valid running light", async () => {
+    vi.useFakeTimers();
+    const f = await fixture({ timeoutMs: 500 });
+    const active = f.service.execute({ ...f.request, replacePending: true });
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(f.service.execute({ ...f.request, replacePending: true, clientRequestId: "invalid_replacement",
+      arguments: [f.request.arguments[0], { ...f.request.arguments[1], arguments: [101] }] })).rejects.toBeInstanceOf(Error);
+    await vi.advanceTimersByTimeAsync(5);
+    expect((await active).status).toBe("confirmed");
+    expect(f.requests).toHaveLength(3);
+  });
+
+  test.each([
+    { targetType: "location", command: "armAway", arguments: [] },
+    { command: "on", arguments: [] }, { confirm: false }, { requireAdvanced: false },
+    { replacePending: "true" },
+  ])("replacement flag is rejected outside the verified-light contract %j", async (invalid) => {
+    const f = await fixture();
+    await expect(f.service.execute({ ...f.request, replacePending: true, ...invalid })).rejects.toBeInstanceOf(Error);
+    expect(f.send).not.toHaveBeenCalled();
+  });
+
+  test("partial failure stops individual Advanced commands without retry or DOM fallback", async () => {
+    const f = await fixture();
+    const original = f.send.getMockImplementation()!;
+    f.send.mockImplementation(async (request, parser) => {
+      if (f.send.mock.calls.length === 2) return parser({ results: [{ status: "ERROR" }] });
+      return original(request, parser);
+    });
+    await expect(f.service.execute({ ...f.request, replacePending: true })).rejects.toMatchObject({ code: "command_execution_failed" });
+    expect(f.send).toHaveBeenCalledTimes(2);
+    expect(f.legacy.executeDeviceAction).not.toHaveBeenCalled();
+    expect(f.store.commandState("dev_001", "loc_001", "identifier_main", "identifier_power", "switch")!.value).toBe("off");
   });
 });

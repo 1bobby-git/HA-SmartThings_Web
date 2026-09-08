@@ -107,6 +107,162 @@ def isolated_suite():
             self.device.command_omissions = ()
             return shared
 
+        def enable_latest_catalog(self):
+            self.enable_joint_catalog()
+            self.runtime.inventory.light_latest_wins_supported = True
+            self.client.async_execute_command.return_value = NS(status="confirmed", sequence=1)
+
+        async def test_latest_flag_routes_power_color_and_white_to_verified_advanced(self):
+            self.enable_latest_catalog()
+            await self.entity.async_turn_on(brightness=128, hs_color=(180, 75))
+            first = self.client.async_execute_command.await_args.kwargs
+            self.assertEqual(first["command"], "applyLight")
+            self.assertTrue(first["replace_pending"])
+            self.assertEqual([c["command"] for c in first["arguments"]], ["on", "setLevel", "setColor"])
+            self.assertEqual(first["arguments"][2]["arguments"], [{"hue": 50, "saturation": 75}])
+            await self.entity.async_turn_on(color_temp_kelvin=3000)
+            self.assertEqual([c["command"] for c in self.client.async_execute_command.await_args.kwargs["arguments"]],
+                             ["on", "setColorTemperature"])
+            await self.entity.async_turn_off()
+            self.assertEqual(self.client.async_execute_command.await_args.kwargs["arguments"],
+                             [{"attribute": "switch", "capability": capabilities["switch"], "command": "off", "arguments": []}])
+            # Returning a receipt never changes requested values into observed state.
+            self.assertEqual(self.entity.brightness, 153)
+            self.assertEqual(self.entity.hs_color, (90, 80))
+            self.assertFalse(self.entity.is_on)
+
+        async def test_slider_burst_merges_pending_brightness_with_latest_color_without_error_flood(self):
+            import asyncio
+            self.enable_latest_catalog()
+            started = asyncio.Event()
+            first_response = asyncio.get_running_loop().create_future()
+            async def execute(**kwargs):
+                if self.client.async_execute_command.await_count == 1:
+                    started.set()
+                    return await first_response
+                first_response.set_exception(BridgeClientError("command_superseded"))
+                return NS(status="confirmed", sequence=1)
+            self.client.async_execute_command.side_effect = execute
+            first = asyncio.create_task(self.entity.async_turn_on(brightness=128))
+            await started.wait()
+            tasks = [asyncio.create_task(self.entity.async_turn_on(hs_color=(n * 10, 80))) for n in range(1, 19)]
+            await asyncio.gather(first, *tasks)
+            self.assertEqual(self.client.async_execute_command.await_count, 2)
+            payload = self.client.async_execute_command.await_args.kwargs["arguments"]
+            self.assertEqual([c["command"] for c in payload], ["on", "setLevel", "setColor"])
+            self.assertEqual(payload[1]["arguments"], [50])
+            self.assertEqual(payload[2]["arguments"], [{"hue": 50, "saturation": 80}])
+            self.assertFalse(self.entity._intent_pending)
+            self.assertEqual(self.entity._pending_light_values, {})
+            self.assertEqual(self.client.async_get_inventory.await_count, 1)
+
+        async def test_off_replaces_pending_color_and_does_not_send_obsolete_channels(self):
+            import asyncio
+            self.enable_latest_catalog()
+            started = asyncio.Event()
+            first_response = asyncio.get_running_loop().create_future()
+            async def execute(**kwargs):
+                if self.client.async_execute_command.await_count == 1:
+                    started.set(); return await first_response
+                first_response.set_exception(BridgeClientError("command_superseded"))
+                return NS(status="confirmed", sequence=1)
+            self.client.async_execute_command.side_effect = execute
+            first = asyncio.create_task(self.entity.async_turn_on(hs_color=(180, 70)))
+            await started.wait()
+            await asyncio.gather(first, self.entity.async_turn_off())
+            payload = self.client.async_execute_command.await_args.kwargs["arguments"]
+            self.assertEqual([c["command"] for c in payload], ["off"])
+            self.assertIsNone(self.entity._confirmed_color_mode)
+
+        async def test_white_replaces_pending_color_mode_instead_of_merging_incompatible_modes(self):
+            import asyncio
+            self.enable_latest_catalog()
+            self.entity._intent_pending = True
+            self.entity._pending_light_values = {"hue": 50, "saturation": 70, "level": 40}
+            await self.entity.async_turn_on(color_temp_kelvin=3000)
+            payload = self.client.async_execute_command.await_args.kwargs["arguments"]
+            self.assertEqual([c["command"] for c in payload], ["on", "setLevel", "setColorTemperature"])
+            self.assertEqual(payload[1]["arguments"], [40])
+
+        async def test_invalid_new_color_does_not_cancel_existing_intent(self):
+            self.enable_latest_catalog()
+            self.entity._intent_pending = True
+            self.entity._pending_light_values = {"level": 40}
+            before = self.entity._intent_generation
+            with self.assertRaises(HomeAssistantError):
+                await self.entity.async_turn_on(hs_color=(999, 100))
+            self.assertEqual(self.entity._intent_generation, before)
+            self.assertEqual(self.entity._pending_light_values, {"level": 40})
+            self.client.async_execute_command.assert_not_awaited()
+
+        async def test_newest_real_failure_is_not_hidden_or_retried(self):
+            self.enable_latest_catalog()
+            self.client.async_execute_command.side_effect = BridgeClientError("command_confirmation_timeout")
+            with self.assertRaisesRegex(HomeAssistantError, "command_confirmation_timeout"):
+                await self.entity.async_turn_on(brightness=200)
+            self.assertEqual(self.client.async_execute_command.await_count, 1)
+            self.assertFalse(self.entity._intent_pending)
+            self.assertEqual(self.entity.brightness, 153)
+
+        async def test_receipt_only_cannot_confirm_new_light_intent(self):
+            self.enable_latest_catalog()
+            self.client.async_execute_command.return_value = NS(status="accepted_unconfirmed", sequence=1)
+            with self.assertRaisesRegex(HomeAssistantError, "bridge_command_unconfirmed"):
+                await self.entity.async_turn_on(color_temp_kelvin=3000)
+            self.assertIsNone(self.entity._confirmed_color_mode)
+            self.assertFalse(self.entity._intent_pending)
+
+        async def test_cancelled_trailing_intent_does_not_leave_stale_pending_values(self):
+            import asyncio
+            self.enable_latest_catalog()
+            self.entity._intent_pending = True
+            self.entity._pending_light_values = {"level": 40}
+            task = asyncio.create_task(self.entity.async_turn_on(hs_color=(180, 70)))
+            await asyncio.sleep(0)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            self.assertFalse(self.entity._intent_pending)
+            self.assertEqual(self.entity._pending_light_values, {})
+            self.client.async_execute_command.assert_not_awaited()
+
+        async def test_old_bridge_never_receives_new_replacement_flag(self):
+            self.enable_joint_catalog()
+            await self.entity.async_turn_on(brightness=128)
+            self.assertNotIn("replace_pending", self.client.async_execute_command.await_args.kwargs)
+
+        def test_verified_equal_timestamp_inventory_updates_actual_light_only(self):
+            self.enable_latest_catalog()
+            latest = deepcopy(self.runtime.inventory)
+            latest.sequence += 1
+            level = latest.devices[self.device.device_id].states[self.states[1].key]
+            level.value = 40; level.command_read_verified = True
+            self.runtime.apply_inventory(latest)
+            self.assertEqual(self.entity.brightness, 102)
+            self.assertEqual(self.entity._state("level").updated_at, self.states[1].updated_at)
+
+        def test_equal_timestamp_without_proof_or_feature_or_sequence_cannot_rollback(self):
+            for kind in ("no_proof", "no_flag", "equal_sequence", "old_time"):
+                with self.subTest(kind=kind):
+                    latest = deepcopy(self.runtime.inventory)
+                    latest.sequence += int(kind != "equal_sequence")
+                    latest.light_latest_wins_supported = kind != "no_flag"
+                    level = latest.devices[self.device.device_id].states[self.states[1].key]
+                    level.value = 40; level.command_read_verified = kind != "no_proof"
+                    if kind == "old_time": level.updated_at = "2020-01-01T00:00:00Z"
+                    self.runtime.apply_inventory(latest)
+                    self.assertEqual(self.entity.brightness, 153)
+
+        def test_only_strict_read_proof_is_parsed(self):
+            from smartthings_web.models import parse_state
+            for fields, expected in (({}, False), ({"commandReadVerified": True}, False),
+                    ({"commandReadVerified": "true", "source": "COMMAND_STATUS_RECHECK"}, False),
+                    ({"commandReadVerified": True, "source": "LOCATION_EVENT"}, False),
+                    ({"commandReadVerified": True, "source": "COMMAND_STATUS_RECHECK"}, True)):
+                candidate = parse_state({"component": C, "capability": capabilities["level"],
+                                         "attribute": "level", "value": 40, "updatedAt": self.states[1].updated_at, **fields})
+                self.assertEqual(candidate.command_read_verified, expected)
+
         async def test_caught_up_confirmed_power_releases_queue_without_full_inventory_read(self):
             async def execute(**payload):
                 latest = deepcopy(self.runtime.inventory); latest.sequence += 1

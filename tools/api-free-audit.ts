@@ -166,6 +166,15 @@ function isApiFinding(
   ) {
     return false;
   }
+  if (
+    rule === "playwright-network-mutation" &&
+    relativePath === "bridge/src/command/command-service.ts" &&
+    /^\s*if \(prior instanceof AbortController\) prior\.abort\(\);\s*$/u.test(line)
+  ) {
+    // This is local command cancellation, not Playwright Route.abort(). The
+    // exact line includes a runtime type guard; no browser/network call is exempt.
+    return false;
+  }
   if (rule === "direct-smartthings-socket") {
     return /(?:my\.smartthings\.com|smartthings\.com|samsungiotcloud|socket\.io)/i.test(
       nearby(lines, index)

@@ -146,6 +146,49 @@ export class AdvancedCommandAdapter implements CommandTransport {
     } catch (error) { throw classifyError(error); }
   }
 
+  /** Match Advanced's individual controls: validate ALL inputs, then POST each
+   * command in order. Acceptance is not physical confirmation. Never replay a
+   * timeout or send the rest of a superseded plan after its in-flight POST ends.
+   */
+  async executeSequence(requests: RoutedCommandRequest[], signal?: AbortSignal): Promise<CommandTransportReceipt> {
+    if (requests.length < 1 || requests.length > 4 || !this.options.capabilityCache || requests.some((item) =>
+        item.deviceId !== requests[0]!.deviceId || item.component !== requests[0]!.component ||
+        item.capabilityVersion === undefined ||
+        !["on", "off", "setLevel", "setColor", "setHue", "setSaturation", "setColorTemperature"].includes(item.command))) {
+      throw new AdvancedCommandError("invalid_arguments");
+    }
+    const deviceId = this.options.resolveRawDeviceId(requests[0]!.deviceId);
+    if (!deviceId) throw new AdvancedCommandError("unsupported");
+    const commands: AdvancedCommandBody["commands"] = [];
+    const checkCurrent = () => { if (signal?.aborted) throw new Error("command_superseded"); };
+    try {
+      for (const request of requests) {
+        checkCurrent();
+        const component = resolveIdentifier(request.component, this.options.resolveRawIdentifier);
+        const capability = resolveIdentifier(request.capability, this.options.resolveRawIdentifier);
+        if (!component || !capability) throw new AdvancedCommandError("unsupported");
+        const arguments_ = await this.validateArguments(capability, request);
+        assertJsonArguments(arguments_);
+        commands.push({ component, capability, command: request.command, arguments: arguments_ });
+      }
+      const sentAtMs = this.#now();
+      let acceptedAtMs = sentAtMs;
+      for (const command of commands) {
+        checkCurrent();
+        const stepSentAtMs = this.#now();
+        const receipt = await this.options.session.request({ endpoint: "commands", method: "POST",
+          path: advancedEndpoints.deviceCommands(deviceId), body: { commands: [command] } },
+          (value) => parseReceipt(value, stepSentAtMs, this.#now()));
+        acceptedAtMs = receipt.acceptedAtMs;
+      }
+      checkCurrent();
+      return { state: "ACCEPTED", transport: "advanced", sentAtMs, acceptedAtMs };
+    } catch (error) {
+      checkCurrent();
+      throw classifyError(error);
+    }
+  }
+
   private async validateArguments(
     rawCapabilityId: string,
     request: RoutedCommandRequest
@@ -166,7 +209,7 @@ function parseReceipt(
   sentAtMs: number,
   acceptedAtMs: number
 ): CommandTransportReceipt {
-  if (!isRecord(value) || !Array.isArray(value.results) || value.results.length === 0) {
+  if (!isRecord(value) || !Array.isArray(value.results) || value.results.length !== 1) {
     throw new AdvancedCommandError("response_invalid");
   }
   const first = value.results[0];
