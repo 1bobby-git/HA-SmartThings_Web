@@ -8,6 +8,7 @@ import logging
 from homeassistant.components.alarm_control_panel import (
     AlarmControlPanelEntity,
     AlarmControlPanelEntityFeature,
+    AlarmControlPanelState,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -58,6 +59,8 @@ class SmartThingsWebHomeMonitor(AlarmControlPanelEntity):
 
     def __init__(self, runtime: SmartThingsWebRuntime) -> None:
         self.runtime = runtime
+        self._pending_command: str | None = None
+        self._pending_token: object | None = None
         self._attr_name = f"{location_name(runtime.inventory, runtime.location_id)} Home Monitor"
         self._attr_unique_id = location_unique_id(runtime.location_id, "home_monitor")
         self._attr_device_info = {
@@ -76,13 +79,12 @@ class SmartThingsWebHomeMonitor(AlarmControlPanelEntity):
         """
         return self.runtime.location_id in self.runtime.inventory.locations
 
-    @property
-    def state(self) -> str | None:
-        """Return the HA alarm state from the latest Bridge inventory."""
+    def _observed_state(self) -> str | None:
+        """Return only the state actually received in the Bridge inventory."""
         value = location_arm_state(self.runtime.inventory, self.runtime.location_id)
         if value is None:
             return None
-        normalized = value.lower()
+        normalized = value.strip().lower()
         return {
             "disarmed": "disarmed",
             "off": "disarmed",
@@ -94,6 +96,33 @@ class SmartThingsWebHomeMonitor(AlarmControlPanelEntity):
             "armed_away": "armed_away",
             "armedaway": "armed_away",
         }.get(normalized, normalized)
+
+    @property
+    def alarm_state(self) -> AlarmControlPanelState | None:
+        """Show request progress separately from confirmed home/away states."""
+        if not self.available:
+            return None
+        observed = self._observed_state()
+        # A triggered alarm/entry countdown always outranks local command progress.
+        if self._pending_command and observed not in {"triggered", "pending"}:
+            expected = {"armAway": "armed_away", "armStay": "armed_home", "disarm": "disarmed"}[self._pending_command]
+            if observed != expected:
+                return (AlarmControlPanelState.DISARMING if self._pending_command == "disarm"
+                        else AlarmControlPanelState.ARMING)
+        try:
+            return AlarmControlPanelState(observed) if observed is not None else None
+        except ValueError:
+            return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Do not mistake a local request for the server's final security mode."""
+        return {"command_pending": self._pending_command,
+                "confirmed_state": self._observed_state()}
+
+    def _publish_pending(self) -> None:
+        if getattr(self, "hass", None) is not None:
+            self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """Subscribe to Bridge pushes."""
@@ -112,6 +141,23 @@ class SmartThingsWebHomeMonitor(AlarmControlPanelEntity):
         await self._async_arm("armAway")
 
     async def _async_arm(self, command: str) -> None:
+        # Keep the Bridge's existing command ordering. A newer request (including
+        # disarm) must not be rejected merely to manage a local progress indicator.
+        token = object()
+        self._pending_token = token
+        self._pending_command = command
+        self._publish_pending()
+        try:
+            await self._async_execute_arm(command)
+        finally:
+            # Includes timeout, rejected request and task cancellation. Never leave
+            # a local progress state stuck or manufacture a successful arm mode.
+            if self._pending_token is token:
+                self._pending_token = None
+                self._pending_command = None
+                self._publish_pending()
+
+    async def _async_execute_arm(self, command: str) -> None:
         try:
             result = await self.runtime.client.async_execute_command(
                 target_type="location",
@@ -142,7 +188,7 @@ class SmartThingsWebHomeMonitor(AlarmControlPanelEntity):
             isinstance(sequence, int)
             and not isinstance(sequence, bool)
             and self.runtime.inventory.sequence >= sequence
-            and self.state == expected_state
+            and self._observed_state() == expected_state
         ):
             # The verified result has already arrived through SSE. Avoid a redundant full read.
             return

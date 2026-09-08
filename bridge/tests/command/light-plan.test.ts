@@ -15,7 +15,7 @@ import type { DeviceActionExecutionInput } from "../../src/command/command-servi
 const shared = JSON.parse(readFileSync("custom_components/smartthings_web/tests/fixtures/light-plan.json", "utf8"));
 const stores: DeviceStore[] = [];
 afterEach(() => { stores.splice(0).forEach((store) => store.close()); vi.useRealTimers(); });
-async function fixture() {
+async function fixture(options: { stabilityMs?: number; timeoutMs?: number } = {}) {
   const store = new DeviceStore(); stores.push(store);
   const row = (values: Record<string, unknown>, timestamp = "2026-09-07T00:00:00Z") => ({
     deviceId: "dev_001", locationId: "loc_001", label: "Fixture lamp", type: "light",
@@ -60,7 +60,8 @@ async function fixture() {
     authenticated: true, pushConnected: true, parserHealthy: true, initialSnapshotComplete: true, dbAvailable: true,
     heartbeatAtMs: now, initialSnapshotCompletedAtMs: now, lastSnapshotAtMs: now, lastParserSuccessAtMs: now, lastPushAtMs: now } });
   const diagnostics = vi.fn();
-  const service = new SafeCommandService({ devices: store, status, executor, timeoutMs: 60, resyncAfterMs: 1,
+  const service = new SafeCommandService({ devices: store, status, executor, timeoutMs: options.timeoutMs ?? 60, resyncAfterMs: 1,
+    confirmationStabilityMs: options.stabilityMs ?? 0,
     resync, onDeviceDiagnostic: diagnostics });
   const request = structuredClone(shared.request);
   return { store, catalog, request, service, send, resync, legacy, requests, row, diagnostics,
@@ -260,5 +261,110 @@ describe("Fresh brightness retries", () => {
     });
     await f.service.execute(levelRequest(f)).catch(() => undefined);
     expect(f.send).toHaveBeenCalledOnce();
+  });
+});
+
+
+describe("Light delivery regressions (1.8.24)", () => {
+  function push(f: Awaited<ReturnType<typeof fixture>>, attribute: string, value: unknown,
+    stamp = "2026-09-07T00:00:10Z") {
+    const capability = Object.entries(shared.capabilities).find(([,attrs]) => (attrs as string[]).includes(attribute))?.[0] ?? "identifier_mode";
+    const text = `42${JSON.stringify(["api/subscription DEVICE_EVENT", {data: {
+      event_type: "DEVICE_EVENT", event_time: stamp, device_event: {
+        device_id: "dev_001", location_id: "loc_001", component: "identifier_main",
+        capability, attribute, value, unit: null
+      }
+    }}])}`;
+    f.store.observe({ __sanitized: true, source: "playwright-websocket-frame", receivedAt: new Date().toISOString(),
+      payload: {direction: "received", frame: {payload: text, truncated: false}}, payloadHash: text });
+  }
+  const initial = (f: Awaited<ReturnType<typeof fixture>>, values: Record<string, unknown>) => {
+    f.store.observeAdvancedDeviceSnapshot({items: [f.row({...shared.initial, ...values}, "2026-09-07T00:00:01Z")]});
+  };
+  test("unchanged on/level/hue do not block a fresh saturation event", async () => {
+    const f = await fixture();
+    initial(f, {switch: "on", level: 50, hue: 0, saturation: 20});
+    f.resync.mockImplementation(async () => undefined as any);
+    const send = f.send.getMockImplementation()!;
+    f.send.mockImplementation(async (request, parser) => {
+      const result = await send(request, parser);
+      push(f, "saturation", 100);
+      return result;
+    });
+    expect((await f.service.execute(f.request)).status).toBe("confirmed");
+    expect(f.resync).not.toHaveBeenCalled();
+    expect(f.send).toHaveBeenCalledOnce();
+  });
+  test("zero-saturation color does not wait for an irrelevant unchanged hue", async () => {
+    const f = await fixture();
+    initial(f, {switch: "on", level: 50, hue: 25, saturation: 80});
+    f.request.arguments[2].arguments[0] = {hue: 0, saturation: 0};
+    f.resync.mockImplementation(async () => undefined as any);
+    const send = f.send.getMockImplementation()!;
+    f.send.mockImplementation(async (request, parser) => {
+      const result = await send(request, parser); push(f, "saturation", 0); return result;
+    });
+    expect((await f.service.execute(f.request)).status).toBe("confirmed");
+    expect(f.resync).not.toHaveBeenCalled();
+  });
+  test("brightness alone cannot prove a same-number color mode change", async () => {
+    const f = await fixture(); initial(f, {switch: "on", level: 20, hue: 0, saturation: 100});
+    f.resync.mockImplementation(async () => undefined as any);
+    const send = f.send.getMockImplementation()!;
+    f.send.mockImplementation(async (request, parser) => {
+      const result = await send(request, parser); push(f, "level", 50); return result;
+    });
+    await expect(f.service.execute(f.request)).rejects.toMatchObject({code: "command_confirmation_timeout"});
+  });
+  test("fresh colorMode can prove a same-number mode change without requiring a power event", async () => {
+    const f = await fixture(); initial(f, {switch: "on", level: 50, hue: 0, saturation: 100});
+    push(f, "colorMode", "colorTemperature", "2026-09-07T00:00:02Z");
+    f.resync.mockImplementation(async () => undefined as any);
+    const send = f.send.getMockImplementation()!;
+    f.send.mockImplementation(async (request, parser) => {
+      const result = await send(request, parser); push(f, "colorMode", "color"); return result;
+    });
+    expect((await f.service.execute(f.request)).status).toBe("confirmed");
+    expect(f.resync).not.toHaveBeenCalled();
+  });
+  test("an explicitly contradictory reported mode is not confirmed by stale scalar values", async () => {
+    const f = await fixture();
+    push(f, "colorMode", "colorTemperature");
+    await expect(f.service.execute(f.request)).rejects.toMatchObject({code: "command_confirmation_timeout"});
+  });
+  test.each([
+    ["level", "identifier_level", "setLevel", 50, 49.8],
+    ["hue", "identifier_color", "setHue", 0, 99.9],
+    ["saturation", "identifier_color", "setSaturation", 50, 49.8],
+    ["colorTemperature", "identifier_temperature", "setColorTemperature", 3000, 2994]
+  ])("single %s confirmation uses the same light resolution as a joint plan", async (attribute, capability, command, wanted, actual) => {
+    const f = await fixture();
+    const original = f.resync.getMockImplementation()!;
+    f.resync.mockImplementation(async () => {f.setDesired({...shared.initial, [attribute!]: actual}); return original();});
+    const result = await f.service.execute({...f.request, command, capability, attribute, arguments: [wanted]});
+    expect(result.status).toBe("confirmed");
+    expect(f.store.commandStates("dev_001", "loc_001").find((s) => s.attribute === attribute)?.value).toBe(actual);
+    expect(f.send).toHaveBeenCalledOnce();
+  });
+  test("a fresh unchanged exact GET honors, rather than disables, the stability window", async () => {
+    vi.useFakeTimers();
+    const f = await fixture({stabilityMs: 20, timeoutMs: 100});
+    initial(f, {switch: "on", level: 50, hue: 0, saturation: 100});
+    let done = false;
+    const result = f.service.execute(f.request).then(value => {done = true; return value;});
+    await vi.advanceTimersByTimeAsync(10); expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(15); expect(done).toBe(true);
+    expect((await result).status).toBe("confirmed");
+    expect(f.send).toHaveBeenCalledOnce();
+  });
+  test("a contradictory event during GET stability still prevents confirmation", async () => {
+    vi.useFakeTimers();
+    const f = await fixture({stabilityMs: 20, timeoutMs: 60});
+    const original = f.resync.getMockImplementation()!;
+    f.resync.mockImplementationOnce(original).mockImplementation(async () => undefined as any);
+    const result = expect(f.service.execute(f.request)).rejects.toMatchObject({code: "command_confirmation_timeout"});
+    await vi.advanceTimersByTimeAsync(10);
+    push(f, "level", 20, new Date(Date.now()+1).toISOString());
+    await vi.advanceTimersByTimeAsync(60); await result;
   });
 });

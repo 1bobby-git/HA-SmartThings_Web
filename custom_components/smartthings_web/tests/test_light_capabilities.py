@@ -107,6 +107,48 @@ def isolated_suite():
             self.device.command_omissions = ()
             return shared
 
+        async def test_caught_up_confirmed_power_releases_queue_without_full_inventory_read(self):
+            async def execute(**payload):
+                latest = deepcopy(self.runtime.inventory); latest.sequence += 1
+                new = state("switch", payload["command"], at=f"2026-09-07T00:00:{latest.sequence:02d}Z")
+                latest.devices["dev_001"].states[new.key] = new
+                self.runtime.apply_inventory(latest)
+                return NS(status="confirmed", sequence=latest.sequence)
+            self.client.async_execute_command.side_effect = execute
+            await self.entity.async_turn_on()
+            await self.entity.async_turn_off()
+            self.client.async_get_inventory.assert_not_awaited()
+            self.assertFalse(self.entity._command_lock.locked())
+            self.assertEqual(self.client.async_execute_command.await_count, 2)
+            self.assertFalse(self.entity.is_on)
+
+        async def test_caught_up_joint_color_uses_actual_rounded_states_without_extra_get(self):
+            self.enable_joint_catalog()
+            async def execute(**payload):
+                latest = deepcopy(self.runtime.inventory); latest.sequence += 1
+                for attribute, value in {"switch": "on", "level": 49.8, "hue": 99.9, "saturation": 99.8}.items():
+                    new = state(attribute, value, at="2026-09-07T00:00:01Z")
+                    latest.devices["dev_001"].states[new.key] = new
+                self.runtime.apply_inventory(latest)
+                return NS(status="confirmed", sequence=latest.sequence)
+            self.client.async_execute_command.side_effect = execute
+            await self.entity.async_turn_on(brightness=128, hs_color=(0, 100))
+            self.client.async_get_inventory.assert_not_awaited()
+            self.assertEqual(self.entity.brightness, 127)
+            self.assertEqual(self.entity.hs_color, (359.64, 99.8))
+
+        async def test_a_newer_sequence_with_mismatched_light_still_catches_up(self):
+            self.runtime.inventory.sequence = 10
+            self.client.async_execute_command.return_value = NS(status="confirmed", sequence=9)
+            await self.entity.async_turn_on()
+            self.client.async_get_inventory.assert_awaited_once()
+            self.assertFalse(self.entity.is_on, "requested power must not become state")
+
+        async def test_missing_sse_sequence_still_reads_after_confirmed_power(self):
+            self.client.async_execute_command.return_value = NS(status="confirmed", sequence=9)
+            await self.entity.async_turn_off()
+            self.client.async_get_inventory.assert_awaited_once()
+
         async def test_joint_catalog_uses_one_power_level_setcolor_request(self):
             shared = self.enable_joint_catalog()
             original = (self.entity.entity_id, self.entity._attr_unique_id)

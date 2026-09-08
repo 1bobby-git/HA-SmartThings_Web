@@ -23,6 +23,7 @@ from . import SmartThingsWebConfigEntry
 from .bridge_client import BridgeClientError, bridge_error_message
 from .entity import SmartThingsWebEntity
 from .models import (
+    BridgeCommandResult,
     BridgeDevice,
     BridgeState,
     LightScalarControl,
@@ -240,10 +241,11 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
             if ATTR_BRIGHTNESS in kwargs:
                 value = _input_number(kwargs[ATTR_BRIGHTNESS], 0, 255)
                 if value == 0:
+                    result = None
                     try:
-                        await self._async_command("off")
+                        result = await self._async_command("off")
                     finally:
-                        await self._async_catch_up_state()
+                        await self._async_catch_up_state(result, {"switch": "off"})
                     return
                 # HA brightness 1 must not round to a native OFF level of zero.
                 plan.append(("level", max(1, round(value * 100 / 255))))
@@ -266,20 +268,24 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
             for attribute, value in plan:
                 if batch is None and self._control(attribute) is None:
                     raise HomeAssistantError(f"SmartThings Web light has no verified {attribute} control")
+            result = None
+            expected: dict[str, object] = {"switch": "on", **dict(plan)}
             try:
                 if batch is not None:
-                    await self._async_apply_plan(batch)
+                    result = await self._async_apply_plan(batch)
                 else:
-                    await self._async_command("on")
+                    result = await self._async_command("on")
                     for attribute, value in plan:
-                        await self._async_set_number(attribute, value)
+                        # A failure must still catch up even after an earlier confirmed step.
+                        result = None
+                        result = await self._async_set_number(attribute, value)
                 if mode is not None:
                     # A fallback mode hint only after confirmed commands, never a color value.
                     self._confirmed_color_mode = mode
                     if getattr(self, "hass", None) is not None:
                         self.async_write_ha_state()
             finally:
-                await self._async_catch_up_state()
+                await self._async_catch_up_state(result, expected)
 
     def _verified_plan(self, values: list[tuple[str, int | float]]) -> list[dict[str, object]] | None:
         """Use the advertised batch feature only with exact current catalog contracts."""
@@ -325,12 +331,12 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
                             "command": descriptor.command, "arguments": [converted]})
         return payload
 
-    async def _async_apply_plan(self, payload: list[dict[str, object]]) -> None:
+    async def _async_apply_plan(self, payload: list[dict[str, object]]) -> BridgeCommandResult:
         """One POST, then one joint confirmation: hue cannot block saturation/brightness."""
         if not self.available:
             raise HomeAssistantError("SmartThings Web light has no observed power control")
         try:
-            await self.runtime.client.async_execute_command(
+            return await self.runtime.client.async_execute_command(
                 target_type="device", target_id=self.device_id,
                 component=self.state_key[0], capability=self.state_key[1], attribute="switch",
                 command="applyLight", arguments=payload, require_advanced=True, confirm=True,
@@ -340,17 +346,28 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
 
     async def async_turn_off(self, **kwargs: object) -> None:
         async with _command_slot(self._command_lock):
+            result = None
             try:
-                await self._async_command("off")
+                result = await self._async_command("off")
             finally:
-                await self._async_catch_up_state()
+                await self._async_catch_up_state(result, {"switch": "off"})
 
-    async def _async_catch_up_state(self) -> None:
+    async def _async_catch_up_state(
+        self, result: BridgeCommandResult | None = None,
+        expected: dict[str, object] | None = None,
+    ) -> None:
         """Read the Bridge once after a plan, even if a later step failed.
 
         This catches up a lagging SSE stream without changing request/receipt
         values into state or masking the original command failure.
         """
+        sequence = getattr(result, "sequence", None)
+        if (getattr(result, "status", None) in {"confirmed", "already_confirmed"}
+                and isinstance(sequence, int) and not isinstance(sequence, bool)
+                and self.runtime.inventory.sequence >= sequence
+                and expected and all(self._matches_observed(key, value) for key, value in expected.items()
+                                     if key != "hue" or expected.get("saturation") != 0)):
+            return
         try:
             async with asyncio.timeout(_STATE_CATCHUP_TIMEOUT):
                 inventory = await self.runtime.client.async_get_inventory()
@@ -358,7 +375,24 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
         except (BridgeClientError, TimeoutError):
             _LOGGER.debug("SmartThings Web light state catch-up unavailable; waiting for events")
 
-    async def _async_command(self, command: str) -> None:
+    def _matches_observed(self, attribute: str, expected: object) -> bool:
+        """A caught-up push, not a requested value, permits skipping a full GET."""
+        state = self.bridge_state if attribute == "switch" else self._state(attribute)
+        if state is None:
+            return False
+        actual = state.value
+        if attribute == "switch":
+            return isinstance(actual, str) and actual.strip().lower() == expected
+        if not finite_number(actual) or not finite_number(expected):
+            return False
+        if attribute == "colorTemperature":
+            return 1 <= actual <= 30000 and expected > 0 and abs(1e6 / actual - 1e6 / expected) <= 1
+        if not 0 <= actual <= 100:
+            return False
+        distance = abs(actual - expected)
+        return (min(distance, 100 - distance) if attribute == "hue" else distance) <= 0.5
+
+    async def _async_command(self, command: str) -> BridgeCommandResult:
         device = self.bridge_device
         state = device.states.get(self.state_key) if device is not None else None
         control = (
@@ -374,7 +408,7 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
         ):
             raise HomeAssistantError("SmartThings Web light has no observed power control")
         try:
-            await self.runtime.client.async_execute_command(
+            return await self.runtime.client.async_execute_command(
                 target_type="device",
                 target_id=self.device_id,
                 component=control.component,
@@ -388,7 +422,7 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
         except BridgeClientError as err:
             raise HomeAssistantError(bridge_error_message(f"light {command} command", err)) from err
 
-    async def _async_set_number(self, attribute: str, value: int | float) -> None:
+    async def _async_set_number(self, attribute: str, value: int | float) -> BridgeCommandResult | None:
         binding = self._control(attribute)
         if not self.available or binding is None:
             raise HomeAssistantError(f"SmartThings Web light has no verified {attribute} control")
@@ -396,7 +430,7 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
         try:
             if binding.descriptor is not None:
                 descriptor = binding.descriptor
-                await self.runtime.client.async_execute_command(
+                return await self.runtime.client.async_execute_command(
                     target_type="device", target_id=self.device_id,
                     component=descriptor.component, capability=descriptor.capability,
                     attribute=attribute, command=descriptor.command, arguments=[value],
@@ -404,7 +438,7 @@ class SmartThingsWebLight(SmartThingsWebEntity, LightEntity):
                 )
             elif binding.control is not None:
                 control = binding.control
-                await self.runtime.client.async_execute_command(
+                return await self.runtime.client.async_execute_command(
                     target_type="device", target_id=self.device_id,
                     component=control.component, capability=control.capability,
                     attribute=control.attribute, control_id=control.control_id,
