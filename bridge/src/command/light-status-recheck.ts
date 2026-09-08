@@ -11,11 +11,11 @@ export async function readLightCommandStatus(
   const first = await read();
   const firstStates = devices.commandStatusStates(first, deviceId, locationId);
   if (!component || !devices.needsLightStatusProof(firstStates, deviceId, locationId, component)) {
-    return devices.observeCommandDeviceStatus(first, deviceId, locationId);
+    return devices.observeCommandDeviceStatus(first, deviceId, locationId, undefined, component);
   }
   let second: unknown;
   try { second = await read(); }
-  catch { return devices.observeCommandDeviceStatus(first, deviceId, locationId); }
+  catch { return devices.observeCommandDeviceStatus(first, deviceId, locationId, undefined, component); }
   return devices.observeCommandDeviceStatus(second, deviceId, locationId,
-    { component, beforeRevision, corroboratedStates: firstStates });
+    { component, beforeRevision, corroboratedStates: firstStates }, component);
 }

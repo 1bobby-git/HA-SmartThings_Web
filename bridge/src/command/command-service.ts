@@ -5,6 +5,7 @@ import { normalizeLocationArmState } from "../state/location-arm-state.js";
 import { enqueueWithDeadline } from "./bounded-command-queue.js";
 import { enqueueLightIntent } from "./latest-light-queue.js";
 import { boundedLocationRead, scheduleLocationRechecks } from "./location-rechecks.js";
+import { scheduleLightStateRechecks } from "./light-state-rechecks.js";
 import type {
   BridgeDevice,
   BridgeDeviceState,
@@ -233,7 +234,7 @@ interface SafeCommandServiceOptions {
     reason?: SafeCommandErrorCode;
   }) => void;
   onDeviceDiagnostic?: (event: { deviceId: string; stage: string; attribute: string;
-    elapsedMs: number; stateCount?: number; matches?: boolean; code?: string; commands?: string[];
+    elapsedMs: number; stateCount?: number; matches?: boolean; code?: string; commands?: string[]; readMs?: number;
     lightStatus?: { attribute: string; requested: string | number; observed: string | number | null }[] }) => void;
   onPendingCountChange?: (count: number) => void;
   onResult?: (result: SafeCommandResult) => void;
@@ -435,7 +436,7 @@ export class SafeCommandService {
   }
 
   #deviceDiagnostic(request: SafeCommandRequest, stage: string, startedAt: number,
-    details: { stateCount?: number; matches?: boolean; code?: string; commands?: string[];
+    details: { stateCount?: number; matches?: boolean; code?: string; commands?: string[]; readMs?: number;
       lightStatus?: { attribute: string; requested: string | number; observed: string | number | null }[] } = {}): void {
     try {
       this.options.onDeviceDiagnostic?.({ deviceId: request.targetId, stage,
@@ -461,8 +462,9 @@ export class SafeCommandService {
     this.options.devices.beginLightCommand(device.id);
     const startedAt = Date.now();
     const recheck = async () => {
+      const readStartedAt = Date.now();
       const evidence = await this.options.resync({ deviceId: device.id, lightComponent: request.component! });
-      this.#deviceDiagnostic(request, "read", startedAt, { stateCount: evidence?.observedStates?.length ?? 0,
+      this.#deviceDiagnostic(request, "read", startedAt, { readMs: Math.max(0, Date.now() - readStartedAt), stateCount: evidence?.observedStates?.length ?? 0,
         matches: evidence?.observedStates ? lightPlanMatches(evidence.observedStates, plan.expected) : false,
         lightStatus: plan.expected.map((target) => {
           const states = evidence?.observedStates?.filter((state) => state.component === target.component &&
@@ -487,6 +489,7 @@ export class SafeCommandService {
       // Only validated light-plan command names, never raw identifiers or bodies.
       this.#deviceDiagnostic(request, "dispatch", startedAt, { commands: plan.actions.map((action) => action.command) });
       const receipt = await this.options.executor.executeLightPlan!(plan.actions, signal);
+      this.#deviceDiagnostic(request, "receipt", startedAt);
       if (signal?.aborted) throw new SafeCommandError("command_superseded");
       wait.startTimeout(request.timeout === undefined ? this.options.timeoutMs : request.timeout * 1_000,
         this.options.resyncAfterMs, Date.now());
@@ -1167,7 +1170,7 @@ function waitForLightPlan(options: { devices: DeviceStore; deviceId: string; loc
   const before = currentStates();
   const changed = () => lightPlanHasFreshEvidence(before, currentStates(), options.expected);
   return waitForPredicate({ devices: options.devices, afterSequence: options.devices.currentSequence(),
-    resync: options.resync, boundedStateRechecks: true, stabilityMs: options.stabilityMs,
+    resync: options.resync, boundedLightRechecks: true, stabilityMs: options.stabilityMs,
     matches: (event) => (event.type === "inventory" || (event.type === "state" && event.deviceId === options.deviceId)) && changed() && matches(),
     invalidates: () => !matches(), matchesSnapshot: () => changed() && matches(),
     acceptsResyncEvidence: (proof, startedAt) => !!proof &&
@@ -1420,7 +1423,7 @@ interface ConfirmationEvidence {
   commandId?: string;
 }
 
-function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: CommandResync; matches: (event: BridgeDeviceStoreEvent) => boolean; invalidates?: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean; acceptsResyncEvidence?: (evidence: CommandResyncEvidence | undefined, minStartedAtMs?: number) => boolean; acceptsEvidence?: (evidence: ConfirmationEvidence) => boolean; stabilityMs?: number; forceFinalResync?: boolean; boundedLocationRechecks?: boolean; boundedStateRechecks?: boolean }): ConfirmationWait {
+function waitForPredicate(options: { devices: DeviceStore; afterSequence: number; resync: CommandResync; matches: (event: BridgeDeviceStoreEvent) => boolean; invalidates?: (event: BridgeDeviceStoreEvent) => boolean; matchesSnapshot?: () => boolean; acceptsResyncEvidence?: (evidence: CommandResyncEvidence | undefined, minStartedAtMs?: number) => boolean; acceptsEvidence?: (evidence: ConfirmationEvidence) => boolean; stabilityMs?: number; forceFinalResync?: boolean; boundedLocationRechecks?: boolean; boundedStateRechecks?: boolean; boundedLightRechecks?: boolean }): ConfirmationWait {
   let settled = false;
   let interactionComplete = false;
   let unsubscribe: () => void = () => undefined;
@@ -1483,7 +1486,8 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
       if (!options.matches(event)) return;
       pendingEvidence = {
         sequence: event.sequence,
-        source: event.type === "inventory" ? "inventory_snapshot" : "event",
+        source: event.type === "inventory" || (event.type === "state" && event.state.source === "COMMAND_STATUS_RECHECK")
+          ? "inventory_snapshot" : "event",
         ...(event.type === "state" && event.eventTime ? { eventTime: event.eventTime } : {}),
         ...(event.type === "state" && event.commandId ? { commandId: event.commandId } : {})
       };
@@ -1541,8 +1545,10 @@ function waitForPredicate(options: { devices: DeviceStore; afterSequence: number
         Number.isFinite(resyncAfterMs) &&
         resyncAfterMs >= 0 &&
         resyncAfterMs < timeoutMs;
-      if (options.boundedLocationRechecks === true || options.boundedStateRechecks === true) {
-        stopLocationRechecks = scheduleLocationRechecks(
+      if (options.boundedLocationRechecks === true || options.boundedStateRechecks === true || options.boundedLightRechecks === true) {
+        stopLocationRechecks = options.boundedLightRechecks === true
+          ? scheduleLightStateRechecks(() => resyncAndCheck(minResyncStartedAtMs, true), { timeoutMs, early: hasEarlyResync })
+          : scheduleLocationRechecks(
           () => resyncAndCheck(minResyncStartedAtMs, true),
           { timeoutMs, ...(hasEarlyResync ? { firstDelayMs: resyncAfterMs } : {}) }
         );

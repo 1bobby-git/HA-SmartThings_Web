@@ -7,6 +7,7 @@ import { AdvancedCommandCatalog } from "../../src/advanced/command-catalog.js";
 import { CapabilityDefinitionCache, parseCapabilityDefinition } from "../../src/advanced/capability-cache.js";
 import { AdvancedCommandAdapter } from "../../src/advanced/command-adapter.js";
 import { AdvancedFirstCommandExecutor } from "../../src/command/advanced-first-executor.js";
+import { readLightCommandStatus } from "../../src/command/light-status-recheck.js";
 import { lightPlanMatches, lightValueMatches } from "../../src/command/light-plan.js";
 import { verifiedAdvancedControl } from "../../src/command/verified-control-route.js";
 import type { AdvancedParser, AdvancedRequest } from "../../src/advanced/authenticated-session.js";
@@ -107,6 +108,27 @@ describe("Verified same-component light plans through real catalog/store/adapter
     expect(f.resync).toHaveBeenCalledOnce();
     expect(f.store.snapshot().devices[0]!.states.find((item) => item.attribute === "level")!.value).toBe(50);
     expect(f.diagnostics.mock.calls.some(([entry]) => entry.stage === "read" && entry.matches)).toBe(true);
+  });
+
+  test("status deltas complete the same Advanced plan as GET evidence, not a fabricated device push", async () => {
+    const f = await fixture(); const events: any[] = [];
+    f.store.subscribe((event) => events.push(event));
+    f.resync.mockImplementation(async () => {
+      const startedAtMs = Date.now();
+      const raw = f.row({ switch: "on", level: 50, hue: 0, saturation: 100, colorTemperature: 3000 });
+      const { label: _label, type: _type, ...exact } = raw;
+      const observedStates = await readLightCommandStatus(f.store, "dev_001", "loc_001",
+        async () => ({ items: [exact] }), "identifier_main");
+      return { source: "advanced_device_status" as const, authoritativeSnapshot: false,
+        deviceId: "dev_001", locationId: "loc_001", observedStates, startedAtMs };
+    });
+    const result = await f.service.execute(f.request);
+    expect(result).toMatchObject({ status: "confirmed", transport: "advanced", confirmation: "inventory_snapshot" });
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((event) => event.type === "state" && event.state.source === "COMMAND_STATUS_RECHECK")).toBe(true);
+    expect(f.diagnostics).toHaveBeenCalledWith(expect.objectContaining({ stage: "receipt", elapsedMs: expect.any(Number) }));
+    expect(f.diagnostics).toHaveBeenCalledWith(expect.objectContaining({ stage: "read", readMs: expect.any(Number) }));
+    expect(f.requests.flatMap((item) => (item.body as any).commands)).toEqual(shared.expectedCommands);
   });
 
   test("unchanged power cannot block numeric members, even without a new on event", async () => {
