@@ -1,0 +1,88 @@
+name: Apply verified light latency repair
+on:
+  push:
+    branches:
+      - perf/light-state-delivery-1.8.27
+    paths:
+      - .github/workflows/apply-light-latency.yml
+permissions:
+  contents: write
+concurrency:
+  group: apply-light-latency-1.8.27
+  cancel-in-progress: false
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: perf/light-state-delivery-1.8.27
+          fetch-depth: 0
+      - name: Verify reviewed patch and resulting source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64, hashlib, json, lzma, os, pathlib, re, shutil, subprocess
+          root = pathlib.Path('.')
+          payloads = ['.github/light-latency.patch.1', '.github/light-latency.patch.2']
+          workflow = '.github/workflows/apply-light-latency.yml'
+          base = '7a467b95a0c2100495a110ba78b3c0dc8934fe46'
+          def git(*args, **kwargs):
+              return subprocess.check_output(['git', *args], **kwargs).decode().strip()
+          if git('rev-parse', 'origin/main') != base:
+              raise SystemExit('Main advanced; review before applying')
+          if set(git('diff', '--name-only', base, 'HEAD').splitlines()) != {*payloads, workflow}:
+              raise SystemExit('Unexpected branch changes')
+          encoded = ''.join((root / path).read_text().strip() for path in payloads)
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True), memlimit=128*1024*1024)
+          expected = '5ca6e1d0496fcac541e996f7464108d1a001cc7716885f701981123cbabf9af0'
+          if len(patch) != 39989 or hashlib.sha256(patch).hexdigest() != expected:
+              raise SystemExit('Reviewed patch checksum mismatch')
+          if json.loads((root / 'package.json').read_text())['version'] != '1.8.26':
+              raise SystemExit('Unexpected base version')
+          allowed = {
+              'CHANGELOG.md', 'addon/smartthings_web_bridge/CHANGELOG.md',
+              'addon/smartthings_web_bridge/config.yaml', 'bridge/src/command/command-service.ts',
+              'bridge/src/command/light-state-rechecks.ts', 'bridge/src/command/light-status-recheck.ts',
+              'bridge/src/runtime.ts', 'bridge/src/state/device-store.ts',
+              'bridge/tests/command/light-plan.test.ts', 'bridge/tests/command/light-state-rechecks.test.ts',
+              'bridge/tests/command/light-status-recheck.test.ts', 'bridge/tests/runtime.test.ts',
+              'custom_components/smartthings_web/manifest.json', 'custom_components/smartthings_web/models.py',
+              'custom_components/smartthings_web/tests/test_light_capabilities.py',
+              'custom_components/smartthings_web/tests/test_light_status_deltas.py',
+              'docs/LIGHT_STATE_LATENCY_1.8.27.md', 'package-lock.json', 'package.json',
+              'protocol/version.json', 'tests/addon-config.test.ts', 'tests/protocol-version-contract.test.ts'
+          }
+          if set(re.findall(r'^diff --git a/\S+ b/(\S+)$', patch.decode(), re.M)) != allowed:
+              raise SystemExit('Unexpected patch scope')
+          subprocess.run(['git', 'apply', '--unidiff-zero', '--check', '-'], input=patch, check=True)
+          subprocess.run(['git', 'apply', '--unidiff-zero', '-'], input=patch, check=True)
+          subprocess.run(['git', 'add', '--', *sorted(allowed)], check=True)
+          subprocess.run(['git', 'rm', '--', *payloads], check=True)
+          verify_index = (root / '.git/light-latency-verify-index').resolve()
+          shutil.copyfile('.git/index', verify_index)
+          env = {**os.environ, 'GIT_INDEX_FILE': str(verify_index)}
+          try:
+              git('update-index', '--force-remove', workflow, env=env)
+              tree = git('write-tree', env=env)
+              if tree != 'ee8e4aff40b58ecd065a257784b8fc8e579f62fa':
+                  raise SystemExit('Source tree does not match reviewed repair: ' + tree)
+          finally:
+              verify_index.unlink(missing_ok=True)
+          print('Verified patch SHA256:', expected)
+          print('Verified final source tree:', tree)
+          print('Reviewed files:', len(allowed))
+          PY
+          git diff --cached --check
+          git diff --cached --stat
+      - name: Commit only to the repair branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'perf: deliver observed light status without full inventory reload (1.8.27)'
+          git push origin HEAD:perf/light-state-delivery-1.8.27
+          echo "REPAIR_COMMIT=$(git rev-parse HEAD)"
