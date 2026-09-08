@@ -19,6 +19,11 @@ export interface HealthDetails {
   detailDiscoveryFailureCount: number;
   protocolChangeCount: number;
   protocolMismatchSurface?: RuntimeStatusSnapshot["protocolMismatchSurface"];
+  sessionTouchCount?: number;
+  sessionTouchConsecutiveFailures?: number;
+  sessionTouchLastOutcome?: RuntimeStatusSnapshot["sessionTouchLastOutcome"];
+  sessionTouchAgeMs?: number;
+  sessionTouchSuccessAgeMs?: number;
   restartCount: number;
   architectureVersion: string;
   advancedInventoryDeviceCount: number;
@@ -124,6 +129,11 @@ export function createHealthReport(
       protocolChangeCount: snapshot.protocolChangeCount,
       protocolMismatchSurface: snapshot.protocolMismatchSurface,
       restartCount: snapshot.restartCount,
+      sessionTouchCount: snapshot.sessionTouchCount,
+      sessionTouchConsecutiveFailures: snapshot.sessionTouchConsecutiveFailures,
+      sessionTouchLastOutcome: snapshot.sessionTouchLastOutcome,
+      sessionTouchAgeMs: optionalAgeMs(nowMs, snapshot.lastSessionTouchAtMs),
+      sessionTouchSuccessAgeMs: optionalAgeMs(nowMs, snapshot.lastSessionTouchSuccessAtMs),
       architectureVersion: snapshot.architectureVersion,
       advancedInventoryDeviceCount: snapshot.advancedInventoryDeviceCount,
       advancedInventoryLocationCount: snapshot.advancedInventoryLocationCount,

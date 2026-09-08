@@ -35,10 +35,11 @@ export interface AdvancedDeviceSnapshotEntry {
   snapshot: unknown;
 }
 
-export type SessionTouchOutcome = "ok" | "reauth" | "failed";
+export type SessionTouchOutcome = "ok" | "reauth" | "failed" | "stale";
 
 export interface KeeperPageManagerOptions {
   now?: () => number;
+  canNavigate?: () => boolean;
   sessionReauthRecoveryDelayMs?: number;
   loginRecoveryDelayMs?: number;
   sessionRecoveryRetryMs?: number;
@@ -114,12 +115,15 @@ export class KeeperPageManager {
   #loginObservedAtMs: number | undefined;
   #lastRecoveryAttemptAtMs: number | undefined;
   #sessionRecoveryInFlight: Promise<void> | undefined;
+  #touchInFlight: { page: BrowserPageLike; url: string; result: Promise<SessionTouchOutcome> } | undefined;
+  readonly #canNavigate: () => boolean;
 
   constructor(
     private readonly context: BrowserContextLike,
     options: KeeperPageManagerOptions = {}
   ) {
     this.#now = options.now ?? Date.now;
+    this.#canNavigate = options.canNavigate ?? (() => true);
     this.#sessionReauthRecoveryDelayMs = validDelay(
       options.sessionReauthRecoveryDelayMs,
       SESSION_REAUTH_RECOVERY_DELAY_MS
@@ -240,7 +244,12 @@ export class KeeperPageManager {
   }
 
   async recoverKeeper(): Promise<BrowserPageLike> {
+    const current = this.currentKeeper();
+    if (!this.#canNavigate() || (current && isSamsungLoginUrl(current.url()))) {
+      throw new Error("keeper_recovery_deferred");
+    }
     const keeper = await this.ensureKeeper();
+    if (!this.#canNavigate() || isSamsungLoginUrl(keeper.url())) throw new Error("keeper_recovery_deferred");
     const target = isConcreteLocationUrl(keeper.url()) ? keeper.url() : KEEPER_URL;
     await keeper.goto(target, { waitUntil: "domcontentloaded" });
     if (isKeeperSettledUrl(keeper.url())) {
@@ -262,54 +271,77 @@ export class KeeperPageManager {
       return "reauth";
     }
     if (!isKeeperSettledUrl(url) || !keeper.evaluate) return "failed";
-    try {
-      const outcome = await keeper.evaluate<
-        SessionTouchOutcome,
-        { path: string; authPath: string; timeout: number }
-      >(
-        async ({ path, authPath, timeout }) => {
+    const running = this.#touchInFlight;
+    if (running?.page === keeper && running.url === url) return running.result;
+    const timeout = Number.isFinite(timeoutMs)
+      ? Math.max(1, Math.min(SESSION_TOUCH_TIMEOUT_MS, Math.floor(timeoutMs))) : SESSION_TOUCH_TIMEOUT_MS;
+    const flight = { page: keeper, url, result: Promise.resolve("failed" as SessionTouchOutcome) };
+    this.#touchInFlight = flight;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Keep the underlying evaluate lease until it settles. A renderer timeout
+    // must not create an unbounded pile of hidden requests on later heartbeats.
+    const operation = Promise.resolve().then(() => keeper.evaluate!<
+      SessionTouchOutcome, { path: string; authPath: string; timeout: number }
+    >(
+      async ({ path, authPath, timeout }) => {
+        const request = async (target: string, budget: number, verify: boolean): Promise<SessionTouchOutcome> => {
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), timeout);
-          const request = async (target: string): Promise<SessionTouchOutcome> => {
+          const timer = setTimeout(() => controller.abort(), budget);
+          try {
             // api-free-audit: authenticated-page-same-origin-read-only-session-touch
             const response = await fetch(target, {
-              cache: "no-store",
-              credentials: "same-origin",
-              method: "GET",
-              redirect: "manual",
-              signal: controller.signal
+              cache: "no-store", credentials: "same-origin", method: "GET",
+              redirect: "manual", signal: controller.signal
             });
-            if (
-              response.type === "opaqueredirect" ||
-              response.status === 401 ||
-              (response.status >= 300 && response.status < 400)
-            ) {
-              return "reauth";
+            if (response.type === "opaqueredirect" || response.status === 401 ||
+                (response.status >= 300 && response.status < 400)) return "reauth";
+            if (!response.ok) return "failed";
+            if (!verify) {
+              await response.body?.cancel().catch(() => undefined);
+              return "ok";
             }
-            return response.ok ? "ok" : "failed";
-          };
-          try {
-            // The location page may redirect to a selected location or fail independently.
-            // Only the authenticated endpoint determines whether renewal is needed.
-            await request(path).catch(() => undefined);
-            return await request(authPath);
-          } catch {
-            return "failed";
-          } finally {
-            clearTimeout(timer);
-          }
-        },
-        {
-          path: SESSION_TOUCH_PATH,
-          authPath: SESSION_TOUCH_AUTH_PATH,
-          timeout: Math.max(1, Math.min(SESSION_TOUCH_TIMEOUT_MS, timeoutMs))
-        }
-      );
-      this.observeSessionTouchOutcome(outcome, keeper.url());
-      return outcome;
-    } catch {
-      return "failed";
-    }
+            // HTTP 200 alone can be an HTML sign-in shell or an error envelope.
+            if (!/^application\/(?:[a-z0-9.+-]+\+)?json(?:;|$)/i.test(response.headers.get("content-type") ?? "")) {
+              await response.body?.cancel().catch(() => undefined);
+              return "failed";
+            }
+            const value: unknown = await response.json();
+            const record = typeof value === "object" && value !== null && !Array.isArray(value)
+              ? value as Record<string, unknown> : undefined;
+            const rows = Array.isArray(value) ? value :
+              ["items", "locations", "data", "results"].map((key) => record?.[key]).find(Array.isArray);
+            if (!Array.isArray(rows) || (record && (record.error || record.errors))) return "failed";
+            return rows.every((row: unknown) => {
+              if (typeof row !== "object" || row === null || Array.isArray(row)) return false;
+              const item = row as Record<string, unknown>;
+              const id = item.locationId ?? item.id;
+              return typeof id === "string" && id.length > 0 && id.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(id);
+            }) ? "ok" : "failed";
+          } catch { return "failed"; }
+          finally { controller.abort(); clearTimeout(timer); }
+        };
+        // Separate budgets: a slow optional page GET cannot starve the actual
+        // authenticated check. Neither request navigates or changes devices.
+        const pageBudget = Math.max(1, Math.min(3_000, Math.floor(timeout / 4)));
+        await request(path, pageBudget, false);
+        return request(authPath, Math.max(1, timeout - pageBudget), true);
+      }, { path: SESSION_TOUCH_PATH, authPath: SESSION_TOUCH_AUTH_PATH, timeout }
+    )).catch(() => "failed" as const).finally(() => {
+      if (this.#touchInFlight === flight) this.#touchInFlight = undefined;
+    });
+    flight.result = Promise.race([
+      operation,
+      new Promise<SessionTouchOutcome>((resolve) => {
+        timer = setTimeout(() => resolve("failed"), timeout + 1_000);
+        timer.unref?.();
+      })
+    ]).then((outcome) => {
+      if (this.currentKeeper() !== keeper || keeper.isClosed() || keeper.url() !== url) return "stale";
+      const result = ["ok", "reauth", "failed"].includes(outcome) ? outcome : "failed";
+      this.observeSessionTouchOutcome(result as SessionTouchOutcome, url);
+      return result as SessionTouchOutcome;
+    }).finally(() => { if (timer !== undefined) clearTimeout(timer); });
+    return flight.result;
   }
 
   async openAdvancedPage(
@@ -362,6 +394,7 @@ export class KeeperPageManager {
   }
 
   private async recoverRememberedSessionIfDue(keeper: BrowserPageLike): Promise<void> {
+    if (!this.#canNavigate()) return;
     const now = this.#now();
     const loginPage = isSamsungLoginUrl(keeper.url());
     if (loginPage) {
@@ -392,7 +425,9 @@ export class KeeperPageManager {
         return;
       }
       if (isKeeperSettledUrl(keeper.url())) {
-        this.clearRecoveryState();
+        // A loaded application shell does not prove an authenticated session.
+        // Preserve the pending state until the protected read succeeds.
+        await this.touchAuthenticatedSession();
       } else if (isSamsungLoginUrl(keeper.url())) {
         this.#sessionReauthObservedAtMs = undefined;
         this.#loginObservedAtMs = this.#now();

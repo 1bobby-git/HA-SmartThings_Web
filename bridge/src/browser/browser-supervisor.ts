@@ -2,6 +2,7 @@ import type { RuntimeStatusStore } from "../state/runtime-state.js";
 
 export interface BrowserSupervisorOptions {
   maxRestarts: number;
+  shouldStop?: () => boolean;
   launch: () => Promise<unknown>;
   status: RuntimeStatusStore;
   now?: () => number;
@@ -17,8 +18,10 @@ export class BrowserSupervisor {
 
   async start(): Promise<unknown | undefined> {
     let cycleFailures = 0;
+    if (this.options.shouldStop?.()) return undefined;
     this.options.status.update({ state: "BROWSER_STARTING" });
     while (cycleFailures <= this.options.maxRestarts) {
+      if (this.options.shouldStop?.()) return undefined;
       try {
         const context = await this.options.launch();
         this.options.status.update({

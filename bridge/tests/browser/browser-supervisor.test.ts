@@ -16,6 +16,16 @@ class FakeStatusStore {
 }
 
 describe("BrowserSupervisor", () => {
+  test("stops immediate relaunches when shutdown arrives during the retry delay", async () => {
+    let stopped = false;
+    const launch = vi.fn(async () => { throw new Error("fixture failure"); });
+    const supervisor = new BrowserSupervisor({ launch, maxRestarts: 3, retryDelayMs: 1,
+      shouldStop: () => stopped, wait: async () => { stopped = true; },
+      status: new FakeStatusStore() as unknown as RuntimeStatusStore });
+    expect(await supervisor.start()).toBeUndefined();
+    expect(launch).toHaveBeenCalledTimes(1);
+  });
+
   test("preserves the authenticated state established during launch", async () => {
     const status = new FakeStatusStore();
     const supervisor = new BrowserSupervisor({
