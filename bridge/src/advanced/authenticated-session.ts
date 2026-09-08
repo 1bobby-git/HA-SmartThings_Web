@@ -9,6 +9,8 @@ export interface AdvancedRequest {
   path: string;
   body?: unknown;
   timeoutMs?: number;
+  /** Optional READ-only fast path: never open a fallback page for this request. */
+  keeperOnly?: boolean;
 }
 
 export interface AuthenticatedAdvancedSession {
@@ -63,10 +65,14 @@ export class AuthenticatedSmartThingsSession implements AuthenticatedAdvancedSes
       request,
       this.options.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS
     );
+    if (request.keeperOnly !== undefined && (request.keeperOnly !== true || safeRequest.method !== "GET")) {
+      throw new AdvancedSessionError("advanced_request_path_invalid", request.endpoint);
+    }
     const keeper = this.options.currentKeeper();
     if (keeper?.evaluate && !keeper.isClosed()) {
       const keeperResult = await executePageRequest(keeper, safeRequest);
       if (keeperResult.ok) return parseResult(keeperResult, request.endpoint, parser);
+      if (request.keeperOnly) throw classifyFailure(request.endpoint, keeperResult);
       if (safeRequest.method === "POST" && !knownNotSent(keeperResult)) {
         throw classifyFailure(request.endpoint, keeperResult);
       }
@@ -78,6 +84,8 @@ export class AuthenticatedSmartThingsSession implements AuthenticatedAdvancedSes
         );
       }
     }
+
+    if (request.keeperOnly) throw new AdvancedSessionError("advanced_request_unavailable", request.endpoint);
 
     if (this.options.requestJson) {
       const contextResult = await this.options.requestJson(safeRequest);

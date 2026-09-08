@@ -832,7 +832,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
 
     expect(log.info.mock.calls.slice(0, 14)).toEqual([
-      ["bridge_init:version:1.8.27:home_monitor_direct"],
+      ["bridge_init:version:1.8.28:home_monitor_direct"],
       ["bridge_init:data_paths"],
       ["bridge_init:data_paths:data_dir"],
       ["bridge_init:data_paths:profile_dir"],
@@ -2980,3 +2980,64 @@ function capabilityDefinition(
     commands
   };
 }
+
+test("runtime light preview reads the exact aliased device and skips only matching on/level", async () => {
+  const shared = JSON.parse(readFileSync("custom_components/smartthings_web/tests/fixtures/light-plan.json", "utf8"));
+  const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+  const statusPayload = { components: { main: {
+    switch: { switch: { value: "on", timestamp: "2026-09-08T00:00:00Z" } },
+    switchLevel: { level: { value: 50, timestamp: "2026-09-08T00:00:00Z" } },
+    colorControl: { hue: { value: 25, timestamp: "2026-09-08T00:00:00Z" },
+      saturation: { value: 50, timestamp: "2026-09-08T00:00:00Z" } }
+  } } };
+  keeper.advancedSnapshots = [{ items: [{ deviceId: "runtime-fixture-lamp", locationId: "loc-synthetic-001",
+    label: "Fixture lamp", type: "light", status: statusPayload,
+    components: [{ id: "main", capabilities: ["switch", "switchLevel", "colorControl"].map((id) => ({ id, version: 1 })) }] }] }];
+  keeper.advancedStatusResponse = structuredClone(statusPayload);
+  for (const def of shared.definitions) keeper.advancedResponses.set(`/advanced/cupcake-api/api/capabilities/${def.id}/1`, def);
+  keeper.advancedCommandResponse = { results: [{ status: "ACCEPTED" }] };
+  keeper.onAdvancedCommand = () => {
+    const req = keeper.advancedRequestCalls.at(-1) as { body: { commands: { command: string }[] } };
+    expect(req.body.commands.map((c) => c.command)).toEqual(["setColor"]);
+    keeper.advancedStatusResponse = { components: { main: { ...statusPayload.components.main,
+      colorControl: { hue: { value: 34, timestamp: new Date().toISOString() },
+        saturation: { value: 96, timestamp: new Date().toISOString() } }
+    } } };
+  };
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const root = createTempRoot();
+  const runtime = await createBridgeRuntime(createDeps(root, { log,
+    chromium: { launchPersistentContext: vi.fn(async () => new FakeContext([keeper])) } }));
+  runtimes.push(runtime); await runtime.browserStartup;
+  const now = Date.now();
+  runtime.status.update({ state: "CONNECTED", chromiumRunning: true, keeperPresent: true,
+    authenticated: true, pushConnected: true, parserHealthy: true, initialSnapshotComplete: true, dbAvailable: true,
+    heartbeatAtMs: now, initialSnapshotCompletedAtMs: now, lastSnapshotAtMs: now, lastParserSuccessAtMs: now, lastPushAtMs: now });
+  const baseUrl = `http://127.0.0.1:${runtime.port}`;
+  const token = await exchangeBridgeToken(baseUrl);
+  const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+  const inventory = await fetch(`${baseUrl}/api/v1/inventory`, { headers }).then((res) => res.json()) as any;
+  const lamp = inventory.devices.find((d: any) => d.name === "Fixture lamp");
+  expect(lamp).toBeDefined();
+  const sw = lamp.states.find((s: any) => s.attribute === "switch");
+  const level = lamp.states.find((s: any) => s.attribute === "level");
+  const hue = lamp.states.find((s: any) => s.attribute === "hue");
+  const definitionReads = keeper.advancedRequestCalls.filter((r: any) => r.endpoint === "capability").length;
+  expect(definitionReads).toBe(3);
+  const result = await fetch(`${baseUrl}/api/v1/commands`, { method: "POST", headers, body: JSON.stringify({
+    targetType: "device", targetId: lamp.id, component: sw.component, capability: sw.capability, attribute: "switch",
+    command: "applyLight", confirm: true, requireAdvanced: true, replacePending: true, timeout: 1,
+    clientRequestId: "runtime_preview_light_001", arguments: [
+      { attribute: "switch", capability: sw.capability, command: "on", arguments: [] },
+      { attribute: "level", capability: level.capability, command: "setLevel", arguments: [50] },
+      { attribute: "color", capability: hue.capability, command: "setColor", arguments: [{ hue: 34, saturation: 96 }] }
+    ]
+  }) });
+  expect({ code: result.status, body: await result.json() }).toMatchObject({ code: 200, body: { status: "confirmed" } });
+  expect(keeper.advancedRequestCalls.filter((r: any) => r.endpoint === "capability")).toHaveLength(definitionReads);
+  const posts = keeper.advancedRequestCalls.filter((r: any) => r.method === "POST");
+  expect(posts).toHaveLength(1);
+  expect(keeper.advancedRequestCalls.some((r: any) => r.path.endsWith("/runtime-fixture-lamp/status") && r.timeoutMs === 350)).toBe(true);
+  const diagnostics = log.info.mock.calls.filter(([s]) => s.startsWith("command_device:")).map(([s]) => JSON.parse(s.slice("command_device:".length)));
+  expect(diagnostics).toContainEqual(expect.objectContaining({ stage: "dispatch", commands: ["setColor"], skippedCommands: ["on", "setLevel"] }));
+});

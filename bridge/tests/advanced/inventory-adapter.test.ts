@@ -149,3 +149,14 @@ describe("AdvancedInventoryAdapter", () => {
     expect(session.requests).toHaveLength(11);
   });
 });
+
+test("light preview is one bounded keeper-only GET; ordinary status reads are unchanged", async () => {
+  const path = "/advanced/cupcake-api/api/devices/fixture-light/status";
+  const payload = { components: { main: { switch: { switch: { value: "on" } } } } };
+  const session = new FakeSession(new Map([[path, payload]]));
+  const adapter = new AdvancedInventoryAdapter(session);
+  expect(await adapter.previewLightStatus("fixture-light")).toBe(payload);
+  expect(session.requests[0]).toEqual({ endpoint: "device_status", method: "GET", path, timeoutMs: 350, keeperOnly: true });
+  await adapter.getDeviceStatus("fixture-light");
+  expect(session.requests[1]).toEqual({ endpoint: "device_status", method: "GET", path });
+});
