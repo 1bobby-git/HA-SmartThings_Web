@@ -233,7 +233,7 @@ interface SafeCommandServiceOptions {
     reason?: SafeCommandErrorCode;
   }) => void;
   onDeviceDiagnostic?: (event: { deviceId: string; stage: string; attribute: string;
-    elapsedMs: number; stateCount?: number; matches?: boolean; code?: string;
+    elapsedMs: number; stateCount?: number; matches?: boolean; code?: string; commands?: string[];
     lightStatus?: { attribute: string; requested: string | number; observed: string | number | null }[] }) => void;
   onPendingCountChange?: (count: number) => void;
   onResult?: (result: SafeCommandResult) => void;
@@ -435,7 +435,7 @@ export class SafeCommandService {
   }
 
   #deviceDiagnostic(request: SafeCommandRequest, stage: string, startedAt: number,
-    details: { stateCount?: number; matches?: boolean; code?: string;
+    details: { stateCount?: number; matches?: boolean; code?: string; commands?: string[];
       lightStatus?: { attribute: string; requested: string | number; observed: string | number | null }[] } = {}): void {
     try {
       this.options.onDeviceDiagnostic?.({ deviceId: request.targetId, stage,
@@ -484,6 +484,8 @@ export class SafeCommandService {
     signal?.addEventListener("abort", supersede, { once: true });
     try {
       if (signal?.aborted) throw new SafeCommandError("command_superseded");
+      // Only validated light-plan command names, never raw identifiers or bodies.
+      this.#deviceDiagnostic(request, "dispatch", startedAt, { commands: plan.actions.map((action) => action.command) });
       const receipt = await this.options.executor.executeLightPlan!(plan.actions, signal);
       if (signal?.aborted) throw new SafeCommandError("command_superseded");
       wait.startTimeout(request.timeout === undefined ? this.options.timeoutMs : request.timeout * 1_000,

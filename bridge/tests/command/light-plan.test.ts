@@ -15,7 +15,7 @@ import type { DeviceActionExecutionInput } from "../../src/command/command-servi
 const shared = JSON.parse(readFileSync("custom_components/smartthings_web/tests/fixtures/light-plan.json", "utf8"));
 const stores: DeviceStore[] = [];
 afterEach(() => { stores.splice(0).forEach((store) => store.close()); vi.useRealTimers(); });
-async function fixture(options: { stabilityMs?: number; timeoutMs?: number } = {}) {
+async function fixture(options: { stabilityMs?: number; timeoutMs?: number; colorSchema?: Record<string, unknown> } = {}) {
   const store = new DeviceStore(); stores.push(store);
   const row = (values: Record<string, unknown>, timestamp = "2026-09-07T00:00:00Z") => ({
     deviceId: "dev_001", locationId: "loc_001", label: "Fixture lamp", type: "light",
@@ -24,7 +24,10 @@ async function fixture(options: { stabilityMs?: number; timeoutMs?: number } = {
         [attribute, { value: values[attribute], timestamp }]))])) } }
   });
   store.observeAdvancedDeviceSnapshot({ items: [row(shared.initial)] });
-  const definitions = shared.definitions.map(parseCapabilityDefinition);
+  const rawDefinitions = structuredClone(shared.definitions);
+  if (options.colorSchema) rawDefinitions.find((item: any) => item.id === "colorControl")
+    .commands.setColor.arguments[0].schema = options.colorSchema;
+  const definitions = rawDefinitions.map(parseCapabilityDefinition);
   const loader = async (id: string) => { const value = definitions.find((item: any) => item.id === id); if (!value) throw Error("missing definition"); return value; };
   const catalog = await new AdvancedCommandCatalog(loader).build(shared.bindings);
   store.observeAdvancedCommandCatalog("dev_001", catalog.commandsByDevice.get("dev_001")!, catalog.omissions);
@@ -69,6 +72,28 @@ async function fixture(options: { stabilityMs?: number; timeoutMs?: number } = {
 }
 
 describe("Verified same-component light plans through real catalog/store/adapter", () => {
+  test("optional ColorMap reaches setColor instead of unusable split handlers", async () => {
+    const f = await fixture({ colorSchema: {
+      title: "ColorMap", type: "object", additionalProperties: false,
+      properties: {
+        hue: { type: "number" }, saturation: { type: "number" },
+        hex: { type: "string", maxLength: 7 }, level: { type: "integer" },
+        switch: { type: "string", maxLength: 3 }
+      }
+    } });
+    expect(f.catalog.omissions).toEqual([]);
+    expect(f.catalog.commandsByDevice.get("dev_001")).toEqual(shared.expectedCatalog.commands);
+    const result = await f.service.execute(f.request);
+    expect(result).toMatchObject({ status: "confirmed", transport: "advanced" });
+    expect(f.requests.flatMap((item) => (item.body as any).commands)).toEqual(shared.expectedCommands);
+    expect(f.requests.flatMap((item) => (item.body as any).commands.map((cmd: any) => cmd.command)))
+      .toEqual(["on", "setLevel", "setColor"]);
+    expect(f.legacy.executeDeviceAction).not.toHaveBeenCalled();
+    expect(f.diagnostics).toHaveBeenCalledWith(expect.objectContaining({
+      stage: "dispatch", commands: ["on", "setLevel", "setColor"]
+    }));
+  });
+
   test("retains bounded setColor and serializes Advanced power/level/color before waiting", async () => {
     const f = await fixture();
     expect(f.catalog.omissions).toEqual([]);
