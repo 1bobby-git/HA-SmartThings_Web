@@ -107,7 +107,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.28";
+const bridgeVersion = "1.8.29";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -191,6 +191,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   let sessionTouchReadySinceMs: number | undefined;
   let lastSessionTouchAttemptAtMs = 0;
   const authenticatedSession = new AuthenticatedSmartThingsSession({
+    onRequestTiming: (event) => log.info(`advanced_request_timing:${JSON.stringify(event)}`),
     currentKeeper: () => currentKeeperManager?.currentKeeper(),
     openAdvancedPage: async () => {
       const manager = currentKeeperManager;
@@ -447,6 +448,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     timeoutMs: deps.config.commandConfirmationTimeoutMs ?? 30_000,
     ...(deps.config.statusRecheckEnabled === false ? {} : { resyncAfterMs: 250 }),
     resync: refreshCommandSnapshot,
+    lightDispatchScope: () => currentKeeperManager?.currentKeeper(),
     lightDispatchPreview: async (deviceId, locationId) => {
       if (deps.config.statusRecheckEnabled === false) return undefined;
       const startedAtMs = Date.now();

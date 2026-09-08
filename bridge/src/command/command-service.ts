@@ -1,3 +1,4 @@
+import { LightDispatchCache } from "./light-dispatch-cache.js";
 import { LightPlanError, buildLightPlan, lightPlanMatches, lightPlanHasFreshEvidence, lightValueMatches, type LightExpectedState } from "./light-plan.js";
 import { prepareLightDispatch, type LightDispatchPreview } from "./light-dispatch-plan.js";
 import { validColorArgument } from "../advanced/color-argument.js";
@@ -227,6 +228,8 @@ interface SafeCommandServiceOptions {
   resyncAfterMs?: number;
   confirmationStabilityMs?: number;
   lightDispatchPreview?: LightDispatchPreview;
+  /** Browser identity: cached proof must not cross a keeper/session replacement. */
+  lightDispatchScope?: () => unknown;
   resync: (request?: CommandResyncRequest) => Promise<CommandResyncEvidence | undefined>;
   onLocationDiagnostic?: (diagnostic: {
     phase: "dispatching" | "waiting" | "confirmed" | "failed" | "transition_disarming" | "transition_disarmed" | "transition_failed";
@@ -236,7 +239,7 @@ interface SafeCommandServiceOptions {
     reason?: SafeCommandErrorCode;
   }) => void;
   onDeviceDiagnostic?: (event: { deviceId: string; stage: string; attribute: string;
-    elapsedMs: number; stateCount?: number; matches?: boolean; code?: string; commands?: string[]; readMs?: number; skippedCommands?: string[]; preflightMs?: number;
+    elapsedMs: number; stateCount?: number; matches?: boolean; code?: string; commands?: string[]; readMs?: number; skippedCommands?: string[]; preflightMs?: number; preflightSource?: "recent_read" | "live_read" | "backoff" | undefined;
     lightStatus?: { attribute: string; requested: string | number; observed: string | number | null }[] }) => void;
   onPendingCountChange?: (count: number) => void;
   onResult?: (result: SafeCommandResult) => void;
@@ -335,7 +338,11 @@ export class SafeCommandService {
   readonly #queues = new Map<string, Promise<void>>();
   readonly #lightIntents = new Map<string, AbortController>();
 
-  constructor(private readonly options: SafeCommandServiceOptions) {}
+  readonly #lightDispatchCache: LightDispatchCache;
+  #lightHealthEpoch: string | undefined;
+  constructor(private readonly options: SafeCommandServiceOptions) {
+    this.#lightDispatchCache = new LightDispatchCache(options.devices);
+  }
 
   async execute(input: unknown): Promise<SafeCommandResult> {
     const request = validateRequest(input);
@@ -418,6 +425,13 @@ export class SafeCommandService {
     if (runtime.state !== "CONNECTED" || !createHealthReport(runtime).ready) {
       throw new SafeCommandError("bridge_not_connected");
     }
+    // Even a rapid reconnect invalidates evidence captured before that transition.
+    const healthEpoch = JSON.stringify([runtime.lastStateChangeAtMs, runtime.restartCount,
+      runtime.reconnectCount, runtime.lastReconnectAtMs, runtime.lastBrowserStartAtMs]);
+    if (this.#lightHealthEpoch !== healthEpoch) this.#lightDispatchCache.clear();
+    this.#lightHealthEpoch = healthEpoch;
+    if (request.targetType !== "device") this.#lightDispatchCache.clear();
+    else if (request.command !== "applyLight") this.#lightDispatchCache.invalidate(request.targetId);
     const snapshot = this.options.devices.snapshot();
     const locationNames = Object.fromEntries(
       snapshot.locations.map((location) => [location.id, location.name])
@@ -438,7 +452,7 @@ export class SafeCommandService {
   }
 
   #deviceDiagnostic(request: SafeCommandRequest, stage: string, startedAt: number,
-    details: { stateCount?: number; matches?: boolean; code?: string; commands?: string[]; readMs?: number; skippedCommands?: string[]; preflightMs?: number;
+    details: { stateCount?: number; matches?: boolean; code?: string; commands?: string[]; readMs?: number; skippedCommands?: string[]; preflightMs?: number; preflightSource?: "recent_read" | "live_read" | "backoff" | undefined;
       lightStatus?: { attribute: string; requested: string | number; observed: string | number | null }[] } = {}): void {
     try {
       this.options.onDeviceDiagnostic?.({ deviceId: request.targetId, stage,
@@ -461,13 +475,29 @@ export class SafeCommandService {
 
   async #executeLight(request: SafeCommandRequest, device: BridgeDevice, signal?: AbortSignal): Promise<SafeCommandResult> {
     const plan = this.#lightPlan(request, device);
+    const canOptimize = this.options.resyncAfterMs !== undefined && this.options.lightDispatchPreview !== undefined;
+    const cached = this.#lightDispatchCache.begin(device, this.options.lightDispatchScope?.());
     this.options.devices.beginLightCommand(device.id);
     const startedAt = Date.now();
     const dispatch = await prepareLightDispatch(this.options.devices, device, plan,
-      this.options.lightDispatchPreview, signal);
+      !canOptimize || cached.skipPreview ? undefined : this.options.lightDispatchPreview, signal,
+      canOptimize ? cached.proof : undefined);
+    if (dispatch.previewFailed && !signal?.aborted) this.#lightDispatchCache.previewFailed(device.id, cached.token);
+    let succeeded = false, receiptAt: number | undefined;
+    let lastRead: { proof: CommandResyncEvidence; revision: number | undefined } | undefined;
+    const remember = () => {
+      if (canOptimize && succeeded && !signal?.aborted && lastRead && receiptAt !== undefined &&
+          lastRead.proof.startedAtMs >= receiptAt) {
+        this.#lightDispatchCache.remember(device, cached.token, lastRead.proof, lastRead.revision);
+      }
+    };
     const recheck = async () => {
       const readStartedAt = Date.now();
       const evidence = await this.options.resync({ deviceId: device.id, lightComponent: request.component! });
+      if (evidence && evidence.observedStates && lightPlanMatches(evidence.observedStates, plan.expected)) {
+        lastRead = { proof: structuredClone(evidence), revision: this.options.devices.commandStateRevision(device.id, device.locationId) };
+        remember();
+      }
       this.#deviceDiagnostic(request, "read", startedAt, { readMs: Math.max(0, Date.now() - readStartedAt), stateCount: evidence?.observedStates?.length ?? 0,
         matches: evidence?.observedStates ? lightPlanMatches(evidence.observedStates, plan.expected) : false,
         lightStatus: plan.expected.map((target) => {
@@ -492,13 +522,16 @@ export class SafeCommandService {
       if (signal?.aborted) throw new SafeCommandError("command_superseded");
       // Only validated light-plan command names, never raw identifiers or bodies.
       this.#deviceDiagnostic(request, "dispatch", startedAt, { commands: dispatch.actions.map((action) => action.command),
-        skippedCommands: dispatch.skippedCommands, preflightMs: dispatch.preflightMs });
+        skippedCommands: dispatch.skippedCommands, preflightMs: dispatch.preflightMs,
+        preflightSource: dispatch.preflightSource ?? (cached.skipPreview ? "backoff" : undefined) });
       const receipt = await this.options.executor.executeLightPlan!(dispatch.actions, signal);
+      receiptAt = Date.now();
       this.#deviceDiagnostic(request, "receipt", startedAt);
       if (signal?.aborted) throw new SafeCommandError("command_superseded");
       wait.startTimeout(request.timeout === undefined ? this.options.timeoutMs : request.timeout * 1_000,
         this.options.resyncAfterMs, Date.now());
       const evidence = await wait.result;
+      succeeded = true; remember();
       return confirmed(request.clientRequestId, evidence.sequence,
         evidence.source === "event" ? "device_event" : "inventory_snapshot", receipt.transport);
     } catch (error) {

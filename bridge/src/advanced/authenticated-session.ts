@@ -42,16 +42,30 @@ interface SessionPageManager {
   openAdvancedPage(): Promise<BrowserPageLike>;
 }
 
+export interface AdvancedRequestTiming {
+  endpoint: AdvancedEndpointCategory;
+  method: "GET" | "POST";
+  route: "keeper" | "advanced_page" | "context";
+  totalMs: number;
+  status: number;
+  browserMs?: number;
+  fetchMs?: number;
+  bodyMs?: number;
+  bridgeOverheadMs?: number;
+}
+
 interface BrowserFetchResult {
   ok: boolean;
   status: number;
   value?: unknown;
   error?: string;
+  timing?: { browserMs: number; fetchMs: number; bodyMs: number };
 }
 
 export interface AuthenticatedSmartThingsSessionOptions extends SessionPageManager {
   requestJson?: (request: AdvancedRequest) => Promise<BrowserFetchResult | undefined>;
   defaultTimeoutMs?: number;
+  onRequestTiming?: (event: AdvancedRequestTiming) => void;
 }
 
 const SMARTTHINGS_ORIGIN = "https://my.smartthings.com";
@@ -68,9 +82,27 @@ export class AuthenticatedSmartThingsSession implements AuthenticatedAdvancedSes
     if (request.keeperOnly !== undefined && (request.keeperOnly !== true || safeRequest.method !== "GET")) {
       throw new AdvancedSessionError("advanced_request_path_invalid", request.endpoint);
     }
+    const measured = async (route: AdvancedRequestTiming["route"], run: () => Promise<BrowserFetchResult | undefined>) => {
+      const start = performance.now();
+      const result = await run();
+      if (safeRequest.method === "POST" && safeRequest.endpoint === "commands") {
+        const totalMs = Math.max(0, Math.round(performance.now() - start));
+        const timing = result?.timing;
+        const valid = timing && [timing.browserMs, timing.fetchMs, timing.bodyMs]
+          .every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 120_000) &&
+          timing.fetchMs + timing.bodyMs <= timing.browserMs + 2;
+        try {
+          this.options.onRequestTiming?.({ endpoint: "commands", method: "POST", route, totalMs,
+            status: Number.isInteger(result?.status) && result!.status >= 0 && result!.status <= 599 ? result!.status : 0,
+            ...(valid ? { browserMs: Math.round(timing.browserMs), fetchMs: Math.round(timing.fetchMs),
+              bodyMs: Math.round(timing.bodyMs), bridgeOverheadMs: Math.max(0, totalMs - Math.round(timing.browserMs)) } : {}) });
+        } catch { /* Timing observers cannot alter command delivery. */ }
+      }
+      return result;
+    };
     const keeper = this.options.currentKeeper();
     if (keeper?.evaluate && !keeper.isClosed()) {
-      const keeperResult = await executePageRequest(keeper, safeRequest);
+      const keeperResult = (await measured("keeper", () => executePageRequest(keeper, safeRequest)))!;
       if (keeperResult.ok) return parseResult(keeperResult, request.endpoint, parser);
       if (request.keeperOnly) throw classifyFailure(request.endpoint, keeperResult);
       if (safeRequest.method === "POST" && !knownNotSent(keeperResult)) {
@@ -88,7 +120,7 @@ export class AuthenticatedSmartThingsSession implements AuthenticatedAdvancedSes
     if (request.keeperOnly) throw new AdvancedSessionError("advanced_request_unavailable", request.endpoint);
 
     if (this.options.requestJson) {
-      const contextResult = await this.options.requestJson(safeRequest);
+      const contextResult = await measured("context", () => this.options.requestJson!(safeRequest));
       if (contextResult?.ok) return parseResult(contextResult, request.endpoint, parser);
       if (safeRequest.method === "POST" && contextResult && !knownNotSent(contextResult)) {
         throw classifyFailure(request.endpoint, contextResult);
@@ -108,7 +140,7 @@ export class AuthenticatedSmartThingsSession implements AuthenticatedAdvancedSes
       if (!page.evaluate || page.isClosed()) {
         throw new AdvancedSessionError("advanced_request_unavailable", request.endpoint);
       }
-      const result = await executePageRequest(page, safeRequest);
+      const result = (await measured("advanced_page", () => executePageRequest(page!, safeRequest)))!;
       if (!result.ok) throw classifyFailure(request.endpoint, result);
       return parseResult(result, request.endpoint, parser);
     } finally {
@@ -132,6 +164,11 @@ async function executePageRequest(
   try {
     return await page.evaluate(
       async (input) => {
+        const startedAt = performance.now();
+        let fetchMs = 0, bodyMs = 0;
+        const finish = (result: { ok: boolean; status: number; value?: unknown; error?: string }) => ({
+          ...result, timing: { browserMs: performance.now() - startedAt, fetchMs, bodyMs }
+        });
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), input.timeoutMs);
         try {
@@ -142,10 +179,11 @@ async function executePageRequest(
           if (input.method === "POST") {
             const csrfToken = smartThingsCsrfToken();
             if (!csrfToken) {
-              return { ok: false, status: 0, error: "csrf_token_unavailable" };
+              return finish({ ok: false, status: 0, error: "csrf_token_unavailable" });
             }
             headers["x-csrf-token"] = csrfToken;
           }
+          const fetchStartedAt = performance.now();
           // api-free-audit: authenticated-page-same-origin-advanced-request
           const response = await fetch(input.path, {
             cache: "no-store",
@@ -160,24 +198,28 @@ async function executePageRequest(
                   body: JSON.stringify(input.body)
                 })
           });
+          fetchMs = performance.now() - fetchStartedAt;
           if (response.type === "opaqueredirect") {
-            return { ok: false, status: 401, error: "redirect" };
+            return finish({ ok: false, status: 401, error: "redirect" });
           }
+          const bodyStartedAt = performance.now();
           let value: unknown;
           try {
             value = await response.json();
           } catch {
-            return { ok: false, status: response.status, error: "invalid_json" };
+            bodyMs = performance.now() - bodyStartedAt;
+            return finish({ ok: false, status: response.status, error: "invalid_json" });
           }
-          return response.ok
+          bodyMs = performance.now() - bodyStartedAt;
+          return finish(response.ok
             ? { ok: true, status: response.status, value }
-            : { ok: false, status: response.status, value, error: `http_${response.status}` };
+            : { ok: false, status: response.status, value, error: `http_${response.status}` });
         } catch (error) {
-          return {
+          return finish({
             ok: false,
             status: 0,
             error: error instanceof DOMException && error.name === "AbortError" ? "timeout" : "network"
-          };
+          });
         } finally {
           clearTimeout(timer);
         }

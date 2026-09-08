@@ -16,7 +16,7 @@ import type { DeviceActionExecutionInput } from "../../src/command/command-servi
 const shared = JSON.parse(readFileSync("custom_components/smartthings_web/tests/fixtures/light-plan.json", "utf8"));
 const stores: DeviceStore[] = [];
 afterEach(() => { stores.splice(0).forEach((store) => store.close()); vi.useRealTimers(); });
-async function fixture(options: { stabilityMs?: number; timeoutMs?: number; colorSchema?: Record<string, unknown>; preview?: boolean; initial?: Record<string, unknown>; postDelayMs?: number } = {}) {
+async function fixture(options: { stabilityMs?: number; timeoutMs?: number; colorSchema?: Record<string, unknown>; preview?: boolean; initial?: Record<string, unknown>; postDelayMs?: number; disableRechecks?: boolean } = {}) {
   const store = new DeviceStore(); stores.push(store);
   const row = (values: Record<string, unknown>, timestamp = "2026-09-07T00:00:00Z") => ({
     deviceId: "dev_001", locationId: "loc_001", label: "Fixture lamp", type: "light",
@@ -73,12 +73,12 @@ async function fixture(options: { stabilityMs?: number; timeoutMs?: number; colo
       deviceId: "dev_001", locationId: "loc_001", startedAtMs,
       observedStates: store.commandStatusStates({ items: [row(desired)] }, "dev_001", "loc_001") };
   });
-  const service = new SafeCommandService({ devices: store, status, executor, timeoutMs: options.timeoutMs ?? 60, resyncAfterMs: 1,
+  const service = new SafeCommandService({ devices: store, status, executor, timeoutMs: options.timeoutMs ?? 60, ...(options.disableRechecks ? {} : { resyncAfterMs: 1 }),
     confirmationStabilityMs: options.stabilityMs ?? 0,
     resync, onDeviceDiagnostic: diagnostics, ...(options.preview ? { lightDispatchPreview: preview } : {}) });
   const request = structuredClone(shared.request);
   return { store, catalog, request, service, send, resync, legacy, requests, row, diagnostics,
-    preview, setDesired: (value: Record<string, unknown>) => { desired = value; } };
+    preview, status, setDesired: (value: Record<string, unknown>) => { desired = value; } };
 }
 
 describe("Verified same-component light plans through real catalog/store/adapter", () => {
@@ -610,5 +610,64 @@ describe("Fresh preflight prunes redundant light POSTs without changing confirma
       expect(f.send).toHaveBeenCalledTimes(preview ? 1 : 3);
     }
     expect(times).toEqual([2401, 901]);
+  });
+});
+
+
+describe("Confirmed read reuse through actual service and adapter", () => {
+  test("second color command uses a recent read with 0ms preflight, then still performs post-command verification", async () => {
+    const f = await fixture({ preview: true, initial: { switch: "on", level: 50 } });
+    await f.service.execute(f.request);
+    const calls = f.resync.mock.calls.length;
+    const next = { ...structuredClone(f.request), clientRequestId: "recent_color_request_002" };
+    next.arguments[2].arguments = [{ hue: 34, saturation: 96 }];
+    expect((await f.service.execute(next)).status).toBe("confirmed");
+    expect(f.preview).toHaveBeenCalledOnce();
+    expect(f.resync.mock.calls.length).toBeGreaterThan(calls);
+    expect(f.requests.flatMap((r) => (r.body as any).commands.map((c: any) => c.command))).toEqual(["setColor", "setColor"]);
+    expect(f.diagnostics).toHaveBeenCalledWith(expect.objectContaining({ stage: "dispatch", preflightSource: "recent_read", preflightMs: 0 }));
+  });
+  test("cached proof does not confirm an ignored second color command", async () => {
+    const f = await fixture({ preview: true, initial: { switch: "on", level: 50 } });
+    await f.service.execute(f.request);
+    f.send.mockImplementation(async (_r, parser) => parser({ results: [{ status: "ACCEPTED" }] }));
+    const next = { ...structuredClone(f.request), clientRequestId: "recent_ignored_request_002" };
+    next.arguments[2].arguments = [{ hue: 34, saturation: 96 }];
+    await expect(f.service.execute(next)).rejects.toThrow("command_confirmation_timeout");
+    expect(f.preview).toHaveBeenCalledOnce();
+  });
+  test("new observed state or reconnect invalidates recent read", async () => {
+    const f = await fixture({ preview: true, initial: { switch: "on", level: 50 } });
+    await f.service.execute(f.request);
+    f.status.update({ reconnectCount: 1 });
+    await f.service.execute({ ...f.request, clientRequestId: "recent_reconnected_002" });
+    expect(f.preview).toHaveBeenCalledTimes(2);
+  });
+  test("disabled rechecks also disable preview and proof reuse", async () => {
+    const f = await fixture({ preview: true, disableRechecks: true, initial: { switch: "on", level: 50 } });
+    await f.service.execute(f.request);
+    await f.service.execute({ ...f.request, clientRequestId: "disabled_recheck_002" });
+    expect(f.preview).not.toHaveBeenCalled(); expect(f.send).toHaveBeenCalledTimes(6);
+  });
+  test("failed preview is not repeated immediately after a failed command", async () => {
+    const f = await fixture({ preview: true, initial: { switch: "on", level: 50 } });
+    f.preview.mockRejectedValue(new Error("slow GET"));
+    f.send.mockImplementation(async (_r, parser) => parser({ results: [{ status: "ACCEPTED" }] }));
+    await expect(f.service.execute(f.request)).rejects.toThrow("command_confirmation_timeout");
+    await expect(f.service.execute({ ...f.request, clientRequestId: "backoff_request_002" })).rejects.toThrow("command_confirmation_timeout");
+    expect(f.preview).toHaveBeenCalledOnce(); expect(f.send).toHaveBeenCalledTimes(6);
+    expect(f.diagnostics).toHaveBeenCalledWith(expect.objectContaining({ stage: "dispatch", preflightSource: "backoff", preflightMs: 0 }));
+  });
+  test("synthetic hot control removes the 100ms GET without removing confirmation", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2026-09-08T00:00:00Z"));
+    const f = await fixture({ preview: true, initial: { switch: "on", level: 50 }, postDelayMs: 800, timeoutMs: 30_000 });
+    const times: number[] = [];
+    for (let i = 0; i < 2; i++) {
+      const start = Date.now();
+      const work = f.service.execute({ ...f.request, clientRequestId: `hot_control_request_${i}` }).then((r) => { times.push(Date.now() - start); return r; });
+      await vi.advanceTimersByTimeAsync(i === 0 ? 902 : 802);
+      expect((await work).status).toBe("confirmed");
+    }
+    expect(times).toEqual([901, 801]); expect(f.preview).toHaveBeenCalledOnce();
   });
 });

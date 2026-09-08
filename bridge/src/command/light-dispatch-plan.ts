@@ -1,20 +1,21 @@
 import type { DeviceStore, BridgeDevice, BridgeDeviceState } from "../state/device-store.js";
 import type { CommandResyncEvidence } from "./command-service.js";
+import { LIGHT_PROOF_MAX_AGE_MS } from "./light-dispatch-cache.js";
 import type { VerifiedLightPlan } from "./light-plan.js";
 
 export type LightDispatchPreview = (deviceId: string, locationId: string) => Promise<CommandResyncEvidence | undefined>;
 
-/** Prune only redundant power/brightness proven by a NEW exact GET and the
+/** Prune only redundant power/brightness proven by an exact GET and the
  * unchanged observed cache. Never omit a color-mode setter or a power-only
  * operation. This preview is not published and cannot confirm the command.
  */
 export async function prepareLightDispatch(
   devices: DeviceStore, device: BridgeDevice, plan: VerifiedLightPlan,
-  preview?: LightDispatchPreview, signal?: AbortSignal
-): Promise<{ actions: VerifiedLightPlan["actions"]; skippedCommands: string[]; preflightMs: number }> {
+  preview?: LightDispatchPreview, signal?: AbortSignal, recentProof?: CommandResyncEvidence
+): Promise<{ actions: VerifiedLightPlan["actions"]; skippedCommands: string[]; preflightMs: number; preflightSource?: "recent_read" | "live_read"; previewFailed?: boolean }> {
   const unchanged = { actions: plan.actions, skippedCommands: [] as string[], preflightMs: 0 };
   const power = plan.actions[0];
-  if (!preview || signal?.aborted || !power || power.command !== "on" || plan.actions.length < 2) return unchanged;
+  if ((!preview && !recentProof) || signal?.aborted || !power || power.command !== "on" || plan.actions.length < 2) return unchanged;
   const before = devices.commandStates(device.id, device.locationId);
   const powerState = exact(before, power.component, power.capability, "switch");
   // No extra round trip when power is off, unknown, or not currently observable.
@@ -22,12 +23,15 @@ export async function prepareLightDispatch(
   const revision = devices.commandStateRevision(device.id, device.locationId);
   if (revision === undefined) return unchanged;
   const start = Date.now();
-  const proof = await boundedPreview(() => preview(device.id, device.locationId), signal);
+  // Reuse only caller-validated, consume-once post-command evidence. All normal
+  // target/value/timestamp/revision checks below still apply to the cached proof.
+  const proof = recentProof ?? await boundedPreview(() => preview!(device.id, device.locationId), signal);
+  const preflightSource = recentProof ? "recent_read" as const : "live_read" as const;
   const preflightMs = Math.max(0, Date.now() - start);
-  const fallback = { ...unchanged, preflightMs };
+  const fallback = { ...unchanged, preflightMs, preflightSource, previewFailed: !proof || preflightMs > 400 };
   if (signal?.aborted || !proof || proof.source !== "advanced_device_status" || proof.authoritativeSnapshot ||
       proof.deviceId !== device.id || proof.locationId !== device.locationId ||
-      !Number.isFinite(proof.startedAtMs) || proof.startedAtMs < start || proof.startedAtMs > Date.now() ||
+      !Number.isFinite(proof.startedAtMs) || proof.startedAtMs < start - (recentProof ? LIGHT_PROOF_MAX_AGE_MS : 0) || proof.startedAtMs > Date.now() ||
       preflightMs > 400 || !Array.isArray(proof.observedStates) ||
       devices.commandStateRevision(device.id, device.locationId) !== revision) return fallback;
   const agrees = (component: string, capability: string, attribute: string, value: unknown) => {
@@ -52,7 +56,7 @@ export async function prepareLightDispatch(
     }
     return true;
   });
-  return actions.length ? { actions, skippedCommands, preflightMs } : fallback;
+  return actions.length ? { actions, skippedCommands, preflightMs, preflightSource } : fallback;
 }
 
 function exact(states: readonly BridgeDeviceState[], component: string, capability: string, attribute: string) {
