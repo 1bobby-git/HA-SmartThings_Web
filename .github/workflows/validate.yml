@@ -42,6 +42,9 @@ jobs:
           node tools/ci-home-monitor-linked-popup-smoke.mjs
           node tools/ci-home-monitor-native-smoke.mjs
 
+      - name: Exercise Advanced transport timings in real Chromium
+        run: node tools/ci-advanced-timing-smoke.mjs
+
       - name: Run Python tests
         shell: bash
         run: |
