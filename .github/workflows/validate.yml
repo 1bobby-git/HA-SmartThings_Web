@@ -45,6 +45,10 @@ jobs:
       - name: Exercise Advanced transport timings in real Chromium
         run: node tools/ci-advanced-timing-smoke.mjs
 
+      - name: Verify session continuity with a persistent Chromium profile
+        timeout-minutes: 3
+        run: xvfb-run -a node tools/ci-session-continuity-smoke.mjs
+
       - name: Run Python tests
         shell: bash
         run: |
