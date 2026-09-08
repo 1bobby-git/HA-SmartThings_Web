@@ -1,0 +1,87 @@
+name: Apply verified session continuity
+on:
+  push:
+    branches: [fix/session-continuity-1.8.30]
+    paths: [.github/workflows/apply-session-continuity.yml]
+permissions:
+  contents: write
+concurrency:
+  group: apply-session-continuity-1.8.30
+  cancel-in-progress: false
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/session-continuity-1.8.30
+          fetch-depth: 0
+      - name: Verify reviewed patch and exact final source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64, hashlib, json, lzma, os, pathlib, re, shutil, subprocess
+          root = pathlib.Path('.')
+          payloads = [f'.github/session-continuity.patch.b64.{n}' for n in (1, 2)]
+          workflow = '.github/workflows/apply-session-continuity.yml'
+          validation = '.github/workflows/validate.yml'
+          base = '54749fd730e455df33198513424306602b390321'
+          def git(*args, **kwargs):
+              return subprocess.check_output(['git', *args], **kwargs).decode().strip()
+          if git('rev-parse', 'origin/main') != base:
+              raise SystemExit('Main advanced; review required')
+          if set(git('diff', '--name-only', base, 'HEAD').splitlines()) != {*payloads, workflow, validation}:
+              raise SystemExit('Unexpected branch changes')
+          if git('hash-object', validation) != '6ca5cd67c4ff1d3916eb2c39baae816ba215736c':
+              raise SystemExit('Validation gate differs from reviewed candidate')
+          encoded = ''.join((root / name).read_text().strip() for name in payloads)
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True), memlimit=128*1024*1024)
+          expected = 'e91a77fbe804924d555684c9ca5e79b72b96ec3f11c9ee78ed1826f8347c159d'
+          if len(patch) != 66837 or hashlib.sha256(patch).hexdigest() != expected:
+              raise SystemExit('Reviewed patch checksum mismatch')
+          if json.loads((root / 'package.json').read_text())['version'] != '1.8.29':
+              raise SystemExit('Unexpected base version')
+          allowed = {
+              'CHANGELOG.md', 'addon/smartthings_web_bridge/CHANGELOG.md',
+              'addon/smartthings_web_bridge/config.yaml', 'bridge/src/browser/browser-supervisor.ts',
+              'bridge/src/browser/keeper-page.ts', 'bridge/src/runtime.ts', 'bridge/src/server/health.ts',
+              'bridge/src/state/runtime-state.ts', 'bridge/tests/browser/browser-supervisor.test.ts',
+              'bridge/tests/browser/keeper-page.test.ts', 'bridge/tests/browser/session-continuity.test.ts',
+              'bridge/tests/runtime.test.ts', 'bridge/tests/server/health.test.ts',
+              'bridge/tests/state/runtime-state.test.ts', 'custom_components/smartthings_web/manifest.json',
+              'docs/SESSION_CONTINUITY_1.8.30.md', 'package-lock.json', 'package.json',
+              'protocol/version.json', 'tests/addon-config.test.ts', 'tests/protocol-version-contract.test.ts',
+              'tools/ci-session-continuity-smoke.mjs'
+          }
+          if set(re.findall(r'^diff --git a/\S+ b/(\S+)$', patch.decode(), re.M)) != allowed:
+              raise SystemExit('Unexpected patch scope')
+          subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
+          subprocess.run(['git', 'apply', '-'], input=patch, check=True)
+          subprocess.run(['git', 'add', '--', *sorted(allowed)], check=True)
+          subprocess.run(['git', 'rm', '--', *payloads], check=True)
+          verify_index = (root / '.git/session-verify-index').resolve()
+          shutil.copyfile('.git/index', verify_index)
+          env = {**os.environ, 'GIT_INDEX_FILE': str(verify_index)}
+          try:
+              git('update-index', '--force-remove', workflow, env=env)
+              tree = git('write-tree', env=env)
+              if tree != 'da162698b8f02f91183a6117b2cade4c5286b80f':
+                  raise SystemExit('Unexpected final source tree: ' + tree)
+          finally:
+              verify_index.unlink(missing_ok=True)
+          print('Verified patch SHA256:', expected)
+          print('Verified final source tree:', tree)
+          PY
+          git diff --cached --check
+          git diff --cached --stat
+      - name: Commit candidate on isolated branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: harden authenticated session maintenance and unattended browser recovery (1.8.30)'
+          git push origin HEAD:fix/session-continuity-1.8.30
+          echo "CANDIDATE_COMMIT=$(git rev-parse HEAD)"
