@@ -1,4 +1,5 @@
 import { LightPlanError, buildLightPlan, lightPlanMatches, lightPlanHasFreshEvidence, lightValueMatches, type LightExpectedState } from "./light-plan.js";
+import { prepareLightDispatch, type LightDispatchPreview } from "./light-dispatch-plan.js";
 import { validColorArgument } from "../advanced/color-argument.js";
 import type { RoutedCommandRequest } from "./command-router.js";
 import { normalizeLocationArmState } from "../state/location-arm-state.js";
@@ -225,6 +226,7 @@ interface SafeCommandServiceOptions {
   timeoutMs: number;
   resyncAfterMs?: number;
   confirmationStabilityMs?: number;
+  lightDispatchPreview?: LightDispatchPreview;
   resync: (request?: CommandResyncRequest) => Promise<CommandResyncEvidence | undefined>;
   onLocationDiagnostic?: (diagnostic: {
     phase: "dispatching" | "waiting" | "confirmed" | "failed" | "transition_disarming" | "transition_disarmed" | "transition_failed";
@@ -234,7 +236,7 @@ interface SafeCommandServiceOptions {
     reason?: SafeCommandErrorCode;
   }) => void;
   onDeviceDiagnostic?: (event: { deviceId: string; stage: string; attribute: string;
-    elapsedMs: number; stateCount?: number; matches?: boolean; code?: string; commands?: string[]; readMs?: number;
+    elapsedMs: number; stateCount?: number; matches?: boolean; code?: string; commands?: string[]; readMs?: number; skippedCommands?: string[]; preflightMs?: number;
     lightStatus?: { attribute: string; requested: string | number; observed: string | number | null }[] }) => void;
   onPendingCountChange?: (count: number) => void;
   onResult?: (result: SafeCommandResult) => void;
@@ -436,7 +438,7 @@ export class SafeCommandService {
   }
 
   #deviceDiagnostic(request: SafeCommandRequest, stage: string, startedAt: number,
-    details: { stateCount?: number; matches?: boolean; code?: string; commands?: string[]; readMs?: number;
+    details: { stateCount?: number; matches?: boolean; code?: string; commands?: string[]; readMs?: number; skippedCommands?: string[]; preflightMs?: number;
       lightStatus?: { attribute: string; requested: string | number; observed: string | number | null }[] } = {}): void {
     try {
       this.options.onDeviceDiagnostic?.({ deviceId: request.targetId, stage,
@@ -461,6 +463,8 @@ export class SafeCommandService {
     const plan = this.#lightPlan(request, device);
     this.options.devices.beginLightCommand(device.id);
     const startedAt = Date.now();
+    const dispatch = await prepareLightDispatch(this.options.devices, device, plan,
+      this.options.lightDispatchPreview, signal);
     const recheck = async () => {
       const readStartedAt = Date.now();
       const evidence = await this.options.resync({ deviceId: device.id, lightComponent: request.component! });
@@ -487,8 +491,9 @@ export class SafeCommandService {
     try {
       if (signal?.aborted) throw new SafeCommandError("command_superseded");
       // Only validated light-plan command names, never raw identifiers or bodies.
-      this.#deviceDiagnostic(request, "dispatch", startedAt, { commands: plan.actions.map((action) => action.command) });
-      const receipt = await this.options.executor.executeLightPlan!(plan.actions, signal);
+      this.#deviceDiagnostic(request, "dispatch", startedAt, { commands: dispatch.actions.map((action) => action.command),
+        skippedCommands: dispatch.skippedCommands, preflightMs: dispatch.preflightMs });
+      const receipt = await this.options.executor.executeLightPlan!(dispatch.actions, signal);
       this.#deviceDiagnostic(request, "receipt", startedAt);
       if (signal?.aborted) throw new SafeCommandError("command_superseded");
       wait.startTimeout(request.timeout === undefined ? this.options.timeoutMs : request.timeout * 1_000,

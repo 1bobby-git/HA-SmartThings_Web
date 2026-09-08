@@ -241,3 +241,30 @@ describe("AuthenticatedSmartThingsSession", () => {
   });
 
 });
+
+describe("Optional light preflight never opens a fallback page", () => {
+  test.each([undefined, { ok: false, status: 0, error: "timeout" }, { ok: false, status: 403, error: "http_403" }])(
+    "no keeper/failed keeper returns without fallback: %j", async (result) => {
+      const openAdvancedPage = vi.fn(), requestJson = vi.fn();
+      const session = new AuthenticatedSmartThingsSession({
+        currentKeeper: () => result ? new FakePage("https://my.smartthings.com/location", result) : undefined,
+        openAdvancedPage, requestJson
+      });
+      await expect(session.request({ endpoint: "device_status", method: "GET",
+        path: "/advanced/cupcake-api/api/devices/fixture/status", timeoutMs: 200, keeperOnly: true }, (x) => x)).rejects.toThrow();
+      expect(openAdvancedPage).not.toHaveBeenCalled(); expect(requestJson).not.toHaveBeenCalled();
+    });
+  test("keeperOnly cannot change POST fallback or retry policy", async () => {
+    const keeper = new FakePage("https://my.smartthings.com/location", { ok: true, status: 200, value: {} });
+    const session = new AuthenticatedSmartThingsSession({ currentKeeper: () => keeper, openAdvancedPage: vi.fn() });
+    await expect(session.request({ endpoint: "commands", method: "POST",
+      path: "/advanced/cupcake-api/api/devices/fixture/commands", keeperOnly: true }, (x) => x)).rejects.toThrow("advanced_request_path_invalid");
+    expect(keeper.evaluateCalls).not.toHaveBeenCalled();
+  });
+  test("keeperOnly still executes the ordinary authenticated GET", async () => {
+    const keeper = new FakePage("https://my.smartthings.com/location", { ok: true, status: 200, value: { components: {} } });
+    const session = new AuthenticatedSmartThingsSession({ currentKeeper: () => keeper, openAdvancedPage: vi.fn() });
+    expect(await session.request({ endpoint: "device_status", method: "GET",
+      path: "/advanced/cupcake-api/api/devices/fixture/status", keeperOnly: true, timeoutMs: 200 }, (x) => x)).toEqual({ components: {} });
+  });
+});

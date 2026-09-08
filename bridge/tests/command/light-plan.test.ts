@@ -16,7 +16,7 @@ import type { DeviceActionExecutionInput } from "../../src/command/command-servi
 const shared = JSON.parse(readFileSync("custom_components/smartthings_web/tests/fixtures/light-plan.json", "utf8"));
 const stores: DeviceStore[] = [];
 afterEach(() => { stores.splice(0).forEach((store) => store.close()); vi.useRealTimers(); });
-async function fixture(options: { stabilityMs?: number; timeoutMs?: number; colorSchema?: Record<string, unknown> } = {}) {
+async function fixture(options: { stabilityMs?: number; timeoutMs?: number; colorSchema?: Record<string, unknown>; preview?: boolean; initial?: Record<string, unknown>; postDelayMs?: number } = {}) {
   const store = new DeviceStore(); stores.push(store);
   const row = (values: Record<string, unknown>, timestamp = "2026-09-07T00:00:00Z") => ({
     deviceId: "dev_001", locationId: "loc_001", label: "Fixture lamp", type: "light",
@@ -24,7 +24,8 @@ async function fixture(options: { stabilityMs?: number; timeoutMs?: number; colo
       [capability, Object.fromEntries((attributes as string[]).filter((attribute) => attribute in values).map((attribute) =>
         [attribute, { value: values[attribute], timestamp }]))])) } }
   });
-  store.observeAdvancedDeviceSnapshot({ items: [row(shared.initial)] });
+  const initial = { ...shared.initial, ...options.initial };
+  store.observeAdvancedDeviceSnapshot({ items: [row(initial)] });
   const rawDefinitions = structuredClone(shared.definitions);
   if (options.colorSchema) rawDefinitions.find((item: any) => item.id === "colorControl")
     .commands.setColor.arguments[0].schema = options.colorSchema;
@@ -33,9 +34,10 @@ async function fixture(options: { stabilityMs?: number; timeoutMs?: number; colo
   const catalog = await new AdvancedCommandCatalog(loader).build(shared.bindings);
   store.observeAdvancedCommandCatalog("dev_001", catalog.commandsByDevice.get("dev_001")!, catalog.omissions);
   const requests: AdvancedRequest[] = [];
-  let desired = { ...shared.initial };
+  let desired = { ...initial };
   const send = vi.fn(async <T>(request: AdvancedRequest, parser: AdvancedParser<T>): Promise<T> => {
     requests.push(request);
+    if (options.postDelayMs) await new Promise((resolve) => setTimeout(resolve, options.postDelayMs));
     const commands = (request.body as { commands: any[] }).commands;
     // Simulate a controller accepting setColor, not setHue/setSaturation handlers.
     for (const command of commands) {
@@ -64,12 +66,19 @@ async function fixture(options: { stabilityMs?: number; timeoutMs?: number; colo
     authenticated: true, pushConnected: true, parserHealthy: true, initialSnapshotComplete: true, dbAvailable: true,
     heartbeatAtMs: now, initialSnapshotCompletedAtMs: now, lastSnapshotAtMs: now, lastParserSuccessAtMs: now, lastPushAtMs: now } });
   const diagnostics = vi.fn();
+  const preview = vi.fn(async () => {
+    const startedAtMs = Date.now();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return { source: "advanced_device_status" as const, authoritativeSnapshot: false,
+      deviceId: "dev_001", locationId: "loc_001", startedAtMs,
+      observedStates: store.commandStatusStates({ items: [row(desired)] }, "dev_001", "loc_001") };
+  });
   const service = new SafeCommandService({ devices: store, status, executor, timeoutMs: options.timeoutMs ?? 60, resyncAfterMs: 1,
     confirmationStabilityMs: options.stabilityMs ?? 0,
-    resync, onDeviceDiagnostic: diagnostics });
+    resync, onDeviceDiagnostic: diagnostics, ...(options.preview ? { lightDispatchPreview: preview } : {}) });
   const request = structuredClone(shared.request);
   return { store, catalog, request, service, send, resync, legacy, requests, row, diagnostics,
-    setDesired: (value: Record<string, unknown>) => { desired = value; } };
+    preview, setDesired: (value: Record<string, unknown>) => { desired = value; } };
 }
 
 describe("Verified same-component light plans through real catalog/store/adapter", () => {
@@ -523,5 +532,83 @@ describe("Opt-in latest light intent transport", () => {
     expect(f.send).toHaveBeenCalledTimes(2);
     expect(f.legacy.executeDeviceAction).not.toHaveBeenCalled();
     expect(f.store.commandState("dev_001", "loc_001", "identifier_main", "identifier_power", "switch")!.value).toBe("off");
+  });
+});
+
+
+describe("Fresh preflight prunes redundant light POSTs without changing confirmation", () => {
+  test("same observed power and level sends only setColor, then confirms ALL targets", async () => {
+    const f = await fixture({ preview: true, initial: { switch: "on", level: 50 } });
+    const result = await f.service.execute(f.request);
+    expect(result.status).toBe("confirmed");
+    expect(f.requests.flatMap((r) => (r.body as any).commands.map((c: any) => c.command))).toEqual(["setColor"]);
+    expect(f.diagnostics).toHaveBeenCalledWith(expect.objectContaining({ stage: "dispatch", commands: ["setColor"],
+      skippedCommands: ["on", "setLevel"] }));
+    expect(f.resync).toHaveBeenCalled();
+    expect(lightPlanMatches(f.store.snapshot().devices[0]!.states, [
+      { component: "identifier_main", capability: "identifier_power", attribute: "switch", value: "on" },
+      { component: "identifier_main", capability: "identifier_level", attribute: "level", value: 50 },
+      { component: "identifier_main", capability: "identifier_color", attribute: "hue", value: 0 },
+      { component: "identifier_main", capability: "identifier_color", attribute: "saturation", value: 100 }
+    ])).toBe(true);
+  });
+  test("off bulb retains on and changed level before setColor, without extra GET", async () => {
+    const f = await fixture({ preview: true });
+    await f.service.execute(f.request);
+    expect(f.requests.flatMap((r) => (r.body as any).commands.map((c: any) => c.command)))
+      .toEqual(["on", "setLevel", "setColor"]);
+    expect(f.preview).not.toHaveBeenCalled();
+  });
+  test("power-only requests still POST even when power matches", async () => {
+    const f = await fixture({ preview: true, initial: { switch: "on" } });
+    f.request.arguments = f.request.arguments.slice(0, 1);
+    await f.service.execute(f.request);
+    expect(f.requests.map((r) => (r.body as any).commands[0].command)).toEqual(["on"]);
+    expect(f.preview).not.toHaveBeenCalled();
+  });
+  test("GET failure falls back to the entire original plan", async () => {
+    const f = await fixture({ preview: true, initial: { switch: "on", level: 50 } });
+    f.preview.mockRejectedValueOnce(new Error("timeout"));
+    await f.service.execute(f.request);
+    expect(f.send).toHaveBeenCalledTimes(3);
+  });
+  test("successful preview never turns an ignored color command into success", async () => {
+    const f = await fixture({ preview: true, initial: { switch: "on", level: 50 } });
+    f.send.mockImplementation(async (_r, parser) => parser({ results: [{ status: "ACCEPTED" }] }));
+    await expect(f.service.execute(f.request)).rejects.toThrow("command_confirmation_timeout");
+    expect(f.send).toHaveBeenCalledTimes(1);
+  });
+  test("new intent during preview cancels old request BEFORE any POST", async () => {
+    const f = await fixture({ preview: true, initial: { switch: "on", level: 50 } });
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    f.preview.mockImplementationOnce(() => { entered(); return new Promise(() => {}); });
+    const old = f.service.execute({ ...f.request, replacePending: true });
+    const oldRejected = expect(old).rejects.toThrow("command_superseded");
+    await ready;
+    const next = f.service.execute({ ...f.request, clientRequestId: "request_faster_latest_02", replacePending: true });
+    await oldRejected;
+    expect((await next).status).toBe("confirmed");
+    expect(f.send).toHaveBeenCalledTimes(1);
+  });
+  test("invalid original plan is rejected without GET or POST", async () => {
+    const f = await fixture({ preview: true, initial: { switch: "on", level: 50 } });
+    f.request.arguments[1].arguments = [999];
+    await expect(f.service.execute(f.request)).rejects.toThrow();
+    expect(f.preview).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();
+  });
+  test("synthetic 800ms POST / 100ms GET: three serial POSTs reduce to one, not parallel POSTs", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-08T00:00:00Z"));
+    const times: number[] = [];
+    for (const preview of [false, true]) {
+      const f = await fixture({ preview, initial: { switch: "on", level: 50 }, postDelayMs: 800, timeoutMs: 30_000 });
+      const start = Date.now();
+      const work = f.service.execute(f.request).then((result) => { times.push(Date.now() - start); return result; });
+      await vi.advanceTimersByTimeAsync(3000);
+      expect((await work).status).toBe("confirmed");
+      expect(f.send).toHaveBeenCalledTimes(preview ? 1 : 3);
+    }
+    expect(times).toEqual([2401, 901]);
   });
 });

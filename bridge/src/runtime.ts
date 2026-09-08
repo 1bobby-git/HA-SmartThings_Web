@@ -107,7 +107,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.27";
+const bridgeVersion = "1.8.28";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -204,7 +204,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       await advancedInventory.getCapabilityDefinition(capabilityId, version)
     );
   const capabilityCache = new CapabilityDefinitionCache(loadCapabilityDefinition);
-  const advancedCommandCatalog = new AdvancedCommandCatalog(loadCapabilityDefinition);
+  // Discovery and dispatch must validate the same cached definition, without a second GET.
+  const advancedCommandCatalog = new AdvancedCommandCatalog((id, version) => capabilityCache.get(id, version));
   let advancedCommandCatalogGeneration = 0;
   const buildAdvancedCommandCatalog = async (
     authoritativeDeviceIds: ReadonlySet<string>
@@ -446,6 +447,21 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     timeoutMs: deps.config.commandConfirmationTimeoutMs ?? 30_000,
     ...(deps.config.statusRecheckEnabled === false ? {} : { resyncAfterMs: 250 }),
     resync: refreshCommandSnapshot,
+    lightDispatchPreview: async (deviceId, locationId) => {
+      if (deps.config.statusRecheckEnabled === false) return undefined;
+      const startedAtMs = Date.now();
+      const rawDeviceId = volatileIdentifiers.rawDeviceId(deviceId);
+      const rawLocationId = volatileIdentifiers.rawLocationId(locationId);
+      const keeper = currentKeeperManager?.currentKeeper();
+      if (!rawDeviceId || !rawLocationId || !keeper ||
+          classifySmartThingsUrl(keeper.url()) !== "smartthings_location") return undefined;
+      // Pure, bounded GET: no store/online/inventory mutation, no fallback page.
+      const statusPayload = await advancedInventory.previewLightStatus(rawDeviceId);
+      const sanitized = redactor({ items: [{ deviceId: rawDeviceId, locationId: rawLocationId, status: statusPayload }] });
+      return { source: "advanced_device_status", authoritativeSnapshot: false,
+        deviceId, locationId, startedAtMs,
+        observedStates: devices.commandStatusStates(sanitized, deviceId, locationId) };
+    },
     onLocationDiagnostic: (diagnostic) => log.info(
       `home_monitor_command:${diagnostic.phase}:action_${diagnostic.action}` +
       `:matches_${Number(diagnostic.observedStateMatches)}:elapsed_ms_${diagnostic.elapsedMs}` +

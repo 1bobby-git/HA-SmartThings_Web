@@ -111,6 +111,12 @@ export class AdvancedInventoryAdapter {
     return this.getObject("device_status", advancedEndpoints.deviceStatus(deviceId));
   }
 
+  /** Best-effort pre-dispatch GET; its result is never itself a confirmation. */
+  previewLightStatus(deviceId: string): Promise<unknown> {
+    return this.session.request({ endpoint: "device_status", method: "GET",
+      path: advancedEndpoints.deviceStatus(deviceId), timeoutMs: 350, keeperOnly: true }, identity);
+  }
+
   getDeviceHealth(deviceId: string): Promise<unknown> {
     return this.getObject("device_health", advancedEndpoints.deviceHealth(deviceId));
   }
