@@ -1,0 +1,23 @@
+name: Session continuity workspace
+on:
+  push:
+    branches: [fix/session-continuity-1.8.30]
+    paths: [.github/workflows/session-continuity-workspace.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 54749fd730e455df33198513424306602b390321
+          persist-credentials: false
+      - name: Archive tracked source only
+        run: git archive --format=tar HEAD | gzip > session-continuity-source.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: session-continuity-source
+          path: session-continuity-source.tar.gz
+          retention-days: 1
