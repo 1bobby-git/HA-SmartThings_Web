@@ -268,3 +268,52 @@ describe("Optional light preflight never opens a fallback page", () => {
       path: "/advanced/cupcake-api/api/devices/fixture/status", keeperOnly: true, timeoutMs: 200 }, (x) => x)).toEqual({ components: {} });
   });
 });
+
+describe("Bounded request timing without changing transport semantics", () => {
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+  test("separates page scheduling, response-header wait and JSON-body time on an actual page function", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const events: unknown[] = [];
+    const keeper = new FakePage("https://my.smartthings.com/location", undefined, false, true);
+    const evaluate = keeper.evaluate.bind(keeper);
+    keeper.evaluate = async (fn, argument) => { await sleep(30); return evaluate(fn, argument); };
+    vi.stubGlobal("window", { _app: { csrfToken: "fixture-csrf-not-for-output" } });
+    const send = vi.fn(async () => { await sleep(80); return { ok: true, status: 200, type: "basic",
+      json: async () => { await sleep(20); return { accepted: true }; } }; });
+    vi.stubGlobal("fetch", send);
+    const session = new AuthenticatedSmartThingsSession({ currentKeeper: () => keeper,
+      openAdvancedPage: vi.fn(), onRequestTiming: (event) => events.push(event) });
+    const work = session.request({ endpoint: "commands", method: "POST",
+      path: "/advanced/cupcake-api/api/devices/private-device/commands", body: { private: "not-for-output" } }, (v) => v);
+    await vi.advanceTimersByTimeAsync(130);
+    expect(await work).toEqual({ accepted: true });
+    expect(events).toEqual([{ endpoint: "commands", method: "POST", route: "keeper", totalMs: 130,
+      status: 200, browserMs: 100, fetchMs: 80, bodyMs: 20, bridgeOverheadMs: 30 }]);
+    expect(JSON.stringify(events)).not.toMatch(/private|csrf|not-for-output/);
+    expect(send).toHaveBeenCalledOnce(); expect(vi.getTimerCount()).toBe(0);
+  });
+  test("faulty diagnostic consumer does not fail or retry a successful command", async () => {
+    const keeper = new FakePage("https://my.smartthings.com/location", { ok: true, status: 200, value: { accepted: true } });
+    const open = vi.fn();
+    const session = new AuthenticatedSmartThingsSession({ currentKeeper: () => keeper, openAdvancedPage: open,
+      onRequestTiming: () => { throw new Error("observer failure"); } });
+    await expect(session.request({ endpoint: "commands", method: "POST", path: "/advanced/cupcake-api/api/devices/a/commands" }, (v) => v))
+      .resolves.toEqual({ accepted: true });
+    expect(open).not.toHaveBeenCalled(); expect(keeper.evaluateCalls).toHaveBeenCalledOnce();
+  });
+  test.each([NaN, Infinity, -1, "secret", 1e9])("rejects invalid browser timing %s without logging arbitrary fields", async (bad) => {
+    const keeper = new FakePage("https://my.smartthings.com/location", { ok: true, status: 200, value: {},
+      timing: { browserMs: bad, fetchMs: 1, bodyMs: 0, secret: "sensitive" } });
+    const events: unknown[] = [];
+    const session = new AuthenticatedSmartThingsSession({ currentKeeper: () => keeper, openAdvancedPage: vi.fn(), onRequestTiming: (e) => events.push(e) });
+    await session.request({ endpoint: "commands", method: "POST", path: "/advanced/cupcake-api/api/devices/a/commands" }, (v) => v);
+    expect(events).toEqual([{ endpoint: "commands", method: "POST", route: "keeper", totalMs: expect.any(Number), status: 200 }]);
+  });
+  test("ordinary background reads do not add high-volume timing logs", async () => {
+    const keeper = new FakePage("https://my.smartthings.com/location", { ok: true, status: 200, value: {} }), timing = vi.fn();
+    const session = new AuthenticatedSmartThingsSession({ currentKeeper: () => keeper, openAdvancedPage: vi.fn(), onRequestTiming: timing });
+    await session.request({ endpoint: "devices", method: "GET", path: "/advanced/cupcake-api/api/devices" }, (v) => v);
+    expect(timing).not.toHaveBeenCalled();
+  });
+});

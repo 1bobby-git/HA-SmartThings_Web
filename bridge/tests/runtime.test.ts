@@ -832,7 +832,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
 
     expect(log.info.mock.calls.slice(0, 14)).toEqual([
-      ["bridge_init:version:1.8.28:home_monitor_direct"],
+      ["bridge_init:version:1.8.29:home_monitor_direct"],
       ["bridge_init:data_paths"],
       ["bridge_init:data_paths:data_dir"],
       ["bridge_init:data_paths:profile_dir"],
@@ -3040,4 +3040,19 @@ test("runtime light preview reads the exact aliased device and skips only matchi
   expect(keeper.advancedRequestCalls.some((r: any) => r.path.endsWith("/runtime-fixture-lamp/status") && r.timeoutMs === 350)).toBe(true);
   const diagnostics = log.info.mock.calls.filter(([s]) => s.startsWith("command_device:")).map(([s]) => JSON.parse(s.slice("command_device:".length)));
   expect(diagnostics).toContainEqual(expect.objectContaining({ stage: "dispatch", commands: ["setColor"], skippedCommands: ["on", "setLevel"] }));
+  const previewsBefore = keeper.advancedRequestCalls.filter((r: any) => r.timeoutMs === 350).length;
+  const repeated = await fetch(`${baseUrl}/api/v1/commands`, { method: "POST", headers, body: JSON.stringify({
+    targetType: "device", targetId: lamp.id, component: sw.component, capability: sw.capability, attribute: "switch",
+    command: "applyLight", confirm: true, requireAdvanced: true, replacePending: true, timeout: 1,
+    clientRequestId: "runtime_recent_light_002", arguments: [
+      { attribute: "switch", capability: sw.capability, command: "on", arguments: [] },
+      { attribute: "level", capability: level.capability, command: "setLevel", arguments: [50] },
+      { attribute: "color", capability: hue.capability, command: "setColor", arguments: [{ hue: 34, saturation: 96 }] }
+    ]
+  }) });
+  expect({ code: repeated.status, body: await repeated.json() }).toMatchObject({ code: 200, body: { status: "confirmed" } });
+  expect(keeper.advancedRequestCalls.filter((r: any) => r.timeoutMs === 350)).toHaveLength(previewsBefore);
+  expect(keeper.advancedRequestCalls.filter((r: any) => r.method === "POST")).toHaveLength(2);
+  expect(log.info.mock.calls.filter(([s]) => s.startsWith("command_device:")).map(([s]) => JSON.parse(s.slice("command_device:".length))))
+    .toContainEqual(expect.objectContaining({ stage: "dispatch", preflightSource: "recent_read", preflightMs: 0, commands: ["setColor"] }));
 });

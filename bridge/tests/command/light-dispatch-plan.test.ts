@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { DeviceStore } from "../../src/state/device-store.js";
+import { LightDispatchCache } from "../../src/command/light-dispatch-cache.js";
 import { prepareLightDispatch } from "../../src/command/light-dispatch-plan.js";
 import type { VerifiedLightPlan } from "../../src/command/light-plan.js";
 import type { CommandResyncEvidence } from "../../src/command/command-service.js";
@@ -90,5 +91,74 @@ describe("Read-proven redundant power and brightness pruning", () => {
     vi.useFakeTimers(); const f = fixture(), c = new AbortController();
     const work = prepareLightDispatch(f.store, f.device, f.plan, () => new Promise(() => {}), c.signal);
     c.abort(); await work; expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+
+describe("Consume-once recent actual read proof", () => {
+  test("reuses a one-second actual read without another GET; no state mutations", async () => {
+    vi.useFakeTimers(); const f = fixture(), cache = new LightDispatchCache(f.store), scope = {};
+    const first = cache.begin(f.device, scope), proof = f.proof();
+    cache.remember(f.device, first.token, proof, f.store.commandStateRevision(f.device.id, f.device.locationId));
+    await vi.advanceTimersByTimeAsync(999);
+    const next = cache.begin(f.device, scope), read = vi.fn();
+    const before = f.store.snapshot();
+    const result = await prepareLightDispatch(f.store, f.device, f.plan, read, undefined, next.proof);
+    expect(result).toMatchObject({ skippedCommands: ["on", "setLevel"], preflightMs: 0, preflightSource: "recent_read" });
+    expect(result.actions.map((a) => a.command)).toEqual(["setColor"]);
+    expect(read).not.toHaveBeenCalled(); expect(f.store.snapshot()).toEqual(before);
+    expect(cache.begin(f.device, scope).proof).toBeUndefined();
+  });
+  test.each(["expired", "clock_backwards", "revision", "session", "location", "invalidated", "cleared"])("discards proof on %s", async (reason) => {
+    vi.useFakeTimers(); const f = fixture(), cache = new LightDispatchCache(f.store), scope = {};
+    const first = cache.begin(f.device, scope);
+    cache.remember(f.device, first.token, f.proof(), f.store.commandStateRevision(f.device.id, f.device.locationId));
+    if (reason === "expired") await vi.advanceTimersByTimeAsync(1001);
+    if (reason === "clock_backwards") vi.setSystemTime(Date.now() - 1);
+    if (reason === "revision") f.store.beginLightCommand(f.device.id);
+    if (reason === "invalidated") cache.invalidate(f.device.id);
+    if (reason === "cleared") cache.clear();
+    const next = cache.begin(reason === "location" ? { ...f.device, locationId: "loc_other" } : f.device,
+      reason === "session" ? {} : scope);
+    expect(next.proof).toBeUndefined();
+  });
+  test.each(["device", "location", "source", "snapshot", "future", "stale", "missing_states", "stale_revision"])("does not retain malformed or stale %s proof", (reason) => {
+    const f = fixture(), cache = new LightDispatchCache(f.store), first = cache.begin(f.device, undefined), p = f.proof();
+    if (reason === "device") p.deviceId = "dev_999";
+    if (reason === "location") p.locationId = "loc_other";
+    if (reason === "source") p.source = "advanced_inventory";
+    if (reason === "snapshot") p.authoritativeSnapshot = true;
+    if (reason === "future") p.startedAtMs += 1000;
+    if (reason === "stale") p.startedAtMs -= 1001;
+    if (reason === "missing_states") p.observedStates = [];
+    cache.remember(f.device, first.token, p, reason === "stale_revision" ? -1 : f.store.commandStateRevision(f.device.id, f.device.locationId));
+    expect(cache.begin(f.device, undefined).proof).toBeUndefined();
+  });
+  test("late response from the previous intent cannot warm the new intent", () => {
+    const f = fixture(), cache = new LightDispatchCache(f.store), first = cache.begin(f.device, undefined);
+    cache.begin(f.device, undefined);
+    cache.remember(f.device, first.token, f.proof(), f.store.commandStateRevision(f.device.id, f.device.locationId));
+    cache.previewFailed(f.device.id, first.token);
+    expect(cache.begin(f.device, undefined)).toMatchObject({ proof: undefined, skipPreview: false });
+  });
+  test("slow preview pauses only optional GETs for five seconds, never delays POST", async () => {
+    vi.useFakeTimers(); const f = fixture(), cache = new LightDispatchCache(f.store), scope = {};
+    const first = cache.begin(f.device, scope); cache.previewFailed(f.device.id, first.token);
+    expect(cache.begin(f.device, scope).skipPreview).toBe(true);
+    await vi.advanceTimersByTimeAsync(4999); expect(cache.begin(f.device, scope).skipPreview).toBe(true);
+    await vi.advanceTimersByTimeAsync(1); expect(cache.begin(f.device, scope).skipPreview).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  test("bounds the proof table and evicts old tokens", () => {
+    const f = fixture(), cache = new LightDispatchCache(f.store), first = cache.begin(f.device, undefined);
+    for (let i = 0; i < 128; i++) cache.begin({ ...f.device, id: `dev_${1000+i}` }, undefined);
+    cache.remember(f.device, first.token, f.proof(), f.store.commandStateRevision(f.device.id, f.device.locationId));
+    expect(cache.begin(f.device, undefined).proof).toBeUndefined();
+  });
+  test("recent proof cannot drop a newly different brightness or a color mode command", async () => {
+    const f = fixture(); f.plan.actions[1]!.arguments = [51];
+    const p = f.proof(); p.startedAtMs -= 100;
+    const result = await prepareLightDispatch(f.store, f.device, f.plan, undefined, undefined, p);
+    expect(result.actions.map((a) => a.command)).toEqual(["setLevel", "setColor"]);
   });
 });
