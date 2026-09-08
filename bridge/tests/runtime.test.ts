@@ -832,7 +832,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
 
     expect(log.info.mock.calls.slice(0, 14)).toEqual([
-      ["bridge_init:version:1.8.30:home_monitor_direct"],
+      ["bridge_init:version:1.8.31:home_monitor_direct"],
       ["bridge_init:data_paths"],
       ["bridge_init:data_paths:data_dir"],
       ["bridge_init:data_paths:profile_dir"],
@@ -3110,7 +3110,7 @@ test("runtime light preview reads the exact aliased device and skips only matchi
   } } };
   keeper.advancedSnapshots = [{ items: [{ deviceId: "runtime-fixture-lamp", locationId: "loc-synthetic-001",
     label: "Fixture lamp", type: "light", status: statusPayload,
-    components: [{ id: "main", capabilities: ["switch", "switchLevel", "colorControl"].map((id) => ({ id, version: 1 })) }] }] }];
+    components: [{ id: "main", label: "Main", capabilities: ["switch", "switchLevel", "colorControl"].map((id) => ({ id, version: 1 })) }] }] }];
   keeper.advancedStatusResponse = structuredClone(statusPayload);
   for (const def of shared.definitions) keeper.advancedResponses.set(`/advanced/cupcake-api/api/capabilities/${def.id}/1`, def);
   keeper.advancedCommandResponse = { results: [{ status: "ACCEPTED" }] };

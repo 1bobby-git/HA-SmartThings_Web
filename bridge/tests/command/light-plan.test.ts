@@ -671,3 +671,40 @@ describe("Confirmed read reuse through actual service and adapter", () => {
     expect(times).toEqual([901, 801]); expect(f.preview).toHaveBeenCalledOnce();
   });
 });
+
+
+describe("Mixed-source light preview through service/catalog/adapter", () => {
+  test("two fresh 80ms corroborations avoid a redundant 800ms on POST", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2026-09-08T00:00:10Z"));
+    const f = await fixture({ preview: true, initial: { switch: "on", level: 50 }, postDelayMs: 800, timeoutMs: 30_000 });
+    f.store.observeAdvancedDeviceSnapshot({ items: [f.row({ ...shared.initial, switch: "on", level: 50 },
+      "2026-09-08T00:00:09Z")] }, { source: "LOCATION_EVENT" });
+    f.request.arguments.splice(1, 1); // Same observed power; change color only.
+    f.preview.mockImplementation(async () => {
+      const startedAtMs = Date.now(); await new Promise(r => setTimeout(r, 80));
+      return { source: "advanced_device_status", authoritativeSnapshot: false,
+        deviceId: "dev_001", locationId: "loc_001", startedAtMs,
+        observedStates: f.store.commandStatusStates({ items: [f.row({ ...shared.initial, switch: "on", level: 50 },
+          "2026-09-08T00:00:08Z")] }, "dev_001", "loc_001") };
+    });
+    const begin = Date.now(); let elapsed = -1;
+    const work = f.service.execute(f.request).then(result => { elapsed = Date.now() - begin; return result; });
+    await vi.advanceTimersByTimeAsync(2500);
+    expect((await work).status).toBe("confirmed");
+    expect(elapsed).toBe(961);
+    expect(f.requests.flatMap(r => (r.body as any).commands.map((c: any) => c.command))).toEqual(["setColor"]);
+    expect(f.preview).toHaveBeenCalledTimes(2); expect(f.resync).toHaveBeenCalled();
+    expect(f.diagnostics).toHaveBeenCalledWith(expect.objectContaining({ stage: "dispatch",
+      commands: ["setColor"], skippedCommands: ["on"], preflightReason: "pruned_corroborated", preflightReads: 2 }));
+  });
+  test("corroborated previews cannot confirm an ignored color command", async () => {
+    const f = await fixture({ preview: true, initial: { switch: "on", level: 50 } });
+    f.store.observeAdvancedDeviceSnapshot({ items: [f.row({ ...shared.initial, switch: "on", level: 50 },
+      "2026-09-08T00:00:01Z")] }, { source: "LOCATION_EVENT" });
+    f.send.mockImplementation(async (_r, parser) => parser({ results: [{ status: "ACCEPTED" }] }));
+    await expect(f.service.execute(f.request)).rejects.toThrow("command_confirmation_timeout");
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect((f.send.mock.calls[0]![0].body as any).commands[0].command).toBe("setColor");
+    expect(f.preview).toHaveBeenCalledTimes(2);
+  });
+});

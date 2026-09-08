@@ -1,6 +1,6 @@
 import { LightDispatchCache } from "./light-dispatch-cache.js";
 import { LightPlanError, buildLightPlan, lightPlanMatches, lightPlanHasFreshEvidence, lightValueMatches, type LightExpectedState } from "./light-plan.js";
-import { prepareLightDispatch, type LightDispatchPreview } from "./light-dispatch-plan.js";
+import { type LightPreflightReason, prepareLightDispatch, type LightDispatchPreview } from "./light-dispatch-plan.js";
 import { validColorArgument } from "../advanced/color-argument.js";
 import type { RoutedCommandRequest } from "./command-router.js";
 import { normalizeLocationArmState } from "../state/location-arm-state.js";
@@ -239,7 +239,7 @@ interface SafeCommandServiceOptions {
     reason?: SafeCommandErrorCode;
   }) => void;
   onDeviceDiagnostic?: (event: { deviceId: string; stage: string; attribute: string;
-    elapsedMs: number; stateCount?: number; matches?: boolean; code?: string; commands?: string[]; readMs?: number; skippedCommands?: string[]; preflightMs?: number; preflightSource?: "recent_read" | "live_read" | "backoff" | undefined;
+    elapsedMs: number; stateCount?: number; matches?: boolean; code?: string; commands?: string[]; readMs?: number; skippedCommands?: string[]; preflightMs?: number; preflightReason?: LightPreflightReason; preflightReads?: number; preflightSource?: "recent_read" | "live_read" | "backoff" | undefined;
     lightStatus?: { attribute: string; requested: string | number; observed: string | number | null }[] }) => void;
   onPendingCountChange?: (count: number) => void;
   onResult?: (result: SafeCommandResult) => void;
@@ -452,7 +452,7 @@ export class SafeCommandService {
   }
 
   #deviceDiagnostic(request: SafeCommandRequest, stage: string, startedAt: number,
-    details: { stateCount?: number; matches?: boolean; code?: string; commands?: string[]; readMs?: number; skippedCommands?: string[]; preflightMs?: number; preflightSource?: "recent_read" | "live_read" | "backoff" | undefined;
+    details: { stateCount?: number; matches?: boolean; code?: string; commands?: string[]; readMs?: number; skippedCommands?: string[]; preflightMs?: number; preflightReason?: LightPreflightReason; preflightReads?: number; preflightSource?: "recent_read" | "live_read" | "backoff" | undefined;
       lightStatus?: { attribute: string; requested: string | number; observed: string | number | null }[] } = {}): void {
     try {
       this.options.onDeviceDiagnostic?.({ deviceId: request.targetId, stage,
@@ -523,6 +523,7 @@ export class SafeCommandService {
       // Only validated light-plan command names, never raw identifiers or bodies.
       this.#deviceDiagnostic(request, "dispatch", startedAt, { commands: dispatch.actions.map((action) => action.command),
         skippedCommands: dispatch.skippedCommands, preflightMs: dispatch.preflightMs,
+        preflightReason: dispatch.preflightReason, preflightReads: dispatch.preflightReads,
         preflightSource: dispatch.preflightSource ?? (cached.skipPreview ? "backoff" : undefined) });
       const receipt = await this.options.executor.executeLightPlan!(dispatch.actions, signal);
       receiptAt = Date.now();

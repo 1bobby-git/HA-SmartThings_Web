@@ -23,7 +23,7 @@ function fixture() {
   const proof = (): CommandResyncEvidence => ({ source: "advanced_device_status", authoritativeSnapshot: false,
     deviceId: device.id, locationId: device.locationId, startedAtMs: Date.now(),
     observedStates: store.commandStatusStates({ items: [row] }, device.id, device.locationId) });
-  return { store, device, plan, proof };
+  return { store, device, plan, proof, row };
 }
 
 describe("Read-proven redundant power and brightness pruning", () => {
@@ -161,4 +161,121 @@ describe("Consume-once recent actual read proof", () => {
     const result = await prepareLightDispatch(f.store, f.device, f.plan, undefined, undefined, p);
     expect(result.actions.map((a) => a.command)).toEqual(["setLevel", "setColor"]);
   });
+});
+
+
+describe("Mixed Location and Advanced preview evidence", () => {
+  function eventFixture() {
+    const f = fixture(), eventRow = structuredClone(f.row);
+    eventRow.status.components.identifier_main.identifier_power.switch.timestamp = "2026-09-08T00:00:02Z";
+    eventRow.status.components.identifier_main.identifier_level.level.timestamp = "2026-09-08T00:00:02Z";
+    f.store.observeAdvancedDeviceSnapshot({ items: [eventRow] }, { source: "LOCATION_EVENT" });
+    return f;
+  }
+  test("case-only role differences do not add a redundant power POST", async () => {
+    const f = fixture();
+    f.store.observeAdvancedDeviceSnapshot({ items: [{ ...f.row,
+      components: [{ id: "identifier_main", label: "Main", capabilities: [] }] }] });
+    const before = f.store.snapshot();
+    const result = await prepareLightDispatch(f.store, f.device, f.plan, async () => {
+      const p = f.proof(); p.observedStates!.forEach(s => { s.componentRole = "main"; }); return p;
+    });
+    expect(result.skippedCommands).toEqual(["on", "setLevel"]);
+    expect(result.preflightReason).toBe("pruned");
+    expect(f.store.snapshot()).toEqual(before);
+  });
+  test("two exact live reads corroborate unchanged values with older Advanced attribute time", async () => {
+    const f = eventFixture(), before = f.store.snapshot(), read = vi.fn(async () => f.proof());
+    const result = await prepareLightDispatch(f.store, f.device, f.plan, read);
+    expect(result.actions.map(a => a.command)).toEqual(["setColor"]);
+    expect(result).toMatchObject({ preflightReason: "pruned_corroborated", preflightReads: 2 });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(f.store.snapshot()).toEqual(before); // Never roll back the event watermark.
+  });
+  test.each(["off", "source", "target", "time", "metadata", "duplicate", "revision", "unavailable"])(
+    "second-read %s conflict retains original dispatch", async (conflict) => {
+      const f = eventFixture(); let reads = 0;
+      const result = await prepareLightDispatch(f.store, f.device, f.plan, async () => {
+        const p = f.proof(); if (++reads === 1) return p;
+        const power = p.observedStates!.find(s => s.attribute === "switch")!;
+        if (conflict === "off") power.value = "off";
+        if (conflict === "source") power.source = "ADVANCED_SNAPSHOT";
+        if (conflict === "target") p.deviceId = "dev_999";
+        if (conflict === "time") power.updatedAt = "2026-09-08T00:00:01Z";
+        if (conflict === "metadata") power.unit = "other";
+        if (conflict === "duplicate") p.observedStates = [...p.observedStates!, { ...power }];
+        if (conflict === "revision") f.store.beginLightCommand(f.device.id);
+        if (conflict === "unavailable") return undefined;
+        return p;
+      });
+      expect(result.skippedCommands).toEqual([]); expect(result.actions).toEqual(f.plan.actions);
+      expect(result.preflightReason).not.toMatch(/^pruned/);
+    });
+  test("different second-read brightness keeps setLevel while corroborated on can be skipped", async () => {
+    const f = eventFixture(); let reads = 0;
+    const result = await prepareLightDispatch(f.store, f.device, f.plan, async () => {
+      const p = f.proof(); if (++reads === 2) p.observedStates!.find(s => s.attribute === "level")!.value = 49;
+      return p;
+    });
+    expect(result.actions.map(a => a.command)).toEqual(["setLevel", "setColor"]);
+    expect(result.skippedCommands).toEqual(["on"]);
+  });
+  test("both previews share the original 400ms budget and late reads do not mutate state", async () => {
+    vi.useFakeTimers(); const f = eventFixture(), before = f.store.snapshot(); let reads = 0;
+    const result = prepareLightDispatch(f.store, f.device, f.plan, async () => {
+      if (++reads === 1) { const p = f.proof(); await new Promise(r => setTimeout(r, 300)); return p; }
+      return new Promise<CommandResyncEvidence>(() => {});
+    });
+    await vi.advanceTimersByTimeAsync(400);
+    expect(await result).toMatchObject({ skippedCommands: [], preflightReads: 2, preflightMs: 400, previewFailed: true });
+    expect(f.store.snapshot()).toEqual(before); expect(vi.getTimerCount()).toBe(0);
+  });
+  test("older same-source snapshots remain rejected, without a second GET", async () => {
+    const f = fixture(); const read = vi.fn(async () => {
+      const p = f.proof(); p.observedStates!.forEach(s => { s.updatedAt = "2026-09-07T00:00:00Z"; }); return p;
+    });
+    const result = await prepareLightDispatch(f.store, f.device, f.plan, read);
+    expect(result).toMatchObject({ preflightReason: "power_timestamp_older", skippedCommands: [] });
+    expect(read).toHaveBeenCalledOnce();
+  });
+  test("actual role and unit conflicts remain explicit failures", async () => {
+    for (const kind of ["role", "unit"]) {
+      const f = fixture();
+      const result = await prepareLightDispatch(f.store, f.device, f.plan, async () => {
+        const p = f.proof(), power = p.observedStates!.find(s => s.attribute === "switch")!;
+        if (kind === "role") power.componentRole = "switch2"; else power.unit = "%";
+        return p;
+      });
+      expect(result).toMatchObject({ preflightReason: kind === "unit" ? "power_unit_mismatch" : "power_component_role_mismatch", skippedCommands: [] });
+    }
+  });
+  test("cancellation during corroboration clears timers and never skips commands", async () => {
+    vi.useFakeTimers(); const f = eventFixture(), controller = new AbortController(); let reads = 0;
+    const before = f.store.snapshot();
+    const work = prepareLightDispatch(f.store, f.device, f.plan, async () => {
+      if (++reads === 1) return f.proof();
+      return new Promise<CommandResyncEvidence>(() => {});
+    }, controller.signal);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reads).toBe(2); controller.abort();
+    expect(await work).toMatchObject({ skippedCommands: [], preflightReason: "cancelled" });
+    expect(vi.getTimerCount()).toBe(0); expect(f.store.snapshot()).toEqual(before);
+  });
+  test("a recent proof with older event-relative time alone cannot skip on", async () => {
+    const f = eventFixture();
+    const result = await prepareLightDispatch(f.store, f.device, f.plan, undefined, undefined, f.proof());
+    expect(result).toMatchObject({ skippedCommands: [], preflightReads: 0, preflightReason: "corroboration_failed" });
+  });
+  test.each(["earlier_request", "future_request", "capability_conflict"])("second-read %s is not trusted", async (kind) => {
+    const f = eventFixture(); let reads = 0;
+    const result = await prepareLightDispatch(f.store, f.device, f.plan, async () => {
+      const p = f.proof(); if (++reads === 1) return p;
+      if (kind === "earlier_request") p.startedAtMs -= 1000;
+      if (kind === "future_request") p.startedAtMs += 1000;
+      if (kind === "capability_conflict") p.observedStates!.find(s => s.attribute === "switch")!.capability = "identifier_other";
+      return p;
+    });
+    expect(result.skippedCommands).toEqual([]);
+  });
+
 });
