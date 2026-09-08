@@ -23,8 +23,7 @@ export class BrowserSupervisor {
         const context = await this.options.launch();
         this.options.status.update({
           chromiumRunning: true,
-          lastBrowserStartAtMs: this.options.now?.() ?? Date.now(),
-          state: "LOGIN_REQUIRED"
+          lastBrowserStartAtMs: this.options.now?.() ?? Date.now()
         });
         return context;
       } catch (error: unknown) {

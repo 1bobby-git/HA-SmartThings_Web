@@ -315,6 +315,55 @@ describe("KeeperPageManager", () => {
     );
   });
 
+  test("adopts a completed login in a new location tab", async () => {
+    const login = new FakePage("https://account.samsung.com/accounts/v1/ST/signInGate");
+    const context = new FakeContext([login]);
+    const manager = new KeeperPageManager(context);
+    await manager.ensureKeeper();
+    const completed = new FakePage(`${KEEPER_URL}/logged-in-home`);
+    context.existing.push(completed);
+
+    expect(await manager.ensureKeeper()).toBe(completed);
+    expect(completed.close).not.toHaveBeenCalled();
+    expect(completed.goto).not.toHaveBeenCalled();
+    expect(login.close).toHaveBeenCalledTimes(1);
+    expect(manager.authenticationRecoveryPending()).toBe(false);
+  });
+
+  test.each([
+    { ok: false, status: 0, type: "opaqueredirect" },
+    { ok: false, status: 403, type: "basic" }
+  ])("uses the authenticated endpoint after an ambiguous location response: %j", async (response) => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response)
+      .mockResolvedValueOnce({ ok: true, status: 200, type: "basic" });
+    vi.stubGlobal("fetch", fetchMock);
+    const keeper = new FakePage(`${KEEPER_URL}/home`);
+    keeper.executeEvaluate = true;
+    const manager = new KeeperPageManager(new FakeContext([keeper]));
+
+    await expect(manager.touchAuthenticatedSession()).resolves.toBe("ok");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(manager.authenticationRecoveryPending()).toBe(false);
+    expect(keeper.goto).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    [401, "reauth"],
+    [403, "failed"]
+  ] as const)("classifies authenticated endpoint status %i as %s", async (status, outcome) => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, type: "basic" })
+      .mockResolvedValueOnce({ ok: false, status, type: "basic" });
+    vi.stubGlobal("fetch", fetchMock);
+    const keeper = new FakePage(`${KEEPER_URL}/home`);
+    keeper.executeEvaluate = true;
+    const manager = new KeeperPageManager(new FakeContext([keeper]));
+
+    await expect(manager.touchAuthenticatedSession()).resolves.toBe(outcome);
+    expect(manager.authenticationRecoveryPending()).toBe(outcome === "reauth");
+  });
+
 
   test("re-enters SmartThings with the remembered Samsung session after reauthentication", async () => {
     let now = 10_000;

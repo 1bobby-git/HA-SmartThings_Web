@@ -204,11 +204,18 @@ export class KeeperPageManager {
       .pages()
       .find((page) => !page.isClosed() && isSamsungLoginUrl(page.url()));
 
-    const keeper =
-      this.#keeper && !this.#keeper.isClosed()
-        ? this.#keeper
-        : candidates[0] ?? loginPage ?? this.findReusableBlankPage() ?? (await this.createKeeperPage());
+    const previousKeeper = this.currentKeeper();
+    // Samsung SSO may complete in a new tab while its original login tab stays open.
+    const completedLogin = previousKeeper && isSamsungLoginUrl(previousKeeper.url())
+      ? candidates.find((page) => isKeeperSettledUrl(page.url()))
+      : undefined;
+    const keeper = completedLogin ?? previousKeeper ?? candidates[0] ?? loginPage ??
+      this.findReusableBlankPage() ?? (await this.createKeeperPage());
     this.#keeper = keeper;
+    if (completedLogin) {
+      this.clearRecoveryState();
+      await previousKeeper?.close().catch(() => undefined);
+    }
 
     for (const duplicate of candidates.filter((candidate) => candidate !== keeper)) {
       await duplicate.close();
@@ -275,7 +282,6 @@ export class KeeperPageManager {
             if (
               response.type === "opaqueredirect" ||
               response.status === 401 ||
-              response.status === 403 ||
               (response.status >= 300 && response.status < 400)
             ) {
               return "reauth";
@@ -283,11 +289,10 @@ export class KeeperPageManager {
             return response.ok ? "ok" : "failed";
           };
           try {
-            const locationOutcome = await request(path);
-            if (locationOutcome === "reauth") return "reauth";
-            const authenticatedOutcome = await request(authPath);
-            if (authenticatedOutcome === "reauth") return "reauth";
-            return authenticatedOutcome === "ok" ? "ok" : "failed";
+            // The location page may redirect to a selected location or fail independently.
+            // Only the authenticated endpoint determines whether renewal is needed.
+            await request(path).catch(() => undefined);
+            return await request(authPath);
           } catch {
             return "failed";
           } finally {

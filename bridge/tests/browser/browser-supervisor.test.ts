@@ -16,6 +16,25 @@ class FakeStatusStore {
 }
 
 describe("BrowserSupervisor", () => {
+  test("preserves the authenticated state established during launch", async () => {
+    const status = new FakeStatusStore();
+    const supervisor = new BrowserSupervisor({
+      launch: async () => {
+        status.update({ state: "CONNECTED", authenticated: true });
+        return {};
+      },
+      maxRestarts: 0,
+      status: status as unknown as RuntimeStatusStore
+    });
+
+    await supervisor.start();
+
+    const final = Object.assign({}, ...status.updates);
+    expect(final.state).toBe("CONNECTED");
+    expect(final.authenticated).toBe(true);
+    expect(final.chromiumRunning).toBe(true);
+  });
+
   test("reduces launch failures to an allowlisted code token", () => {
     expect(browserLaunchFailureToken({ code: "EACCES" })).toBe("EACCES");
     expect(browserLaunchFailureToken({ code: "EACCES:/data/private" })).toBe("UNKNOWN");
@@ -120,9 +139,9 @@ describe("BrowserSupervisor", () => {
     expect(launch).toHaveBeenCalledTimes(2);
     expect(status.updates.at(-1)).toMatchObject({
       chromiumRunning: true,
-      lastBrowserStartAtMs: 987_654,
-      state: "LOGIN_REQUIRED"
+      lastBrowserStartAtMs: 987_654
     });
+    expect(status.updates.at(-1)).not.toHaveProperty("state");
   });
 
   test("resets retry budget for each start while keeping restartCount cumulative", async () => {
