@@ -1,3 +1,11 @@
+## 1.8.36
+
+- 조명 `applyLight`의 검증된 Advanced 전송에 로그인된 keeper가 이미 로드한 SmartThings 웹앱 `api/device` 서비스를 우선 사용하는 fast path를 추가합니다. 새 브라우저 컨텍스트/탭, 쿠키 복제, 별도 로그인을 만들지 않으며 기존 persistent Chromium 프로필과 세션 유지/복구를 그대로 사용합니다.
+- fast path는 `service.patch(deviceId, { query: { execute: true, commands } })`가 호출되기 **전** 서비스가 없을 때만 기존 `/advanced/cupcake-api/.../commands` CSRF POST로 폴백합니다. patch 호출 후 시간초과·네트워크·인증 오류는 불확실 재전송을 하지 않아 같은 물리 명령의 중복 실행을 막습니다. 일반 Advanced 명령, Home Monitor, 장면 및 조회는 기존 경로를 유지합니다.
+- `advanced_request_timing`의 fast path 요청에는 `appClient:true`를 추가합니다. `fetchMs`는 이 경우 웹앱 client patch Promise의 왕복 대기이고 `browserMs`는 keeper 평가 전체 시간입니다. 원본 기기 ID·쿠키·CSRF·본문은 로그에 추가하지 않습니다.
+- 기존 `light_command_batch_enabled=true`이면 on/밝기/setColor/색온도 묶음은 계속 한 client patch로 전달되며 실제 상태 확인과 `command_superseded` 최신 의도 직렬화도 유지됩니다. 요청값을 HA 상태로 낙관 적용하지 않으며, 실제 상태 이벤트/상태 조회가 성공 조건입니다.
+- 제공된 1.8.35 로그의 `inventory_persist_timing` 60~117ms Worker 저장은 현재 약 690~790ms 명령 병목과 분리되어 있습니다. 이번 변경은 그 단일 Advanced keeper POST를 웹앱의 기존 제어 서비스로 우회하는 것이 핵심입니다. 사용자 `dev_300`의 실제 물리 반응 개선값은 업데이트 후 새 `advanced_request_timing`/`command_request_timing`으로 검증해야 하며 미측정 수치를 보장하지 않습니다.
+
 ## 1.8.35
 
 - 전체 기기 상태 캐시의 JSON 인코딩과 SQLite 기록·체크포인트를 전용 Worker로 분리합니다. 이전 버전의 저장 시점 지연만으로는 이미 시작된 동기 저장 중 새 요청이 들어오는 경우를 막지 못했습니다. 상태 복사와 Worker 전송의 일부 CPU 비용은 메인 스레드에 남지만 디스크 저장이 끝날 때까지 제어 루프를 멈추지는 않습니다.

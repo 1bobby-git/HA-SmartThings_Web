@@ -1,3 +1,9 @@
+## 1.8.36 조명 keeper 앱 클라이언트 fast path
+
+Bridge와 HA 통합을 1.8.36으로 함께 업데이트하고 Bridge 앱을 재시작하세요. 조명 계획은 현재 로그인 keeper에 SmartThings 웹앱의 `api/device` 서비스가 이미 로드돼 있으면 그 서비스를 우선 재사용합니다. 새 탭/컨텍스트를 열거나 쿠키를 복제하지 않습니다. 서비스가 아직 없을 때만 기존 Advanced CSRF POST를 사용하며, 한 번 `patch()`를 시도한 요청은 실패 시 다른 전송으로 자동 재전송하지 않습니다.
+
+`advanced_request_timing`에 `appClient:true`가 보이면 fast path가 사용된 것입니다. 이 경우 `fetchMs`는 웹앱 client patch 대기 시간입니다. `light_command_batch_enabled=true`이면 검증된 전원+밝기/색상/색온도 조합을 계속 한 요청으로 보냅니다. 실제 상태 확인은 유지하므로 HA 요청 완료 시간이 물리 동작보다 늦을 수 있습니다. 요청값을 낙관적으로 상태에 쓰지는 않습니다.
+
 ## 1.8.16 재실 및 방/영역 동기화
 
 Bridge 앱과 HA 통합을 함께 업데이트하고 재시작합니다. 방 동기화는 기본 켬이고 명시적으로 저장된 끔 옵션은 보존합니다. 확인된 Advanced room과 같은 location의 방 이름을 우선하며 HA 기기 영역을 따로 관리하려면 통합 옵션에서 동기화를 끄세요. 엔티티별 수동 영역은 변경하지 않습니다. 새 재실 엔티티는 실제 occupancy/peopleCounter 상태만 읽으며 숫자 제어·명령 방식은 유지합니다. [동작 조건 및 검증 한계](../../docs/OCCUPANCY_ROOM_SYNC_1.8.16.md).
