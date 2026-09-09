@@ -1,0 +1,22 @@
+name: Latency34 workspace
+on:
+  push:
+    branches: [fix/light-latency-1.8.34]
+    paths: [.github/workflows/latency34-workspace.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: eb6b708675da74796fb9d0c7eedb581a774dd56b
+          persist-credentials: false
+      - run: git archive --format=tar HEAD | gzip > latency34-source.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: latency34-source
+          path: latency34-source.tar.gz
+          retention-days: 1
