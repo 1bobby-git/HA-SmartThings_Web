@@ -10,22 +10,22 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("packages HAOS live-control recovery as version 1.8.32", () => {
+  test("packages HAOS live-control recovery as version 1.8.33", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("1.8.32");
+    expect(config.version).toBe("1.8.33");
     expect(config.homeassistant_api).toBe(true);
     expect(config.hassio_api).toBe(true);
     expect(config.discovery).toEqual(["smartthings_web"]);
-    expect(packageMetadata.version).toBe("1.8.32");
-    expect(protocolMetadata.bridge_version).toBe("1.8.32");
+    expect(packageMetadata.version).toBe("1.8.33");
+    expect(protocolMetadata.bridge_version).toBe("1.8.33");
     expect(protocolMetadata.protocol_version).toBe(5);
-    expect(runtime).toContain('const bridgeVersion = "1.8.32";');
-    expect(changelog).toContain("## 1.8.32");
+    expect(runtime).toContain('const bridgeVersion = "1.8.33";');
+    expect(changelog).toContain("## 1.8.33");
     expect(changelog).toContain("## 1.8.12");
     expect(changelog).toContain("## 1.8.11");
     expect(changelog).toContain("## 1.8.7");
@@ -605,4 +605,15 @@ describe("standalone Docker container", () => {
     expect(service).not.toHaveProperty("privileged");
     expect(service).not.toHaveProperty("cap_add");
   });
+});
+
+
+test("Core API streams without disk response buffering while preserving access controls", () => {
+  const nginx = readText("addon/smartthings_web_bridge/rootfs/etc/nginx/nginx.conf");
+  const core = nginx.slice(nginx.indexOf("listen 8100;"));
+  expect(core).toContain("proxy_buffering off;");
+  expect(core).toContain("allow 172.30.32.1;");
+  expect(core).toContain("deny all;");
+  expect(core).toMatch(/location = \/api\/v1\/pairing-code\s*{\s*return 403;/);
+  expect(core).not.toContain("proxy_cache");
 });

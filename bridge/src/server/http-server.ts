@@ -159,7 +159,7 @@ async function handleBridgeApiRequest(
       if (method !== "GET") return writeError(response, 405, "method_not_allowed");
       const query = validateCatalogQuery(request.url);
       if (!query.ok) return writeError(response, 400, query.error);
-      const device = options.devices.snapshot().devices.find((item) => item.id === query.deviceId);
+      const device = options.devices.device(query.deviceId);
       if (!device) return writeError(response, 404, "device_not_found");
       return writeJson(response, 200, {
         schemaVersion: 1,

@@ -552,6 +552,7 @@ describe("createBridgeHttpServer", () => {
       devices
     });
     servers.push(server);
+    const full = vi.spyOn(devices, "snapshot");
     const response = await fetch(
       `http://127.0.0.1:${server.port}/api/v1/commands/catalog?deviceId=dev_001`,
       { headers: { authorization: `Bearer ${token}` } }
@@ -578,6 +579,8 @@ describe("createBridgeHttpServer", () => {
       ],
       omissions: { sensitive_argument: 1 }
     });
+    expect(full).not.toHaveBeenCalled();
+    full.mockRestore();
     body.commands[0].arguments.push({ name: "mutated" });
     expect(devices.snapshot().devices[0]?.advancedCommands?.[0]?.arguments).toEqual([]);
     expect(JSON.stringify(body)).not.toMatch(/raw|uuid|token|secret|identifier_/i);

@@ -389,33 +389,46 @@ export class DeviceStore {
       sequence: this.#sequence,
       locations: [...this.#locations.values()].sort(byId).map((value) => ({ ...value })),
       rooms: [...this.#rooms.values()].sort(byId).map((value) => ({ ...value })),
-      devices: [...this.#devices.values()].sort(byId).map((device) => ({
-        id: device.id,
-        locationId: device.locationId,
-        roomId: device.roomId,
-        // Both the device binding and its room must be observed in this session.
-        ...(device.roomSource === "advanced" && (device.roomId === null ||
-            (this.#advancedRooms.has(device.roomId) &&
-             this.#rooms.get(device.roomId)?.locationId === device.locationId))
-          ? { roomSource: "advanced" as const } : {}),
-        name: device.name,
-        type: device.type,
-        online: device.online,
-        ...(device.healthUpdatedAt ? { healthUpdatedAt: device.healthUpdatedAt } : {}),
-        ...(device.presentation ? { presentation: { ...device.presentation } } : {}),
-        ...(device.advanced ? { advanced: cloneAdvancedMetadata(device.advanced) } : {}),
-        states: snapshotDeviceStates(device).sort(byState).map(cloneState),
-        ...(device.controls.size > 0
-          ? { controls: [...device.controls.values()].sort(byId).map(cloneControl) }
-          : {}),
-        ...(device.advancedCommands.length > 0
-          ? { advancedCommands: device.advancedCommands.map(cloneAdvancedCommandDescriptor) }
-          : {}),
-        ...(device.advancedCommands.length > 0 || device.commandOmissions.length > 0
-          ? { commandOmissions: device.commandOmissions.map(cloneAdvancedCommandOmission) }
-          : {})
-      })),
+      devices: [...this.#devices.values()].sort(byId).map((device) => this.#snapshotDevice(device)),
       scenes: [...this.#scenes.values()].sort(byId).map(cloneScene)
+    };
+  }
+
+  /** Detached exact-device inventory view. Unlike commandStates, includes offline
+   * devices so callers retain their existing explicit offline/not-found checks.
+   * Uses precisely the same filtering and cloning rules as the full inventory.
+   */
+  device(deviceId: string): BridgeDevice | undefined {
+    const device = this.#devices.get(deviceId);
+    return device ? this.#snapshotDevice(device) : undefined;
+  }
+
+  #snapshotDevice(device: MutableDevice): BridgeDevice {
+    return {
+      id: device.id,
+      locationId: device.locationId,
+      roomId: device.roomId,
+      // Both the device binding and its room must be observed in this session.
+      ...(device.roomSource === "advanced" && (device.roomId === null ||
+          (this.#advancedRooms.has(device.roomId) &&
+           this.#rooms.get(device.roomId)?.locationId === device.locationId))
+        ? { roomSource: "advanced" as const } : {}),
+      name: device.name,
+      type: device.type,
+      online: device.online,
+      ...(device.healthUpdatedAt ? { healthUpdatedAt: device.healthUpdatedAt } : {}),
+      ...(device.presentation ? { presentation: { ...device.presentation } } : {}),
+      ...(device.advanced ? { advanced: cloneAdvancedMetadata(device.advanced) } : {}),
+      states: snapshotDeviceStates(device).sort(byState).map(cloneState),
+      ...(device.controls.size > 0
+        ? { controls: [...device.controls.values()].sort(byId).map(cloneControl) }
+        : {}),
+      ...(device.advancedCommands.length > 0
+        ? { advancedCommands: device.advancedCommands.map(cloneAdvancedCommandDescriptor) }
+        : {}),
+      ...(device.advancedCommands.length > 0 || device.commandOmissions.length > 0
+        ? { commandOmissions: device.commandOmissions.map(cloneAdvancedCommandOmission) }
+        : {})
     };
   }
 

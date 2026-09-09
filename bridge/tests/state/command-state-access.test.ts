@@ -58,3 +58,29 @@ describe("Command-scoped state reads", () => {
     expect(snapshot).not.toHaveBeenCalled();
   });
 });
+
+
+describe("Exact device inventory access", () => {
+  test("uses the identical snapshot shape and filters but not a whole inventory read", () => {
+    const store = fixture();
+    store.observeAdvancedDeviceSnapshot({ items: Array.from({ length: 500 }, (_, i) => row(`dev_${i + 100}`)) });
+    const expected = store.snapshot().devices.find(item => item.id === "dev_001");
+    const before = store.currentSequence();
+    const full = vi.spyOn(store, "snapshot").mockImplementation(() => { throw Error("whole inventory must not be used"); });
+    expect(store.device("dev_001")).toEqual(expected);
+    expect(store.device("dev_missing")).toBeUndefined();
+    expect(store.device("dev_001")!.states.some(state => state.attribute === "image")).toBe(false);
+    expect(store.currentSequence()).toBe(before);
+    expect(full).not.toHaveBeenCalled();
+  });
+  test("nested values remain detached and offline devices remain distinguishable from missing", () => {
+    const store = fixture(), before = store.snapshot();
+    const view = store.device("dev_001")!;
+    (view.states.find(state => state.attribute === "levelRange")!.value as any).maximum = 1;
+    view.name = "changed copy"; view.online = false;
+    expect(store.snapshot()).toEqual(before);
+    store.observeAdvancedDeviceSnapshot({ items: [{ ...row(), health: { state: "OFFLINE", updatedAt: "2026-09-07T01:00:00Z" } }] });
+    expect(store.device("dev_001")).toEqual(store.snapshot().devices[0]);
+    expect(store.device("dev_001")!.online).toBe(false);
+  });
+});

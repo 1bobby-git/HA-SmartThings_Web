@@ -106,7 +106,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.32";
+const bridgeVersion = "1.8.33";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -343,9 +343,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           locationId: request.locationId, armState: observed.armState, startedAtMs };
       }
       if (request?.deviceId) {
-        const device = devices
-          .snapshot()
-          .devices.find((candidate) => candidate.id === request.deviceId);
+        const device = devices.device(request.deviceId);
         const rawDeviceId = volatileIdentifiers.rawDeviceId(request.deviceId);
         const rawLocationId = device
           ? volatileIdentifiers.rawLocationId(device.locationId)
@@ -440,7 +438,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       lightCommandBatchEnabled: deps.config.lightCommandBatchEnabled ?? false,
       domFallbackEnabled: deps.config.domFallbackEnabled ?? true,
       canUseAdvanced: (input) => verifiedAdvancedControl(
-        devices.snapshot().devices.find((device) => device.id === input.deviceId), input),
+        input.deviceId ? devices.device(input.deviceId) : undefined, input),
       onDiagnostic: ({ transport, stage, outcome, code, mode, commandCount }) =>
         log.info(
           `command_route:${transport}:${stage}:${outcome}${code ? `:${code}` : ""}${mode ? `:mode_${mode}:commands_${commandCount}` : ""}`
@@ -480,6 +478,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       (diagnostic.reason ? `:reason_${diagnostic.reason}` : "")
     ),
     onDeviceDiagnostic: (event) => log.info(`command_device:${JSON.stringify(event)}`),
+    onRequestTiming: (event) => log.info(`command_request_timing:${JSON.stringify(event)}`),
     onPendingCountChange: (count) => status.update({ pendingCommandCount: count }),
     onResult: (result) => {
       const current = status.getSnapshot();
@@ -506,6 +505,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       return (
         report.ready &&
         report.details.state === "CONNECTED" &&
+        report.details.pendingCommandCount === 0 &&
         !legacyCommandExecutor.hasWarmCommandPage() &&
         !legacyCommandExecutor.hasForegroundOperation() &&
         !sessionTouchInFlight &&
@@ -534,6 +534,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     getProbeEvidence
   });
   log.info(`bridge_init:http_server_ready:${server.port}`);
+  log.info(`bridge_init:light_command_mode:${deps.config.lightCommandBatchEnabled === true ? "batch" : "sequence"}`);
 
   let activeContextGeneration = 0;
   let stopped = false;
