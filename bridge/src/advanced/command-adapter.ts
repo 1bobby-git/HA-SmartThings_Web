@@ -136,7 +136,7 @@ export class AdvancedCommandAdapter implements CommandTransport {
       if (signal?.aborted) throw new Error("command_superseded");
       const sentAtMs = this.#now();
       return await this.options.session.request({ endpoint: "commands", method: "POST",
-        path: advancedEndpoints.deviceCommands(deviceId), body: { commands } }, (value) => {
+        path: advancedEndpoints.deviceCommands(deviceId), body: { commands }, preferAppClient: true }, (value) => {
         if (!isRecord(value) || !Array.isArray(value.results) || value.results.length !== commands.length) {
           throw new AdvancedCommandError("response_invalid");
         }
@@ -179,7 +179,7 @@ export class AdvancedCommandAdapter implements CommandTransport {
         checkCurrent();
         const stepSentAtMs = this.#now();
         const receipt = await this.options.session.request({ endpoint: "commands", method: "POST",
-          path: advancedEndpoints.deviceCommands(deviceId), body: { commands: [command] } },
+          path: advancedEndpoints.deviceCommands(deviceId), body: { commands: [command] }, preferAppClient: true },
           (value) => parseReceipt(value, stepSentAtMs, this.#now()));
         acceptedAtMs = receipt.acceptedAtMs;
       }

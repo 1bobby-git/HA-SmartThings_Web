@@ -1,4 +1,5 @@
 import type { BrowserPageLike } from "../browser/keeper-page.js";
+import { executeAppClientCommand } from "./app-client-command.js";
 import type { AdvancedEndpointCategory } from "./types.js";
 
 export type AdvancedParser<T> = (value: unknown) => T;
@@ -11,6 +12,8 @@ export interface AdvancedRequest {
   timeoutMs?: number;
   /** Optional READ-only fast path: never open a fallback page for this request. */
   keeperOnly?: boolean;
+  /** Verified light plans may reuse the keeper's already-loaded api/device client. */
+  preferAppClient?: boolean;
 }
 
 export interface AuthenticatedAdvancedSession {
@@ -52,6 +55,7 @@ export interface AdvancedRequestTiming {
   fetchMs?: number;
   bodyMs?: number;
   bridgeOverheadMs?: number;
+  appClient?: true;
 }
 
 interface BrowserFetchResult {
@@ -59,7 +63,7 @@ interface BrowserFetchResult {
   status: number;
   value?: unknown;
   error?: string;
-  timing?: { browserMs: number; fetchMs: number; bodyMs: number };
+  timing?: { browserMs: number; fetchMs: number; bodyMs: number; appClient?: true };
 }
 
 export interface AuthenticatedSmartThingsSessionOptions extends SessionPageManager {
@@ -83,6 +87,10 @@ export class AuthenticatedSmartThingsSession implements AuthenticatedAdvancedSes
     if (request.keeperOnly !== undefined && (request.keeperOnly !== true || safeRequest.method !== "GET")) {
       throw new AdvancedSessionError("advanced_request_path_invalid", request.endpoint);
     }
+    if (request.preferAppClient !== undefined &&
+        (request.preferAppClient !== true || safeRequest.method !== "POST" || safeRequest.endpoint !== "commands")) {
+      throw new AdvancedSessionError("advanced_request_path_invalid", request.endpoint);
+    }
     const requestKeeper = this.options.currentKeeper();
     const requestKeeperUrl = requestKeeper?.url();
     const measured = async (route: AdvancedRequestTiming["route"], run: () => Promise<BrowserFetchResult | undefined>) => {
@@ -103,14 +111,21 @@ export class AuthenticatedSmartThingsSession implements AuthenticatedAdvancedSes
           this.options.onRequestTiming?.({ endpoint: "commands", method: "POST", route, totalMs,
             status: Number.isInteger(result?.status) && result!.status >= 0 && result!.status <= 599 ? result!.status : 0,
             ...(valid ? { browserMs: Math.round(timing.browserMs), fetchMs: Math.round(timing.fetchMs),
-              bodyMs: Math.round(timing.bodyMs), bridgeOverheadMs: Math.max(0, totalMs - Math.round(timing.browserMs)) } : {}) });
+              bodyMs: Math.round(timing.bodyMs), bridgeOverheadMs: Math.max(0, totalMs - Math.round(timing.browserMs)),
+              ...(timing.appClient === true ? { appClient: true as const } : {}) } : {}) });
         } catch { /* Timing observers cannot alter command delivery. */ }
       }
       return result;
     };
     const keeper = this.options.currentKeeper();
     if (keeper?.evaluate && !keeper.isClosed()) {
-      const keeperResult = (await measured("keeper", () => executePageRequest(keeper, safeRequest)))!;
+      const keeperResult = (await measured("keeper", async () => {
+        if (safeRequest.preferAppClient === true) {
+          const appClientResult = await executeAppClientCommand(keeper, safeRequest);
+          if (appClientResult !== undefined) return appClientResult;
+        }
+        return await executePageRequest(keeper, safeRequest);
+      }))!;
       if (keeperResult.ok) return parseResult(keeperResult, request.endpoint, parser);
       if (request.keeperOnly) throw classifyFailure(request.endpoint, keeperResult);
       if (safeRequest.method === "POST" && !knownNotSent(keeperResult)) {
@@ -164,7 +179,7 @@ function knownNotSent(result: BrowserFetchResult): boolean {
 async function executePageRequest(
   page: BrowserPageLike,
   request: Required<Pick<AdvancedRequest, "endpoint" | "method" | "path" | "timeoutMs">> &
-    Pick<AdvancedRequest, "body">
+    Pick<AdvancedRequest, "body" | "preferAppClient">
 ): Promise<BrowserFetchResult> {
   if (!page.evaluate) {
     return { ok: false, status: 0, error: "evaluate_unavailable" };
@@ -260,7 +275,7 @@ function normalizeRequest(
   request: AdvancedRequest,
   defaultTimeoutMs: number
 ): Required<Pick<AdvancedRequest, "endpoint" | "method" | "path" | "timeoutMs">> &
-  Pick<AdvancedRequest, "body"> {
+  Pick<AdvancedRequest, "body" | "preferAppClient"> {
   let url: URL;
   try {
     url = new URL(request.path, SMARTTHINGS_ORIGIN);
@@ -284,7 +299,8 @@ function normalizeRequest(
     method: request.method,
     path: `${url.pathname}${url.search}`,
     timeoutMs,
-    ...(request.body === undefined ? {} : { body: request.body })
+    ...(request.body === undefined ? {} : { body: request.body }),
+    ...(request.preferAppClient === true ? { preferAppClient: true } : {})
   };
 }
 
