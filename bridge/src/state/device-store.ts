@@ -12,8 +12,11 @@ import type {
   AdvancedCommandOmission
 } from "../advanced/command-catalog-types.js";
 import { dirname } from "node:path";
+import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { inventoryCachePath, readInventoryCache, ThreadedInventoryWriter,
+  type InventoryWriter } from "./inventory-writer.js";
 
 export type BridgeJsonValue = null | boolean | number | string | BridgeJsonValue[] | {
   [key: string]: BridgeJsonValue;
@@ -238,6 +241,9 @@ export interface InventoryPersistenceTiming {
   writeMs: number;
   totalMs: number;
   deferredMs: number;
+  mode?: "worker";
+  workerSerializeMs?: number;
+  transferMs?: number;
 }
 const CAMERA_IMAGE_ATTRIBUTES = new Set([
   "captureTime",
@@ -273,6 +279,11 @@ export class DeviceStore {
   readonly #deferPersistenceWhile: (() => boolean) | undefined;
   readonly #onPersistenceTiming: ((event: InventoryPersistenceTiming) => void) | undefined;
   #lastPersistedInventoryJson: string | undefined;
+  #legacyPersistedAtMs = 0;
+  readonly #writer: InventoryWriter | undefined;
+  #persistInFlight: Promise<void> | undefined;
+  #closed = false;
+  #closePromise: Promise<void> | undefined;
   #sequence = 0;
   #sessionPendingDeviceIds: Set<string> | undefined;
   readonly #sessionConsumerLocationIds = new Set<string>();
@@ -286,7 +297,10 @@ export class DeviceStore {
     identifierRole?: IdentifierRoleResolver;
     sqlitePath?: string;
     onPersistenceError?: () => void;
-    /** Optional background-only deferral. Shutdown always flushes synchronously. */
+    /** Production uses a private worker/cache DB; legacy readers remain compatible. */
+    backgroundPersistence?: boolean;
+    persistenceWriter?: InventoryWriter;
+    /** Optional background-only deferral. Shutdown always drains pending writes. */
     deferPersistenceWhile?: () => boolean;
     onPersistenceTiming?: (event: InventoryPersistenceTiming) => void;
   } = {}) {
@@ -317,7 +331,31 @@ export class DeviceStore {
         )
       `);
       this.#loadComponentChildMappings();
-      const restored = this.#loadPersistedInventory();
+      let identity: string | undefined;
+      if (options.backgroundPersistence || options.persistenceWriter) {
+        this.#db.exec("CREATE TABLE IF NOT EXISTS inventory_cache_identity(singleton INTEGER PRIMARY KEY CHECK(singleton=1), identity TEXT NOT NULL)");
+        this.#db.prepare("INSERT OR IGNORE INTO inventory_cache_identity(singleton,identity) VALUES(1,?)").run(randomUUID());
+        identity = this.#db.prepare("SELECT identity FROM inventory_cache_identity WHERE singleton=1").get()?.identity as string;
+      }
+      this.#writer = options.persistenceWriter ?? (options.backgroundPersistence
+        ? new ThreadedInventoryWriter(inventoryCachePath(options.sqlitePath), identity!) : undefined);
+      const legacy = this.#loadPersistedInventory();
+      let cached: BridgeInventory | undefined;
+      if (this.#writer) {
+        try {
+          const row = readInventoryCache(inventoryCachePath(options.sqlitePath), identity!);
+          if (row) {
+            const parsed = parsePersistedInventory(JSON.parse(row.json));
+            if (!parsed) this.#reportPersistenceError();
+            // A rollback may have saved newer legacy data. Never prefer an
+            // older sidecar merely because it exists on a subsequent upgrade.
+            else if (row.persistedAtMs >= this.#legacyPersistedAtMs) cached = parsed;
+          }
+        } catch { this.#reportPersistenceError(); }
+      }
+      // Bind cache to this identity DB, not just path: reset aliases cannot
+      // restore another database generation's numbered device aliases.
+      const restored = cached ?? legacy;
       if (restored) {
         const livenessReconciled = this.#restore(restored);
         // Devices restored from a previous session start as unconfirmed. Keep
@@ -325,7 +363,7 @@ export class DeviceStore {
         // from the next complete consumer device snapshot. Partial location,
         // room, scene, and Advanced responses are not authoritative inventory.
         this.#sessionPendingDeviceIds = new Set(restored.devices.map((d) => d.id));
-        if (livenessReconciled) this.#schedulePersist();
+        if (livenessReconciled || (this.#writer && !cached)) this.#schedulePersist();
       }
     }
   }
@@ -807,20 +845,33 @@ export class DeviceStore {
     return true;
   }
 
-  close(): void {
-
+  close(): void | Promise<void> {
+    if (this.#closed) return this.#closePromise;
+    this.#closed = true;
     if (this.#persistTimer !== undefined) {
       clearTimeout(this.#persistTimer);
       this.#persistTimer = undefined;
     }
-    try {
-      this.#flushPersist();
-    } catch {
-      // Shutdown durability is best-effort when SQLite remains locked; never mask a graceful stop.
-      this.#onPersistenceError?.();
-    } finally {
-      this.#db?.close();
+    if (this.#writer) {
+      this.#closePromise = (async () => {
+        try {
+          await this.#persistInFlight;
+          // A change during an in-flight save must not disappear at shutdown.
+          if (this.#persistPending) await this.#flushPersistAsync();
+        } finally {
+          try { await this.#writer!.close(); }
+          finally { this.#db?.close(); }
+        }
+      })();
+      return this.#closePromise;
     }
+    try { this.#flushPersist(); }
+    catch { this.#reportPersistenceError(); }
+    finally { this.#db?.close(); }
+  }
+
+  #reportPersistenceError(): void {
+    try { this.#onPersistenceError?.(); } catch { /* Error observers are not durability. */ }
   }
 
   #applySnapshot(query: SnapshotQuery, body: unknown): boolean {
@@ -1487,12 +1538,15 @@ export class DeviceStore {
 
   #loadPersistedInventory(): BridgeInventory | undefined {
     const row = this.#db
-      ?.prepare("SELECT inventory_json AS inventoryJson FROM normalized_inventory WHERE schema_version = 1")
-      .get() as { inventoryJson?: unknown } | undefined;
+      ?.prepare("SELECT inventory_json AS inventoryJson, persisted_at AS persistedAt FROM normalized_inventory WHERE schema_version = 1")
+      .get() as { inventoryJson?: unknown; persistedAt?: unknown } | undefined;
     if (typeof row?.inventoryJson !== "string") return undefined;
     try {
       const parsed = parsePersistedInventory(JSON.parse(row.inventoryJson));
-      if (parsed) this.#lastPersistedInventoryJson = row.inventoryJson;
+      if (parsed) {
+        this.#lastPersistedInventoryJson = row.inventoryJson;
+        this.#legacyPersistedAtMs = typeof row.persistedAt === "string" ? Date.parse(row.persistedAt) || 0 : 0;
+      }
       return parsed;
     } catch {
       return undefined;
@@ -1567,14 +1621,14 @@ export class DeviceStore {
   }
 
   #schedulePersist(): void {
-    if (!this.#db) return;
+    if (!this.#db || this.#closed) return;
     this.#persistPending = true;
     this.#armPersistTimer(INVENTORY_PERSIST_COALESCE_MS);
   }
 
   #armPersistTimer(delayMs: number): void {
     if (!this.#db) return;
-    if (this.#persistTimer !== undefined) return;
+    if (this.#closed || this.#persistInFlight || this.#persistTimer !== undefined) return;
     // Keep the push-to-SSE path synchronous and coalesce the large durability snapshot behind it.
     this.#persistTimer = setTimeout(() => {
       this.#persistTimer = undefined;
@@ -1591,14 +1645,50 @@ export class DeviceStore {
           return;
         }
       }
-      try {
-        this.#flushPersist();
-      } catch {
-        this.#onPersistenceError?.();
-        this.#armPersistTimer(INVENTORY_PERSIST_RETRY_MS);
+      if (this.#writer) {
+        this.#persistInFlight = this.#flushPersistAsync().finally(() => {
+          this.#persistInFlight = undefined;
+          if (this.#persistPending) this.#armPersistTimer(INVENTORY_PERSIST_RETRY_MS);
+        });
+      } else {
+        try { this.#flushPersist(); }
+        catch {
+          this.#reportPersistenceError();
+          this.#armPersistTimer(INVENTORY_PERSIST_RETRY_MS);
+        }
       }
     }, delayMs);
     this.#persistTimer.unref();
+  }
+
+  async #flushPersistAsync(): Promise<void> {
+    if (!this.#writer || !this.#persistPending) return;
+    const start = performance.now();
+    const deferredMs = this.#persistDeferredAtMs === undefined ? 0 :
+      Math.max(0, Math.round(start - this.#persistDeferredAtMs));
+    this.#persistDeferredAtMs = undefined;
+    // Clear before awaiting, not after: newer events mark a subsequent save.
+    this.#persistPending = false;
+    let snapshotMs = 0, writeMs = 0, workerSerializeMs = 0, transferMs = 0;
+    let outcome: InventoryPersistenceTiming["outcome"] = "failed";
+    try {
+      const inventory = this.snapshot();
+      const pending = this.#writer.write(inventory);
+      snapshotMs = Math.max(0, Math.round(performance.now() - start));
+      const result = await pending;
+      ({ outcome, writeMs } = result);
+      workerSerializeMs = result.serializeMs;
+      transferMs = result.transferMs ?? 0;
+      if (outcome === "failed") throw new Error("inventory_persist_failed");
+    } catch {
+      this.#persistPending = true;
+      this.#reportPersistenceError();
+    } finally {
+      try {
+        this.#onPersistenceTiming?.({ outcome, snapshotMs, writeMs, workerSerializeMs, transferMs,
+          mode: "worker", deferredMs, totalMs: Math.max(0, Math.round(performance.now() - start)) });
+      } catch { /* Diagnostics cannot make a successful write fail. */ }
+    }
   }
 
   #flushPersist(): void {

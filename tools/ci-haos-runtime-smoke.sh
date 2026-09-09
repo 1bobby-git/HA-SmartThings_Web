@@ -79,6 +79,9 @@ run_case() {
     invalid-sqlite-header)
       printf 'not-a-sqlite-database' > "$data_dir/bridge.sqlite"
       ;;
+    invalid-inventory-cache)
+      printf 'invalid-inventory' > "$data_dir/bridge.sqlite.inventory"
+      ;;
     empty-secret)
       : > "$data_dir/bridge-secret"
       ;;
@@ -127,6 +130,9 @@ run_case() {
       sudo test ! -d "$data_dir/bridge.sqlite"
       test -n "$(sudo find "$data_dir/recovery" -mindepth 1 -maxdepth 1 -name '*bridge.sqlite*' -print -quit 2>/dev/null)"
       ;;
+    invalid-inventory-cache)
+      test -n "$(sudo find "$data_dir/recovery" -mindepth 1 -maxdepth 1 -name '*inventory-cache-invalid-header*' -print -quit)"
+      ;;
     empty-secret)
       sudo python - "$data_dir/bridge-secret" <<'PY'
 from pathlib import Path
@@ -138,10 +144,14 @@ PY
       ;;
   esac
 
+  if [[ "$case_name" == "clean" ]]; then
+    docker cp tools/ci-inventory-worker-smoke.mjs "$container_name:/tmp/ci-inventory-worker-smoke.mjs"
+    docker exec --user pwuser "$container_name" node /tmp/ci-inventory-worker-smoke.mjs /app
+  fi
   docker rm -f "$container_name" >/dev/null
 }
 
-for case_name in clean root-owned-profile invalid-sqlite-directory invalid-sqlite-header empty-secret; do
+for case_name in clean root-owned-profile invalid-sqlite-directory invalid-sqlite-header invalid-inventory-cache empty-secret; do
   echo "===== runtime smoke: $case_name ====="
   run_case "$case_name"
 done

@@ -23,6 +23,7 @@ RECOVERY_DIR="$DATA_DIR/recovery"
 RECOVERY_STAMP="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || printf 'unknown')-$$"
 RECOVERY_READY=0
 SQLITE_RESET_REQUIRED=0
+INVENTORY_SQLITE_RESET_REQUIRED=0
 
 ensure_recovery_dir() {
   if [ "$RECOVERY_READY" -eq 1 ]; then
@@ -93,6 +94,8 @@ repair_private_file() {
     quarantine_path "$pf_path" "$pf_label"
     if [ "$pf_label" = "bridge.sqlite" ]; then
       SQLITE_RESET_REQUIRED=1
+    elif [ "$pf_label" = "bridge.sqlite.inventory" ]; then
+      INVENTORY_SQLITE_RESET_REQUIRED=1
     fi
     return 0
   fi
@@ -146,6 +149,10 @@ for file in \
   /data/bridge.sqlite-wal \
   /data/bridge.sqlite-shm \
   /data/bridge.sqlite-journal \
+  /data/bridge.sqlite.inventory \
+  /data/bridge.sqlite.inventory-wal \
+  /data/bridge.sqlite.inventory-shm \
+  /data/bridge.sqlite.inventory-journal \
   /data/settings.json \
   /data/protocol-fingerprint.json; do
   repair_private_file "$file" "${file##*/}"
@@ -163,6 +170,21 @@ if [ "$SQLITE_RESET_REQUIRED" -eq 1 ] || { [ -f /data/bridge.sqlite ] && [ ! -s 
   quarantine_path /data/bridge.sqlite-shm bridge.sqlite-shm-stale
   quarantine_path /data/bridge.sqlite-journal bridge.sqlite-journal-stale
   log "data_prep:sqlite_reset"
+fi
+
+# Only the reconstructible inventory cache is separate; identity and login
+# stores keep their original paths. Preserve damaged cache bytes in recovery.
+if [ -f /data/bridge.sqlite.inventory ] && [ -s /data/bridge.sqlite.inventory ]; then
+  if ! sqlite_header_valid /data/bridge.sqlite.inventory; then
+    quarantine_path /data/bridge.sqlite.inventory inventory-cache-invalid-header
+    INVENTORY_SQLITE_RESET_REQUIRED=1
+  fi
+fi
+if [ "$INVENTORY_SQLITE_RESET_REQUIRED" -eq 1 ] || { [ -f /data/bridge.sqlite.inventory ] && [ ! -s /data/bridge.sqlite.inventory ] && { path_exists /data/bridge.sqlite.inventory-wal || path_exists /data/bridge.sqlite.inventory-shm || path_exists /data/bridge.sqlite.inventory-journal; }; }; then
+  quarantine_path /data/bridge.sqlite.inventory-wal inventory-cache-wal-stale
+  quarantine_path /data/bridge.sqlite.inventory-shm inventory-cache-shm-stale
+  quarantine_path /data/bridge.sqlite.inventory-journal inventory-cache-journal-stale
+  log "data_prep:inventory_cache_reset"
 fi
 
 if path_exists "$MIGRATED_MARKER"; then

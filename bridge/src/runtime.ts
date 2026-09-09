@@ -106,7 +106,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.34";
+const bridgeVersion = "1.8.35";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -169,6 +169,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   const commandWorkBusy = () => status.getSnapshot().pendingCommandCount > 0 ||
     performance.now() < commandQuietUntilMs;
   const devices = new DeviceStore({
+    backgroundPersistence: true,
     deferPersistenceWhile: commandWorkBusy,
     onPersistenceTiming: (event) => {
       if (event.totalMs >= 50 || event.deferredMs > 0 || event.outcome === "failed") {
@@ -1721,11 +1722,13 @@ async function stopRuntime(options: {
   if (context) {
     await closeContextQuietly(context);
   }
+  // Let accepted HTTP commands finish before draining the latest state cache.
+  // Identity/capture stores remain available until those commands have left.
+  await Promise.allSettled([options.server.close()]);
+  await Promise.allSettled([Promise.resolve().then(() => options.devices.close())]);
   await Promise.allSettled([
-    options.server.close(),
     Promise.resolve().then(() => options.aliases.close()),
-    Promise.resolve().then(() => options.captures.close()),
-    Promise.resolve().then(() => options.devices.close())
+    Promise.resolve().then(() => options.captures.close())
   ]);
 }
 
