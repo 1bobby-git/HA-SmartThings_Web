@@ -1,0 +1,82 @@
+name: Apply verified latency34
+on:
+  push:
+    branches: [fix/light-latency-1.8.34]
+    paths: [.github/workflows/apply-latency34.yml]
+permissions:
+  contents: write
+concurrency:
+  group: apply-latency34
+  cancel-in-progress: false
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/light-latency-1.8.34
+          fetch-depth: 0
+      - name: Verify exact reviewed patch and final source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64, hashlib, json, lzma, os, pathlib, re, shutil, subprocess
+          root = pathlib.Path('.')
+          payload = '.github/latency34.patch.b64'
+          workflow = '.github/workflows/apply-latency34.yml'
+          base = 'eb6b708675da74796fb9d0c7eedb581a774dd56b'
+          def git(*args, **kwargs):
+              return subprocess.check_output(['git', *args], **kwargs).decode().strip()
+          if git('rev-parse', 'origin/main') != base:
+              raise SystemExit('Main changed; review required')
+          if set(git('diff', '--name-only', base, 'HEAD').splitlines()) != {payload, workflow}:
+              raise SystemExit('Unexpected branch changes')
+          encoded = (root / payload).read_text().strip()
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True), memlimit=128*1024*1024)
+          expected = '72b528fa2e89a8d08e3bdb1d957941b4146e647c2c99de5c97ede860284dd81b'
+          if len(patch) != 41380 or hashlib.sha256(patch).hexdigest() != expected:
+              raise SystemExit('Reviewed patch checksum mismatch')
+          if json.loads((root / 'package.json').read_text())['version'] != '1.8.33':
+              raise SystemExit('Unexpected base version')
+          allowed = {
+              'CHANGELOG.md', 'addon/smartthings_web_bridge/CHANGELOG.md',
+              'addon/smartthings_web_bridge/config.yaml', 'bridge/src/browser/command-page.ts',
+              'bridge/src/runtime.ts', 'bridge/src/state/device-store.ts',
+              'bridge/tests/browser/command-page.test.ts', 'bridge/tests/runtime.test.ts',
+              'bridge/tests/state/interactive-persistence.test.ts',
+              'custom_components/smartthings_web/manifest.json',
+              'docs/LIGHT_INTERACTION_PRIORITY_1.8.34.md', 'package-lock.json', 'package.json',
+              'protocol/version.json', 'tests/addon-config.test.ts', 'tests/protocol-version-contract.test.ts'
+          }
+          if set(re.findall(r'^diff --git a/\S+ b/(\S+)$', patch.decode(), re.M)) != allowed:
+              raise SystemExit('Unexpected patch scope')
+          subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
+          subprocess.run(['git', 'apply', '-'], input=patch, check=True)
+          subprocess.run(['git', 'add', '--', *sorted(allowed)], check=True)
+          subprocess.run(['git', 'rm', '--', payload], check=True)
+          index = (root / '.git/latency34-verify-index').resolve()
+          shutil.copyfile('.git/index', index)
+          env = {**os.environ, 'GIT_INDEX_FILE': str(index)}
+          try:
+              git('update-index', '--force-remove', workflow, env=env)
+              tree = git('write-tree', env=env)
+              if tree != '9db07a2b7162cc35474d1219b7724cbf57c005b4':
+                  raise SystemExit('Unexpected final tree: ' + tree)
+          finally:
+              index.unlink(missing_ok=True)
+          print('Verified SHA256:', expected)
+          print('Verified final tree:', tree)
+          PY
+          git diff --cached --check
+          git diff --cached --stat
+      - name: Commit reviewed candidate to isolated branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'perf: prioritize light commands over background persistence and discovery (1.8.34)'
+          git push origin HEAD:fix/light-latency-1.8.34
+          echo "CANDIDATE_COMMIT=$(git rev-parse HEAD)"
