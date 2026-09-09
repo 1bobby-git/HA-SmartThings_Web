@@ -3952,3 +3952,48 @@ function webpackCameraClientEvaluate(
     }
   };
 }
+
+
+describe("Advanced commands preempt only background navigation", () => {
+  test("blocks new inspection without taking a UI lane or opening any page", async () => {
+    const manager = { openCommandPage: vi.fn(async () => new FakeCommandPage()) };
+    const executor = new SmartThingsWebUiCommandExecutor(() => manager);
+    executor.setExternalCommandsPending(true);
+    executor.setExternalCommandsPending(true);
+    expect(executor.hasForegroundOperation()).toBe(true);
+    await expect(executor.inspectDeviceDetails({deviceName: "Safe plug", locationId: "loc_001"}))
+      .rejects.toThrow("detail_discovery_preempted");
+    expect(manager.openCommandPage).not.toHaveBeenCalled();
+    executor.setExternalCommandsPending(false);
+    expect(executor.hasForegroundOperation()).toBe(false);
+    await executor.inspectDeviceDetails({deviceName: "Safe plug", locationId: "loc_001"});
+    expect(manager.openCommandPage).toHaveBeenCalledTimes(1);
+  });
+  test("interrupts an already-running inspection without waiting on close and leaves keeper intact", async () => {
+    const page = new FakeCommandPage(), keeper = new FakeCommandPage();
+    const settle = deferred(), close = deferred();
+    page.waitForTimeout = vi.fn(() => settle.promise);
+    page.close.mockImplementation(async () => { await close.promise; return undefined; });
+    const manager = { openCommandPage: vi.fn(async () => page), currentKeeper: () => keeper };
+    const executor = new SmartThingsWebUiCommandExecutor(() => manager);
+    const result = executor.inspectDeviceDetails({deviceName: "Safe plug", locationId: "loc_001"}).catch(e => e);
+    await vi.waitFor(() => expect(page.waitForTimeout).toHaveBeenCalled());
+    executor.setExternalCommandsPending(true);
+    await expect(result).resolves.toMatchObject({message: "detail_discovery_preempted"});
+    expect(page.close).toHaveBeenCalled(); expect(keeper.close).not.toHaveBeenCalled();
+    executor.setExternalCommandsPending(false);
+    close.resolve(); settle.resolve();
+  });
+  test("a late-created discovery page remains cancelled even after the short foreground request ends", async () => {
+    const page = new FakeCommandPage(), ready = deferred();
+    const manager = { openCommandPage: vi.fn(async () => { await ready.promise; return page; }) };
+    const executor = new SmartThingsWebUiCommandExecutor(() => manager);
+    const result = executor.inspectDeviceDetails({deviceName: "Safe plug", locationId: "loc_001"}).catch(e => e);
+    await vi.waitFor(() => expect(manager.openCommandPage).toHaveBeenCalled());
+    executor.setExternalCommandsPending(true); executor.setExternalCommandsPending(false);
+    ready.resolve();
+    await expect(result).resolves.toMatchObject({message: "detail_discovery_preempted"});
+    await vi.waitFor(() => expect(page.close).toHaveBeenCalled());
+    expect(page.card.click).not.toHaveBeenCalled(); expect(page.toggle.click).not.toHaveBeenCalled();
+  });
+});

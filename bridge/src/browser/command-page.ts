@@ -158,6 +158,7 @@ export class SmartThingsWebUiCommandExecutor {
   #backgroundInspectionPage: CommandPageLike | undefined;
   #backgroundPreemption: BackgroundPreemption | undefined;
   #foregroundOperationCount = 0;
+  #externalCommandsPending = false;
   readonly #verifiedDetailRoutes = new Map<string, { detailUrl: string; verifiedAt: number }>();
   readonly #warmPageTtlMs: number;
   readonly #onDiagnostic: ((stage: CommandDiagnosticStage) => void) | undefined;
@@ -202,7 +203,24 @@ export class SmartThingsWebUiCommandExecutor {
   }
 
   hasForegroundOperation(): boolean {
-    return this.#foregroundOperationCount > 0;
+    return this.#foregroundOperationCount > 0 || this.#externalCommandsPending;
+  }
+
+  /** Advanced controls bypass the UI queue but still need its background
+   * navigation preemption. Never wait for or close the keeper/login/warm page.
+   */
+  setExternalCommandsPending(pending: boolean): void {
+    if (this.#externalCommandsPending === pending) return;
+    this.#externalCommandsPending = pending;
+    if (pending) this.#preemptBackground();
+  }
+
+  #preemptBackground(): void {
+    this.#backgroundPreemption?.request();
+    const page = this.#backgroundInspectionPage;
+    try {
+      if (page && !page.isClosed()) void page.close().catch(() => undefined);
+    } catch { /* Background cleanup must never prevent a real control. */ }
   }
 
   async executeSwitch(input: {
@@ -451,15 +469,15 @@ export class SmartThingsWebUiCommandExecutor {
     detailSettleMs?: number;
     cameraImageUrl?: string;
   }): Promise<void> {
-    if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
+    if (this.hasForegroundOperation()) throw new Error("detail_discovery_preempted");
     const preemption = createBackgroundPreemption();
     this.#backgroundPreemption = preemption;
     try {
       await this.#runExclusive(async () => {
-        if (this.#foregroundOperationCount > 0 || preemption.requested) {
+        if (this.hasForegroundOperation() || preemption.requested) {
           throw new Error("detail_discovery_preempted");
         }
-        const inspection = this.#inspectDeviceDetails(input);
+        const inspection = this.#inspectDeviceDetails(input, () => preemption.requested);
         const outcome = await Promise.race([
           inspection.then(
             () => ({ type: "completed" as const }),
@@ -474,7 +492,7 @@ export class SmartThingsWebUiCommandExecutor {
         if (outcome.type === "failed") throw outcome.error;
       });
     } catch (error) {
-      if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
+      if (this.hasForegroundOperation()) throw new Error("detail_discovery_preempted");
       throw error;
     } finally {
       if (this.#backgroundPreemption === preemption) this.#backgroundPreemption = undefined;
@@ -488,23 +506,23 @@ export class SmartThingsWebUiCommandExecutor {
     roomName?: string;
     detailSettleMs?: number;
     cameraImageUrl?: string;
-  }): Promise<void> {
+  }, preempted: () => boolean): Promise<void> {
     // Navigation only: device state and controls still come from observed Socket.IO data.
     const page = await this.openLocationPage(input.locationId, input.locationNames);
     this.#backgroundInspectionPage = page;
     try {
-      if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
+      if (this.hasForegroundOperation() || preempted()) throw new Error("detail_discovery_preempted");
       // Background discovery never executes a control, so start with the
       // overview and retain the existing rooms/search fallbacks.  Forcing the
       // room route here made layout drift prevent otherwise safe detail
       // observation for devices that already had an exact overview card.
       await openDeviceDetail(page, input.deviceName, input.roomName);
-      if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
+      if (this.hasForegroundOperation() || preempted()) throw new Error("detail_discovery_preempted");
       const thumbnailResult = input.cameraImageUrl
         ? await requestCameraThumbnail(page, input.cameraImageUrl)
         : undefined;
       await page.waitForTimeout?.(input.detailSettleMs ?? 1_500);
-      if (this.#foregroundOperationCount > 0) throw new Error("detail_discovery_preempted");
+      if (this.hasForegroundOperation() || preempted()) throw new Error("detail_discovery_preempted");
       if (thumbnailResult && thumbnailResult !== "requested") {
         throw new Error(`camera_thumbnail_${thumbnailResult}`);
       }
@@ -928,11 +946,7 @@ export class SmartThingsWebUiCommandExecutor {
   async #runForeground<T>(work: () => Promise<T>, maxWaitMs?: number): Promise<T> {
     this.#foregroundOperationCount += 1;
     try {
-      this.#backgroundPreemption?.request();
-      const backgroundPage = this.#backgroundInspectionPage;
-      if (backgroundPage && !backgroundPage.isClosed()) {
-        void backgroundPage.close().catch(() => undefined);
-      }
+      this.#preemptBackground();
       return await this.#runExclusive(work, maxWaitMs);
     } finally {
       this.#foregroundOperationCount -= 1;

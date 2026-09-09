@@ -229,6 +229,16 @@ const ADVANCED_COMMAND_MAX_STRING_LENGTH = 2048;
 const ADVANCED_COMMAND_CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/u;
 const INVENTORY_PERSIST_COALESCE_MS = 5_000;
 const INVENTORY_PERSIST_RETRY_MS = 5_000;
+const INVENTORY_PERSIST_BUSY_RECHECK_MS = 250;
+const INVENTORY_PERSIST_MAX_DEFERRAL_MS = 30_000;
+
+export interface InventoryPersistenceTiming {
+  outcome: "persisted" | "unchanged" | "failed";
+  snapshotMs: number;
+  writeMs: number;
+  totalMs: number;
+  deferredMs: number;
+}
 const CAMERA_IMAGE_ATTRIBUTES = new Set([
   "captureTime",
   "clip",
@@ -259,6 +269,9 @@ export class DeviceStore {
   readonly #onPersistenceError: (() => void) | undefined;
   #persistTimer: ReturnType<typeof setTimeout> | undefined;
   #persistPending = false;
+  #persistDeferredAtMs: number | undefined;
+  readonly #deferPersistenceWhile: (() => boolean) | undefined;
+  readonly #onPersistenceTiming: ((event: InventoryPersistenceTiming) => void) | undefined;
   #lastPersistedInventoryJson: string | undefined;
   #sequence = 0;
   #sessionPendingDeviceIds: Set<string> | undefined;
@@ -273,11 +286,16 @@ export class DeviceStore {
     identifierRole?: IdentifierRoleResolver;
     sqlitePath?: string;
     onPersistenceError?: () => void;
+    /** Optional background-only deferral. Shutdown always flushes synchronously. */
+    deferPersistenceWhile?: () => boolean;
+    onPersistenceTiming?: (event: InventoryPersistenceTiming) => void;
   } = {}) {
     this.#normalizeStateToken = options.normalizeStateToken ?? ((value) => value);
     this.#normalizeAdvancedAlias = options.normalizeAdvancedAlias ?? ((_kind, value) => value);
     this.#identifierRole = options.identifierRole ?? (() => undefined);
     this.#onPersistenceError = options.onPersistenceError;
+    this.#deferPersistenceWhile = options.deferPersistenceWhile;
+    this.#onPersistenceTiming = options.onPersistenceTiming;
     if (options.sqlitePath) {
       mkdirSync(dirname(options.sqlitePath), { recursive: true, mode: 0o700 });
       this.#db = new DatabaseSync(options.sqlitePath);
@@ -1560,6 +1578,19 @@ export class DeviceStore {
     // Keep the push-to-SSE path synchronous and coalesce the large durability snapshot behind it.
     this.#persistTimer = setTimeout(() => {
       this.#persistTimer = undefined;
+      // A timer does not move synchronous snapshot/SQLite work off the event
+      // loop. Give in-flight control a bounded quiet window before doing it.
+      let busy = false;
+      try { busy = this.#deferPersistenceWhile?.() === true; }
+      catch { /* A broken optional scheduler must not disable durability. */ }
+      if (this.#persistPending && busy) {
+        const now = performance.now();
+        this.#persistDeferredAtMs ??= now;
+        if (now - this.#persistDeferredAtMs < INVENTORY_PERSIST_MAX_DEFERRAL_MS) {
+          this.#armPersistTimer(INVENTORY_PERSIST_BUSY_RECHECK_MS);
+          return;
+        }
+      }
       try {
         this.#flushPersist();
       } catch {
@@ -1572,22 +1603,41 @@ export class DeviceStore {
 
   #flushPersist(): void {
     if (!this.#db || !this.#persistPending) return;
-    const inventoryJson = JSON.stringify(this.snapshot());
-    if (inventoryJson === this.#lastPersistedInventoryJson) {
+    const start = performance.now();
+    const deferredMs = this.#persistDeferredAtMs === undefined ? 0 :
+      Math.max(0, Math.round(start - this.#persistDeferredAtMs));
+    this.#persistDeferredAtMs = undefined;
+    let snapshotMs = 0, writeMs = 0;
+    let outcome: InventoryPersistenceTiming["outcome"] = "failed";
+    try {
+      const inventoryJson = JSON.stringify(this.snapshot());
+      snapshotMs = Math.max(0, Math.round(performance.now() - start));
+      if (inventoryJson === this.#lastPersistedInventoryJson) {
+        this.#persistPending = false;
+        outcome = "unchanged";
+        return;
+      }
+      const writeStart = performance.now();
+      try {
+        this.#db
+          .prepare(`
+            INSERT INTO normalized_inventory (schema_version, inventory_json, persisted_at)
+            VALUES (1, ?, ?)
+            ON CONFLICT(schema_version) DO UPDATE SET
+              inventory_json = excluded.inventory_json,
+              persisted_at = excluded.persisted_at
+          `)
+          .run(inventoryJson, new Date().toISOString());
+      } finally { writeMs = Math.max(0, Math.round(performance.now() - writeStart)); }
+      this.#lastPersistedInventoryJson = inventoryJson;
       this.#persistPending = false;
-      return;
+      outcome = "persisted";
+    } finally {
+      try {
+        this.#onPersistenceTiming?.({ outcome, snapshotMs, writeMs, deferredMs,
+          totalMs: Math.max(0, Math.round(performance.now() - start)) });
+      } catch { /* Metrics must not change persistence or shutdown outcomes. */ }
     }
-    this.#db
-      .prepare(`
-        INSERT INTO normalized_inventory (schema_version, inventory_json, persisted_at)
-        VALUES (1, ?, ?)
-        ON CONFLICT(schema_version) DO UPDATE SET
-          inventory_json = excluded.inventory_json,
-          persisted_at = excluded.persisted_at
-      `)
-      .run(inventoryJson, new Date().toISOString());
-    this.#lastPersistedInventoryJson = inventoryJson;
-    this.#persistPending = false;
   }
 }
 
