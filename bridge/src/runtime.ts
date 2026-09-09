@@ -106,7 +106,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.33";
+const bridgeVersion = "1.8.34";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -164,7 +164,17 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   , (rawIdentifier) => aliases.alias("location", rawIdentifier));
   log.info("bridge_init:capture_store");
   const captures = new CaptureStore(paths.sqlitePath);
+  // Quiet time also covers brief gaps between consecutive slider intents.
+  let commandQuietUntilMs = 0;
+  const commandWorkBusy = () => status.getSnapshot().pendingCommandCount > 0 ||
+    performance.now() < commandQuietUntilMs;
   const devices = new DeviceStore({
+    deferPersistenceWhile: commandWorkBusy,
+    onPersistenceTiming: (event) => {
+      if (event.totalMs >= 50 || event.deferredMs > 0 || event.outcome === "failed") {
+        log.info(`inventory_persist_timing:${JSON.stringify(event)}`);
+      }
+    },
     sqlitePath: paths.sqlitePath,
     onPersistenceError: () => log.warn("device_store_persist_failed"),
     normalizeStateToken: (value) =>
@@ -479,7 +489,11 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     ),
     onDeviceDiagnostic: (event) => log.info(`command_device:${JSON.stringify(event)}`),
     onRequestTiming: (event) => log.info(`command_request_timing:${JSON.stringify(event)}`),
-    onPendingCountChange: (count) => status.update({ pendingCommandCount: count }),
+    onPendingCountChange: (count) => {
+      status.update({ pendingCommandCount: count });
+      if (count === 0) commandQuietUntilMs = performance.now() + 750;
+      legacyCommandExecutor.setExternalCommandsPending(count > 0);
+    },
     onResult: (result) => {
       const current = status.getSnapshot();
       status.update({
@@ -505,7 +519,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       return (
         report.ready &&
         report.details.state === "CONNECTED" &&
-        report.details.pendingCommandCount === 0 &&
+        !commandWorkBusy() &&
         !legacyCommandExecutor.hasWarmCommandPage() &&
         !legacyCommandExecutor.hasForegroundOperation() &&
         !sessionTouchInFlight &&

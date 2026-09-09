@@ -1,3 +1,4 @@
+import { SmartThingsWebUiCommandExecutor } from "../src/browser/command-page.js";
 import { DeviceDetailDiscovery } from "../src/browser/device-detail-discovery.js";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -833,7 +834,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
 
     expect(log.info.mock.calls.slice(0, 14)).toEqual([
-      ["bridge_init:version:1.8.33:home_monitor_direct"],
+      ["bridge_init:version:1.8.34:home_monitor_direct"],
       ["bridge_init:data_paths"],
       ["bridge_init:data_paths:data_dir"],
       ["bridge_init:data_paths:profile_dir"],
@@ -3101,6 +3102,7 @@ function capabilityDefinition(
 }
 
 test.each([false, true])("runtime verifies exact light delivery and immediate auth rejection (batch=%s)", async batch => {
+  const externalPriority = vi.spyOn(SmartThingsWebUiCommandExecutor.prototype, "setExternalCommandsPending");
   const shared = JSON.parse(readFileSync("custom_components/smartthings_web/tests/fixtures/light-plan.json", "utf8"));
   const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
   const statusPayload = { components: { main: {
@@ -3197,6 +3199,7 @@ test.each([false, true])("runtime verifies exact light delivery and immediate au
   expect(rejected.ok).toBe(false);
   expect(runtime.status.getSnapshot()).toMatchObject({ authenticated: false, state: "LOGIN_REQUIRED" });
   expect(log.warn).toHaveBeenCalledWith("session_authentication_rejected");
+  expect(externalPriority.mock.calls).toEqual([[true], [false], [true], [false], [true], [false]]);
 });
 
 
@@ -3221,4 +3224,26 @@ test("background detail discovery does not start while an Advanced command is pe
   runtime.status.update({ pendingCommandCount: 0 });
   const discovery = run.mock.instances[0] as DeviceDetailDiscovery;
   expect(await discovery.runOne()).toBe("idle");
+});
+
+
+test("runtime never flushes full inventory while an Advanced command lane remains pending", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance", "Date"] });
+  const whole = vi.spyOn(DeviceStore.prototype, "snapshot");
+  const root = createTempRoot();
+  const keeper = new FakePage("https://my.smartthings.com/location/loc_001/rooms");
+  const runtime = await createBridgeRuntime(createDeps(root, {
+    config: { ...createDeps(root).config, heartbeatIntervalMs: 600_000 },
+    chromium: { launchPersistentContext: vi.fn(async () => new FakeContext([keeper])) }
+  }));
+  runtimes.push(runtime); await runtime.browserStartup;
+  const store = whole.mock.instances[0] as DeviceStore;
+  store.observeAdvancedDeviceSnapshot({items: [{deviceId: "dev_fixture", locationId: "loc_fixture", label: "Fixture"}]});
+  runtime.status.update({ pendingCommandCount: 1 });
+  whole.mockClear();
+  await vi.advanceTimersByTimeAsync(6000);
+  expect(whole).not.toHaveBeenCalled();
+  runtime.status.update({ pendingCommandCount: 0 });
+  await vi.advanceTimersByTimeAsync(250);
+  expect(whole).toHaveBeenCalledOnce();
 });
