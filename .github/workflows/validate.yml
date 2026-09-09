@@ -31,6 +31,9 @@ jobs:
           npm run typecheck
           npm run build
 
+      - name: Verify compiled inventory worker under a slow SQLite write
+        run: node tools/ci-inventory-worker-smoke.mjs
+
       - name: Exercise Home Monitor dialogs and dashboard in real Chromium
         run: |
           npx playwright-core install --with-deps chromium
