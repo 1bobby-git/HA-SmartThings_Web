@@ -616,7 +616,7 @@ describe("Fresh preflight prunes redundant light POSTs without changing confirma
 
 
 describe("Confirmed read reuse through actual service and adapter", () => {
-  test("second color command uses a recent read with 0ms preflight, then still performs post-command verification", async () => {
+  test("second color command reuses the recent read without another preflight GET and still verifies after dispatch", async () => {
     const f = await fixture({ preview: true, initial: { switch: "on", level: 50 } });
     await f.service.execute(f.request);
     const calls = f.resync.mock.calls.length;
@@ -626,7 +626,8 @@ describe("Confirmed read reuse through actual service and adapter", () => {
     expect(f.preview).toHaveBeenCalledOnce();
     expect(f.resync.mock.calls.length).toBeGreaterThan(calls);
     expect(f.requests.flatMap((r) => (r.body as any).commands.map((c: any) => c.command))).toEqual(["setColor", "setColor"]);
-    expect(f.diagnostics).toHaveBeenCalledWith(expect.objectContaining({ stage: "dispatch", preflightSource: "recent_read", preflightMs: 0 }));
+    // Elapsed CPU time can cross a real clock tick even when no GET is made.
+    expect(f.diagnostics).toHaveBeenCalledWith(expect.objectContaining({ stage: "dispatch", preflightSource: "recent_read", preflightReads: 0 }));
   });
   test("cached proof does not confirm an ignored second color command", async () => {
     const f = await fixture({ preview: true, initial: { switch: "on", level: 50 } });
