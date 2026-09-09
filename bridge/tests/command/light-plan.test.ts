@@ -66,7 +66,7 @@ async function fixture(options: { batch?: boolean; stabilityMs?: number; timeout
   const status = new RuntimeStatusStore({ initial: { state: "CONNECTED", chromiumRunning: true, keeperPresent: true,
     authenticated: true, pushConnected: true, parserHealthy: true, initialSnapshotComplete: true, dbAvailable: true,
     heartbeatAtMs: now, initialSnapshotCompletedAtMs: now, lastSnapshotAtMs: now, lastParserSuccessAtMs: now, lastPushAtMs: now } });
-  const diagnostics = vi.fn();
+  const diagnostics = vi.fn(), requestTimings = vi.fn();
   const preview = vi.fn(async () => {
     const startedAtMs = Date.now();
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -76,10 +76,10 @@ async function fixture(options: { batch?: boolean; stabilityMs?: number; timeout
   });
   const service = new SafeCommandService({ devices: store, status, executor, timeoutMs: options.timeoutMs ?? 60, ...(options.disableRechecks ? {} : { resyncAfterMs: 1 }),
     confirmationStabilityMs: options.stabilityMs ?? 0,
-    resync, onDeviceDiagnostic: diagnostics, ...(options.preview ? { lightDispatchPreview: preview } : {}) });
+    resync, onDeviceDiagnostic: diagnostics, onRequestTiming: requestTimings, ...(options.preview ? { lightDispatchPreview: preview } : {}) });
   const request = structuredClone(shared.request);
   return { store, catalog, request, service, send, resync, legacy, requests, row, diagnostics,
-    preview, status, setDesired: (value: Record<string, unknown>) => { desired = value; } };
+    preview, status, requestTimings, setDesired: (value: Record<string, unknown>) => { desired = value; } };
 }
 
 describe("Verified same-component light plans through real catalog/store/adapter", () => {
@@ -748,4 +748,68 @@ describe("opt-in Advanced multi-command transport keeps real state confirmation"
     }
     expect(measured[0]! - measured[1]!).toBe(1600);
   });
+});
+
+
+describe("Light hot path including standalone power", () => {
+  test.each(["on", "off", "color"])('does not clone unrelated devices for %s, including latest-intent admission', async mode => {
+    const f = await fixture();
+    f.store.observeAdvancedDeviceSnapshot({ items: Array.from({ length: 400 }, (_, i) => ({
+      ...f.row(shared.initial), deviceId: `dev_${i + 100}` })) });
+    const request = { ...f.request, replacePending: true };
+    if (mode !== "color") request.arguments = [{ ...request.arguments[0], command: mode }];
+    const full = vi.spyOn(f.store, "snapshot").mockImplementation(() => { throw Error("global inventory on light hot path"); });
+    expect(await f.service.execute(request)).toMatchObject({ status: "confirmed", transport: "advanced" });
+    expect(full).not.toHaveBeenCalled();
+    expect(f.requests).toHaveLength(mode === "color" ? 3 : 1);
+    expect(f.requestTimings).toHaveBeenCalledOnce();
+    const timing = f.requestTimings.mock.calls[0]![0];
+    expect(timing).toMatchObject({ deviceId: "dev_001", outcome: "confirmed" });
+    expect(Object.keys(timing).sort()).toEqual(["admissionMs", "deviceId", "executionMs", "outcome", "queueMs", "totalMs"]);
+    expect(Math.abs(timing.totalMs - timing.admissionMs - timing.queueMs - timing.executionMs)).toBeLessThanOrEqual(2);
+  });
+  test("detached command contract is immutable through exact device view", async () => {
+    const f = await fixture();
+    const view = f.store.device("dev_001")!;
+    const color = view.advancedCommands!.find(c => c.command === "setColor")!;
+    (color.arguments[0]!.schema.properties as any).hue.maximum = 500;
+    expect((f.store.device("dev_001")!.advancedCommands!.find(c => c.command === "setColor")!.arguments[0]!.schema.properties as any).hue.maximum).toBe(100);
+  });
+  test("execution rechecks offline state rather than trusting detached admission view", async () => {
+    const f = await fixture();
+    const operation = f.service.execute({ ...f.request, replacePending: true });
+    f.store.observeAdvancedDeviceSnapshot({ items: [{ ...f.row(shared.initial), health: { state: "OFFLINE", updatedAt: "2099-09-09T00:00:00Z" } }] });
+    await expect(operation).rejects.toMatchObject({ code: "device_offline" });
+    expect(f.requests).toHaveLength(0);
+    expect(f.requestTimings.mock.calls[0]![0].outcome).toBe("device_offline");
+  });
+  test("duplicate request ID does not execute or log twice", async () => {
+    const f = await fixture();
+    const result = await Promise.all([f.service.execute(f.request), f.service.execute(f.request)]);
+    expect(result[0]).toEqual(result[1]);
+    expect(f.requests).toHaveLength(3); expect(f.requestTimings).toHaveBeenCalledOnce();
+  });
+  test("a broken timing observer cannot change a confirmed result", async () => {
+    const f = await fixture(); f.requestTimings.mockImplementation(() => { throw Error("observer"); });
+    expect((await f.service.execute(f.request)).status).toBe("confirmed");
+  });
+});
+
+
+test("light request timing includes the previous in-flight command's queue wait", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+  const f = await fixture({ postDelayMs: 800, timeoutMs: 2000 });
+  const power = (command: string, id: string) => ({ ...f.request, replacePending: true,
+    clientRequestId: id, arguments: [{ ...f.request.arguments[0], command }] });
+  const first = f.service.execute(power("on", "timing_pending_first")).catch(e => e);
+  await vi.advanceTimersByTimeAsync(10);
+  const second = f.service.execute(power("off", "timing_pending_second"));
+  await vi.advanceTimersByTimeAsync(2000);
+  expect((await first).code).toBe("command_superseded");
+  expect((await second).status).toBe("confirmed");
+  const timing = f.requestTimings.mock.calls.map(([event]) => event).find(event => event.outcome === "confirmed");
+  expect(timing.queueMs).toBeGreaterThanOrEqual(780);
+  expect(timing.executionMs).toBeGreaterThanOrEqual(800);
+  expect(timing.totalMs).toBeGreaterThanOrEqual(1580);
+  expect(f.requests).toHaveLength(2);
 });

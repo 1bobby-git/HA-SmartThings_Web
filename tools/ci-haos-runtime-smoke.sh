@@ -111,6 +111,7 @@ run_case() {
   docker logs "$container_name" > "$log_file" 2>&1 || true
   grep -q 'data_prep:ready' "$log_file"
   grep -q 'bridge_init:http_server_ready:8098' "$log_file"
+  docker exec "$container_name" nginx -t -c /etc/nginx/nginx.conf
   if grep -q 'data_prep:failed:' "$log_file"; then
     cat "$log_file" >&2
     return 1

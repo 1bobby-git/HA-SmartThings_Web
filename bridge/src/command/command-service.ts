@@ -220,6 +220,17 @@ export class SafeCommandError extends Error {
   }
 }
 
+export interface CommandRequestTiming {
+  deviceId: string;
+  outcome: string;
+  admissionMs: number;
+  queueMs: number;
+  executionMs: number;
+  totalMs: number;
+}
+
+interface CommandTimingMarks { admitted?: number; started?: number }
+
 interface SafeCommandServiceOptions {
   devices: DeviceStore;
   status: RuntimeStatusStore;
@@ -241,6 +252,7 @@ interface SafeCommandServiceOptions {
   onDeviceDiagnostic?: (event: { deviceId: string; stage: string; attribute: string;
     elapsedMs: number; stateCount?: number; matches?: boolean; code?: string; commands?: string[]; readMs?: number; skippedCommands?: string[]; preflightMs?: number; preflightReason?: LightPreflightReason; preflightReads?: number; preflightSource?: "recent_read" | "live_read" | "backoff" | undefined;
     lightStatus?: { attribute: string; requested: string | number; observed: string | number | null }[] }) => void;
+  onRequestTiming?: (event: CommandRequestTiming) => void;
   onPendingCountChange?: (count: number) => void;
   onResult?: (result: SafeCommandResult) => void;
 }
@@ -345,6 +357,7 @@ export class SafeCommandService {
   }
 
   async execute(input: unknown): Promise<SafeCommandResult> {
+    const receivedAt = performance.now();
     const request = validateRequest(input);
     const fingerprint = JSON.stringify(request);
     const existing = this.#dedupe.get(request.clientRequestId);
@@ -354,9 +367,33 @@ export class SafeCommandService {
       }
       return existing.result;
     }
-    const result = this.#enqueue(request).then((value) => {
+    const marks: CommandTimingMarks = {};
+    const report = (outcome: string): void => {
+      if (request.command !== "applyLight") return;
+      const finished = performance.now();
+      const admitted = marks.admitted ?? finished;
+      const started = marks.started ?? finished;
+      const ms = (value: number) => Math.max(0, Math.round(value));
+      try {
+        this.options.onRequestTiming?.({ deviceId: request.targetId, outcome,
+          admissionMs: ms(admitted - receivedAt), queueMs: ms(started - admitted),
+          executionMs: marks.started === undefined ? 0 : ms(finished - started),
+          totalMs: ms(finished - receivedAt) });
+      } catch { /* Diagnostics must never change command results. */ }
+    };
+    let operation: Promise<SafeCommandResult>;
+    try { operation = this.#enqueue(request, marks); }
+    catch (error) {
+      report(error instanceof SafeCommandError ? error.code : "command_execution_failed");
+      throw error;
+    }
+    const result = operation.then((value) => {
+      report(value.status);
       this.options.onResult?.(value);
       return value;
+    }, (error: unknown) => {
+      report(error instanceof SafeCommandError ? error.code : "command_execution_failed");
+      throw error;
     });
     this.#dedupe.set(request.clientRequestId, { fingerprint, result });
     while (this.#dedupe.size > dedupeLimit) {
@@ -367,7 +404,7 @@ export class SafeCommandService {
     return result;
   }
 
-  #enqueue(request: SafeCommandRequest): Promise<SafeCommandResult> {
+  #enqueue(request: SafeCommandRequest, marks: CommandTimingMarks): Promise<SafeCommandResult> {
     const previous = this.#queues.get(request.targetId) ?? Promise.resolve();
     let signal: AbortSignal | undefined;
     let lightKey: string | undefined;
@@ -377,7 +414,7 @@ export class SafeCommandService {
       if (runtime.state !== "CONNECTED" || !createHealthReport(runtime).ready) {
         throw new SafeCommandError("bridge_not_connected");
       }
-      const device = this.options.devices.snapshot().devices.find((item) => item.id === request.targetId);
+      const device = this.options.devices.device(request.targetId);
       if (!device) throw new SafeCommandError("device_not_found");
       if (!device.online) throw new SafeCommandError("device_offline");
       this.#lightPlan(request, device);
@@ -393,14 +430,19 @@ export class SafeCommandService {
       if (prior instanceof AbortController) prior.abort();
     }
     const activeSignal = signal;
+    marks.admitted = performance.now();
+    const run = () => {
+      marks.started = performance.now();
+      return this.#execute(request, activeSignal);
+    };
     const queued = activeSignal
-      ? enqueueLightIntent(previous, () => this.#execute(request, activeSignal), activeSignal, 10_000,
+      ? enqueueLightIntent(previous, run, activeSignal, 10_000,
           (code) => new SafeCommandError(code))
       : request.targetType !== "scene"
-      ? enqueueWithDeadline(previous, () => this.#execute(request), 10_000,
+      ? enqueueWithDeadline(previous, run, 10_000,
           () => new SafeCommandError("command_queue_timeout"))
       : undefined;
-    const operation = queued?.result ?? previous.catch(() => undefined).then(() => this.#execute(request));
+    const operation = queued?.result ?? previous.catch(() => undefined).then(run);
     const queueTail = queued?.completion ?? operation.then(
       () => undefined,
       () => undefined
@@ -432,16 +474,28 @@ export class SafeCommandService {
     this.#lightHealthEpoch = healthEpoch;
     if (request.targetType !== "device") this.#lightDispatchCache.clear();
     else if (request.command !== "applyLight") this.#lightDispatchCache.invalidate(request.targetId);
-    const snapshot = this.options.devices.snapshot();
+    const light = request.targetType === "device" && request.command === "applyLight";
+    // Light plans have exact IDs/contracts; unrelated locations, rooms, scenes,
+    // device states and command schemas are not part of this transaction.
+    const snapshot = light ? undefined : this.options.devices.snapshot();
     const locationNames = Object.fromEntries(
-      snapshot.locations.map((location) => [location.id, location.name])
+      (snapshot?.locations ?? []).map((location) => [location.id, location.name])
     );
-    if (request.targetType === "scene") return await this.#executeScene(request, snapshot, locationNames);
-    if (request.targetType === "location") return await this.#executeLocation(request, snapshot, locationNames);
+    if (request.targetType === "scene") return await this.#executeScene(request, snapshot!, locationNames);
+    if (request.targetType === "location") return await this.#executeLocation(request, snapshot!, locationNames);
     const startedAt = Date.now();
     this.#deviceDiagnostic(request, "start", startedAt);
     try {
-      const result = await this.#executeDevice(request, snapshot, locationNames, signal);
+      let result: SafeCommandResult;
+      if (light) {
+        // Read again at execution, never reuse admission state across queue wait.
+        const device = this.options.devices.device(request.targetId);
+        if (!device) throw new SafeCommandError("device_not_found");
+        if (!device.online) throw new SafeCommandError("device_offline");
+        result = await this.#executeLight(request, device, signal);
+      } else {
+        result = await this.#executeDevice(request, snapshot!, locationNames, signal);
+      }
       this.#deviceDiagnostic(request, result.status, startedAt);
       return result;
     } catch (error) {

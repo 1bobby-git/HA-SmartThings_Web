@@ -1,3 +1,4 @@
+import { DeviceDetailDiscovery } from "../src/browser/device-detail-discovery.js";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -832,7 +833,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
 
     expect(log.info.mock.calls.slice(0, 14)).toEqual([
-      ["bridge_init:version:1.8.32:home_monitor_direct"],
+      ["bridge_init:version:1.8.33:home_monitor_direct"],
       ["bridge_init:data_paths"],
       ["bridge_init:data_paths:data_dir"],
       ["bridge_init:data_paths:profile_dir"],
@@ -3143,6 +3144,7 @@ test.each([false, true])("runtime verifies exact light delivery and immediate au
   const hue = lamp.states.find((s: any) => s.attribute === "hue");
   const definitionReads = keeper.advancedRequestCalls.filter((r: any) => r.endpoint === "capability").length;
   expect(definitionReads).toBe(3);
+  const commandSnapshots = vi.spyOn(DeviceStore.prototype, "snapshot");
   const result = await fetch(`${baseUrl}/api/v1/commands`, { method: "POST", headers, body: JSON.stringify({
     targetType: "device", targetId: lamp.id, component: sw.component, capability: sw.capability, attribute: "switch",
     command: "applyLight", confirm: true, requireAdvanced: true, replacePending: true, timeout: 1,
@@ -3175,6 +3177,11 @@ test.each([false, true])("runtime verifies exact light delivery and immediate au
   if (!batch) expect(log.info.mock.calls.filter(([s]) => s.startsWith("command_device:")).map(([s]) => JSON.parse(s.slice("command_device:".length))))
     .toContainEqual(expect.objectContaining({ stage: "dispatch", preflightSource: "recent_read", preflightMs: 0, commands: ["setColor"] }));
   else expect(log.info).toHaveBeenCalledWith("command_route:advanced:dispatch:attempt:mode_batch:commands_3");
+  expect(commandSnapshots).not.toHaveBeenCalled();
+  commandSnapshots.mockRestore();
+  expect(log.info).toHaveBeenCalledWith(`bridge_init:light_command_mode:${batch ? "batch" : "sequence"}`);
+  expect(log.info.mock.calls.filter(([s]) => s.startsWith("command_request_timing:")).map(([s]) => JSON.parse(s.slice("command_request_timing:".length))))
+    .toEqual([expect.objectContaining({ outcome: "confirmed", deviceId: lamp.id }), expect.objectContaining({ outcome: "confirmed", deviceId: lamp.id })]);
   // Reject a subsequent transport request. The real runtime callback should
   // immediately revoke readiness, rather than waiting for periodic keepalive.
   keeper.evaluate.mockResolvedValueOnce({ ok: false, status: 401, value: undefined });
@@ -3188,4 +3195,28 @@ test.each([false, true])("runtime verifies exact light delivery and immediate au
   expect(rejected.ok).toBe(false);
   expect(runtime.status.getSnapshot()).toMatchObject({ authenticated: false, state: "LOGIN_REQUIRED" });
   expect(log.warn).toHaveBeenCalledWith("session_authentication_rejected");
+});
+
+
+test("background detail discovery does not start while an Advanced command is pending", async () => {
+  vi.useFakeTimers();
+  const run = vi.spyOn(DeviceDetailDiscovery.prototype, "runOne");
+  const root = createTempRoot();
+  const keeper = new FakePage("https://my.smartthings.com/location/loc_001/rooms");
+  const runtime = await createBridgeRuntime(createDeps(root, {
+    config: { ...createDeps(root).config, heartbeatIntervalMs: 600_000 },
+    chromium: { launchPersistentContext: vi.fn(async () => new FakeContext([keeper])) }
+  }));
+  runtimes.push(runtime); await runtime.browserStartup;
+  const now = Date.now();
+  runtime.status.update({ state: "CONNECTED", chromiumRunning: true, keeperPresent: true,
+    authenticated: true, pushConnected: true, parserHealthy: true, initialSnapshotComplete: true, dbAvailable: true,
+    heartbeatAtMs: now, initialSnapshotCompletedAtMs: now, lastSnapshotAtMs: now, lastParserSuccessAtMs: now, lastPushAtMs: now,
+    pendingCommandCount: 1 });
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(run).toHaveBeenCalledOnce();
+  expect(await run.mock.results[0]!.value).toBe("blocked");
+  runtime.status.update({ pendingCommandCount: 0 });
+  const discovery = run.mock.instances[0] as DeviceDetailDiscovery;
+  expect(await discovery.runOne()).toBe("idle");
 });
