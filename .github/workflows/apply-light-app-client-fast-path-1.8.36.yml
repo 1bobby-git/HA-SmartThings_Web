@@ -1,0 +1,65 @@
+name: Apply light app-client fast path 1.8.36
+
+on:
+  push:
+    branches:
+      - perf/light-app-client-fast-path-1.8.36
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: perf/light-app-client-fast-path-1.8.36
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Apply source patch
+        run: python tools/apply-light-app-client-fast-path-1.8.36.py
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run focused regression, full Node tests, typecheck and build
+        run: |
+          npx vitest run bridge/tests/advanced/light-app-client-fast-path.test.ts bridge/tests/advanced/authenticated-session.test.ts bridge/tests/advanced/command-adapter.test.ts
+          npm test
+          npm run typecheck
+          npm run build
+          npm run audit:api-free
+          npm run audit:secrets
+          npm run audit:fixtures
+          npm run package:addon
+
+      - name: Run Python regression and compile checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.9,<4' 'voluptuous>=0.13,<1'
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+          python -m compileall -q custom_components/smartthings_web
+
+      - name: Remove temporary patch machinery and commit verified source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f tools/apply-light-app-client-fast-path-1.8.36.py
+          rm -f .github/workflows/apply-light-app-client-fast-path-1.8.36.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'perf: use keeper app client for light commands (1.8.36)'
+          git push origin HEAD:perf/light-app-client-fast-path-1.8.36
