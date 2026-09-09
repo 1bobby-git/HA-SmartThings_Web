@@ -1,0 +1,84 @@
+name: Apply verified light hot path
+on:
+  push:
+    branches: [fix/light-event-loop-latency-1.8.33]
+    paths: [.github/workflows/apply-light-hot-path.yml]
+permissions:
+  contents: write
+concurrency:
+  group: apply-light-hot-path-1.8.33
+  cancel-in-progress: false
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/light-event-loop-latency-1.8.33
+          fetch-depth: 0
+      - name: Verify patch checksum, scope and exact reviewed source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64, hashlib, json, lzma, os, pathlib, re, shutil, subprocess
+          root = pathlib.Path('.')
+          payload = '.github/light-hot-path.patch.b64'
+          workflow = '.github/workflows/apply-light-hot-path.yml'
+          base = '008736d241387d1d3d46ca83a744d773cfaaed9c'
+          expected = '3cbf118210843a611835c0d188f437453c761b91161048f864141409c8363e53'
+          def git(*args, **kwargs):
+              return subprocess.check_output(['git', *args], **kwargs).decode().strip()
+          if git('rev-parse', 'origin/main') != base:
+              raise SystemExit('Main advanced; review required')
+          if set(git('diff', '--name-only', base, 'HEAD').splitlines()) != {payload, workflow}:
+              raise SystemExit('Unexpected branch changes')
+          patch = lzma.decompress(base64.b64decode((root / payload).read_text().strip(), validate=True), memlimit=128*1024*1024)
+          if len(patch) != 45232 or hashlib.sha256(patch).hexdigest() != expected:
+              raise SystemExit('Reviewed patch checksum mismatch')
+          if json.loads((root / 'package.json').read_text())['version'] != '1.8.32':
+              raise SystemExit('Unexpected base version')
+          allowed = {
+              'CHANGELOG.md', 'addon/smartthings_web_bridge/CHANGELOG.md',
+              'addon/smartthings_web_bridge/config.yaml',
+              'addon/smartthings_web_bridge/rootfs/etc/nginx/nginx.conf',
+              'bridge/src/command/command-service.ts', 'bridge/src/runtime.ts',
+              'bridge/src/server/http-server.ts', 'bridge/src/state/device-store.ts',
+              'bridge/tests/command/light-plan.test.ts', 'bridge/tests/runtime.test.ts',
+              'bridge/tests/server/http-server.test.ts', 'bridge/tests/state/command-state-access.test.ts',
+              'custom_components/smartthings_web/manifest.json', 'docs/LIGHT_HOT_PATH_1.8.33.md',
+              'package-lock.json', 'package.json', 'protocol/version.json',
+              'tests/addon-config.test.ts', 'tests/protocol-version-contract.test.ts',
+              'tools/ci-haos-runtime-smoke.sh'
+          }
+          if set(re.findall(r'^diff --git a/\S+ b/(\S+)$', patch.decode(), re.M)) != allowed:
+              raise SystemExit('Unexpected patch scope')
+          subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
+          subprocess.run(['git', 'apply', '-'], input=patch, check=True)
+          subprocess.run(['git', 'add', '--', *sorted(allowed)], check=True)
+          subprocess.run(['git', 'rm', '--', payload], check=True)
+          verify_index = (root / '.git/hot-path-verify-index').resolve()
+          shutil.copyfile('.git/index', verify_index)
+          env = {**os.environ, 'GIT_INDEX_FILE': str(verify_index)}
+          try:
+              git('update-index', '--force-remove', workflow, env=env)
+              tree = git('write-tree', env=env)
+              if tree != '01d27b26d635a969f8242d216aa03fd6e6c5ca65':
+                  raise SystemExit('Unexpected final source tree: ' + tree)
+          finally:
+              verify_index.unlink(missing_ok=True)
+          print('Verified patch SHA256:', expected)
+          print('Verified final source tree:', tree)
+          PY
+          git diff --cached --check
+          git diff --cached --stat
+      - name: Commit isolated candidate without touching main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'perf: remove full-inventory cloning from light command hot path (1.8.33)'
+          git push origin HEAD:fix/light-event-loop-latency-1.8.33
+          echo "CANDIDATE_COMMIT=$(git rev-parse HEAD)"
