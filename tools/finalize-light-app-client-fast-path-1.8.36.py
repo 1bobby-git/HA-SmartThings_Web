@@ -33,10 +33,31 @@ replace(
 # does not alter real-browser behavior, where the callback returns kind/result.
 p = ROOT / "bridge/src/advanced/app-client-command.ts"
 text = p.read_text(encoding="utf-8")
+
+anchors = [
+    (
+        '((globalThis as { window?: PageRecord }).window ?? globalThis) as PageRecord',
+        '((globalThis as unknown as { window?: PageRecord }).window ?? globalThis) as unknown as PageRecord',
+    ),
+    (
+        '''        function asClient(value: unknown): NativeClient | undefined {\n          return record(value) && typeof value.service === "function"\n            ? (value as NativeClient)\n            : undefined;\n        }''',
+        '''        function asClient(value: unknown): NativeClient | undefined {\n          const candidate = record(value);\n          return candidate && typeof candidate.service === "function"\n            ? (candidate as unknown as NativeClient)\n            : undefined;\n        }''',
+    ),
+    (
+        '''        function asService(value: unknown): NativeService | undefined {\n          return record(value) && typeof value.patch === "function"\n            ? (value as NativeService)\n            : undefined;\n        }''',
+        '''        function asService(value: unknown): NativeService | undefined {\n          const candidate = record(value);\n          return candidate && typeof candidate.patch === "function"\n            ? (candidate as unknown as NativeService)\n            : undefined;\n        }''',
+    ),
+]
+for old, new in anchors:
+    if text.count(old) != 1:
+        raise SystemExit(f"app-client strict-type anchor mismatch: {old[:70]!r}")
+    text = text.replace(old, new, 1)
+
 old = '    return outcome.kind === "unavailable" ? undefined : outcome.result;\n'
-new = '''    if (\n      typeof outcome === "object" && outcome !== null &&\n      typeof (outcome as { ok?: unknown }).ok === "boolean" &&\n      typeof (outcome as { status?: unknown }).status === "number"\n    ) {\n      return outcome as AppClientCommandResult;\n    }\n    return outcome.kind === "unavailable" ? undefined : outcome.result;\n'''
+new = '''    if (\n      typeof outcome === "object" && outcome !== null &&\n      typeof (outcome as { ok?: unknown }).ok === "boolean" &&\n      typeof (outcome as { status?: unknown }).status === "number"\n    ) {\n      return outcome as unknown as AppClientCommandResult;\n    }\n    return outcome.kind === "unavailable" ? undefined : outcome.result;\n'''
 if text.count(old) != 1:
     raise SystemExit("app-client helper result anchor mismatch")
-p.write_text(text.replace(old, new, 1), encoding="utf-8", newline="\n")
+text = text.replace(old, new, 1)
+p.write_text(text, encoding="utf-8", newline="\n")
 
 print("Finalized SmartThings Web 1.8.36 release/version fixtures")
