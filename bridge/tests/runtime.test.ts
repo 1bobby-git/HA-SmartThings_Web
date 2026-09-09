@@ -3174,8 +3174,10 @@ test.each([false, true])("runtime verifies exact light delivery and immediate au
   expect({ code: repeated.status, body: await repeated.json() }).toMatchObject({ code: 200, body: { status: "confirmed" } });
   expect(keeper.advancedRequestCalls.filter((r: any) => r.timeoutMs === 350)).toHaveLength(previewsBefore);
   expect(keeper.advancedRequestCalls.filter((r: any) => r.method === "POST")).toHaveLength(2);
+  // Real-clock cache verification may cross a millisecond tick without I/O.
+  // Assert the actual zero-read contract, not an exactly zero wall-clock time.
   if (!batch) expect(log.info.mock.calls.filter(([s]) => s.startsWith("command_device:")).map(([s]) => JSON.parse(s.slice("command_device:".length))))
-    .toContainEqual(expect.objectContaining({ stage: "dispatch", preflightSource: "recent_read", preflightMs: 0, commands: ["setColor"] }));
+    .toContainEqual(expect.objectContaining({ stage: "dispatch", preflightSource: "recent_read", preflightReads: 0, commands: ["setColor"] }));
   else expect(log.info).toHaveBeenCalledWith("command_route:advanced:dispatch:attempt:mode_batch:commands_3");
   expect(commandSnapshots).not.toHaveBeenCalled();
   commandSnapshots.mockRestore();
