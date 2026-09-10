@@ -112,7 +112,7 @@ RUN set -eux; \
   test -f "${addon_dir}/config.yaml"; \
   test -d "${addon_dir}/rootfs"; \
   if [ -n "${BUILD_VERSION}" ]; then \
-    grep -Fx "version: ${BUILD_VERSION}" "${addon_dir}/config.yaml"; \
+    grep -Fxe "version: \${BUILD_VERSION}" -e "version: \"\${BUILD_VERSION}\"" -e "version: '\${BUILD_VERSION}'" "\${addon_dir}/config.yaml"; \
   fi; \
   cp \
     "${source_dir}/package.json" \
