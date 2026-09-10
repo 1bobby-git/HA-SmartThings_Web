@@ -120,33 +120,23 @@ export class EncryptedSessionStateStore {
     const serialized = JSON.stringify(envelope) + "\n";
     const directory = dirname(this.filePath);
     const temporaryPath = `${this.filePath}.tmp-${process.pid}-${randomBytes(8).toString("hex")}`;
-    let temporaryOpen = false;
-
     try {
       const fd = openSync(
         temporaryPath,
         constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
         0o600
       );
-      temporaryOpen = true;
       try {
-        writeSync(fd, serialized, null, "utf8");
+        const bytes = Buffer.from(serialized, "utf8");
+        writeSync(fd, bytes, 0, bytes.length, 0);
         fsyncSync(fd);
         fchmodSync(fd, 0o600);
       } finally {
         closeSync(fd);
-        temporaryOpen = false;
       }
       renameSync(temporaryPath, this.filePath);
       chmodSync(this.filePath, 0o600);
     } finally {
-      if (temporaryOpen) {
-        try {
-          closeSync(openSync(temporaryPath, constants.O_RDONLY));
-        } catch {
-          // The original descriptor was already closed or the temporary file vanished.
-        }
-      }
       try {
         unlinkSync(temporaryPath);
       } catch {
