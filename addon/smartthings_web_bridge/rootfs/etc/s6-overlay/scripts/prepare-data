@@ -147,7 +147,8 @@ for file in \
   /data/bridge.sqlite-shm \
   /data/bridge.sqlite-journal \
   /data/settings.json \
-  /data/protocol-fingerprint.json; do
+  /data/protocol-fingerprint.json \
+  /data/session-state.json; do
   repair_private_file "$file" "${file##*/}"
 done
 
