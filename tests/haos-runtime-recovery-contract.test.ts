@@ -46,4 +46,18 @@ describe("HAOS runtime recovery contract", () => {
     expect(smoke).toContain("empty-secret");
     expect(smoke).toContain("_NET_CLIENT_LIST");
   });
+  test("keeps the encrypted SmartThings session fallback private and recoverable", () => {
+    const runtime = readText("bridge/src/runtime.ts");
+    const sessionState = readText("bridge/src/security/session-state.ts");
+    const prepareData = readText(
+      "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data"
+    );
+
+    expect(runtime).toContain("EncryptedSessionStateStore");
+    expect(runtime).toContain("session_state_restored");
+    expect(runtime).toContain("session_state_persisted:");
+    expect(sessionState).toContain('"aes-256-gcm"');
+    expect(prepareData).toContain("/data/session-state.json");
+  });
+
 });

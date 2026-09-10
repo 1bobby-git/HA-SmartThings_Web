@@ -285,6 +285,28 @@ export class KeeperPageManager {
     return keeper;
   }
 
+  async promoteVerifiedKeeper(candidate: BrowserPageLike): Promise<boolean> {
+    if (!this.#canNavigate() || candidate.isClosed() || !isKeeperSettledUrl(candidate.url())) {
+      return false;
+    }
+    const current = this.currentKeeper();
+    if (current === candidate) {
+      this.#authenticatedOnce = true;
+      this.clearRecoveryState();
+      return true;
+    }
+    this.invalidateTouch();
+    this.#keeper = candidate;
+    this.#commandPages.delete(candidate);
+    this.#authenticatedOnce = true;
+    this.clearRecoveryState();
+    if (current && !current.isClosed() && !isSamsungLoginUrl(current.url())) {
+      await current.close().catch(() => undefined);
+    }
+    this.recoveryDiagnostic("verified");
+    return true;
+  }
+
   async touchAuthenticatedSession(
     timeoutMs = SESSION_TOUCH_TIMEOUT_MS
   ): Promise<SessionTouchOutcome> {

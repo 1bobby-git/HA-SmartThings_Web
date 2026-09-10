@@ -107,4 +107,17 @@ describe("session rejection and non-destructive SSO recovery", () => {
     f.original.evaluate.mockResolvedValue("reauth"); await f.manager.recoverKeeper();
     expect(f.manager.authenticationRecoveryPending()).toBe(true);
   });
+  test("promotes a verified backup tab without closing an active login form", async () => {
+    const f = await setup();
+    const settledUrl = f.original.url();
+    f.manager.reportAuthenticationFailure(f.original, settledUrl);
+    f.original.address = loginUrl;
+    const candidate = new Page();
+
+    expect(await f.manager.promoteVerifiedKeeper(candidate)).toBe(true);
+    expect(f.manager.currentKeeper()).toBe(candidate);
+    expect(f.original.close).not.toHaveBeenCalled();
+    expect(candidate.close).not.toHaveBeenCalled();
+    expect(f.manager.authenticationRecoveryPending()).toBe(false);
+  });
 });
