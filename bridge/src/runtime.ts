@@ -6,6 +6,7 @@ import { readLocationSecurityStatus } from "./browser/location-status.js";
 import { installCakeClientCapture } from "./browser/cake-client-capture.js";
 import {
   ADVANCED_DEVICE_SNAPSHOT_URLS,
+  KEEPER_URL,
   KeeperPageManager,
   fetchAdvancedDeviceSnapshotEntries,
   fetchAdvancedDeviceSnapshots,
@@ -45,6 +46,7 @@ import {
 import { SqliteAliasStore } from "./security/alias-store.js";
 import { VolatileIdentifierMap } from "./security/volatile-identifier-map.js";
 import { bootstrapDataPaths } from "./security/data-paths.js";
+import { EncryptedSessionStateStore } from "./security/session-state.js";
 import { createRedactor } from "./security/redactor.js";
 import { installBrowserObserver, type CaptureSink } from "./inspector/browser-observer.js";
 import { installCdpNetworkObserver, type CdpSessionLike } from "./inspector/cdp-network.js";
@@ -97,6 +99,8 @@ export interface BridgeRuntime {
 
 type ObservableContext = BrowserContextLike & {
   addInitScript?: (script: () => void) => Promise<unknown>;
+  addCookies?: (cookies: unknown[]) => Promise<unknown>;
+  storageState?: (options?: { indexedDB?: boolean }) => Promise<unknown>;
   on: (event: string, handler: (payload?: unknown) => void | Promise<void>) => void;
   close?: () => Promise<unknown>;
   browser?: () => { version?: () => string } | null;
@@ -120,6 +124,10 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   log.info("bridge_init:secret");
   const secret = readFileSync(paths.bridgeSecretPath, "utf8").trim();
   const auth = new BridgeAuth(secret);
+  const sessionStateStore = new EncryptedSessionStateStore(
+    join(paths.dataDir, "session-state.json"),
+    secret
+  );
   let protocolIntegrity: ProtocolIntegrityStore | undefined;
   let protocolIntegritySnapshot: ProtocolIntegritySnapshot | undefined;
   let protocolIntegrityLoadFailed = false;
@@ -185,6 +193,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   let sessionTouchInFlight = false;
   let sessionTouchReadySinceMs: number | undefined;
   let lastSessionTouchAttemptAtMs = 0;
+  const persistCurrentSessionState = () =>
+    persistSessionStateIfHealthy(currentContext, sessionStateStore, log);
   const authenticatedSession = new AuthenticatedSmartThingsSession({
     currentKeeper: () => currentKeeperManager?.currentKeeper(),
     openAdvancedPage: async () => {
@@ -579,6 +589,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       stop: () => {
         stopPromise ??= stopRuntime({
           getContext: () => undefined,
+          persistSessionState: async () => undefined,
           heartbeatInterval,
           keeperInterval,
           detailDiscoveryInterval,
@@ -610,6 +621,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         return context;
       }
       try {
+        await restorePersistedSessionIfAvailable(context, sessionStateStore, log);
         if (!(await installCakeClientCapture(context))) {
           log.warn("cake_client_capture_unavailable");
         }
@@ -803,15 +815,33 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       ) {
         return;
       }
-      handleSessionTouchOutcome(outcome);
+      await handleSessionTouchOutcome(outcome, context, keeperManager);
     } finally {
       sessionTouchInFlight = false;
     }
   };
 
-  const handleSessionTouchOutcome = (outcome: SessionTouchOutcome) => {
-    if (outcome === "ok") return;
+  const handleSessionTouchOutcome = async (
+    outcome: SessionTouchOutcome,
+    context: ObservableContext,
+    keeperManager: KeeperPageManager
+  ) => {
+    if (outcome === "ok") {
+      await persistSessionStateIfHealthy(context, sessionStateStore, log, "keepalive");
+      return;
+    }
     if (outcome === "reauth") {
+      const restored = await restorePersistedSessionIfAvailable(
+        context,
+        sessionStateStore,
+        log,
+        true
+      );
+      if (restored && await keeperManager.touchAuthenticatedSession() === "ok") {
+        sessionTouchReadySinceMs = Date.now();
+        await persistSessionStateIfHealthy(context, sessionStateStore, log, "recovery");
+        return;
+      }
       sessionTouchReadySinceMs = undefined;
       status.update({
         authenticated: false,
@@ -840,6 +870,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     stop: () => {
       stopPromise ??= stopRuntime({
         getContext: () => currentContext,
+        persistSessionState: persistCurrentSessionState,
         heartbeatInterval,
         keeperInterval,
         detailDiscoveryInterval,
@@ -1055,6 +1086,92 @@ async function attachContext(
     ...statusForKeeperUrl(keeper.url())
   });
   return recoverSmartThingsWebSocket;
+}
+
+
+async function restorePersistedSessionIfAvailable(
+  context: ObservableContext,
+  store: EncryptedSessionStateStore,
+  log: BridgeRuntimeLog,
+  force = false
+): Promise<boolean> {
+  const state = store.load();
+  if (!state || (state.cookies.length === 0 && state.origins.length === 0)) {
+    return false;
+  }
+  const pages = context.pages().filter((page) => !page.isClosed());
+  if (!force && pages.some((page) => isSettledSmartThingsLocation(page.url()))) {
+    return false;
+  }
+  const page =
+    pages.find((candidate) => classifySmartThingsUrl(candidate.url()) === "samsung_login") ??
+    pages.find((candidate) => isSettledSmartThingsLocation(candidate.url())) ??
+    pages.find((candidate) => candidate.url() === "about:blank") ??
+    await context.newPage().catch(() => undefined);
+  if (!page) return false;
+
+  try {
+    if (state.cookies.length > 0) {
+      if (!context.addCookies) return false;
+      await context.addCookies(state.cookies);
+    }
+    await page.goto(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 12_000 });
+    if (!isSettledSmartThingsLocation(page.url())) return false;
+
+    if (page.evaluate && state.origins.length > 0) {
+      await page.evaluate(
+        (origins) => {
+          for (const origin of origins) {
+            if (typeof origin !== "object" || origin === null || Array.isArray(origin)) {
+              continue;
+            }
+            const record = origin as Record<string, unknown>;
+            if (record.origin !== location.origin || !Array.isArray(record.localStorage)) {
+              continue;
+            }
+            for (const entry of record.localStorage) {
+              if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+                continue;
+              }
+              const item = entry as Record<string, unknown>;
+              if (typeof item.name === "string" && typeof item.value === "string") {
+                window.localStorage.setItem(item.name, item.value);
+              }
+            }
+          }
+        },
+        state.origins
+      );
+      await page.goto(page.url(), { waitUntil: "domcontentloaded", timeout: 12_000 });
+    }
+
+    const restored = isSettledSmartThingsLocation(page.url());
+    if (restored) log.info("session_state_restored");
+    return restored;
+  } catch {
+    log.warn("session_state_restore_failed");
+    return false;
+  }
+}
+
+async function persistSessionStateIfHealthy(
+  context: ObservableContext | undefined,
+  store: EncryptedSessionStateStore,
+  log: BridgeRuntimeLog,
+  reason = "shutdown"
+): Promise<void> {
+  if (!context?.storageState) return;
+  const pages = context.pages().filter((page) => !page.isClosed());
+  if (!pages.some((page) => isSettledSmartThingsLocation(page.url()))) {
+    return;
+  }
+  try {
+    const state = await context.storageState({ indexedDB: true });
+    store.save(state);
+    log.info("session_state_persisted:" + reason);
+  } catch {
+    log.warn("session_state_persist_failed");
+  }
 }
 
 function shouldRecoverStaleSmartThingsWebSocket(
@@ -1618,6 +1735,7 @@ function safeBrowserVersion(value: string | undefined): string {
 
 async function stopRuntime(options: {
   getContext: () => ObservableContext | undefined;
+  persistSessionState?: () => Promise<void>;
   heartbeatInterval: NodeJS.Timeout;
   keeperInterval: NodeJS.Timeout;
   detailDiscoveryInterval: NodeJS.Timeout;
@@ -1635,6 +1753,7 @@ async function stopRuntime(options: {
   clearInterval(options.reconciliationInterval);
   const context = options.getContext();
   if (context) {
+    await options.persistSessionState?.();
     await closeContextQuietly(context);
   }
   await Promise.allSettled([
