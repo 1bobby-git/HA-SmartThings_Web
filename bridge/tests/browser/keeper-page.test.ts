@@ -316,6 +316,33 @@ describe("KeeperPageManager", () => {
   });
 
 
+  test("does not treat a location redirect as reauth when the authenticated probe succeeds", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 302, type: "opaqueredirect" })
+      .mockResolvedValueOnce({ ok: true, status: 200, type: "basic" });
+    vi.stubGlobal("fetch", fetchMock);
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    keeper.executeEvaluate = true;
+    const manager = new KeeperPageManager(new FakeContext([keeper]));
+
+    await expect(manager.touchAuthenticatedSession()).resolves.toBe("ok");
+    expect(manager.authenticationRecoveryPending()).toBe(false);
+    expect(keeper.goto).not.toHaveBeenCalled();
+  });
+
+  test("does not turn a permission response into a reauth state", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 403, type: "basic" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    keeper.executeEvaluate = true;
+    const manager = new KeeperPageManager(new FakeContext([keeper]));
+
+    await expect(manager.touchAuthenticatedSession()).resolves.toBe("failed");
+    expect(manager.authenticationRecoveryPending()).toBe(false);
+    expect(keeper.goto).not.toHaveBeenCalled();
+  });
+
   test("re-enters SmartThings with the remembered Samsung session after reauthentication", async () => {
     let now = 10_000;
     const fetchMock = vi
