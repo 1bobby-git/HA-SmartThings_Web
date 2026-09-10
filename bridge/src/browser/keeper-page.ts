@@ -261,38 +261,44 @@ export class KeeperPageManager {
         { path: string; authPath: string; timeout: number }
       >(
         async ({ path, authPath, timeout }) => {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), timeout);
+          const deadline = Date.now() + Math.max(1, timeout);
           const request = async (target: string): Promise<SessionTouchOutcome> => {
-            // api-free-audit: authenticated-page-same-origin-read-only-session-touch
-            const response = await fetch(target, {
-              cache: "no-store",
-              credentials: "same-origin",
-              method: "GET",
-              redirect: "manual",
-              signal: controller.signal
-            });
-            if (
-              response.type === "opaqueredirect" ||
-              response.status === 401 ||
-              response.status === 403 ||
-              (response.status >= 300 && response.status < 400)
-            ) {
-              return "reauth";
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) return "failed";
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), remaining);
+            try {
+              // api-free-audit: authenticated-page-same-origin-read-only-session-touch
+              const response = await fetch(target, {
+                cache: "no-store",
+                credentials: "same-origin",
+                method: "GET",
+                redirect: "manual",
+                signal: controller.signal
+              });
+              // The location document can legitimately redirect or return a
+              // permission/server response while the authenticated API session
+              // remains valid. Only the authenticated probe can assert reauth.
+              if (
+                response.type === "opaqueredirect" ||
+                response.status === 401 ||
+                (response.status >= 300 && response.status < 400)
+              ) {
+                return "reauth";
+              }
+              return response.ok ? "ok" : "failed";
+            } catch {
+              return "failed";
+            } finally {
+              clearTimeout(timer);
             }
-            return response.ok ? "ok" : "failed";
           };
-          try {
-            const locationOutcome = await request(path);
-            if (locationOutcome === "reauth") return "reauth";
-            const authenticatedOutcome = await request(authPath);
-            if (authenticatedOutcome === "reauth") return "reauth";
-            return authenticatedOutcome === "ok" ? "ok" : "failed";
-          } catch {
-            return "failed";
-          } finally {
-            clearTimeout(timer);
-          }
+          const locationOutcome = await request(path);
+          const authenticatedOutcome = await request(authPath);
+          if (authenticatedOutcome === "reauth") return "reauth";
+          // Do not turn a location-only redirect/403/network failure into a
+          // login state. The authenticated probe is authoritative.
+          return authenticatedOutcome === "ok" ? "ok" : "failed";
         },
         {
           path: SESSION_TOUCH_PATH,
