@@ -38,6 +38,15 @@ describe("HAOS runtime recovery contract", () => {
     const quotedVersion = String.raw`version: \"__BUILD_VERSION__\"`.replace("__BUILD_VERSION__", "${BUILD_VERSION}");
     expect(dockerfile).toContain(quotedVersion);
   });
+  test("keeps the encrypted session backup under private data preparation", () => {
+    const dataPrep = readText(
+      "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/scripts/prepare-data"
+    );
+
+    expect(dataPrep).toContain("/data/session-state.json");
+    expect(dataPrep).toContain("repair_private_file");
+  });
+
   test("creates Openbox runtime directories and verifies the packaged image on every change", () => {
     const openbox = readText(
       "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/openbox/run"
