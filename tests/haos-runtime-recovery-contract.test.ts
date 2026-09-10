@@ -35,7 +35,7 @@ describe("HAOS runtime recovery contract", () => {
     expect(smoke).toContain("re.fullmatch");
     expect(smoke).toContain("value[0] == value[-1]");
     expect(dockerfile).toContain("grep -Fxe");
-    expect(dockerfile).toContain('version: \"${BUILD_VERSION}\"');
+    expect(dockerfile).toContain(String.raw`version: \"${BUILD_VERSION}\"`);
   });
   test("creates Openbox runtime directories and verifies the packaged image on every change", () => {
     const openbox = readText(
