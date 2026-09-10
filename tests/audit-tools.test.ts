@@ -118,6 +118,40 @@ describe("api-free production audit", () => {
     expect(auditSmartThingsApiFree({ cwd: root })).toEqual([]);
   });
 
+  test("allows encrypted persisted session cookie restore only in the runtime", () => {
+    const root = seededTempDir();
+    write(
+      root,
+      "bridge/src/runtime.ts",
+      `
+      import { EncryptedSessionStateStore } from "../security/session-state.js";
+      async function restorePersistedSessionIfAvailable(context, state) {
+        const store = new EncryptedSessionStateStore("session-state.json", "bridge-secret");
+        void store;
+        // api-free-audit: encrypted-session-restore
+        await context.addCookies(state.cookies);
+      }
+      `
+    );
+
+    expect(auditSmartThingsApiFree({ cwd: root })).toEqual([]);
+
+    write(
+      root,
+      "bridge/src/other.ts",
+      `
+      // api-free-audit: encrypted-session-restore
+      export async function restore(context, state) {
+        await context.addCookies(state.cookies);
+      }
+      `
+    );
+
+    expect(auditSmartThingsApiFree({ cwd: root }).map((finding) => finding.rule)).toContain(
+      "playwright-network-mutation"
+    );
+  });
+
   test("allows the bounded same-origin keeper session touch only on the keeper page", () => {
     const root = seededTempDir();
     write(

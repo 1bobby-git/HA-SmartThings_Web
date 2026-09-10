@@ -158,6 +158,16 @@ function isApiFinding(
   }
   if (
     rule === "playwright-network-mutation" &&
+    relativePath === "bridge/src/runtime.ts" &&
+    /\bcontext\.addCookies\(state\.cookies\)/u.test(line) &&
+    /api-free-audit: encrypted-session-restore/u.test(nearby(lines, index)) &&
+    /\bEncryptedSessionStateStore\b/u.test(fileText) &&
+    /\brestorePersistedSessionIfAvailable\b/u.test(fileText)
+  ) {
+    return false;
+  }
+  if (
+    rule === "playwright-network-mutation" &&
     relativePath === "bridge/src/advanced/authenticated-session.ts" &&
     /\bcontroller\.abort\(\)/u.test(line) &&
     /authenticated-page-same-origin-advanced-request/u.test(fileText) &&

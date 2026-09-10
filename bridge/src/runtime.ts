@@ -10,6 +10,7 @@ import { verifyLocationRead } from "./state/location-read-proof.js";
 import { installCakeClientCapture } from "./browser/cake-client-capture.js";
 import {
   ADVANCED_DEVICE_SNAPSHOT_URLS,
+  KEEPER_URL,
   KeeperPageManager,
   fetchAdvancedDeviceSnapshotEntries,
   fetchAdvancedDeviceSnapshots
@@ -1210,6 +1211,7 @@ async function restorePersistedSessionIfAvailable(
     if (!page) return undefined;
     if (state.cookies.length > 0) {
       if (!context.addCookies) return undefined;
+      // api-free-audit: encrypted-session-restore
       await context.addCookies(state.cookies);
     }
     await page.goto(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 12_000 });
