@@ -1,3 +1,9 @@
+## 1.8.37
+
+- 로그인된 SmartThings keeper의 보호된 조회가 재인증을 요구하거나 add-on이 재시작될 때 세션을 잃지 않도록 보완합니다. 정상 인증 probe가 성공한 경우에만 Playwright storage state를 bridge-secret 기반 AES-256-GCM으로 암호화해 `/data/session-state.json`에 원자적으로 저장합니다.
+- 기존 전용 Chromium 프로필을 기본 저장소로 계속 사용하며, 프로필에 인증된 위치 페이지가 없을 때만 암호화 백업을 별도 탭에 복원합니다. 복원 뒤 보호된 조회를 다시 통과한 경우에만 keeper로 승격하고, 진행 중인 Samsung 로그인/MFA 폼은 닫지 않습니다.
+- 쿠키·localStorage 원문은 로그에 기록하지 않습니다. 실제 Samsung 계정의 add-on 재시작·프로필 손상 복구는 합성 CI와 별도로 운영 환경에서 확인해야 합니다.
+
 ## 1.8.36
 
 - 조명 `applyLight`의 검증된 Advanced 전송에 로그인된 keeper가 이미 로드한 SmartThings 웹앱 `api/device` 서비스를 우선 사용하는 fast path를 추가합니다. 새 브라우저 컨텍스트/탭, 쿠키 복제, 별도 로그인을 만들지 않으며 기존 persistent Chromium 프로필과 세션 유지/복구를 그대로 사용합니다.

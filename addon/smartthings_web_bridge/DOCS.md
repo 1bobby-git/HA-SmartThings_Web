@@ -1,3 +1,9 @@
+## 1.8.37 로그인 세션 백업
+
+Bridge와 HA 통합을 1.8.37으로 함께 업데이트하고 Bridge 앱을 재시작하세요. 기존 `/data/chromium-profile`을 우선 사용하며, 인증된 SmartThings 위치 페이지가 없거나 보호된 probe가 재인증을 요구할 때만 bridge-secret으로 암호화한 `/data/session-state.json` 보조 사본을 사용합니다. 복원 후 protected GET이 성공한 경우에만 세션을 계속 사용하고, 실패하면 원래 로그인/MFA 흐름을 유지합니다.
+
+`/data/session-state.json`에는 쿠키·localStorage가 평문으로 기록되지 않으며 파일 권한은 add-on의 비공개 데이터 정책을 따릅니다. 서버 세션 만료나 MFA를 우회하지 않습니다. 사용자 Samsung 계정으로 add-on 재시작과 프로필 손상 복구를 확인하는 운영 검증은 별도입니다.
+
 ## 1.8.36 조명 keeper 앱 클라이언트 fast path
 
 Bridge와 HA 통합을 1.8.36으로 함께 업데이트하고 Bridge 앱을 재시작하세요. 조명 계획은 현재 로그인 keeper에 SmartThings 웹앱의 `api/device` 서비스가 이미 로드돼 있으면 그 서비스를 우선 재사용합니다. 새 탭/컨텍스트를 열거나 쿠키를 복제하지 않습니다. 서비스가 아직 없을 때만 기존 Advanced CSRF POST를 사용하며, 한 번 `patch()`를 시도한 요청은 실패 시 다른 전송으로 자동 재전송하지 않습니다.
@@ -50,7 +56,7 @@ node dist/tools/haos-soak.js --local-bridge
 
 The equivalent package script is `npm run soak:haos:addon`.
 
-Open the add-on Ingress panel, use the noVNC browser view, and sign in to Samsung manually. The bridge keeps `https://my.smartthings.com/location` open and stores that login only in its dedicated `/data/chromium-profile`. Never copy cookies, CSRF values, user IDs, or other browser session material into the integration.
+Open the add-on Ingress panel, use the noVNC browser view, and sign in to Samsung manually. The bridge keeps `https://my.smartthings.com/location` open and stores that login primarily in its dedicated `/data/chromium-profile` and keeps an encrypted recovery copy under `/data/session-state.json`. Never copy cookies, CSRF values, user IDs, or other browser session material into the integration.
 
 On Supervisor installations, the app publishes its exact runtime hostname and Core-only port `8100` through app discovery after the Bridge health endpoint is ready. The integration uses that value to prefill the Bridge URL. Manual setup remains available, and current repository, local-install, and legacy repository hostnames are tried only as private migration fallbacks.
 
