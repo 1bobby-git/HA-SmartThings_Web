@@ -6,9 +6,16 @@ cd "$repo_root"
 
 version="$(python - <<'PY'
 from pathlib import Path
+import re
+
 for line in Path('addon/smartthings_web_bridge/config.yaml').read_text(encoding='utf-8').splitlines():
     if line.startswith('version: '):
-        print(line.split(':', 1)[1].strip())
+        value = line.split(':', 1)[1].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z_.-]*", value):
+            raise SystemExit('invalid add-on version')
+        print(value)
         break
 else:
     raise SystemExit('missing add-on version')
