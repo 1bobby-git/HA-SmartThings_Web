@@ -59,7 +59,6 @@ try {
     const { SmartThingsWebUiCommandExecutor } = await import("../dist/bridge/src/browser/command-page.js");
     const page = await browser.newPage();
     const events = [];
-    const domEvents = [];
     try {
       await page.route("**/*", (route) => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8",
         body: '<meta charset="utf-8">' + css + repeated }));
@@ -87,20 +86,9 @@ try {
         const value = Reflect.get(target, key);return typeof value === "function" ? value.bind(target) : value;
       } });
       const executor = new SmartThingsWebUiCommandExecutor(() => ({ openCommandPage: async () => wrapped }), (id) => id,
-        {
-          onDiagnostic: (entry) => events.push(entry),
-          onHomeMonitorCardDiagnostic: (entry) => domEvents.push({ type: "card", ...entry }),
-          onHomeMonitorDialogDiagnostic: (entry) => domEvents.push({ type: "dialog", ...entry })
-        });
+        { onDiagnostic: (entry) => events.push(entry) });
       const start = Date.now();
-      try {
-        await executor.executeLocationAction({ locationId: "synthetic-office", action: "armStay" });
-      } catch (error) {
-        console.error("production orchestration diagnostics", JSON.stringify({
-          events, domEvents, html: await page.locator("body").innerHTML()
-        }));
-        throw error;
-      }
+      await executor.executeLocationAction({ locationId: "synthetic-office", action: "armStay" });
       assert.deepEqual(await page.evaluate(() => window.executed), [{ id: "stay", trusted: true }], "Stay only; never an intermediate disarm");
       assert(Date.now() - start < 4_000, "already-rendered single-mode layout must not spend five seconds probing absent direct buttons");
       assert(events.includes("home_monitor_current_mode_opened"));
