@@ -12,7 +12,6 @@ import {
   writeSync
 } from "node:fs";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import { dirname } from "node:path";
 
 export interface SessionStorageState {
   cookies: unknown[];
@@ -118,7 +117,6 @@ export class EncryptedSessionStateStore {
       ciphertext: ciphertext.toString("base64")
     };
     const serialized = JSON.stringify(envelope) + "\n";
-    const directory = dirname(this.filePath);
     const temporaryPath = `${this.filePath}.tmp-${process.pid}-${randomBytes(8).toString("hex")}`;
     try {
       const fd = openSync(
