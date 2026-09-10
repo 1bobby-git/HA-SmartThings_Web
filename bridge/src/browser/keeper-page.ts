@@ -293,7 +293,7 @@ export class KeeperPageManager {
               clearTimeout(timer);
             }
           };
-          const locationOutcome = await request(path);
+          await request(path);
           const authenticatedOutcome = await request(authPath);
           if (authenticatedOutcome === "reauth") return "reauth";
           // Do not turn a location-only redirect/403/network failure into a
