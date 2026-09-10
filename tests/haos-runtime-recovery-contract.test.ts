@@ -28,6 +28,15 @@ describe("HAOS runtime recovery contract", () => {
     expect(runtime).toContain('browser_launch:sandbox_fallback');
   });
 
+  test("normalizes quoted YAML versions before Docker tagging", () => {
+    const dockerfile = readText("addon/smartthings_web_bridge/Dockerfile");
+    const smoke = readText("tools/ci-haos-runtime-smoke.sh");
+
+    expect(smoke).toContain("re.fullmatch");
+    expect(smoke).toContain("value[0] == value[-1]");
+    expect(dockerfile).toContain("grep -Fxe");
+    expect(dockerfile).toContain('version: \"${BUILD_VERSION}\"');
+  });
   test("creates Openbox runtime directories and verifies the packaged image on every change", () => {
     const openbox = readText(
       "addon/smartthings_web_bridge/rootfs/etc/s6-overlay/s6-rc.d/openbox/run"
