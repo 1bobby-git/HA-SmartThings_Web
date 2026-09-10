@@ -62,15 +62,26 @@ try {
     const domEvents = [];
     try {
       await page.route("**/*", (route) => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8",
-        body: '<meta charset="utf-8">' + css + repeated + `<script>
-        window.executed=[];document.getElementById('mode').addEventListener('click',()=>{
-          if(document.querySelector('[role=dialog]'))return;
-          const dialog=document.createElement('div');dialog.setAttribute('role','dialog');
-          dialog.innerHTML='<h2>SmartThings Home Monitor</h2><button id="away">보안(외출)</button><button id="stay">보안(실내)</button><button id="disarm">해제</button>';
-          document.body.append(dialog);
-          for(const button of dialog.querySelectorAll('button'))button.addEventListener('click',e=>{window.executed.push({id:button.id,trusted:e.isTrusted});dialog.remove()});
-        });</script>` }));
+        body: '<meta charset="utf-8">' + css + repeated }));
       await page.goto("https://my.smartthings.com/location/synthetic-office");
+      await page.evaluate(() => {
+        window.executed = [];
+        const mode = document.getElementById("mode");
+        if (!mode) throw new Error("synthetic_mode_missing");
+        mode.addEventListener("click", () => {
+          if (document.querySelector('[role="dialog"]')) return;
+          const dialog = document.createElement("div");
+          dialog.setAttribute("role", "dialog");
+          dialog.innerHTML = '<h2>SmartThings Home Monitor</h2><button id="away">보안(외출)</button><button id="stay">보안(실내)</button><button id="disarm">해제</button>';
+          document.body.append(dialog);
+          for (const button of dialog.querySelectorAll("button")) {
+            button.addEventListener("click", (event) => {
+              window.executed.push({ id: button.id, trusted: event.isTrusted });
+              dialog.remove();
+            });
+          }
+        });
+      });
       const wrapped = new Proxy(page, { get(target, key) {
         if (key === "close") return async () => undefined;
         const value = Reflect.get(target, key);return typeof value === "function" ? value.bind(target) : value;
