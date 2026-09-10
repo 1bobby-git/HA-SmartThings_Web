@@ -10,6 +10,7 @@ import { verifyLocationRead } from "./state/location-read-proof.js";
 import { installCakeClientCapture } from "./browser/cake-client-capture.js";
 import {
   ADVANCED_DEVICE_SNAPSHOT_URLS,
+  KEEPER_URL,
   KeeperPageManager,
   fetchAdvancedDeviceSnapshotEntries,
   fetchAdvancedDeviceSnapshots
