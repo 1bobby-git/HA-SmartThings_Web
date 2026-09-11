@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { launchSmartThingsPersistentContext } from '../dist/bridge/src/browser/persistent-context.js';
 import { KeeperPageManager, KEEPER_URL, SESSION_TOUCH_AUTH_PATH } from '../dist/bridge/src/browser/keeper-page.js';
+import { isEmptySessionStorageState } from '../dist/bridge/src/security/session-state.js';
 
 // Only a new temporary profile and synthetic values. No real Samsung traffic:
 // all page traffic is fulfilled locally; even pre-route restore/background
@@ -17,6 +18,8 @@ let responseStatus = 200;
 let htmlAuth = false;
 let touches = 0;
 let clock = Date.now();
+let delayedRedirectsRemaining = 0;
+let completedRelayPages = 0;
 const recoveryPhases = [];
 const paths = { dataDir: root, profileDir: join(root, 'chromium-profile'), downloadDir: join(root, 'downloads') };
 const launch = async () => {
@@ -30,10 +33,20 @@ const launch = async () => {
   await context.route('**/*', async route => {
     const url = new URL(route.request().url());
     assert.equal(route.request().method(), 'GET');
+    if (url.origin === 'https://account.samsung.com' && url.pathname === '/fixture-relay') {
+      completedRelayPages++;
+      // DOMContentLoaded happens BEFORE this client-side SSO redirect.
+      return route.fulfill({ contentType: 'text/html', body:
+        '<!doctype html><title>Fixture SSO relay</title><script>setTimeout(() => location.replace("https://my.smartthings.com/location/fixture-home"), 250);</script>' });
+    }
     if (url.origin === 'https://account.samsung.com') {
       return route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Fixture login</title><input id="mfa" value="unsent-fixture">' });
     }
     if (url.origin !== 'https://my.smartthings.com') return route.abort();
+    if (delayedRedirectsRemaining > 0 && route.request().isNavigationRequest() && url.pathname === '/location') {
+      delayedRedirectsRemaining--;
+      return route.fulfill({ status: 302, headers: { location: 'https://account.samsung.com/fixture-relay' }, body: '' });
+    }
     if (url.pathname === new URL(SESSION_TOUCH_AUTH_PATH, KEEPER_URL).pathname) {
       touches++;
       await route.fulfill({ status: responseStatus,
@@ -107,6 +120,41 @@ try {
   assert.equal(await recovered.evaluate(() => localStorage.getItem('fixture-state')), 'preserved');
   assert.ok(recoveryPhases.includes('verified'));
   console.log('PASS isolated SSO recovery: pending form preserved on 401; protected GET required; verified same-profile promotion; no network access');
+
+  // A current rotating cookie/localStorage profile is not an empty restore target.
+  assert.equal(isEmptySessionStorageState(await context.storageState({ indexedDB: true })), false);
+  await recovered.goto('https://account.samsung.com/accounts/v1/ST/signInGate');
+  await recovered.locator('#mfa').fill('fixture-delayed-form');
+  await keeper.ensureKeeper(); clock += 30_001;
+  delayedRedirectsRemaining = 1; responseStatus = 401;
+  const touchesBeforeDeniedRelay = touches;
+  assert.equal(await keeper.ensureKeeper(), recovered);
+  assert.equal(completedRelayPages, 1);
+  assert.ok(touches > touchesBeforeDeniedRelay, 'SSO relay must finish before the protected check');
+  assert.equal(await recovered.locator('#mfa').inputValue(), 'fixture-delayed-form');
+  assert.equal(context.pages().length, 1);
+  assert.equal(keeper.authenticationRecoveryPending(), true);
+
+  clock += 300_001; responseStatus = 200; delayedRedirectsRemaining = 1;
+  const touchesBeforeRecovery = touches;
+  const delayedRecovery = await keeper.ensureKeeper();
+  assert.notEqual(delayedRecovery, recovered);
+  assert.equal(recovered.isClosed(), true);
+  assert.equal(completedRelayPages, 2);
+  assert.ok(touches > touchesBeforeRecovery);
+  assert.equal(delayedRecovery.url(), `${KEEPER_URL}/fixture-home`);
+  assert.equal(keeper.authenticationRecoveryPending(), false);
+  assert.equal(context.pages().length, 1);
+  assert.equal(await delayedRecovery.evaluate(() => localStorage.getItem('fixture-state')), 'preserved');
+
+  clock += 15 * 60_000 + 1; delayedRedirectsRemaining = 1;
+  assert.equal(await keeper.refreshAuthenticatedSessionIfDue(), 'verified');
+  assert.equal(completedRelayPages, 3);
+  assert.equal(keeper.currentKeeper(), delayedRecovery);
+  assert.equal(delayedRecovery.isClosed(), false);
+  assert.equal(context.pages().length, 1);
+  assert.equal(delayedRedirectsRemaining, 0);
+  console.log('PASS delayed client-side SSO: final redirect awaited in recovery and proactive refresh; protected denial preserves sign-in form; rotating profile not overwritten (synthetic only)');
   console.log('PASS session continuity: cookie rotation, persistent session-cookie/localStorage restore, bounded tab count, auth proof and transient failure classification (synthetic only)');
 } finally {
   await context?.close();
