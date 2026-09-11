@@ -28,7 +28,16 @@ jobs:
           node-version: 24.18.1
           cache: npm
       - name: Apply anchored repair
-        run: python3 tools/apply-session-lifecycle-1.8.40.py
+        run: |
+          python3 tools/apply-session-lifecycle-1.8.40.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('bridge/src/browser/keeper-page.ts')
+          text = p.read_text()
+          old = 'onSessionProbe: this.#onSessionProbe'
+          assert text.count(old) == 3
+          p.write_text(text.replace(old, 'onSessionProbe: (diagnostic) => this.#onSessionProbe?.(diagnostic)'))
+          PY
       - name: Install locked dependencies
         run: npm ci
       - name: Complete regression tests and typecheck
