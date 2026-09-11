@@ -18,6 +18,20 @@ export interface SessionStorageState {
   origins: unknown[];
 }
 
+/** Only a genuinely empty profile may be replaced with an older backup.
+ * Unknown/corrupt state fails closed; it is not proof that a profile is empty.
+ */
+export function isEmptySessionStorageState(value: unknown): boolean {
+  const state = normalizeSessionStorageState(value);
+  if (!state || state.cookies.length !== 0) return false;
+  return state.origins.every((origin) => {
+    const record = origin as Record<string, unknown>;
+    return ["localStorage", "indexedDB"].every((key) =>
+      record[key] === undefined || (Array.isArray(record[key]) && record[key].length === 0)
+    );
+  });
+}
+
 export type SessionStorageRestoreMode = "full" | "legacy";
 
 export interface SessionStorageRestoreContext {
