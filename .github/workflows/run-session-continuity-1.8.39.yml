@@ -36,6 +36,16 @@ jobs:
           Path('/tmp/apply-session-continuity.py').write_text(body)
           PY
           python3 /tmp/apply-session-continuity.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('bridge/src/security/session-state.ts')
+          text = path.read_text()
+          old = '    await context.addCookies(state.cookies);'
+          new = '    // api-free-audit: encrypted-session-restore\n    await context.addCookies(state.cookies);'
+          if old not in text:
+              raise SystemExit('missing addCookies audit anchor')
+          path.write_text(text.replace(old, new, 1))
+          PY
       - name: Install dependencies
         run: npm ci
       - name: Focused regression tests
