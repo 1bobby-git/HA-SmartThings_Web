@@ -40,9 +40,6 @@ jobs:
           from pathlib import Path
           import re
 
-          # Preserve the existing encrypted-store envelope/constants. Only the newly
-          # inserted restore helper is narrowed; the legacy addCookies fallback stays
-          # in runtime.ts under its pre-existing API-free audit exception.
           p = Path('bridge/src/security/session-state.ts')
           text = p.read_text()
           pattern = re.compile(
@@ -74,7 +71,11 @@ jobs:
           )
           if count != 1:
               raise SystemExit('failed to update storage restore fallback test')
-          p.write_text(text)
+          old = '''    const setStorageState = vi.fn(async () => undefined);\n    const addCookies = vi.fn(async () => undefined);\n\n    expect(await restoreSessionStorageState({ setStorageState, addCookies }, state)).toBe("full");\n    expect(setStorageState).toHaveBeenCalledWith(state);\n    expect(addCookies).not.toHaveBeenCalled();'''
+          new = '''    const setStorageState = vi.fn(async () => undefined);\n\n    expect(await restoreSessionStorageState({ setStorageState }, state)).toBe("full");\n    expect(setStorageState).toHaveBeenCalledWith(state);'''
+          if old not in text:
+              raise SystemExit('failed to align full restore test signature')
+          p.write_text(text.replace(old, new, 1))
           PY
       - name: Install dependencies
         run: npm ci
