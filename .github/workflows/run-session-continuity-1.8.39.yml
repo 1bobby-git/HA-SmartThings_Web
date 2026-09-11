@@ -40,15 +40,16 @@ jobs:
           from pathlib import Path
           import re
 
-          # Keep the legacy addCookies call in runtime.ts where the repository's
-          # existing API-free audit already validates this exact encrypted-restore path.
+          # Preserve the existing encrypted-store envelope/constants. Only the newly
+          # inserted restore helper is narrowed; the legacy addCookies fallback stays
+          # in runtime.ts under its pre-existing API-free audit exception.
           p = Path('bridge/src/security/session-state.ts')
           text = p.read_text()
           pattern = re.compile(
-              r'export type SessionStorageRestoreMode = "full" \| "legacy" \| "unavailable";.*?\n\nexport class EncryptedSessionStateStore',
+              r'export type SessionStorageRestoreMode = "full" \| "legacy" \| "unavailable";.*?\n}\n\n(?=interface EncryptedSessionStateEnvelope)',
               re.S,
           )
-          replacement = '''export type SessionStorageRestoreMode = "full" | "legacy";\n\nexport interface SessionStorageRestoreContext {\n  setStorageState?: (state: SessionStorageState) => Promise<unknown>;\n}\n\n/** Restore the complete last verified Playwright storage state when supported.\n * This covers cookies, localStorage and IndexedDB. The caller keeps the existing\n * cookie + page-localStorage compatibility path for older contexts.\n */\nexport async function restoreSessionStorageState(\n  context: SessionStorageRestoreContext,\n  state: SessionStorageState\n): Promise<SessionStorageRestoreMode> {\n  if (!context.setStorageState) return "legacy";\n  await context.setStorageState(state);\n  return "full";\n}\n\nexport class EncryptedSessionStateStore'''
+          replacement = '''export type SessionStorageRestoreMode = "full" | "legacy";\n\nexport interface SessionStorageRestoreContext {\n  setStorageState?: (state: SessionStorageState) => Promise<unknown>;\n}\n\n/** Restore the complete last verified Playwright storage state when supported.\n * This covers cookies, localStorage and IndexedDB. The caller keeps the existing\n * cookie + page-localStorage compatibility path for older contexts.\n */\nexport async function restoreSessionStorageState(\n  context: SessionStorageRestoreContext,\n  state: SessionStorageState\n): Promise<SessionStorageRestoreMode> {\n  if (!context.setStorageState) return "legacy";\n  await context.setStorageState(state);\n  return "full";\n}\n\n'''
           text, count = pattern.subn(replacement, text, count=1)
           if count != 1:
               raise SystemExit('failed to narrow storage-state restore helper')
