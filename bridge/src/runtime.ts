@@ -110,7 +110,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.37";
+const bridgeVersion = "1.8.38";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -602,10 +602,25 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       void restartBrowser();
       return;
     }
-    // Serial maintenance avoids an SSO navigation racing its own auth probe.
-    void reconcileActiveKeeper().then(touchAuthenticatedSessionIfDue).catch(() => {
-      log.warn("session_maintenance_failed");
-    });
+    // Serial maintenance avoids SSO refresh navigation racing its own auth probe.
+    void reconcileActiveKeeper()
+      .then(touchAuthenticatedSessionIfDue)
+      .then(async () => {
+        const manager = currentKeeperManager;
+        if (!manager) return;
+        if (await manager.refreshAuthenticatedSessionIfDue() === "verified") {
+          await persistSessionStateIfHealthy(
+            currentContext,
+            sessionStateStore,
+            status,
+            log,
+            "proactive_refresh"
+          );
+        }
+      })
+      .catch(() => {
+        log.warn("session_maintenance_failed");
+      });
   }, deps.config.heartbeatIntervalMs);
   const detailDiscoveryInterval = setInterval(() => {
     void detailDiscovery.runOne().then((result) => {

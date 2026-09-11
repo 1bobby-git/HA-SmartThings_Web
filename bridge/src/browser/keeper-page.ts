@@ -7,6 +7,8 @@ const SESSION_TOUCH_TIMEOUT_MS = 12_000;
 const SESSION_REAUTH_RECOVERY_DELAY_MS = 30_000;
 const LOGIN_RECOVERY_DELAY_MS = 15 * 60_000;
 const SESSION_RECOVERY_RETRY_MS = 5 * 60_000;
+const SESSION_PROACTIVE_REFRESH_INTERVAL_MS = 15 * 60_000;
+const SESSION_PROACTIVE_REFRESH_RETRY_MS = 2 * 60_000;
 export const ADVANCED_DEVICE_SNAPSHOT_URLS = [
   "/advanced/cupcake-api/api/devices?type=HUB",
   "/advanced/cupcake-api/api/devices?includeHealth=true&includeStatus=true&includeGroups=true&includeUserDevices=true&includeAllowedActions=true&includeRestricted=true",
@@ -36,6 +38,12 @@ export interface AdvancedDeviceSnapshotEntry {
 }
 
 export type SessionTouchOutcome = "ok" | "reauth" | "failed" | "stale";
+export type ProactiveSessionRefreshOutcome =
+  | "verified"
+  | "login_required"
+  | "failed"
+  | "stale"
+  | "skipped";
 
 export interface KeeperPageManagerOptions {
   now?: () => number;
@@ -43,7 +51,20 @@ export interface KeeperPageManagerOptions {
   sessionReauthRecoveryDelayMs?: number;
   loginRecoveryDelayMs?: number;
   sessionRecoveryRetryMs?: number;
-  onRecovery?: (phase: "attempt" | "verified" | "login_required" | "failed" | "stale") => void;
+  proactiveRefreshIntervalMs?: number;
+  proactiveRefreshRetryMs?: number;
+  onRecovery?: (phase:
+    | "attempt"
+    | "verified"
+    | "login_required"
+    | "failed"
+    | "stale"
+    | "refresh_attempt"
+    | "refresh_verified"
+    | "refresh_login_required"
+    | "refresh_failed"
+    | "refresh_stale"
+  ) => void;
 }
 
 export async function fetchAdvancedDeviceSnapshots(
@@ -116,6 +137,11 @@ export class KeeperPageManager {
   #loginObservedAtMs: number | undefined;
   #lastRecoveryAttemptAtMs: number | undefined;
   #sessionRecoveryInFlight: Promise<void> | undefined;
+  readonly #proactiveRefreshIntervalMs: number;
+  readonly #proactiveRefreshRetryMs: number;
+  #lastProactiveRefreshAtMs: number | undefined;
+  #lastProactiveRefreshAttemptAtMs: number | undefined;
+  #proactiveRefreshInFlight: Promise<ProactiveSessionRefreshOutcome> | undefined;
   #touchInFlight: { page: BrowserPageLike; url: string; result: Promise<SessionTouchOutcome> } | undefined;
   readonly #canNavigate: () => boolean;
   readonly #onRecovery: KeeperPageManagerOptions["onRecovery"];
@@ -140,6 +166,14 @@ export class KeeperPageManager {
     this.#sessionRecoveryRetryMs = validDelay(
       options.sessionRecoveryRetryMs,
       SESSION_RECOVERY_RETRY_MS
+    );
+    this.#proactiveRefreshIntervalMs = validDelay(
+      options.proactiveRefreshIntervalMs,
+      SESSION_PROACTIVE_REFRESH_INTERVAL_MS
+    );
+    this.#proactiveRefreshRetryMs = validDelay(
+      options.proactiveRefreshRetryMs,
+      SESSION_PROACTIVE_REFRESH_RETRY_MS
     );
   }
 
@@ -392,6 +426,102 @@ export class KeeperPageManager {
     return flight.result;
   }
 
+  async refreshAuthenticatedSessionIfDue(): Promise<ProactiveSessionRefreshOutcome> {
+    const keeper = this.currentKeeper();
+    if (
+      !keeper ||
+      !this.#authenticatedOnce ||
+      this.authenticationRecoveryPending() ||
+      !this.#canNavigate() ||
+      !isKeeperSettledUrl(keeper.url())
+    ) {
+      return "skipped";
+    }
+
+    const now = this.#now();
+    this.#lastProactiveRefreshAtMs ??= now;
+    if (now - this.#lastProactiveRefreshAtMs < this.#proactiveRefreshIntervalMs) {
+      return "skipped";
+    }
+    if (
+      this.#lastProactiveRefreshAttemptAtMs !== undefined &&
+      now - this.#lastProactiveRefreshAttemptAtMs < this.#proactiveRefreshRetryMs
+    ) {
+      return "skipped";
+    }
+    if (this.#proactiveRefreshInFlight) return this.#proactiveRefreshInFlight;
+
+    this.#lastProactiveRefreshAttemptAtMs = now;
+    const expectedKeeper = keeper;
+    const expectedUrl = keeper.url();
+    const operation = this.refreshAuthenticatedSessionProbe(expectedKeeper, expectedUrl);
+    this.#proactiveRefreshInFlight = operation;
+    try {
+      return await operation;
+    } finally {
+      if (this.#proactiveRefreshInFlight === operation) {
+        this.#proactiveRefreshInFlight = undefined;
+      }
+    }
+  }
+
+  private async refreshAuthenticatedSessionProbe(
+    expectedKeeper: BrowserPageLike,
+    expectedUrl: string
+  ): Promise<ProactiveSessionRefreshOutcome> {
+    let probe: BrowserPageLike | undefined;
+    this.recoveryDiagnostic("refresh_attempt");
+    try {
+      probe = await this.context.newPage();
+      this.#commandPages.add(probe);
+      await probe.goto(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });
+      if (isSamsungLoginUrl(probe.url())) {
+        this.recoveryDiagnostic("refresh_login_required");
+        return "login_required";
+      }
+      if (!isKeeperSettledUrl(probe.url())) {
+        this.recoveryDiagnostic("refresh_failed");
+        return "failed";
+      }
+
+      const candidate = probe;
+      const verifier = new KeeperPageManager(
+        { pages: () => [candidate], newPage: async () => candidate },
+        { canNavigate: () => false }
+      );
+      await verifier.reconcileRestoredPages();
+      const outcome = await verifier.touchAuthenticatedSession();
+      if (outcome !== "ok") {
+        this.recoveryDiagnostic(
+          outcome === "reauth" ? "refresh_login_required" : "refresh_failed"
+        );
+        return outcome === "reauth" ? "login_required" : "failed";
+      }
+      if (
+        !this.#canNavigate() ||
+        this.currentKeeper() !== expectedKeeper ||
+        expectedKeeper.isClosed() ||
+        expectedKeeper.url() !== expectedUrl
+      ) {
+        this.recoveryDiagnostic("refresh_stale");
+        return "stale";
+      }
+
+      this.#lastProactiveRefreshAtMs = this.#now();
+      this.#lastProactiveRefreshAttemptAtMs = undefined;
+      this.recoveryDiagnostic("refresh_verified");
+      return "verified";
+    } catch {
+      this.recoveryDiagnostic("refresh_failed");
+      return "failed";
+    } finally {
+      if (probe) {
+        this.#commandPages.delete(probe);
+        await probe.close().catch(() => undefined);
+      }
+    }
+  }
+
   async openAdvancedPage(
     beforeGoto?: (page: BrowserPageLike) => Promise<void>
   ): Promise<BrowserPageLike> {
@@ -544,6 +674,7 @@ export class KeeperPageManager {
   private observeSessionTouchOutcome(outcome: SessionTouchOutcome, url: string): void {
     if (outcome === "ok") {
       this.#authenticatedOnce = true;
+      this.#lastProactiveRefreshAtMs ??= this.#now();
       this.clearRecoveryState();
       return;
     }

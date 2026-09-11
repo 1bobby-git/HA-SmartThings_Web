@@ -834,7 +834,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
 
     expect(log.info.mock.calls.slice(0, 14)).toEqual([
-      ["bridge_init:version:1.8.37:home_monitor_direct"],
+      ["bridge_init:version:1.8.38:home_monitor_direct"],
       ["bridge_init:data_paths"],
       ["bridge_init:data_paths:data_dir"],
       ["bridge_init:data_paths:profile_dir"],
@@ -1284,7 +1284,7 @@ describe("createBridgeRuntime", () => {
   });
 
 
-  test("maintains a quiet session over a synthetic day without accumulating pages or navigation", async () => {
+  test("maintains a quiet session over a synthetic day without accumulating open pages or keeper navigation", async () => {
     vi.useFakeTimers(); vi.setSystemTime(10_000);
     const root = createTempRoot();
     const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
@@ -1302,7 +1302,7 @@ describe("createBridgeRuntime", () => {
     await vi.advanceTimersByTimeAsync(86_410_000);
     expect(runtime.status.getSnapshot()).toMatchObject({ sessionTouchCount: 288,
       sessionTouchLastOutcome: "ok", sessionTouchConsecutiveFailures: 0, authenticated: true });
-    expect(context.pages()).toHaveLength(pages);
+    expect(context.pages().filter((page) => !page.isClosed())).toHaveLength(pages);
     expect(keeper.goto).not.toHaveBeenCalled();
     expect(log.warn).not.toHaveBeenCalledWith("session_touch_failed");
     const details = createHealthReport(runtime.status.getSnapshot()).details;
