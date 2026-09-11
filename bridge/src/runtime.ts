@@ -49,7 +49,7 @@ import {
 import { SqliteAliasStore } from "./security/alias-store.js";
 import { VolatileIdentifierMap } from "./security/volatile-identifier-map.js";
 import { bootstrapDataPaths } from "./security/data-paths.js";
-import { EncryptedSessionStateStore } from "./security/session-state.js";
+import { EncryptedSessionStateStore, restoreSessionStorageState } from "./security/session-state.js";
 import { createRedactor } from "./security/redactor.js";
 import { installBrowserObserver, type CaptureSink } from "./inspector/browser-observer.js";
 import { installCdpNetworkObserver, type CdpSessionLike } from "./inspector/cdp-network.js";
@@ -103,6 +103,7 @@ export interface BridgeRuntime {
 type ObservableContext = BrowserContextLike & {
   addInitScript?: (script: () => void) => Promise<unknown>;
   addCookies?: (cookies: unknown[]) => Promise<unknown>;
+  setStorageState?: (state: { cookies: unknown[]; origins: unknown[] }) => Promise<unknown>;
   storageState?: (options?: { indexedDB?: boolean }) => Promise<unknown>;
   on: (event: string, handler: (payload?: unknown) => void | Promise<void>) => void;
   close?: () => Promise<unknown>;
@@ -110,7 +111,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.38";
+const bridgeVersion = "1.8.39";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -1224,7 +1225,8 @@ async function restorePersistedSessionIfAvailable(
       }
     }
     if (!page) return undefined;
-    if (state.cookies.length > 0) {
+    const restoreMode = await restoreSessionStorageState(context, state);
+    if (restoreMode === "legacy" && state.cookies.length > 0) {
       if (!context.addCookies) return undefined;
       // api-free-audit: encrypted-session-restore
       await context.addCookies(state.cookies);
@@ -1234,7 +1236,7 @@ async function restorePersistedSessionIfAvailable(
       throw new Error("session_state_restore_not_authenticated");
     }
 
-    if (page.evaluate && state.origins.length > 0) {
+    if (restoreMode === "legacy" && page.evaluate && state.origins.length > 0) {
       await page.evaluate(
         (origins: unknown[]) => {
           for (const origin of origins) {

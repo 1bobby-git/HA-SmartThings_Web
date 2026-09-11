@@ -1,3 +1,10 @@
+## 1.8.39
+
+- 1.8.38 운영 로그에서 선제 세션 갱신과 암호화 백업 저장은 성공했지만 이후 `session_recovery:attempt -> failed`가 반복되는 실제 실패를 기준으로 복구 경로를 보강합니다.
+- `storageState({ indexedDB: true })`로 저장하던 전체 인증 상태를 복구할 때도 Playwright `setStorageState()`로 그대로 적용합니다. 이전에는 백업 안의 IndexedDB가 저장되어도 복구 시 쿠키와 localStorage만 적용되어 일부 인증 상태가 버려질 수 있었습니다. 구형 컨텍스트는 기존 쿠키 + localStorage 복구를 유지합니다.
+- 이미 인증됐던 SmartThings 앱 셸이 보호된 조회를 갱신하지 못하면 같은 `/location` 재로드만 반복하지 않고 별도 탭에서 정상 Samsung Account -> SmartThings SSO 흐름을 다시 부트스트랩한 뒤 보호된 조회가 성공한 경우에만 keeper로 승격합니다.
+- Samsung Account가 실제 로그인을 요구하면 자동 자격증명 입력, 쿠키 만료 조작, MFA 우회 없이 그 실제 로그인 페이지를 keeper로 노출해 숨은 복구 루프에 갇히지 않게 합니다. 로그인 완료 후에는 동일 persistent Chromium 프로필을 계속 사용합니다. 서버가 세션을 강제 폐기하거나 MFA를 요구하는 정책 자체는 클라이언트가 제거하지 않습니다.
+
 ## 1.8.38
 
 - 기존 5분 보호된 조회 keepalive에 더해, 인증이 정상인 동안 15분마다 같은 persistent Chromium context의 **별도 임시 탭**에서 `/location`을 새 문서로 부트스트랩하고 보호된 위치 조회까지 다시 검증합니다. SmartThings 웹앱의 정상 SSO/세션 갱신 흐름을 선제적으로 실행해 API GET만 반복하던 1.8.37보다 갱신 가능한 웹 세션을 오래 유지하도록 보강합니다.

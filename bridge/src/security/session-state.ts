@@ -18,6 +18,25 @@ export interface SessionStorageState {
   origins: unknown[];
 }
 
+export type SessionStorageRestoreMode = "full" | "legacy";
+
+export interface SessionStorageRestoreContext {
+  setStorageState?: (state: SessionStorageState) => Promise<unknown>;
+}
+
+/** Restore the complete last verified Playwright storage state when supported.
+ * This covers cookies, localStorage and IndexedDB. The caller keeps the existing
+ * cookie + page-localStorage compatibility path for older contexts.
+ */
+export async function restoreSessionStorageState(
+  context: SessionStorageRestoreContext,
+  state: SessionStorageState
+): Promise<SessionStorageRestoreMode> {
+  if (!context.setStorageState) return "legacy";
+  await context.setStorageState(state);
+  return "full";
+}
+
 interface EncryptedSessionStateEnvelope {
   version: 1;
   algorithm: "aes-256-gcm";

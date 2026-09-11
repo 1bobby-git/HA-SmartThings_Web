@@ -2,11 +2,31 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
-import { EncryptedSessionStateStore } from "../../src/security/session-state.js";
+import { EncryptedSessionStateStore, restoreSessionStorageState } from "../../src/security/session-state.js";
 
 describe("encrypted SmartThings session state", () => {
+  test("restores the complete verified Playwright state including IndexedDB", async () => {
+    const state = {
+      cookies: [{ name: "SamsungSession", value: "cookie", domain: ".smartthings.com", path: "/" }],
+      origins: [{
+        origin: "https://my.smartthings.com",
+        localStorage: [{ name: "auth", value: "local" }],
+        indexedDB: [{ name: "auth-db", version: 1, stores: [] }]
+      }]
+    };
+    const setStorageState = vi.fn(async () => undefined);
+
+    expect(await restoreSessionStorageState({ setStorageState }, state)).toBe("full");
+    expect(setStorageState).toHaveBeenCalledWith(state);
+  });
+
+  test("reports legacy mode when full Playwright storage restore is unavailable", async () => {
+    const state = { cookies: [{ name: "session" }], origins: [] };
+    expect(await restoreSessionStorageState({}, state)).toBe("legacy");
+  });
+
   test("round-trips without writing cookies or local storage in plaintext", () => {
     const root = mkdtempSync(join(tmpdir(), "stw-session-state-"));
     try {

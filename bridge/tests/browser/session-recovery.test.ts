@@ -51,6 +51,46 @@ describe("session rejection and non-destructive SSO recovery", () => {
     expect(f.manager.reportAuthenticationFailure(f.probe, f.probe.url())).toBe(false);
     expect(f.manager.authenticationRecoveryPending()).toBe(false);
   });
+  test("a stale app shell escalates through Samsung Account SSO and promotes a verified tab", async () => {
+    const f = await setup();
+    await f.manager.touchAuthenticatedSession();
+    expect(f.manager.reportAuthenticationFailure(f.original, f.original.url())).toBe(true);
+    f.original.evaluate.mockResolvedValue("failed");
+    f.advance(30_001);
+    f.probe.goto.mockImplementation(async (url: string) => {
+      f.probe.address = url === KEEPER_URL ? `${KEEPER_URL}/sso-home` : url;
+    });
+    f.probe.evaluate.mockResolvedValue("ok");
+
+    expect(await f.manager.ensureKeeper()).toBe(f.probe);
+    expect(f.probe.goto.mock.calls.map(([url]) => url)).toEqual([
+      "https://account.samsung.com/", KEEPER_URL
+    ]);
+    expect(f.manager.currentKeeper()).toBe(f.probe);
+    expect(f.original.close).toHaveBeenCalledOnce();
+    expect(f.recovery).toHaveBeenCalledWith("sso_attempt");
+    expect(f.recovery).toHaveBeenCalledWith("sso_verified");
+  });
+
+  test("an expired Samsung SSO session surfaces the real login page instead of looping the stale shell", async () => {
+    const f = await setup();
+    await f.manager.touchAuthenticatedSession();
+    expect(f.manager.reportAuthenticationFailure(f.original, f.original.url())).toBe(true);
+    f.original.evaluate.mockResolvedValue("failed");
+    f.advance(30_001);
+    f.probe.goto.mockImplementation(async (url: string) => {
+      f.probe.address = url === KEEPER_URL ? loginUrl : url;
+    });
+
+    expect(await f.manager.ensureKeeper()).toBe(f.probe);
+    expect(f.manager.currentKeeper()).toBe(f.probe);
+    expect(f.probe.url()).toBe(loginUrl);
+    expect(f.probe.close).not.toHaveBeenCalled();
+    expect(f.original.close).toHaveBeenCalledOnce();
+    expect(f.manager.authenticationRecoveryPending()).toBe(true);
+    expect(f.recovery).toHaveBeenCalledWith("sso_login_required");
+  });
+
   test("a formerly authenticated login page recovers in a separate tab after 30 seconds", async () => {
     const f = await setup(); await f.manager.touchAuthenticatedSession();
     f.original.address = loginUrl; await f.manager.ensureKeeper();
