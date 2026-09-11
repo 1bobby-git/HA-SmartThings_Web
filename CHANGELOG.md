@@ -1,3 +1,10 @@
+## 1.8.38
+
+- 기존 5분 보호된 조회 keepalive에 더해, 인증이 정상인 동안 15분마다 같은 persistent Chromium context의 **별도 임시 탭**에서 `/location`을 새 문서로 부트스트랩하고 보호된 위치 조회까지 다시 검증합니다. SmartThings 웹앱의 정상 SSO/세션 갱신 흐름을 선제적으로 실행해 API GET만 반복하던 1.8.37보다 갱신 가능한 웹 세션을 오래 유지하도록 보강합니다.
+- 선제 갱신 탭은 keeper·Home Monitor·기기 명령 탭으로 승격하지 않고 항상 닫습니다. 로그인/MFA 화면으로 전환되거나 검증이 실패하면 현재 keeper를 그대로 보존하고 2분 이상 간격으로만 다시 시도하므로 사용자 로그인 화면이나 진행 중인 제어를 덮어쓰지 않습니다.
+- 선제 갱신이 성공하면 갱신된 공유 쿠키/스토리지 상태를 즉시 기존 AES-256-GCM `/data/session-state.json`에도 다시 저장합니다. `session_recovery` 로그에 `refresh_attempt`, `refresh_verified`, `refresh_login_required`, `refresh_failed`, `refresh_stale` 단계가 추가되어 실제 유지 여부를 구분할 수 있습니다.
+- Samsung 서버가 세션을 절대 만료시키거나 MFA/비밀번호 재입력을 요구하는 정책 자체를 우회하지는 않습니다. 그런 경우에는 기존 수동 로그인 화면을 보존합니다. 기기 제어 요청을 재전송하거나 SmartThings 공개/비공개 API를 새로 호출하는 방식은 추가하지 않습니다.
+
 ## 1.8.37
 
 - SmartThings 로그인 세션의 기존 persistent Chromium 프로필을 유지하면서, 정상 protected probe가 확인한 쿠키·localStorage를 bridge-secret으로 암호화한 `/data/session-state.json`에 보조 저장합니다. add-on 재시작·프로필 복구 시에만 사용하며, 복원 후 protected probe가 다시 성공해야 인증 상태로 복귀합니다.
