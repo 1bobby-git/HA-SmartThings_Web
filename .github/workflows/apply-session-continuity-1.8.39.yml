@@ -1,0 +1,147 @@
+name: Apply session continuity 1.8.39
+
+on:
+  push:
+    branches:
+      - fix/session-continuity-1.8.39
+    paths:
+      - .github/workflows/apply-session-continuity-1.8.39.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.head_commit.message == 'bootstrap: apply session-continuity 1.8.39'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.15.0'
+          cache: npm
+
+      - name: Apply session continuity patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f"missing patch anchor in {path}: {old[:120]!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          # 1) Restore the complete encrypted Playwright storage state, including IndexedDB.
+          replace_once(
+              "bridge/src/security/session-state.ts",
+              "export interface SessionStorageState {\n  cookies: unknown[];\n  origins: unknown[];\n}\n",
+              '''export interface SessionStorageState {\n  cookies: unknown[];\n  origins: unknown[];\n}\n\nexport type SessionStorageRestoreMode = "full" | "legacy" | "unavailable";\n\nexport interface SessionStorageRestoreContext {\n  setStorageState?: (state: SessionStorageState) => Promise<unknown>;\n  addCookies?: (cookies: unknown[]) => Promise<unknown>;\n}\n\n/** Restore the last verified browser storage state without weakening server auth.\n * Playwright's full restore covers cookies, localStorage and IndexedDB. Older\n * contexts retain the cookie + page-localStorage compatibility path.\n */\nexport async function restoreSessionStorageState(\n  context: SessionStorageRestoreContext,\n  state: SessionStorageState\n): Promise<SessionStorageRestoreMode> {\n  if (context.setStorageState) {\n    await context.setStorageState(state);\n    return "full";\n  }\n  if (state.cookies.length > 0) {\n    if (!context.addCookies) return "unavailable";\n    await context.addCookies(state.cookies);\n  }\n  return "legacy";\n}\n'''
+          )
+
+          replace_once(
+              "bridge/src/runtime.ts",
+              'import { EncryptedSessionStateStore } from "./security/session-state.js";',
+              'import { EncryptedSessionStateStore, restoreSessionStorageState } from "./security/session-state.js";'
+          )
+          replace_once(
+              "bridge/src/runtime.ts",
+              '  addCookies?: (cookies: unknown[]) => Promise<unknown>;\n  storageState?: (options?: { indexedDB?: boolean }) => Promise<unknown>;',
+              '  addCookies?: (cookies: unknown[]) => Promise<unknown>;\n  setStorageState?: (state: { cookies: unknown[]; origins: unknown[] }) => Promise<unknown>;\n  storageState?: (options?: { indexedDB?: boolean }) => Promise<unknown>;'
+          )
+          replace_once(
+              "bridge/src/runtime.ts",
+              '''    if (state.cookies.length > 0) {\n      if (!context.addCookies) return undefined;\n      // api-free-audit: encrypted-session-restore\n      await context.addCookies(state.cookies);\n    }\n    await page.goto(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 12_000 });''',
+              '''    // api-free-audit: encrypted-session-restore\n    const restoreMode = await restoreSessionStorageState(context, state);\n    if (restoreMode === "unavailable") return undefined;\n    await page.goto(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 12_000 });'''
+          )
+          replace_once(
+              "bridge/src/runtime.ts",
+              '    if (page.evaluate && state.origins.length > 0) {',
+              '    if (restoreMode === "legacy" && page.evaluate && state.origins.length > 0) {'
+          )
+
+          # 2) Escalate a stale SmartThings shell through the normal Samsung Account SSO chain.
+          replace_once(
+              "bridge/src/browser/keeper-page.ts",
+              'export const ADVANCED_URL = "https://my.smartthings.com/advanced";',
+              'export const ADVANCED_URL = "https://my.smartthings.com/advanced";\nexport const SAMSUNG_ACCOUNT_URL = "https://account.samsung.com/";'
+          )
+          replace_once(
+              "bridge/src/browser/keeper-page.ts",
+              '''    | "refresh_failed"\n    | "refresh_stale"\n  ) => void;''',
+              '''    | "refresh_failed"\n    | "refresh_stale"\n    | "sso_attempt"\n    | "sso_verified"\n    | "sso_login_required"\n    | "sso_failed"\n    | "sso_stale"\n  ) => void;'''
+          )
+          replace_once(
+              "bridge/src/browser/keeper-page.ts",
+              '''        const outcome = await this.touchAuthenticatedSession();\n        this.recoveryDiagnostic(outcome === "ok" ? "verified" : outcome === "reauth" ? "login_required" : "failed");''',
+              '''        const outcome = await this.touchAuthenticatedSession();\n        this.recoveryDiagnostic(outcome === "ok" ? "verified" : outcome === "reauth" ? "login_required" : "failed");\n        if (\n          outcome !== "ok" &&\n          this.#authenticatedOnce &&\n          this.authenticationRecoveryPending()\n        ) {\n          await this.recoverViaSamsungSsoInSeparatePage(keeper);\n        }'''
+          )
+
+          marker = '''  /** Use the existing profile's ordinary SSO redirect chain without touching the\n   * user's sign-in/MFA form. Promote only after an actual protected read succeeds.\n   */\n  private async recoverLoginInSeparatePage(original: BrowserPageLike): Promise<void> {'''
+          method = '''  /** Re-enter the ordinary Samsung Account -> SmartThings SSO chain when a\n   * stale SmartThings application shell cannot renew its protected session.\n   * This never fills credentials, changes cookie expiry, bypasses MFA, or replays\n   * a device command. If Samsung requires interaction, the real login page is\n   * surfaced as the keeper instead of repeatedly reloading a dead app shell.\n   */\n  private async recoverViaSamsungSsoInSeparatePage(original: BrowserPageLike): Promise<void> {\n    const originalUrl = original.url();\n    let probe: BrowserPageLike | undefined;\n    this.recoveryDiagnostic("sso_attempt");\n    try {\n      probe = await this.context.newPage();\n      this.#commandPages.add(probe);\n      await probe.goto(SAMSUNG_ACCOUNT_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });\n      if (\n        !this.#canNavigate() ||\n        this.currentKeeper() !== original ||\n        original.isClosed() ||\n        original.url() !== originalUrl\n      ) {\n        this.recoveryDiagnostic("sso_stale");\n        return;\n      }\n\n      await probe.goto(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });\n      if (isSamsungLoginUrl(probe.url())) {\n        if (\n          !this.#canNavigate() ||\n          this.currentKeeper() !== original ||\n          original.isClosed() ||\n          original.url() !== originalUrl\n        ) {\n          this.recoveryDiagnostic("sso_stale");\n          return;\n        }\n        this.invalidateTouch();\n        this.#keeper = probe;\n        this.#commandPages.delete(probe);\n        this.#sessionReauthObservedAtMs = undefined;\n        this.#loginObservedAtMs = this.#now();\n        probe = undefined;\n        await original.close().catch(() => undefined);\n        this.recoveryDiagnostic("sso_login_required");\n        return;\n      }\n      if (!isKeeperSettledUrl(probe.url())) {\n        this.recoveryDiagnostic("sso_failed");\n        return;\n      }\n\n      const candidate = probe;\n      const verifier = new KeeperPageManager(\n        { pages: () => [candidate], newPage: async () => candidate },\n        { canNavigate: () => false }\n      );\n      await verifier.reconcileRestoredPages();\n      const outcome = await verifier.touchAuthenticatedSession();\n      if (outcome !== "ok") {\n        this.recoveryDiagnostic(outcome === "reauth" ? "sso_login_required" : "sso_failed");\n        return;\n      }\n      if (\n        !this.#canNavigate() ||\n        this.currentKeeper() !== original ||\n        original.isClosed() ||\n        original.url() !== originalUrl ||\n        candidate.isClosed()\n      ) {\n        this.recoveryDiagnostic("sso_stale");\n        return;\n      }\n      if (!(await this.promoteVerifiedKeeper(candidate))) {\n        this.recoveryDiagnostic("sso_stale");\n        return;\n      }\n      probe = undefined;\n      this.recoveryDiagnostic("sso_verified");\n    } catch {\n      this.recoveryDiagnostic("sso_failed");\n    } finally {\n      if (probe) this.#commandPages.delete(probe);\n      await probe?.close().catch(() => undefined);\n    }\n  }\n\n''' + marker
+          replace_once("bridge/src/browser/keeper-page.ts", marker, method)
+
+          # 3) Regression tests for complete storage restore and SSO escalation.
+          replace_once(
+              "bridge/tests/security/session-state.test.ts",
+              'import { describe, expect, test } from "vitest";\n\nimport { EncryptedSessionStateStore } from "../../src/security/session-state.js";',
+              'import { describe, expect, test, vi } from "vitest";\n\nimport { EncryptedSessionStateStore, restoreSessionStorageState } from "../../src/security/session-state.js";'
+          )
+          replace_once(
+              "bridge/tests/security/session-state.test.ts",
+              'describe("encrypted SmartThings session state", () => {\n',
+              '''describe("encrypted SmartThings session state", () => {\n  test("restores the complete verified Playwright state including IndexedDB", async () => {\n    const state = {\n      cookies: [{ name: "SamsungSession", value: "cookie", domain: ".smartthings.com", path: "/" }],\n      origins: [{\n        origin: "https://my.smartthings.com",\n        localStorage: [{ name: "auth", value: "local" }],\n        indexedDB: [{ name: "auth-db", version: 1, stores: [] }]\n      }]\n    };\n    const setStorageState = vi.fn(async () => undefined);\n    const addCookies = vi.fn(async () => undefined);\n\n    expect(await restoreSessionStorageState({ setStorageState, addCookies }, state)).toBe("full");\n    expect(setStorageState).toHaveBeenCalledWith(state);\n    expect(addCookies).not.toHaveBeenCalled();\n  });\n\n  test("keeps the cookie compatibility restore when full storage restore is unavailable", async () => {\n    const state = { cookies: [{ name: "session" }], origins: [] };\n    const addCookies = vi.fn(async () => undefined);\n    expect(await restoreSessionStorageState({ addCookies }, state)).toBe("legacy");\n    expect(addCookies).toHaveBeenCalledWith(state.cookies);\n    expect(await restoreSessionStorageState({}, state)).toBe("unavailable");\n  });\n\n'''
+          )
+
+          test_marker = '''  test("a formerly authenticated login page recovers in a separate tab after 30 seconds", async () => {'''
+          test_insert = '''  test("a stale app shell escalates through Samsung Account SSO and promotes a verified tab", async () => {\n    const f = await setup();\n    await f.manager.touchAuthenticatedSession();\n    expect(f.manager.reportAuthenticationFailure(f.original, f.original.url())).toBe(true);\n    f.original.evaluate.mockResolvedValue("failed");\n    f.advance(30_001);\n    f.probe.goto.mockImplementation(async (url: string) => {\n      f.probe.address = url === KEEPER_URL ? `${KEEPER_URL}/sso-home` : url;\n    });\n    f.probe.evaluate.mockResolvedValue("ok");\n\n    expect(await f.manager.ensureKeeper()).toBe(f.probe);\n    expect(f.probe.goto.mock.calls.map(([url]) => url)).toEqual([\n      "https://account.samsung.com/", KEEPER_URL\n    ]);\n    expect(f.manager.currentKeeper()).toBe(f.probe);\n    expect(f.original.close).toHaveBeenCalledOnce();\n    expect(f.recovery).toHaveBeenCalledWith("sso_attempt");\n    expect(f.recovery).toHaveBeenCalledWith("sso_verified");\n  });\n\n  test("an expired Samsung SSO session surfaces the real login page instead of looping the stale shell", async () => {\n    const f = await setup();\n    await f.manager.touchAuthenticatedSession();\n    expect(f.manager.reportAuthenticationFailure(f.original, f.original.url())).toBe(true);\n    f.original.evaluate.mockResolvedValue("failed");\n    f.advance(30_001);\n    f.probe.goto.mockImplementation(async (url: string) => {\n      f.probe.address = url === KEEPER_URL ? loginUrl : url;\n    });\n\n    expect(await f.manager.ensureKeeper()).toBe(f.probe);\n    expect(f.manager.currentKeeper()).toBe(f.probe);\n    expect(f.probe.url()).toBe(loginUrl);\n    expect(f.probe.close).not.toHaveBeenCalled();\n    expect(f.original.close).toHaveBeenCalledOnce();\n    expect(f.manager.authenticationRecoveryPending()).toBe(true);\n    expect(f.recovery).toHaveBeenCalledWith("sso_login_required");\n  });\n\n''' + test_marker
+          replace_once("bridge/tests/browser/session-recovery.test.ts", test_marker, test_insert)
+
+          # 4) Synchronize 1.8.39 metadata and release notes.
+          for path in ["package.json", "custom_components/smartthings_web/manifest.json"]:
+              replace_once(path, '"version": "1.8.38"', '"version": "1.8.39"')
+          p = Path("package-lock.json")
+          text = p.read_text()
+          if text.count('"version": "1.8.38"') < 2:
+              raise SystemExit("package-lock version anchors missing")
+          p.write_text(text.replace('"version": "1.8.38"', '"version": "1.8.39"', 2))
+          replace_once("addon/smartthings_web_bridge/config.yaml", "version: 1.8.38", "version: 1.8.39")
+          replace_once("protocol/version.json", '"bridge_version": "1.8.38"', '"bridge_version": "1.8.39"')
+          replace_once("bridge/src/runtime.ts", 'const bridgeVersion = "1.8.38";', 'const bridgeVersion = "1.8.39";')
+
+          notes = '''## 1.8.39\n\n- 1.8.38 운영 로그에서 선제 세션 갱신과 암호화 백업 저장은 성공했지만 이후 `session_recovery:attempt -> failed`가 반복되는 실제 실패를 기준으로 복구 경로를 보강합니다.\n- `storageState({ indexedDB: true })`로 저장하던 전체 인증 상태를 복구할 때도 Playwright `setStorageState()`로 그대로 적용합니다. 이전에는 백업 안의 IndexedDB가 저장되어도 복구 시 쿠키와 localStorage만 적용되어 일부 인증 상태가 버려질 수 있었습니다. 구형 컨텍스트는 기존 쿠키 + localStorage 복구를 유지합니다.\n- 이미 인증됐던 SmartThings 앱 셸이 보호된 조회를 갱신하지 못하면 같은 `/location` 재로드만 반복하지 않고 별도 탭에서 정상 Samsung Account -> SmartThings SSO 흐름을 다시 부트스트랩한 뒤 보호된 조회가 성공한 경우에만 keeper로 승격합니다.\n- Samsung Account가 실제 로그인을 요구하면 자동 자격증명 입력, 쿠키 만료 조작, MFA 우회 없이 그 실제 로그인 페이지를 keeper로 노출해 숨은 복구 루프에 갇히지 않게 합니다. 로그인 완료 후에는 동일 persistent Chromium 프로필을 계속 사용합니다. 서버가 세션을 강제 폐기하거나 MFA를 요구하는 정책 자체는 클라이언트가 제거하지 않습니다.\n\n'''
+          for path in ["CHANGELOG.md", "addon/smartthings_web_bridge/CHANGELOG.md"]:
+              p = Path(path)
+              p.write_text(notes + p.read_text())
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Focused regression tests
+        run: npx vitest run bridge/tests/browser/session-recovery.test.ts bridge/tests/browser/session-proactive-refresh.test.ts bridge/tests/security/session-state.test.ts
+
+      - name: Typecheck and build
+        run: |
+          npm run typecheck
+          npm run build
+
+      - name: Security boundary audits
+        run: |
+          npm run audit:api-free
+          npm run audit:secrets
+
+      - name: Commit validated patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md addon/smartthings_web_bridge/CHANGELOG.md addon/smartthings_web_bridge/config.yaml bridge/src/browser/keeper-page.ts bridge/src/runtime.ts bridge/src/security/session-state.ts bridge/tests/browser/session-recovery.test.ts bridge/tests/security/session-state.test.ts custom_components/smartthings_web/manifest.json package.json package-lock.json protocol/version.json
+          git diff --cached --check
+          git commit -m "fix: harden SmartThings session recovery (1.8.39)"
+          git push origin HEAD:fix/session-continuity-1.8.39
