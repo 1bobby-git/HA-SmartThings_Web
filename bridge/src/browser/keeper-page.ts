@@ -1,5 +1,6 @@
 export const KEEPER_URL = "https://my.smartthings.com/location";
 export const ADVANCED_URL = "https://my.smartthings.com/advanced";
+export const SAMSUNG_ACCOUNT_URL = "https://account.samsung.com/";
 const SESSION_TOUCH_PATH = "/location";
 export const SESSION_TOUCH_AUTH_PATH =
   "/advanced/cupcake-api/api/locations?allowed=true";
@@ -64,6 +65,11 @@ export interface KeeperPageManagerOptions {
     | "refresh_login_required"
     | "refresh_failed"
     | "refresh_stale"
+    | "sso_attempt"
+    | "sso_verified"
+    | "sso_login_required"
+    | "sso_failed"
+    | "sso_stale"
   ) => void;
 }
 
@@ -613,6 +619,13 @@ export class KeeperPageManager {
         // Preserve the pending state until the protected read succeeds.
         const outcome = await this.touchAuthenticatedSession();
         this.recoveryDiagnostic(outcome === "ok" ? "verified" : outcome === "reauth" ? "login_required" : "failed");
+        if (
+          outcome !== "ok" &&
+          this.#authenticatedOnce &&
+          this.authenticationRecoveryPending()
+        ) {
+          await this.recoverViaSamsungSsoInSeparatePage(keeper);
+        }
       } else if (isSamsungLoginUrl(keeper.url())) {
         this.#sessionReauthObservedAtMs = undefined;
         this.#loginObservedAtMs = this.#now();
@@ -625,6 +638,91 @@ export class KeeperPageManager {
       if (this.#sessionRecoveryInFlight === recovery) {
         this.#sessionRecoveryInFlight = undefined;
       }
+    }
+  }
+
+  /** Re-enter the ordinary Samsung Account -> SmartThings SSO chain when a
+   * stale SmartThings application shell cannot renew its protected session.
+   * This never fills credentials, changes cookie expiry, bypasses MFA, or replays
+   * a device command. If Samsung requires interaction, the real login page is
+   * surfaced as the keeper instead of repeatedly reloading a dead app shell.
+   */
+  private async recoverViaSamsungSsoInSeparatePage(original: BrowserPageLike): Promise<void> {
+    const originalUrl = original.url();
+    let probe: BrowserPageLike | undefined;
+    this.recoveryDiagnostic("sso_attempt");
+    try {
+      probe = await this.context.newPage();
+      this.#commandPages.add(probe);
+      await probe.goto(SAMSUNG_ACCOUNT_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });
+      if (
+        !this.#canNavigate() ||
+        this.currentKeeper() !== original ||
+        original.isClosed() ||
+        original.url() !== originalUrl
+      ) {
+        this.recoveryDiagnostic("sso_stale");
+        return;
+      }
+
+      await probe.goto(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });
+      if (isSamsungLoginUrl(probe.url())) {
+        if (
+          !this.#canNavigate() ||
+          this.currentKeeper() !== original ||
+          original.isClosed() ||
+          original.url() !== originalUrl
+        ) {
+          this.recoveryDiagnostic("sso_stale");
+          return;
+        }
+        this.invalidateTouch();
+        this.#keeper = probe;
+        this.#commandPages.delete(probe);
+        this.#sessionReauthObservedAtMs = undefined;
+        this.#loginObservedAtMs = this.#now();
+        probe = undefined;
+        await original.close().catch(() => undefined);
+        this.recoveryDiagnostic("sso_login_required");
+        return;
+      }
+      if (!isKeeperSettledUrl(probe.url())) {
+        this.recoveryDiagnostic("sso_failed");
+        return;
+      }
+
+      const candidate = probe;
+      const verifier = new KeeperPageManager(
+        { pages: () => [candidate], newPage: async () => candidate },
+        { canNavigate: () => false }
+      );
+      await verifier.reconcileRestoredPages();
+      const outcome = await verifier.touchAuthenticatedSession();
+      if (outcome !== "ok") {
+        this.recoveryDiagnostic(outcome === "reauth" ? "sso_login_required" : "sso_failed");
+        return;
+      }
+      if (
+        !this.#canNavigate() ||
+        this.currentKeeper() !== original ||
+        original.isClosed() ||
+        original.url() !== originalUrl ||
+        candidate.isClosed()
+      ) {
+        this.recoveryDiagnostic("sso_stale");
+        return;
+      }
+      if (!(await this.promoteVerifiedKeeper(candidate))) {
+        this.recoveryDiagnostic("sso_stale");
+        return;
+      }
+      probe = undefined;
+      this.recoveryDiagnostic("sso_verified");
+    } catch {
+      this.recoveryDiagnostic("sso_failed");
+    } finally {
+      if (probe) this.#commandPages.delete(probe);
+      await probe?.close().catch(() => undefined);
     }
   }
 
