@@ -1,0 +1,50 @@
+name: Validate session lifecycle repair
+
+on:
+  push:
+    branches: [fix/session-lifecycle-1.8.40]
+    paths:
+      - tools/apply-session-lifecycle-1.8.40.py
+      - .github/workflows/apply-session-lifecycle-1.8.40.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: session-lifecycle-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/session-lifecycle-1.8.40
+          fetch-depth: 1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Apply anchored repair
+        run: python3 tools/apply-session-lifecycle-1.8.40.py
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Complete regression tests and typecheck
+        run: |
+          npm test
+          npm run typecheck
+          npm run build
+      - name: Preserve security boundaries
+        run: |
+          npm run audit:api-free
+          npm run audit:secrets
+      - name: Commit tested repair
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add bridge/src bridge/tests tests/addon-config.test.ts tests/protocol-version-contract.test.ts package.json package-lock.json protocol/version.json custom_components/smartthings_web/manifest.json addon/smartthings_web_bridge/config.yaml CHANGELOG.md addon/smartthings_web_bridge/CHANGELOG.md
+          git diff --cached --check
+          git commit -m 'fix: preserve live authentication and await SSO completion (1.8.40)'
+          git push origin HEAD:fix/session-lifecycle-1.8.40
