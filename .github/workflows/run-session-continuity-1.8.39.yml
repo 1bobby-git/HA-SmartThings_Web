@@ -1,0 +1,59 @@
+name: Run session continuity 1.8.39 patch
+
+on:
+  push:
+    branches:
+      - fix/session-continuity-1.8.39
+    paths:
+      - .github/workflows/run-session-continuity-1.8.39.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.15.0'
+          cache: npm
+      - name: Extract and apply the validated patch script
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('.github/workflows/apply-session-continuity-1.8.39.yml').read_text()
+          begin_token = "          python3 - <<'PY'\n"
+          end_token = "\n          PY\n"
+          start = source.index(begin_token) + len(begin_token)
+          end = source.index(end_token, start)
+          body = source[start:end]
+          body = '\n'.join(line[10:] if line.startswith('          ') else line for line in body.splitlines()) + '\n'
+          Path('/tmp/apply-session-continuity.py').write_text(body)
+          PY
+          python3 /tmp/apply-session-continuity.py
+      - name: Install dependencies
+        run: npm ci
+      - name: Focused regression tests
+        run: npx vitest run bridge/tests/browser/session-recovery.test.ts bridge/tests/browser/session-proactive-refresh.test.ts bridge/tests/security/session-state.test.ts
+      - name: Typecheck and build
+        run: |
+          npm run typecheck
+          npm run build
+      - name: Security boundary audits
+        run: |
+          npm run audit:api-free
+          npm run audit:secrets
+      - name: Commit validated patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md addon/smartthings_web_bridge/CHANGELOG.md addon/smartthings_web_bridge/config.yaml bridge/src/browser/keeper-page.ts bridge/src/runtime.ts bridge/src/security/session-state.ts bridge/tests/browser/session-recovery.test.ts bridge/tests/security/session-state.test.ts custom_components/smartthings_web/manifest.json package.json package-lock.json protocol/version.json
+          git diff --cached --check
+          git commit -m "fix: harden SmartThings session recovery (1.8.39)"
+          git push origin HEAD:fix/session-continuity-1.8.39
