@@ -1,0 +1,81 @@
+name: Synchronize 1.8.38 version contracts
+
+on:
+  push:
+    branches:
+      - fix/session-continuity-1.8.38
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/session-continuity-1.8.38
+          fetch-depth: 0
+
+      - name: Synchronize version metadata and tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match for {old!r}, got {count}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          version_path = Path("protocol/version.json")
+          version = json.loads(version_path.read_text(encoding="utf-8"))
+          if version.get("bridge_version") != "1.8.37":
+              raise SystemExit(f"unexpected protocol bridge version: {version.get('bridge_version')}")
+          version["bridge_version"] = "1.8.38"
+          version_path.write_text(json.dumps(version, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+          addon = "tests/addon-config.test.ts"
+          replace_once(addon, 'test("packages HAOS live-control recovery as version 1.8.37", () => {', 'test("packages HAOS session continuity as version 1.8.38", () => {')
+          replace_once(addon, 'expect(config.version).toBe("1.8.37");', 'expect(config.version).toBe("1.8.38");')
+          replace_once(addon, 'expect(packageMetadata.version).toBe("1.8.37");', 'expect(packageMetadata.version).toBe("1.8.38");')
+          replace_once(addon, 'expect(protocolMetadata.bridge_version).toBe("1.8.37");', 'expect(protocolMetadata.bridge_version).toBe("1.8.38");')
+          replace_once(addon, 'expect(runtime).toContain(\'const bridgeVersion = "1.8.37";\');', 'expect(runtime).toContain(\'const bridgeVersion = "1.8.38";\');')
+          replace_once(addon, 'expect(changelog).toContain("## 1.8.37");', 'expect(changelog).toContain("## 1.8.38");\n    expect(changelog).toContain("## 1.8.37");')
+
+          contract = "tests/protocol-version-contract.test.ts"
+          replace_once(contract, 'test("keeps integration 1.8.37 compatible with Bridge 1.8.37 and protocol 5", () => {', 'test("keeps integration 1.8.38 compatible with Bridge 1.8.38 and protocol 5", () => {')
+          replace_once(contract, 'const expectedBridgeVersion = "1.8.37";', 'const expectedBridgeVersion = "1.8.38";')
+          replace_once(contract, 'const expectedIntegrationVersion = "1.8.37";', 'const expectedIntegrationVersion = "1.8.38";')
+          PY
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Validate version contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npx vitest run tests/addon-config.test.ts tests/protocol-version-contract.test.ts bridge/tests/browser/session-proactive-refresh.test.ts bridge/tests/runtime.test.ts
+          npm run typecheck
+          npm run build
+
+      - name: Commit synchronized branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/fix-version-contract-1.8.38.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "test: synchronize 1.8.38 version contracts"
+          git push origin HEAD:fix/session-continuity-1.8.38
