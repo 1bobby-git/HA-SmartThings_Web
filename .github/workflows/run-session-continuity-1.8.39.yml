@@ -21,7 +21,7 @@ jobs:
         with:
           node-version: '24.15.0'
           cache: npm
-      - name: Extract and apply the validated patch script
+      - name: Extract and apply the session patch
         shell: bash
         run: |
           python3 - <<'PY'
@@ -38,13 +38,42 @@ jobs:
           python3 /tmp/apply-session-continuity.py
           python3 - <<'PY'
           from pathlib import Path
-          path = Path('bridge/src/security/session-state.ts')
-          text = path.read_text()
-          old = '    await context.addCookies(state.cookies);'
-          new = '    // api-free-audit: encrypted-session-restore\n    await context.addCookies(state.cookies);'
+          import re
+
+          # Keep the legacy addCookies call in runtime.ts where the repository's
+          # existing API-free audit already validates this exact encrypted-restore path.
+          p = Path('bridge/src/security/session-state.ts')
+          text = p.read_text()
+          pattern = re.compile(
+              r'export type SessionStorageRestoreMode = "full" \| "legacy" \| "unavailable";.*?\n\nexport class EncryptedSessionStateStore',
+              re.S,
+          )
+          replacement = '''export type SessionStorageRestoreMode = "full" | "legacy";\n\nexport interface SessionStorageRestoreContext {\n  setStorageState?: (state: SessionStorageState) => Promise<unknown>;\n}\n\n/** Restore the complete last verified Playwright storage state when supported.\n * This covers cookies, localStorage and IndexedDB. The caller keeps the existing\n * cookie + page-localStorage compatibility path for older contexts.\n */\nexport async function restoreSessionStorageState(\n  context: SessionStorageRestoreContext,\n  state: SessionStorageState\n): Promise<SessionStorageRestoreMode> {\n  if (!context.setStorageState) return "legacy";\n  await context.setStorageState(state);\n  return "full";\n}\n\nexport class EncryptedSessionStateStore'''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('failed to narrow storage-state restore helper')
+          p.write_text(text)
+
+          p = Path('bridge/src/runtime.ts')
+          text = p.read_text()
+          old = '''    // api-free-audit: encrypted-session-restore\n    const restoreMode = await restoreSessionStorageState(context, state);\n    if (restoreMode === "unavailable") return undefined;\n    await page.goto(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 12_000 });'''
+          new = '''    const restoreMode = await restoreSessionStorageState(context, state);\n    if (restoreMode === "legacy" && state.cookies.length > 0) {\n      if (!context.addCookies) return undefined;\n      // api-free-audit: encrypted-session-restore\n      await context.addCookies(state.cookies);\n    }\n    await page.goto(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 12_000 });'''
           if old not in text:
-              raise SystemExit('missing addCookies audit anchor')
-          path.write_text(text.replace(old, new, 1))
+              raise SystemExit('failed to restore audited runtime cookie fallback')
+          p.write_text(text.replace(old, new, 1))
+
+          p = Path('bridge/tests/security/session-state.test.ts')
+          text = p.read_text()
+          text, count = re.subn(
+              r'\n  test\("keeps the cookie compatibility restore when full storage restore is unavailable", async \(\) => \{.*?\n  \}\);\n',
+              '''\n  test("reports legacy mode when full Playwright storage restore is unavailable", async () => {\n    const state = { cookies: [{ name: "session" }], origins: [] };\n    expect(await restoreSessionStorageState({}, state)).toBe("legacy");\n  });\n''',
+              text,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit('failed to update storage restore fallback test')
+          p.write_text(text)
           PY
       - name: Install dependencies
         run: npm ci
