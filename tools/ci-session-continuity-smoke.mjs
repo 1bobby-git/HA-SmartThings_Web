@@ -35,7 +35,7 @@ const launch = async () => {
     assert.equal(route.request().method(), 'GET');
     if (url.origin === 'https://account.samsung.com' && url.pathname === '/fixture-relay') {
       completedRelayPages++;
-      // DOMContentLoaded happens BEFORE this client-side SSO redirect.
+      // DOMContentLoaded happens BEFORE this real client-side navigation.
       return route.fulfill({ contentType: 'text/html', body:
         '<!doctype html><title>Fixture SSO relay</title><script>setTimeout(() => location.replace("https://my.smartthings.com/location/fixture-home"), 250);</script>' });
     }
@@ -43,10 +43,6 @@ const launch = async () => {
       return route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Fixture login</title><input id="mfa" value="unsent-fixture">' });
     }
     if (url.origin !== 'https://my.smartthings.com') return route.abort();
-    if (delayedRedirectsRemaining > 0 && route.request().isNavigationRequest() && url.pathname === '/location') {
-      delayedRedirectsRemaining--;
-      return route.fulfill({ status: 302, headers: { location: 'https://account.samsung.com/fixture-relay' }, body: '' });
-    }
     if (url.pathname === new URL(SESSION_TOUCH_AUTH_PATH, KEEPER_URL).pathname) {
       touches++;
       await route.fulfill({ status: responseStatus,
@@ -62,9 +58,29 @@ const launch = async () => {
       body: '<!doctype html><title>Fixture</title><p>Fixture home</p>' });
   });
 };
+// Playwright routes intercept only the first request of an HTTP redirect chain.
+// Simulate that initial server redirect at the navigation boundary instead of
+// allowing a redirected request to reach the deliberately blocked network.
+// The returned Page, DOMContentLoaded, cross-origin JS navigation, waitForURL,
+// storage, protected fetch, and all KeeperPageManager logic remain real.
+const managedContext = () => ({
+  pages: () => context.pages(),
+  newPage: async () => {
+    const page = await context.newPage();
+    const nativeGoto = page.goto.bind(page);
+    page.goto = (url, options) => {
+      if (url === KEEPER_URL && delayedRedirectsRemaining > 0) {
+        delayedRedirectsRemaining--;
+        return nativeGoto('https://account.samsung.com/fixture-relay', options);
+      }
+      return nativeGoto(url, options);
+    };
+    return page;
+  }
+});
 try {
   await launch();
-  let keeper = new KeeperPageManager(context);
+  let keeper = new KeeperPageManager(managedContext());
   let page = await keeper.ensureKeeper();
   await page.evaluate(() => localStorage.setItem('fixture-state', 'preserved'));
   phase = 'touch';
@@ -78,7 +94,7 @@ try {
   const saved = (await context.cookies(KEEPER_URL)).find(cookie => cookie.name === 'fixture_session');
   assert.equal(saved?.value, 'rotated');
   assert.equal(saved?.expires, -1); // Session cookie, not artificially extended.
-  keeper = new KeeperPageManager(context, { now: () => clock, onRecovery: phase => recoveryPhases.push(phase) });
+  keeper = new KeeperPageManager(managedContext(), { now: () => clock, onRecovery: phase => recoveryPhases.push(phase) });
   page = await keeper.ensureKeeper();
   // A restored error tab is allowed; load the intercepted application afresh.
   await page.goto(KEEPER_URL, { waitUntil: 'domcontentloaded' });
@@ -154,7 +170,7 @@ try {
   assert.equal(delayedRecovery.isClosed(), false);
   assert.equal(context.pages().length, 1);
   assert.equal(delayedRedirectsRemaining, 0);
-  console.log('PASS delayed client-side SSO: final redirect awaited in recovery and proactive refresh; protected denial preserves sign-in form; rotating profile not overwritten (synthetic only)');
+  console.log('PASS delayed client-side SSO: final redirect awaited in recovery and proactive refresh; protected denial preserves sign-in form (synthetic entry redirect, real Chromium navigation)');
   console.log('PASS session continuity: cookie rotation, persistent session-cookie/localStorage restore, bounded tab count, auth proof and transient failure classification (synthetic only)');
 } finally {
   await context?.close();
