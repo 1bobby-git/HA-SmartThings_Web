@@ -109,13 +109,19 @@ jobs:
           npm run build
           npm run package:addon
           version="${{ steps.release.outputs.version }}"
+          bridge_version="$(awk -F ': ' '/^version:/ { print $2; exit }' addon/smartthings_web_bridge/config.yaml)"
+          [[ -n "${bridge_version}" ]] || { echo "Missing Bridge add-on version." >&2; exit 1; }
           integration="smartthings-web-integration-${version}.tgz"
-          bridge="smartthings-web-bridge-${version}.tgz"
+          bridge="smartthings-web-bridge-${bridge_version}.tgz"
           tar -C custom_components -czf "${integration}" smartthings_web
           tar -C dist-addon -czf "${bridge}" smartthings_web_bridge
           tar -tzf "${integration}" >/dev/null
           tar -tzf "${bridge}" >/dev/null
-          VERSION="${version}" python - <<'PY'
+          release_notes="release-notes/${version}.md"
+          if [[ -s "${release_notes}" ]]; then
+            cp "${release_notes}" release-notes.md
+          else
+            VERSION="${version}" python - <<'PY'
           import os
           import re
           from pathlib import Path
@@ -134,15 +140,17 @@ jobs:
               raise SystemExit(f"Empty changelog section for {version}")
           Path("release-notes.md").write_text(notes + "\n", encoding="utf-8")
           PY
+          fi
           echo "integration=${integration}" >> "${GITHUB_ENV}"
           echo "bridge=${bridge}" >> "${GITHUB_ENV}"
+          echo "bridge_version=${bridge_version}" >> "${GITHUB_ENV}"
 
       - name: Publish release
         if: steps.release.outputs.publish == 'true'
         shell: bash
         run: |
           gh release create "${{ steps.release.outputs.tag }}" \
-            "${bridge}#SmartThings Web Bridge 앱" \
+            "${bridge}#SmartThings Web Bridge 앱 (${bridge_version})" \
             "${integration}#Home Assistant 통합" \
             --target "${RELEASE_SHA}" \
             --title "SmartThings Web ${{ steps.release.outputs.version }}" \
