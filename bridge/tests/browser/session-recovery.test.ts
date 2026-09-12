@@ -81,6 +81,8 @@ describe("session rejection and non-destructive SSO recovery", () => {
     f.probe.goto.mockImplementation(async (url: string) => {
       f.probe.address = url === KEEPER_URL ? loginUrl : url;
     });
+    // Model an actual visible sign-in form, not just a Samsung URL.
+    f.probe.evaluate.mockResolvedValue("password_input");
 
     expect(await f.manager.ensureKeeper()).toBe(f.probe);
     expect(f.manager.currentKeeper()).toBe(f.probe);
@@ -107,6 +109,8 @@ describe("session rejection and non-destructive SSO recovery", () => {
     const f = await setup(); await f.manager.touchAuthenticatedSession();
     f.original.address = loginUrl; await f.manager.ensureKeeper(); f.advance(30_001);
     f.probe.goto.mockImplementation(async () => { f.probe.address = loginUrl; });
+    // The recovery page presents a real OTP input and must stop escalation.
+    f.probe.evaluate.mockResolvedValue("otp_input");
     expect(await f.manager.ensureKeeper()).toBe(f.original);
     expect(f.original.goto).not.toHaveBeenCalled(); expect(f.original.close).not.toHaveBeenCalled();
     expect(f.probe.close).toHaveBeenCalledOnce();
