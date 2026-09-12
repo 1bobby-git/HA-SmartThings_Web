@@ -16,6 +16,7 @@ import {
   fetchAdvancedDeviceSnapshots,
   waitForSettledKeeperPage
 } from "./browser/keeper-page.js";
+import { verifyLocationApplicationSession, inspectAuthenticationPage } from "./browser/session-application-proof.js";
 import { SessionMaintenanceGate } from "./browser/session-maintenance.js";
 import { BrowserSupervisor } from "./browser/browser-supervisor.js";
 import { SmartThingsWebUiCommandExecutor } from "./browser/command-page.js";
@@ -113,7 +114,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.40";
+const bridgeVersion = "1.8.41";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -615,10 +616,15 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       const context = currentContext;
       const generation = activeContextGeneration;
       if (stopped || !manager || !context) return;
+      const beforeRefresh = manager.currentKeeper();
       if (await manager.refreshAuthenticatedSessionIfDue() === "verified" &&
           !stopped && generation === activeContextGeneration &&
           manager === currentKeeperManager && context === currentContext) {
+        await reconcileActiveKeeper();
         await persistSessionStateIfHealthy(context, sessionStateStore, status, log, "proactive_refresh");
+        if (beforeRefresh !== manager.currentKeeper()) {
+          void reconciliation.request("reconnect").catch(() => log.warn("session_handoff_inventory_sync_failed"));
+        }
       }
     }).catch(() => { log.warn("session_maintenance_failed"); });
   }, deps.config.heartbeatIntervalMs);
@@ -709,6 +715,15 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           log.warn("cake_client_capture_unavailable");
         }
         const keeperManager = new KeeperPageManager(context, {
+          verifyRefreshCandidate: async (candidate, target) => {
+            const proof = await verifyLocationApplicationSession(candidate, target);
+            log.info(`session_application_probe:${JSON.stringify(proof)}`);
+            return proof.outcome === "ok";
+          },
+          onLoginPage: async (page, stage) => {
+            const diagnostic = await inspectAuthenticationPage(page);
+            log.info(`session_login_page:${JSON.stringify({ stage, ...diagnostic })}`);
+          },
           onRecovery: (phase) => log.info(`session_recovery:${JSON.stringify({ phase })}`),
           onSessionProbe: (diagnostic) => log.info(`session_probe:${JSON.stringify(diagnostic)}`),
           canNavigate: canNavigateKeeper
