@@ -26,6 +26,9 @@ from .models import (
     safe_observed_control,
 )
 
+_PEOPLE_COUNTER_MAX = 100.0
+_PEOPLE_COUNTER_STEP = 1.0
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -96,6 +99,13 @@ class SmartThingsWebNumber(SmartThingsWebDeviceEntity, NumberEntity):
             minimum, maximum, step = numeric_range_for(device, state)
         else:
             minimum, maximum, step = (0.0, 100.0, 1.0)
+        minimum, maximum, step = _presentation_range(
+            control,
+            state,
+            minimum,
+            maximum,
+            step,
+        )
         self._attr_native_min_value = minimum
         self._attr_native_max_value = maximum
         self._attr_native_step = step
@@ -191,6 +201,52 @@ class SmartThingsWebNumber(SmartThingsWebDeviceEntity, NumberEntity):
 
 def _name(attribute: str) -> str:
     return re.sub(r"(?<!^)(?=[A-Z])", " ", attribute).replace("_", " ").strip().title()
+
+
+def _presentation_range(
+    control: BridgeControl | None,
+    state: BridgeState | None,
+    minimum: float,
+    maximum: float,
+    step: float,
+) -> tuple[float, float, float]:
+    """Return a UI range without changing unrelated SmartThings numeric controls."""
+    if not _is_people_counter(control, state):
+        return minimum, maximum, step
+
+    # SmartThings can advertise uint16 (65535) for a people counter even though
+    # that makes the Home Assistant slider impractical. Keep the live value raw,
+    # but constrain values users can select from HA to a practical integer range.
+    if minimum <= _PEOPLE_COUNTER_MAX:
+        maximum = min(maximum, _PEOPLE_COUNTER_MAX)
+    return minimum, maximum, _PEOPLE_COUNTER_STEP
+
+
+def _is_people_counter(
+    control: BridgeControl | None,
+    state: BridgeState | None,
+) -> bool:
+    """Identify people-count controls without globally capping number entities."""
+    values = (
+        control.label if control else None,
+        control.attribute if control else None,
+        control.capability if control else None,
+        state.attribute if state else None,
+        state.capability if state else None,
+    )
+    normalized = " ".join(_normalize_identifier(value) for value in values if value)
+    compact = normalized.replace(" ", "")
+    return (
+        "numberofpeople" in compact
+        or "peoplecount" in compact
+        or "personcount" in compact
+    )
+
+
+def _normalize_identifier(value: str) -> str:
+    """Normalize labels, snake case, kebab case and camel case for matching."""
+    separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", value)
+    return " ".join(re.findall(r"[a-z0-9]+", separated.lower()))
 
 
 def _matching_state(device: BridgeDevice, control: BridgeControl) -> BridgeState | None:

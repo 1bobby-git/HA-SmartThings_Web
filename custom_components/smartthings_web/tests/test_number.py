@@ -77,7 +77,89 @@ from smartthings_web.number import SmartThingsWebNumber  # noqa: E402
 
 
 class SmartThingsWebNumberTests(unittest.TestCase):
-    """Keep a number entity bound to the exact observed slider identity."""
+    """Keep number entities safe and practical for their exact observed control."""
+
+    def test_people_counter_caps_uint16_range_and_uses_single_step(self) -> None:
+        state = BridgeState(
+            "main",
+            "peopleCounter",
+            "numberOfPeople",
+            9,
+            None,
+            "2026-09-12T11:00:00Z",
+        )
+        control = BridgeControl(
+            "people_counter",
+            "slider",
+            "Number of people",
+            component="main",
+            capability="peopleCounter",
+            attribute="numberOfPeople",
+            minimum=0,
+            maximum=65535,
+            step=10,
+        )
+        device = BridgeDevice(
+            "dev_people",
+            "loc_001",
+            None,
+            "Counter sensor",
+            "sensor",
+            True,
+            states={state.key: state},
+            controls={control.control_id: control},
+        )
+        runtime = SimpleNamespace(
+            inventory=SimpleNamespace(devices={device.device_id: device}),
+            client=SimpleNamespace(),
+        )
+
+        entity = SmartThingsWebNumber(runtime, device, state, control)
+
+        self.assertEqual(entity._attr_native_min_value, 0)
+        self.assertEqual(entity._attr_native_max_value, 100.0)
+        self.assertEqual(entity._attr_native_step, 1.0)
+        self.assertEqual(entity.native_value, 9.0)
+
+    def test_unrelated_large_number_range_is_not_capped(self) -> None:
+        state = BridgeState(
+            "main",
+            "motion",
+            "detectionFrequency",
+            60,
+            "s",
+            "2026-09-12T11:00:00Z",
+        )
+        control = BridgeControl(
+            "frequency_slider",
+            "slider",
+            "Detection frequency",
+            component="main",
+            capability="motion",
+            attribute="detectionFrequency",
+            minimum=0,
+            maximum=3600,
+            step=5,
+        )
+        device = BridgeDevice(
+            "dev_motion_range",
+            "loc_001",
+            None,
+            "Motion sensor",
+            "sensor",
+            True,
+            states={state.key: state},
+            controls={control.control_id: control},
+        )
+        runtime = SimpleNamespace(
+            inventory=SimpleNamespace(devices={device.device_id: device}),
+            client=SimpleNamespace(),
+        )
+
+        entity = SmartThingsWebNumber(runtime, device, state, control)
+
+        self.assertEqual(entity._attr_native_max_value, 3600)
+        self.assertEqual(entity._attr_native_step, 5)
 
     def test_reused_control_id_cannot_retarget_a_different_slider(self) -> None:
         state = BridgeState(
