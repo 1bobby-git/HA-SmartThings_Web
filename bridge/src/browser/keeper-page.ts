@@ -23,6 +23,7 @@ export interface BrowserPageLike {
     pageFunction: (argument: Argument) => Result | Promise<Result>,
     argument: Argument
   ): Promise<Result>;
+  waitForURL?(url: (url: URL) => boolean, options?: { waitUntil?: "domcontentloaded" | "load"; timeout?: number }): Promise<unknown>;
   bringToFront?(): Promise<unknown>;
   goto(url: string, options?: { waitUntil?: "domcontentloaded" | "load"; timeout?: number }): Promise<unknown>;
   close(): Promise<unknown>;
@@ -46,7 +47,14 @@ export type ProactiveSessionRefreshOutcome =
   | "stale"
   | "skipped";
 
+export interface SessionProbeDiagnostic {
+  outcome: SessionTouchOutcome;
+  reason: string;
+  status?: number;
+}
+
 export interface KeeperPageManagerOptions {
+  onSessionProbe?: (diagnostic: SessionProbeDiagnostic) => void;
   now?: () => number;
   canNavigate?: () => boolean;
   sessionReauthRecoveryDelayMs?: number;
@@ -151,6 +159,7 @@ export class KeeperPageManager {
   #touchInFlight: { page: BrowserPageLike; url: string; result: Promise<SessionTouchOutcome> } | undefined;
   readonly #canNavigate: () => boolean;
   readonly #onRecovery: KeeperPageManagerOptions["onRecovery"];
+  readonly #onSessionProbe: KeeperPageManagerOptions["onSessionProbe"];
   #authenticatedOnce = false;
   #touchGeneration = 0;
 
@@ -160,6 +169,7 @@ export class KeeperPageManager {
   ) {
     this.#now = options.now ?? Date.now;
     this.#onRecovery = options.onRecovery;
+    this.#onSessionProbe = options.onSessionProbe;
     this.#canNavigate = options.canNavigate ?? (() => true);
     this.#sessionReauthRecoveryDelayMs = validDelay(
       options.sessionReauthRecoveryDelayMs,
@@ -308,7 +318,8 @@ export class KeeperPageManager {
 
   async recoverKeeper(): Promise<BrowserPageLike> {
     const current = this.currentKeeper();
-    if (!this.#canNavigate() || (current && isSamsungLoginUrl(current.url()))) {
+    if (this.#proactiveRefreshInFlight || this.#sessionRecoveryInFlight ||
+        !this.#canNavigate() || (current && isSamsungLoginUrl(current.url()))) {
       throw new Error("keeper_recovery_deferred");
     }
     const keeper = await this.ensureKeeper();
@@ -347,6 +358,22 @@ export class KeeperPageManager {
     return true;
   }
 
+  private reportProbe(outcome: SessionTouchOutcome, value?: unknown): void {
+    const record = typeof value === "object" && value !== null
+      ? value as Record<string, unknown> : undefined;
+    // Only fixed categories and an HTTP status are allowed into diagnostics.
+    const reasons = ["verified", "http_401", "auth_redirect", "http_error",
+      "unexpected_content_type", "invalid_json", "invalid_collection",
+      "network_or_timeout", "evaluation_failed", "renderer_timeout", "adapter_result"];
+    const reason = typeof record?.reason === "string" && reasons.includes(record.reason)
+      ? record.reason : "adapter_result";
+    const status = typeof record?.status === "number" && Number.isInteger(record.status) &&
+      record.status >= 100 && record.status <= 599 ? record.status : undefined;
+    try {
+      this.#onSessionProbe?.({ outcome, reason, ...(status === undefined ? {} : { status }) });
+    } catch { /* Diagnostics cannot change authentication. */ }
+  }
+
   async touchAuthenticatedSession(
     timeoutMs = SESSION_TOUCH_TIMEOUT_MS
   ): Promise<SessionTouchOutcome> {
@@ -366,13 +393,12 @@ export class KeeperPageManager {
     const flight = { page: keeper, url, result: Promise.resolve("failed" as SessionTouchOutcome) };
     this.#touchInFlight = flight;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    // Keep the underlying evaluate lease until it settles. A renderer timeout
-    // must not create an unbounded pile of hidden requests on later heartbeats.
+    // Keep the evaluate lease after a renderer timeout until it actually settles.
     const operation = Promise.resolve().then(() => keeper.evaluate!<
-      SessionTouchOutcome, { path: string; authPath: string; timeout: number }
+      SessionProbeDiagnostic | SessionTouchOutcome, { path: string; authPath: string; timeout: number }
     >(
       async ({ path, authPath, timeout }) => {
-        const request = async (target: string, budget: number, verify: boolean): Promise<SessionTouchOutcome> => {
+        const request = async (target: string, budget: number, verify: boolean): Promise<SessionProbeDiagnostic> => {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), budget);
           try {
@@ -381,53 +407,60 @@ export class KeeperPageManager {
               cache: "no-store", credentials: "same-origin", method: "GET",
               redirect: "manual", signal: controller.signal
             });
-            if (response.type === "opaqueredirect" || response.status === 401 ||
-                (response.status >= 300 && response.status < 400)) return "reauth";
-            if (!response.ok) return "failed";
+            const status = response.status;
+            if (status === 401) return { outcome: "reauth", reason: "http_401", status };
+            if (response.type === "opaqueredirect" || (status >= 300 && status < 400)) {
+              return { outcome: "reauth", reason: "auth_redirect", status };
+            }
+            if (!response.ok) return { outcome: "failed", reason: "http_error", status };
             if (!verify) {
               await response.body?.cancel().catch(() => undefined);
-              return "ok";
+              return { outcome: "ok", reason: "verified", status };
             }
-            // HTTP 200 alone can be an HTML sign-in shell or an error envelope.
             if (!/^application\/(?:[a-z0-9.+-]+\+)?json(?:;|$)/i.test(response.headers.get("content-type") ?? "")) {
               await response.body?.cancel().catch(() => undefined);
-              return "failed";
+              return { outcome: "failed", reason: "unexpected_content_type", status };
             }
-            const value: unknown = await response.json();
+            let value: unknown;
+            try { value = await response.json(); }
+            catch { return { outcome: "failed", reason: "invalid_json", status }; }
             const record = typeof value === "object" && value !== null && !Array.isArray(value)
               ? value as Record<string, unknown> : undefined;
             const rows = Array.isArray(value) ? value :
               ["items", "locations", "data", "results"].map((key) => record?.[key]).find(Array.isArray);
-            if (!Array.isArray(rows) || (record && (record.error || record.errors))) return "failed";
-            return rows.every((row: unknown) => {
+            if (!Array.isArray(rows) || (record && (record.error || record.errors))) {
+              return { outcome: "failed", reason: "invalid_collection", status };
+            }
+            const valid = rows.every((row: unknown) => {
               if (typeof row !== "object" || row === null || Array.isArray(row)) return false;
               const item = row as Record<string, unknown>;
               const id = item.locationId ?? item.id;
               return typeof id === "string" && id.length > 0 && id.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(id);
-            }) ? "ok" : "failed";
-          } catch { return "failed"; }
+            });
+            return { outcome: valid ? "ok" : "failed", reason: valid ? "verified" : "invalid_collection", status };
+          } catch { return { outcome: "failed", reason: "network_or_timeout" }; }
           finally { controller.abort(); clearTimeout(timer); }
         };
-        // Separate budgets: a slow optional page GET cannot starve the actual
-        // authenticated check. Neither request navigates or changes devices.
         const pageBudget = Math.max(1, Math.min(3_000, Math.floor(timeout / 4)));
         await request(path, pageBudget, false);
         return request(authPath, Math.max(1, timeout - pageBudget), true);
       }, { path: SESSION_TOUCH_PATH, authPath: SESSION_TOUCH_AUTH_PATH, timeout }
-    )).catch(() => "failed" as const).finally(() => {
+    )).catch(() => ({ outcome: "failed", reason: "evaluation_failed" } as const)).finally(() => {
       if (this.#touchInFlight === flight) this.#touchInFlight = undefined;
     });
     flight.result = Promise.race([
       operation,
-      new Promise<SessionTouchOutcome>((resolve) => {
-        timer = setTimeout(() => resolve("failed"), timeout + 1_000);
+      new Promise<SessionProbeDiagnostic>((resolve) => {
+        timer = setTimeout(() => resolve({ outcome: "failed", reason: "renderer_timeout" }), timeout + 1_000);
         timer.unref?.();
       })
-    ]).then((outcome) => {
+    ]).then((value) => {
       if (generation !== this.#touchGeneration || this.currentKeeper() !== keeper || keeper.isClosed() || keeper.url() !== url) return "stale";
-      const result = ["ok", "reauth", "failed"].includes(outcome) ? outcome : "failed";
-      this.observeSessionTouchOutcome(result as SessionTouchOutcome, url);
-      return result as SessionTouchOutcome;
+      const outcome = typeof value === "string" ? value : value?.outcome;
+      const result: SessionTouchOutcome = outcome === "ok" || outcome === "reauth" ? outcome : "failed";
+      this.reportProbe(result, value);
+      this.observeSessionTouchOutcome(result, url);
+      return result;
     }).finally(() => { if (timer !== undefined) clearTimeout(timer); });
     return flight.result;
   }
@@ -481,6 +514,7 @@ export class KeeperPageManager {
       probe = await this.context.newPage();
       this.#commandPages.add(probe);
       await probe.goto(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });
+      await waitForSettledKeeperPage(probe);
       if (isSamsungLoginUrl(probe.url())) {
         this.recoveryDiagnostic("refresh_login_required");
         return "login_required";
@@ -493,7 +527,7 @@ export class KeeperPageManager {
       const candidate = probe;
       const verifier = new KeeperPageManager(
         { pages: () => [candidate], newPage: async () => candidate },
-        { canNavigate: () => false }
+        { canNavigate: () => false, onSessionProbe: (diagnostic) => this.#onSessionProbe?.(diagnostic) }
       );
       await verifier.reconcileRestoredPages();
       const outcome = await verifier.touchAuthenticatedSession();
@@ -666,6 +700,7 @@ export class KeeperPageManager {
       }
 
       await probe.goto(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });
+      await waitForSettledKeeperPage(probe);
       if (isSamsungLoginUrl(probe.url())) {
         if (
           !this.#canNavigate() ||
@@ -694,7 +729,7 @@ export class KeeperPageManager {
       const candidate = probe;
       const verifier = new KeeperPageManager(
         { pages: () => [candidate], newPage: async () => candidate },
-        { canNavigate: () => false }
+        { canNavigate: () => false, onSessionProbe: (diagnostic) => this.#onSessionProbe?.(diagnostic) }
       );
       await verifier.reconcileRestoredPages();
       const outcome = await verifier.touchAuthenticatedSession();
@@ -738,12 +773,13 @@ export class KeeperPageManager {
       // Exclude this managed tab from concurrent keeper/command page adoption.
       this.#commandPages.add(probe);
       await probe.goto(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });
+      await waitForSettledKeeperPage(probe);
       if (!isKeeperSettledUrl(probe.url())) {
         this.recoveryDiagnostic(isSamsungLoginUrl(probe.url()) ? "login_required" : "failed");
         return;
       }
       const candidate = probe;
-      const verifier = new KeeperPageManager({ pages: () => [candidate], newPage: async () => candidate });
+      const verifier = new KeeperPageManager({ pages: () => [candidate], newPage: async () => candidate }, { onSessionProbe: (diagnostic) => this.#onSessionProbe?.(diagnostic) });
       await verifier.reconcileRestoredPages();
       const outcome = await verifier.touchAuthenticatedSession();
       if (outcome !== "ok") {
@@ -789,6 +825,26 @@ export class KeeperPageManager {
     this.#loginObservedAtMs = undefined;
     this.#lastRecoveryAttemptAtMs = undefined;
   }
+}
+
+/** A DOMContentLoaded on Samsung Account can be an intermediate SSO page.
+ * Wait for the final SmartThings URL; never submit or replace a sign-in form.
+ * A timeout is not evidence of server-enforced expiry or an MFA requirement.
+ */
+export async function waitForSettledKeeperPage(
+  page: BrowserPageLike,
+  timeoutMs = 20_000
+): Promise<boolean> {
+  if (page.isClosed()) return false;
+  if (isKeeperSettledUrl(page.url())) return true;
+  if (!page.waitForURL) return false;
+  const timeout = Number.isFinite(timeoutMs) ? Math.max(1, Math.min(20_000, timeoutMs)) : 20_000;
+  try {
+    await page.waitForURL((url) => isKeeperSettledUrl(url.toString()), {
+      waitUntil: "domcontentloaded", timeout
+    });
+  } catch { /* Preserve the current page for recovery or user interaction. */ }
+  return !page.isClosed() && isKeeperSettledUrl(page.url());
 }
 
 function validDelay(value: number | undefined, fallback: number): number {
