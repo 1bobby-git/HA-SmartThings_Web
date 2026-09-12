@@ -1,0 +1,47 @@
+name: Session continuity repair validation
+
+on:
+  push:
+    branches:
+      - fix/session-sso-continuity-20260913
+    paths:
+      - .github/workflows/session-repair-20260913.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.repository == '1bobby-git/HA-SmartThings_Web'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/session-sso-continuity-20260913
+      - name: Apply exact-base patch and publish only to the isolated fix branch
+        run: |
+          set -euo pipefail
+          python .github/session-fix-20260913.py
+          git diff --check
+          git add bridge/src/browser/keeper-page.ts
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: recover stalled Samsung SSO without replacing active login forms'
+          git push origin HEAD:refs/heads/fix/session-sso-continuity-20260913
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate session regression coverage
+        run: npx vitest run bridge/tests/browser
+      - name: Validate complete Node suite and build
+        run: |
+          npm test
+          npm run typecheck
+          npm run build
+      - name: Audit API-free and secret handling
+        run: |
+          npm run audit:api-free
+          npm run audit:fixtures
+          npm run audit:secrets
