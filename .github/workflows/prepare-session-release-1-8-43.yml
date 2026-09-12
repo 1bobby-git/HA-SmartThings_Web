@@ -1,0 +1,107 @@
+name: Prepare approved session release 1.8.43
+
+on:
+  push:
+    branches:
+      - fix/session-sso-continuity-20260913
+    paths:
+      - .github/workflows/prepare-session-release-1-8-43.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prepare-session-release-1-8-43
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == '1bobby-git/HA-SmartThings_Web'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+      - name: Prepare version metadata without changing runtime behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = '78dc48d1879d958a04edd2a9fd4a347b734b3efe'
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          import re
+
+          version = '1.8.43'
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              assert text.count(old) == count, f'Unexpected source: {path}: {old!r}'
+              p.write_text(text.replace(old, new), encoding='utf-8')
+
+          replace('package.json', '"version": "1.8.41"', f'"version": "{version}"')
+          lock = json.loads(Path('package-lock.json').read_text())
+          assert lock['version'] == lock['packages']['']['version'] == '1.8.41'
+          replace('package-lock.json', '"version": "1.8.41"', f'"version": "{version}"', count=2)
+          replace('custom_components/smartthings_web/manifest.json', '"version": "1.8.42"', f'"version": "{version}"')
+          replace('addon/smartthings_web_bridge/config.yaml', 'version: 1.8.41\n', f'version: {version}\n')
+          replace('protocol/version.json', '"bridge_version": "1.8.41"', f'"bridge_version": "{version}"')
+          replace('bridge/src/runtime.ts', 'const bridgeVersion = "1.8.41";', f'const bridgeVersion = "{version}";')
+
+          p = Path('tests/addon-config.test.ts')
+          text = p.read_text()
+          first = text.index('  test("packages HAOS session continuity as version 1.8.41"')
+          end = text.index('\n  test(', first + 1)
+          text = text[:first] + text[first:end].replace('1.8.41', version) + text[end:]
+          p.write_text(text)
+          p = Path('tests/protocol-version-contract.test.ts')
+          text = p.read_text()
+          assert 'const expectedBridgeVersion = "1.8.41";' in text
+          assert 'const expectedIntegrationVersion = "1.8.42";' in text
+          p.write_text(text.replace('1.8.41', version).replace('1.8.42', version))
+
+          notes = '''- 삼성 로그인 페이지에서 `no_visible_auth_input`과 `login_required`가 반복될 때, 이전에 인증된 세션에 대해 별도 탭에서 Samsung Account → SmartThings 자동인증 복구 경로를 추가로 시도합니다.
+          - 입력창을 찾지 못한 미확정 페이지와 실제 비밀번호·이메일·OTP 입력 화면을 구분하며, 기존 사용자 입력 화면은 보존합니다.
+          - 보호된 HTTP 읽기와 실제 Location 앱 연결 검증을 모두 통과한 경우에만 복구된 탭으로 교체합니다.
+          - 반복 실패 시 재시도 간격을 기본값 기준 5 → 10 → 20 → 최대 30분으로 조정합니다. 최초 복구 지연은 유지하고 검증된 성공 시 초기화합니다.
+          - Bridge 앱과 Home Assistant 통합의 배포 버전은 1.8.43입니다. 통합 기능 변경 없이 기존 사람 수 카운터 0~100/증감 1, 장치·엔티티·사용자 설정 및 protocol 5 호환성을 유지합니다.
+          - 로그인 수정 적용에는 **Bridge 앱 1.8.43 업데이트가 필요합니다. HACS 통합만 업데이트하면 브리지 코드는 바뀌지 않습니다.** 기존 프로필과 세션 데이터는 삭제하지 마세요.
+          - 자동검증의 삼성 응답은 모의 데이터이며, 실제 계정의 장시간 유지가 확인된 것은 아닙니다. 삼성 서버가 세션을 폐기하거나 추가 인증을 요구하면 Bridge 웹 UI에서 다시 로그인해야 할 수 있습니다.
+          '''
+          notes = '\n'.join(line.strip() for line in notes.splitlines()).strip() + '\n'
+          for name in ['CHANGELOG.md', 'addon/smartthings_web_bridge/CHANGELOG.md']:
+              p = Path(name)
+              text = p.read_text(encoding='utf-8')
+              assert not re.search(r'^## 1\.8\.43\b', text, flags=re.M), name
+              first = re.search(r'^## ', text, flags=re.M)
+              assert first, name
+              p.write_text(text[:first.start()] + f'## {version}\n\n' + notes + '\n' + text[first.start():], encoding='utf-8')
+          p = Path(f'release-notes/{version}.md')
+          assert not p.exists()
+          p.parent.mkdir(exist_ok=True)
+          p.write_text(notes, encoding='utf-8')
+          assert json.loads(Path('protocol/version.json').read_text())['protocol_version'] == 5
+          print('Prepared 1.8.43 metadata; dependency versions and protocol are unchanged.')
+          PY
+          git diff --check
+          git diff --stat
+          git grep -n -E '1\.8\.(41|42)' -- bridge/src tests bridge/tests custom_components/smartthings_web protocol package.json package-lock.json addon/smartthings_web_bridge/config.yaml || true
+          git add package.json package-lock.json custom_components/smartthings_web/manifest.json addon/smartthings_web_bridge/config.yaml protocol/version.json bridge/src/runtime.ts tests/addon-config.test.ts tests/protocol-version-contract.test.ts CHANGELOG.md addon/smartthings_web_bridge/CHANGELOG.md release-notes/1.8.43.md
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'release: prepare SmartThings Web 1.8.43 session continuity update'
+          git push origin HEAD:refs/heads/fix/session-sso-continuity-20260913
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Validate release metadata and regression suite
+        run: |
+          npm ci
+          npm test
+          npm run typecheck
+          npm run build
+          npm run package:addon
+          npm run audit:api-free
+          npm run audit:secrets
+          npm run audit:fixtures
