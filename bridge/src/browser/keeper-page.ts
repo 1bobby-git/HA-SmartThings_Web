@@ -54,6 +54,8 @@ export interface SessionProbeDiagnostic {
 }
 
 export interface KeeperPageManagerOptions {
+  verifyRefreshCandidate?: (page: BrowserPageLike, expectedUrl: string) => Promise<boolean>;
+  onLoginPage?: (page: BrowserPageLike, stage: "refresh" | "recovery" | "sso") => Promise<void>;
   onSessionProbe?: (diagnostic: SessionProbeDiagnostic) => void;
   now?: () => number;
   canNavigate?: () => boolean;
@@ -70,6 +72,7 @@ export interface KeeperPageManagerOptions {
     | "stale"
     | "refresh_attempt"
     | "refresh_verified"
+    | "refresh_handoff_verified"
     | "refresh_login_required"
     | "refresh_failed"
     | "refresh_stale"
@@ -160,6 +163,8 @@ export class KeeperPageManager {
   readonly #canNavigate: () => boolean;
   readonly #onRecovery: KeeperPageManagerOptions["onRecovery"];
   readonly #onSessionProbe: KeeperPageManagerOptions["onSessionProbe"];
+  readonly #verifyRefreshCandidate: KeeperPageManagerOptions["verifyRefreshCandidate"];
+  readonly #onLoginPage: KeeperPageManagerOptions["onLoginPage"];
   #authenticatedOnce = false;
   #touchGeneration = 0;
 
@@ -170,6 +175,8 @@ export class KeeperPageManager {
     this.#now = options.now ?? Date.now;
     this.#onRecovery = options.onRecovery;
     this.#onSessionProbe = options.onSessionProbe;
+    this.#verifyRefreshCandidate = options.verifyRefreshCandidate;
+    this.#onLoginPage = options.onLoginPage;
     this.#canNavigate = options.canNavigate ?? (() => true);
     this.#sessionReauthRecoveryDelayMs = validDelay(
       options.sessionReauthRecoveryDelayMs,
@@ -211,6 +218,10 @@ export class KeeperPageManager {
 
   private recoveryDiagnostic(phase: Parameters<NonNullable<KeeperPageManagerOptions["onRecovery"]>>[0]): void {
     try { this.#onRecovery?.(phase); } catch { /* Observers cannot break recovery. */ }
+  }
+
+  private async recordLoginPage(page: BrowserPageLike, stage: "refresh" | "recovery" | "sso"): Promise<void> {
+    try { await this.#onLoginPage?.(page, stage); } catch { /* Diagnostic only. */ }
   }
 
   authenticationRecoveryPending(): boolean {
@@ -513,9 +524,11 @@ export class KeeperPageManager {
     try {
       probe = await this.context.newPage();
       this.#commandPages.add(probe);
-      await probe.goto(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });
+      const target = this.#verifyRefreshCandidate && isConcreteLocationUrl(expectedUrl) ? expectedUrl : KEEPER_URL;
+      await probe.goto(target, { waitUntil: "domcontentloaded", timeout: 10_000 });
       await waitForSettledKeeperPage(probe);
       if (isSamsungLoginUrl(probe.url())) {
+        await this.recordLoginPage(probe, "refresh");
         this.recoveryDiagnostic("refresh_login_required");
         return "login_required";
       }
@@ -547,6 +560,27 @@ export class KeeperPageManager {
         return "stale";
       }
 
+      if (this.#verifyRefreshCandidate) {
+        // The fresh app has its own in-memory auth lifecycle. Verify its native
+        // Location connection, then keep THAT document running instead of
+        // discarding it and leaving the old keeper's stale timers/client alive.
+        if (!(await this.#verifyRefreshCandidate(candidate, expectedUrl))) {
+          this.recoveryDiagnostic("refresh_failed");
+          return "failed";
+        }
+        if (!this.#canNavigate() || this.currentKeeper() !== expectedKeeper ||
+            expectedKeeper.isClosed() || expectedKeeper.url() !== expectedUrl ||
+            candidate.isClosed() || !isKeeperSettledUrl(candidate.url())) {
+          this.recoveryDiagnostic("refresh_stale");
+          return "stale";
+        }
+        if (!(await this.promoteVerifiedKeeper(candidate))) {
+          this.recoveryDiagnostic("refresh_stale");
+          return "stale";
+        }
+        probe = undefined;
+        this.recoveryDiagnostic("refresh_handoff_verified");
+      }
       this.#lastProactiveRefreshAtMs = this.#now();
       this.#lastProactiveRefreshAttemptAtMs = undefined;
       this.recoveryDiagnostic("refresh_verified");
@@ -702,6 +736,7 @@ export class KeeperPageManager {
       await probe.goto(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });
       await waitForSettledKeeperPage(probe);
       if (isSamsungLoginUrl(probe.url())) {
+        await this.recordLoginPage(probe, "sso");
         if (
           !this.#canNavigate() ||
           this.currentKeeper() !== original ||
@@ -775,6 +810,7 @@ export class KeeperPageManager {
       await probe.goto(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });
       await waitForSettledKeeperPage(probe);
       if (!isKeeperSettledUrl(probe.url())) {
+        await this.recordLoginPage(probe, "recovery");
         this.recoveryDiagnostic(isSamsungLoginUrl(probe.url()) ? "login_required" : "failed");
         return;
       }
@@ -801,6 +837,7 @@ export class KeeperPageManager {
     } catch {
       this.recoveryDiagnostic("failed");
     } finally {
+      if (probe) this.#commandPages.delete(probe);
       await probe?.close().catch(() => undefined);
     }
   }

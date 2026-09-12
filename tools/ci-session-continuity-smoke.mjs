@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { launchSmartThingsPersistentContext } from '../dist/bridge/src/browser/persistent-context.js';
 import { KeeperPageManager, KEEPER_URL, SESSION_TOUCH_AUTH_PATH } from '../dist/bridge/src/browser/keeper-page.js';
+import { verifyLocationApplicationSession, inspectAuthenticationPage } from '../dist/bridge/src/browser/session-application-proof.js';
 import { isEmptySessionStorageState } from '../dist/bridge/src/security/session-state.js';
 
 // Only a new temporary profile and synthetic values. No real Samsung traffic:
@@ -172,6 +173,45 @@ try {
   assert.equal(delayedRedirectsRemaining, 0);
   console.log('PASS delayed client-side SSO: final redirect awaited in recovery and proactive refresh; protected denial preserves sign-in form (synthetic entry redirect, real Chromium navigation)');
   console.log('PASS session continuity: cookie rotation, persistent session-cookie/localStorage restore, bounded tab count, auth proof and transient failure classification (synthetic only)');
+
+  // Install only a synthetic counterpart of the already-captured native client.
+  // Its get() is intentionally separate from the successful Advanced HTTP probe.
+  await context.addInitScript(() => {
+    const native = { service: name => ({ get: async id => {
+      if (name !== 'api/location') throw new Error('unexpected native service');
+      if (sessionStorage.getItem('fixture-native-denied') === 'yes') throw { code: 401 };
+      return { locationId: id };
+    } }) };
+    Object.defineProperty(window, Symbol.for('smartthings_web_bridge.cake_client'), { value: native });
+  });
+  const documentBeforeHandoff = delayedRecovery;
+  const handoffPhases = [];
+  const handoff = new KeeperPageManager(managedContext(), {
+    now: () => clock, proactiveRefreshIntervalMs: 100,
+    onRecovery: phase => handoffPhases.push(phase),
+    verifyRefreshCandidate: async (candidate, target) =>
+      (await verifyLocationApplicationSession(candidate, target)).outcome === 'ok'
+  });
+  await handoff.reconcileRestoredPages();
+  assert.equal(await handoff.touchAuthenticatedSession(), 'ok');
+  clock += 101;
+  assert.equal(await handoff.refreshAuthenticatedSessionIfDue(), 'verified');
+  const freshDocument = handoff.currentKeeper();
+  assert.notEqual(freshDocument, documentBeforeHandoff);
+  assert.equal(documentBeforeHandoff.isClosed(), true);
+  assert.equal(freshDocument.isClosed(), false);
+  assert.equal(freshDocument.url(), `${KEEPER_URL}/fixture-home`);
+  assert.equal(context.pages().length, 1);
+  assert.ok(handoffPhases.includes('refresh_handoff_verified'));
+  // Native auth rejection remains a failure even while Advanced HTTP returns 200.
+  await freshDocument.evaluate(() => sessionStorage.setItem('fixture-native-denied', 'yes'));
+  assert.deepEqual(await verifyLocationApplicationSession(freshDocument, freshDocument.url()), { outcome: 'reauth', reason: 'http_401' });
+  await freshDocument.goto('https://account.samsung.com/accounts/v1/ST/signInGate');
+  await freshDocument.setContent('<input type="password" value="private-not-logged">');
+  assert.deepEqual(await inspectAuthenticationPage(freshDocument), { page: 'samsung_account', surface: 'password_input' });
+  await freshDocument.setContent('<input autocomplete="one-time-code" value="private-not-logged">');
+  assert.deepEqual(await inspectAuthenticationPage(freshDocument), { page: 'samsung_account', surface: 'otp_input' });
+  console.log('PASS verified running-document handoff: actual Chromium page promotion, old document retired, native 401 separated from Advanced 200, password/OTP presence diagnostics (synthetic only)');
 } finally {
   await context?.close();
   await rm(root, { recursive: true, force: true });
