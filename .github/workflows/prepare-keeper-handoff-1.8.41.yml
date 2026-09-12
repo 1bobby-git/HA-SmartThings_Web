@@ -1,0 +1,48 @@
+name: Prepare verified keeper handoff
+on:
+  push:
+    branches: [fix/verified-keeper-handoff-1.8.41]
+    paths:
+      - tools/apply-keeper-handoff-1.8.41.py
+      - .github/workflows/prepare-keeper-handoff-1.8.41.yml
+      - bridge/src/browser/session-application-proof.ts
+      - bridge/tests/browser/session-handoff.test.ts
+permissions:
+  contents: write
+concurrency:
+  group: prepare-keeper-handoff-1.8.41
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/verified-keeper-handoff-1.8.41
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Apply anchored changes
+        run: python3 tools/apply-keeper-handoff-1.8.41.py
+      - name: Test and build
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+          npm run audit:api-free
+          npm run audit:secrets
+      - name: Isolated real Chromium session proof
+        run: |
+          npx playwright-core install --with-deps chromium
+          xvfb-run -a node tools/ci-session-continuity-smoke.mjs
+      - name: Commit validated changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add bridge/src bridge/tests tests/addon-config.test.ts tests/protocol-version-contract.test.ts package.json package-lock.json protocol/version.json custom_components/smartthings_web/manifest.json addon/smartthings_web_bridge/config.yaml CHANGELOG.md addon/smartthings_web_bridge/CHANGELOG.md tools/ci-session-continuity-smoke.mjs
+          git diff --cached --check
+          git commit -m 'fix: hand off verified live Location sessions (1.8.41)'
+          git push origin HEAD:fix/verified-keeper-handoff-1.8.41
