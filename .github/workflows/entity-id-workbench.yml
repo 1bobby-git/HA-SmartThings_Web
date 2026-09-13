@@ -1,0 +1,27 @@
+name: Entity ID workbench
+"on":
+  push:
+    branches: [fix/entity-id-types-1.8.48]
+    paths: [.github/workflows/entity-id-workbench.yml]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Archive tracked source for isolated regression tests
+        run: |
+          mkdir -p workbench
+          git archive --format=tar HEAD > workbench/source.tar
+          git ls-files '*AGENTS.md'
+          curl --fail --location https://raw.githubusercontent.com/home-assistant/core/2026.9.0/homeassistant/helpers/entity_registry.py -o workbench/ha-entity-registry.py
+          curl --fail --location https://raw.githubusercontent.com/home-assistant/core/2026.9.0/homeassistant/helpers/entity_platform.py -o workbench/ha-entity-platform.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: entity-id-source
+          path: workbench/
+          retention-days: 1
