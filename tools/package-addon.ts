@@ -319,7 +319,8 @@ const canonicalPackageBytes = (relativePath: string, sourceBytes: Buffer): Buffe
 };
 
 const isPackageTextPath = (relativePath: string) =>
-  ROOT_FILES.includes(relativePath) ||
+  !relativePath.toLowerCase().endsWith(".png") &&
+  (ROOT_FILES.includes(relativePath) ||
   ROOT_TOOL_FILES.includes(relativePath) ||
   relativePath.startsWith("bridge/src/") ||
   relativePath.startsWith("rootfs/") ||
@@ -328,7 +329,7 @@ const isPackageTextPath = (relativePath: string) =>
   relativePath === "Dockerfile" ||
   relativePath === "README.md" ||
   relativePath === "apparmor.txt" ||
-  relativePath === "config.yaml";
+  relativePath === "config.yaml");
 
 const removePath = async (path: string) => {
   await rm(path, { recursive: true, force: true });

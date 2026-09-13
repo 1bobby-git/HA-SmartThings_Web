@@ -6,6 +6,7 @@ addon/smartthings_web_bridge/Dockerfile text eol=lf
 addon/smartthings_web_bridge/apparmor.txt text eol=lf
 addon/smartthings_web_bridge/config.yaml text eol=lf
 addon/smartthings_web_bridge/rootfs/** text eol=lf
+addon/smartthings_web_bridge/rootfs/**/*.png binary
 addon/smartthings_web_bridge/*.md text eol=lf
 bridge/**/*.ts text eol=lf
 docker/** text eol=lf

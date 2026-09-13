@@ -81,8 +81,12 @@ describe("SmartThings brand assets", () => {
     const result = await packageAddon({ repoRoot: resolve("."), outputRoot });
     const source = await readFile("addon/smartthings_web_bridge/icon.png");
     const packaged = await readFile(join(result.packageDir, "icon.png"));
+    const logoSource = await readFile("addon/smartthings_web_bridge/rootfs/usr/share/smartthings-web/brand/logo.png");
+    const packagedLogo = await readFile(join(result.packageDir, "rootfs/usr/share/smartthings-web/brand/logo.png"));
 
     expect(result.files).toContain("icon.png");
     expect(packaged).toEqual(source);
+    expect(result.files).toContain("rootfs/usr/share/smartthings-web/brand/logo.png");
+    expect(packagedLogo).toEqual(logoSource);
   });
 });
