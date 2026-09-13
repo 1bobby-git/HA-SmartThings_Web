@@ -1,0 +1,86 @@
+name: Fix Bridge guide alignment CI
+
+"on":
+  push:
+    branches:
+      - ui/bridge-guide-alignment-v2
+    paths:
+      - .github/workflows/fix-bridge-guide-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ui/bridge-guide-alignment-v2
+
+      - name: Treat packaged PNG branding as binary and fix ready fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          # More-specific binary rule overrides the rootfs text rule for PNG assets.
+          p = Path('.gitattributes')
+          text = p.read_text(encoding='utf-8')
+          anchor = 'addon/smartthings_web_bridge/rootfs/** text eol=lf\n'
+          rule = 'addon/smartthings_web_bridge/rootfs/**/*.png binary\n'
+          assert anchor in text
+          if rule not in text:
+              text = text.replace(anchor, anchor + rule, 1)
+          p.write_text(text, encoding='utf-8')
+
+          # package-addon must preserve PNG bytes instead of UTF-8/LF-normalizing them.
+          p = Path('tools/package-addon.ts')
+          text = p.read_text(encoding='utf-8')
+          old = '''const isPackageTextPath = (relativePath: string) =>\n  ROOT_FILES.includes(relativePath) ||'''
+          new = '''const isPackageTextPath = (relativePath: string) =>\n  !relativePath.toLowerCase().endsWith(".png") &&\n  (ROOT_FILES.includes(relativePath) ||'''
+          assert old in text
+          text = text.replace(old, new, 1)
+          old_tail = '''  relativePath === "apparmor.txt" ||\n  relativePath === "config.yaml";'''
+          new_tail = '''  relativePath === "apparmor.txt" ||\n  relativePath === "config.yaml");'''
+          assert old_tail in text
+          text = text.replace(old_tail, new_tail, 1)
+          p.write_text(text, encoding='utf-8')
+
+          # Line-ending checks apply to runtime text, not PNG binary bytes.
+          p = Path('tests/addon-line-endings.test.ts')
+          text = p.read_text(encoding='utf-8')
+          old = '''      ...regularFilesUnder("addon/smartthings_web_bridge/rootfs").map((path) => relative(process.cwd(), path).replace(/\\\\/g, "/")),'''
+          new = '''      ...regularFilesUnder("addon/smartthings_web_bridge/rootfs")\n        .filter((path) => !path.toLowerCase().endsWith(".png"))\n        .map((path) => relative(process.cwd(), path).replace(/\\\\/g, "/")),'''
+          assert old in text
+          text = text.replace(old, new, 1)
+          p.write_text(text, encoding='utf-8')
+
+          # Lock that the actual logo PNG survives packaging byte-for-byte.
+          p = Path('tests/branding-assets.test.ts')
+          text = p.read_text(encoding='utf-8')
+          old = '''    const source = await readFile("addon/smartthings_web_bridge/icon.png");\n    const packaged = await readFile(join(result.packageDir, "icon.png"));\n\n    expect(result.files).toContain("icon.png");\n    expect(packaged).toEqual(source);'''
+          new = '''    const source = await readFile("addon/smartthings_web_bridge/icon.png");\n    const packaged = await readFile(join(result.packageDir, "icon.png"));\n    const logoSource = await readFile("addon/smartthings_web_bridge/rootfs/usr/share/smartthings-web/brand/logo.png");\n    const packagedLogo = await readFile(join(result.packageDir, "rootfs/usr/share/smartthings-web/brand/logo.png"));\n\n    expect(result.files).toContain("icon.png");\n    expect(packaged).toEqual(source);\n    expect(result.files).toContain("rootfs/usr/share/smartthings-web/brand/logo.png");\n    expect(packagedLogo).toEqual(logoSource);'''
+          assert old in text
+          text = text.replace(old, new, 1)
+          p.write_text(text, encoding='utf-8')
+
+          # The ready UI fixture needs the completed-snapshot timestamp required by health readiness.
+          p = Path('bridge/tests/server/status-page.test.ts')
+          text = p.read_text(encoding='utf-8')
+          old = '''        initialSnapshotComplete: true,\n        parserHealthy: true,\n        lastSnapshotAtMs: 9_900,'''
+          new = '''        initialSnapshotComplete: true,\n        parserHealthy: true,\n        initialSnapshotCompletedAtMs: 9_900,\n        lastSnapshotAtMs: 9_900,'''
+          assert old in text
+          text = text.replace(old, new)
+          p.write_text(text, encoding='utf-8')
+
+          Path('.github/workflows/fix-bridge-guide-v2.yml').unlink()
+          PY
+
+          git diff --check
+          git add -A
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: preserve packaged Bridge logo as binary'
+          git push origin HEAD:refs/heads/ui/bridge-guide-alignment-v2
