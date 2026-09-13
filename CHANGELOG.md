@@ -1,3 +1,13 @@
+## 1.8.44
+
+- 실사용 v1.8.43 로그에서 정상 keepalive·proactive refresh 이후 Samsung Account의 `no_visible_auth_input` 상태에 고착되는 문제를 후속 개선합니다.
+- proactive refresh가 SmartThings Location을 바로 열기 전에 Samsung Account를 일반 브라우저 경로로 먼저 방문해, 아직 유효한 Samsung 웹 세션이 서버에서 정상적으로 갱신될 기회를 제공합니다.
+- 로그인 감지를 top-level input뿐 아니라 open Shadow DOM, same-origin iframe 및 Samsung 계열 인증 iframe까지 확대하고 `embedded_auth_input`을 별도 인증 표면으로 구분합니다.
+- 비밀번호·OTP·이메일 값, 쿠키 값, 토큰은 읽거나 기록하지 않으며 자동 입력, MFA 우회, 쿠키 만료 변경은 하지 않습니다. 기존 persistent Chromium profile과 암호화된 session-state를 유지합니다.
+- 세션 집중 회귀 35개와 전체 Node 1,705개 테스트, typecheck, build, API-free/secrets/fixture 검사를 통과한 변경을 배포합니다.
+- Bridge 앱과 Home Assistant 통합 배포 버전은 1.8.44이며 protocol 5 호환성을 유지합니다. 이 수정은 Bridge 코드 변경이므로 **Bridge 앱을 1.8.44로 업데이트해야 적용됩니다.**
+- Samsung 서버가 세션을 실제로 폐기하거나 MFA/재인증을 요구하면 자동 우회하지 않으며 Bridge 웹 UI에서 다시 로그인해야 합니다.
+
 ## 1.8.43
 
 - 삼성 로그인 페이지에서 `no_visible_auth_input`과 `login_required`가 반복될 때, 이전에 인증된 세션에 대해 별도 탭에서 Samsung Account → SmartThings 자동인증 복구 경로를 추가로 시도합니다.
