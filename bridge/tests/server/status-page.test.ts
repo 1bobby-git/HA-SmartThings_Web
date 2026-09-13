@@ -114,14 +114,58 @@ describe("renderStatusPage", () => {
     expect(html).toContain('class="hc-brand-logo"');
     expect(html).toContain('src="data:image/png;base64,ZmFrZS1sb2dv"');
     expect(html).toContain("SmartThings 연결 상태를 한눈에.");
-    expect(html).toContain("브릿지가 준비되었습니다");
+    expect(html).toContain("브릿지가 정상적으로 준비되었습니다");
     expect(html).toContain("HA 연결됨");
+    expect(html).toContain('data-auth-state="connected"');
+    expect(html).toContain("브라우저 로그인됨");
+    expect(html).toContain("세션 유지 중 · 다시 열기");
+    expect(html).toContain('data-status-icon="ready"');
+    expect(html).toContain("background: var(--hc-surface)");
+    expect(html).not.toContain("background: var(--hc-hero-bg)");
     expect(html).toContain("페어링 코드 생성");
     expect(html).toContain('class="hc-tab" href="#overview" aria-current="page">한눈에</a>');
     expect(html).toContain('id="pairing-result" role="status" aria-live="polite"');
     expect(html).toContain('<details class="hc-card hc-details">');
     expect(html).toContain("기술 세부 정보 보기");
     expect(html).not.toContain("live=true ready=true");
+  });
+
+  test("keeps the browser action non-alarming while an authenticated session is maintained", () => {
+    const html = renderStatusPage(reportFor({
+      state: "CONNECTED",
+      protocolVersion: "1:abcdef1234567890",
+      dbAvailable: true,
+      authenticated: true,
+      chromiumRunning: true,
+      keeperPresent: true
+    }));
+
+    expect(html).toContain('data-auth-state="connected"');
+    expect(html).toContain("브라우저 로그인됨");
+    expect(html).toContain("세션 유지 중 · 다시 열기");
+    expect(html).toContain("브라우저 다시 열기");
+    expect(html).not.toContain("브라우저 로그인 필요");
+  });
+
+  test("uses prepared warning and danger assets when login or browser attention is required", () => {
+    const loginRequired = renderStatusPage(reportFor({
+      state: "LOGIN_REQUIRED",
+      protocolVersion: "1:discovering",
+      dbAvailable: true,
+      authenticated: false
+    }));
+    const browserFailed = renderStatusPage(reportFor({
+      state: "BROWSER_FAILED",
+      protocolVersion: "1:abcdef1234567890",
+      dbAvailable: false,
+      authenticated: false
+    }));
+
+    expect(loginRequired).toContain('data-auth-state="required"');
+    expect(loginRequired).toContain("브라우저 로그인 필요");
+    expect(loginRequired).toContain('data-status-icon="danger"');
+    expect(browserFailed).toContain('data-auth-state="attention"');
+    expect(browserFailed).toContain("브라우저 확인 필요");
   });
 
   test("distinguishes live-but-not-ready from unavailable without relying on color alone", () => {

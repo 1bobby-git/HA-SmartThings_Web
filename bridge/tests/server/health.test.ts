@@ -22,6 +22,7 @@ describe("createHealthReport", () => {
     expect(report.details).toMatchObject({
       state: "BROWSER_FAILED",
       urlCategory: "none",
+      authenticated: false,
       activeConnections: 0,
       observedDeviceCount: 0,
       decodedDeviceEventCount: 0,
@@ -116,6 +117,7 @@ describe("createHealthReport", () => {
       sessionTouchConsecutiveFailures: 0,
       state: "CONNECTED",
       urlCategory: "smartthings_advanced",
+      authenticated: true,
       activeConnections: 3,
       observedDeviceCount: 8,
       decodedDeviceEventCount: 3,
