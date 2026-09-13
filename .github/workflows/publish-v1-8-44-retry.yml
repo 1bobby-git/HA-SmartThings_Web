@@ -1,0 +1,66 @@
+name: Publish v1.8.44 retry
+on:
+  push:
+    branches: [ops/publish-v1.8.44-20260913]
+    paths: [.github/workflows/publish-v1-8-44-retry.yml]
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_SHA: 5e9ab253bb47267fc9b9f65ecddce63f3fac6f2d
+      VERSION: 1.8.44
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Verify immutable release target
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')" == "${RELEASE_SHA}" ]]
+          [[ "$(python -c 'import json; print(json.load(open("custom_components/smartthings_web/manifest.json"))["version"])')" == "${VERSION}" ]]
+      - name: Build release packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          npm run package:addon
+          bridge_version="$(awk -F ': ' '/^version:/ { print $2; exit }' addon/smartthings_web_bridge/config.yaml)"
+          [[ "${bridge_version}" == "${VERSION}" ]]
+          tar -C custom_components -czf "smartthings-web-integration-${VERSION}.tgz" smartthings_web
+          tar -C dist-addon -czf "smartthings-web-bridge-${VERSION}.tgz" smartthings_web_bridge
+          tar -tzf "smartthings-web-integration-${VERSION}.tgz" >/dev/null
+          tar -tzf "smartthings-web-bridge-${VERSION}.tgz" >/dev/null
+      - name: Publish release with retry
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "v${VERSION} already exists; publication is complete."
+            exit 0
+          fi
+          for attempt in 1 2 3 4 5 6; do
+            if gh release create "v${VERSION}" \
+              "smartthings-web-bridge-${VERSION}.tgz#SmartThings Web Bridge 앱 (${VERSION})" \
+              "smartthings-web-integration-${VERSION}.tgz#Home Assistant 통합" \
+              --target "${RELEASE_SHA}" \
+              --title "SmartThings Web ${VERSION}" \
+              --notes-file "release-notes/${VERSION}.md"; then
+              exit 0
+            fi
+            if gh release view "v${VERSION}" >/dev/null 2>&1; then
+              exit 0
+            fi
+            [[ "${attempt}" != "6" ]] || exit 1
+            sleep $((attempt * 5))
+          done
