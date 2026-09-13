@@ -33,7 +33,7 @@ jobs:
           p = Path('tools/ci-native-login-policy-smoke.mjs')
           s = p.read_text().replace('<head><title>Synthetic settings', '<head><meta charset="utf-8"><title>Synthetic settings')
           s = s.replace("contentType: 'text/html'", "contentType: 'text/html; charset=utf-8'")
-          s = s.replace('  const result = await ensureNativeKeepSignedIn(page, target, { enabled: !opts.optOut, timeoutMs: 350 });', "  assert.equal(await page.locator('#open').getAttribute('aria-label'), opts.english ? 'Settings' : '설정', 'fixture labels must retain their UTF-8 encoding');\n  const result = await ensureNativeKeepSignedIn(page, target, { enabled: !opts.optOut, timeoutMs: 350 });")
+          s = s.replace('  const result = await ensureNativeKeepSignedIn(page, target, { enabled: !opts.optOut, timeoutMs: 350 });', "  assert.equal(await page.locator('#open').getAttribute('aria-label'), opts.english ? 'Settings' : '설정', 'fixture labels must retain their UTF-8 encoding');\n  // Use the production timeout; headed Chromium needs real stable frames.\n  const result = await ensureNativeKeepSignedIn(page, target, { enabled: !opts.optOut });")
           p.write_text(s)
           PY
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
