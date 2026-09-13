@@ -1,0 +1,22 @@
+name: Inspect entity and session regression baseline
+on:
+  push:
+    branches: [fix/entity-ids-session-recovery-1.8.48]
+    paths: [.github/workflows/inspect-entity-session-1848.yml]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Archive tracked source only
+        run: git archive --format=tar -o baseline.tar HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: entity-session-baseline
+          path: baseline.tar
+          retention-days: 1
