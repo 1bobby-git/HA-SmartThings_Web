@@ -61,7 +61,7 @@ describe("session lifecycle regressions", () => {
     await manager.ensureKeeper(); await manager.touchAuthenticatedSession(); now += 11;
     candidate.goto.mockImplementation(async () => { candidate.address = login; });
     expect(await manager.refreshAuthenticatedSessionIfDue()).toBe("verified");
-    expect(candidate.waitForURL).toHaveBeenCalledOnce();
+    expect(candidate.waitForURL).toHaveBeenCalledTimes(2);
     expect(manager.currentKeeper()).toBe(original);
     expect(original.close).not.toHaveBeenCalled(); expect(candidate.close).toHaveBeenCalledOnce();
   });
