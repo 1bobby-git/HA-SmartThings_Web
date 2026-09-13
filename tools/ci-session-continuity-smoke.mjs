@@ -70,7 +70,7 @@ const managedContext = () => ({
     const page = await context.newPage();
     const nativeGoto = page.goto.bind(page);
     page.goto = (url, options) => {
-      if (url === KEEPER_URL && delayedRedirectsRemaining > 0) {
+      if (url.startsWith(KEEPER_URL) && delayedRedirectsRemaining > 0) {
         delayedRedirectsRemaining--;
         return nativeGoto('https://account.samsung.com/fixture-relay', options);
       }
@@ -127,8 +127,13 @@ try {
   assert.equal(context.pages().length, 1);
   assert.equal(keeper.authenticationRecoveryPending(), true);
   assert.ok(recoveryPhases.includes('login_required'));
-  // A later protected success may replace the original, using this SAME profile.
+  // Advanced 200 is not permission to erase a visible user's OTP challenge.
   clock += 300_001; responseStatus = 200;
+  assert.equal(await keeper.ensureKeeper(), original);
+  assert.equal(await original.locator('#mfa').inputValue(), 'fixture-in-progress');
+  // Model the user completing the challenge; an input-less relay can now resume.
+  await original.setContent('<p>Authorization processing</p>');
+  clock += 300_001;
   const recovered = await keeper.ensureKeeper();
   assert.notEqual(recovered, original);
   assert.equal(original.isClosed(), true);
@@ -136,7 +141,7 @@ try {
   assert.equal(keeper.authenticationRecoveryPending(), false);
   assert.equal(await recovered.evaluate(() => localStorage.getItem('fixture-state')), 'preserved');
   assert.ok(recoveryPhases.includes('verified'));
-  console.log('PASS isolated SSO recovery: pending form preserved on 401; protected GET required; verified same-profile promotion; no network access');
+  console.log('PASS isolated SSO recovery: visible OTP preserved even on Advanced 200; verified same-profile promotion only after challenge completion; no network access');
 
   // A current rotating cookie/localStorage profile is not an empty restore target.
   assert.equal(isEmptySessionStorageState(await context.storageState({ indexedDB: true })), false);
@@ -146,12 +151,18 @@ try {
   delayedRedirectsRemaining = 1; responseStatus = 401;
   const touchesBeforeDeniedRelay = touches;
   assert.equal(await keeper.ensureKeeper(), recovered);
-  assert.equal(completedRelayPages, 1);
-  assert.ok(touches > touchesBeforeDeniedRelay, 'SSO relay must finish before the protected check');
+  assert.equal(completedRelayPages, 0);
+  assert.equal(touches, touchesBeforeDeniedRelay, 'A visible OTP must prevent automatic SSO attempts');
   assert.equal(await recovered.locator('#mfa').inputValue(), 'fixture-delayed-form');
   assert.equal(context.pages().length, 1);
   assert.equal(keeper.authenticationRecoveryPending(), true);
 
+  await recovered.setContent('<p>Authorization processing</p>');
+  // Try an input-less relay with rejected credentials. It must not be promoted.
+  clock += 300_001; responseStatus = 401;
+  assert.equal(await keeper.ensureKeeper(), recovered);
+  assert.equal(completedRelayPages, 1);
+  assert.equal(context.pages().length, 1);
   clock += 300_001; responseStatus = 200; delayedRedirectsRemaining = 1;
   const touchesBeforeRecovery = touches;
   const delayedRecovery = await keeper.ensureKeeper();
@@ -203,14 +214,34 @@ try {
   assert.equal(freshDocument.url(), `${KEEPER_URL}/fixture-home`);
   assert.equal(context.pages().length, 1);
   assert.ok(handoffPhases.includes('refresh_handoff_verified'));
+  const nativeKeeper = new KeeperPageManager(managedContext(), {
+    probeApplicationSession: (candidate, target) => verifyLocationApplicationSession(candidate, target)
+  });
+  await nativeKeeper.reconcileRestoredPages();
+  assert.equal(await nativeKeeper.touchAuthenticatedSession(), 'ok');
   // Native auth rejection remains a failure even while Advanced HTTP returns 200.
   await freshDocument.evaluate(() => sessionStorage.setItem('fixture-native-denied', 'yes'));
   assert.deepEqual(await verifyLocationApplicationSession(freshDocument, freshDocument.url()), { outcome: 'reauth', reason: 'http_401' });
+  assert.equal(await nativeKeeper.touchAuthenticatedSession(), 'reauth');
+  assert.equal(nativeKeeper.authenticationRecoveryPending(), true);
+  await freshDocument.evaluate(() => sessionStorage.removeItem('fixture-native-denied'));
+  assert.equal(await nativeKeeper.touchAuthenticatedSession(), 'ok');
+  assert.equal(nativeKeeper.authenticationRecoveryPending(), false);
   await freshDocument.goto('https://account.samsung.com/accounts/v1/ST/signInGate');
   await freshDocument.setContent('<input type="password" value="private-not-logged">');
   assert.deepEqual(await inspectAuthenticationPage(freshDocument), { page: 'samsung_account', surface: 'password_input' });
   await freshDocument.setContent('<input autocomplete="one-time-code" value="private-not-logged">');
   assert.deepEqual(await inspectAuthenticationPage(freshDocument), { page: 'samsung_account', surface: 'otp_input' });
+  for (const [html, surface] of [
+    ['<input name="loginId" value="not-logged">', 'email_input'],
+    ['<input id="mfa" type="number" value="123456">', 'otp_input'],
+    ['<button>Continue</button>', 'auth_action'],
+    ['<div data-sitekey="synthetic-captcha">Verify</div>', 'captcha'],
+    ['<input type="password" style="display:none">', 'no_visible_auth_input']
+  ]) {
+    await freshDocument.setContent(html);
+    assert.deepEqual(await inspectAuthenticationPage(freshDocument), { page: 'samsung_account', surface });
+  }
   console.log('PASS verified running-document handoff: actual Chromium page promotion, old document retired, native 401 separated from Advanced 200, password/OTP presence diagnostics (synthetic only)');
 } finally {
   await context?.close();

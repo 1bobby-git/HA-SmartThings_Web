@@ -346,6 +346,62 @@ class EmptyLocationInventoryRecoveryTests(unittest.TestCase):
 class EntityRegistryMigrationTests(unittest.TestCase):
     """Keep stale fan cleanup tightly scoped to this config entry."""
 
+    def test_current_device_and_contact_type_repair_generated_ids_and_restore_hints(self) -> None:
+        state = BridgeState("main", "contactSensor", "contact", "closed", None, "2026-09-14T00:00:00Z")
+        device = BridgeDevice("dev_door", "loc_001", None, "Hwajangsil Doeosenseo", "contact_sensor", True, states={state.key: state})
+        inventory = BridgeInventory(1, True, "1.8.48", "1", {"loc_001": "Home"}, {}, {device.device_id: device})
+        for old_object_id, original_name, suggested in (
+            ("ts0203_close_sensor_contact", "열림 감지", "ts0203_close_sensor_contact"),
+            ("hwajangsil_doeosenseo_yeolrim_gamji", "열림 감지", "hwajangsil_doeosenseo_yeolrim_gamji"),
+            ("hwajangsil_doeosenseo_contact", "열림 감지", "hwajangsil_doeosenseo_yeolrim_gamji"),
+        ):
+            with self.subTest(old_object_id=old_object_id):
+                row = SimpleNamespace(entity_id=f"binary_sensor.{old_object_id}", domain="binary_sensor", platform=DOMAIN,
+                    unique_id="dev_door_main_contactSensor_contact", device_id="uuid_door", name=None,
+                    disabled_by=None, original_name=original_name, object_id_base="열림 감지", suggested_object_id=suggested)
+                registry = FakeRegistry([row]); self.patch_registry(registry)
+                entry = SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"})
+                for _ in range(3): _migrate_entity_registry(object(), entry, inventory)
+                self.assertEqual(row.entity_id, "binary_sensor.hwajangsil_doeosenseo_contact")
+                self.assertEqual(row.suggested_object_id, "hwajangsil_doeosenseo_contact")
+                self.assertEqual(row.object_id_base, "contact")
+                self.assertEqual(row.original_name, original_name)
+                self.assertEqual(row.unique_id, "dev_door_main_contactSensor_contact")
+                self.assertEqual(registry.get_or_create_calls, 1)
+                self.assertLessEqual(len(registry.renamed), 1)
+
+    def test_device_rename_follows_only_generated_id_not_user_override(self) -> None:
+        from dataclasses import replace
+        state = BridgeState("main", "contactSensor", "contact", "closed", None, "2026-09-14T00:00:00Z")
+        device = BridgeDevice("dev_door", "loc_001", None, "Old Door", "contact_sensor", True, states={state.key: state})
+        for current, user_name in (("old_door_contact", None), ("my_manual_contact", None), ("old_door_contact", "My custom name")):
+            with self.subTest(current=current, user_name=user_name):
+                row = SimpleNamespace(entity_id=f"binary_sensor.{current}", domain="binary_sensor", platform=DOMAIN,
+                    unique_id="dev_door_main_contactSensor_contact", device_id="uuid_door", name=user_name,
+                    disabled_by=None, original_name="열림 감지", object_id_base="contact", suggested_object_id="old_door_contact")
+                registry = FakeRegistry([row]); self.patch_registry(registry)
+                inventory = BridgeInventory(2, True, "1.8.48", "1", {"loc_001": "Home"}, {}, {device.device_id: replace(device, name="New Door")})
+                _migrate_entity_registry(object(), SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}), inventory)
+                expected = "new_door_contact" if current == "old_door_contact" and user_name is None else current
+                self.assertEqual(row.entity_id, f"binary_sensor.{expected}")
+                self.assertEqual(row.name, user_name)
+
+    def test_contact_rename_does_not_take_another_entity_id(self) -> None:
+        state = BridgeState("main", "contactSensor", "contact", "closed", None, "2026-09-14T00:00:00Z")
+        device = BridgeDevice("dev_door", "loc_001", None, "New Door", "contact_sensor", True, states={state.key: state})
+        row = SimpleNamespace(entity_id="binary_sensor.old_door_contact", domain="binary_sensor", platform=DOMAIN,
+            unique_id="dev_door_main_contactSensor_contact", device_id="uuid_door", name=None,
+            disabled_by=None, original_name="Contact", object_id_base="contact", suggested_object_id="old_door_contact")
+        other = SimpleNamespace(entity_id="binary_sensor.new_door_contact", domain="binary_sensor", platform="other",
+            unique_id="another-physical-device", device_id="uuid_other", name=None, disabled_by=None)
+        registry = FakeRegistry([row, other]); self.patch_registry(registry, [row])
+        inventory = BridgeInventory(2, True, "1.8.48", "1", {"loc_001": "Home"}, {}, {device.device_id: device})
+        _migrate_entity_registry(object(), SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}), inventory)
+        self.assertEqual(row.entity_id, "binary_sensor.old_door_contact")
+        self.assertEqual(other.unique_id, "another-physical-device")
+        self.assertEqual(registry.renamed, [])
+        self.assertEqual(registry.removed, [])
+
     def test_removes_only_stale_fan_entities_for_current_location_devices(self) -> None:
         registry = FakeRegistry(
             [

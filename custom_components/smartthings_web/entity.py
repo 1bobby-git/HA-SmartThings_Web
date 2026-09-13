@@ -23,6 +23,7 @@ from .models import (
 from .naming import (
     canonical_entity_object_id,
     canonical_primary_control_object_id,
+    state_object_id_name,
 )
 
 
@@ -203,7 +204,10 @@ class SmartThingsWebEntity(Entity):
             suggested_primary_control_object_id(runtime, device)
             if primary_control
             else suggested_entity_object_id(
-                runtime, device, object_id_name or name or state.attribute
+                runtime, device, object_id_name or (
+                    name or state.attribute if state.attribute == "switch"
+                    else state_object_id_name(runtime.inventory, device, state)
+                )
             )
         )
         _set_initial_entity_id(self, self._attr_suggested_object_id)
@@ -265,9 +269,14 @@ class SmartThingsWebDeviceEntity(Entity):
         if name is not None:
             self._attr_name = name
         self._attr_unique_id = f"{device.device_id}_{suffix}"
+        matching_state = next(
+            (state for state in device.states.values() if "_".join(state.key) == suffix),
+            None,
+        )
         object_name = (
-            name
-            if name is not None
+            state_object_id_name(runtime.inventory, device, matching_state)
+            if matching_state is not None
+            else name if name is not None
             else None if suffix in _PRIMARY_DEVICE_ENTITY_SUFFIXES else suffix
         )
         primary_control = (

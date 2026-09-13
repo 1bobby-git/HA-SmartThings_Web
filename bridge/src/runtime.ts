@@ -114,7 +114,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.47";
+const bridgeVersion = "1.8.48";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -715,6 +715,11 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           log.warn("cake_client_capture_unavailable");
         }
         const keeperManager = new KeeperPageManager(context, {
+          probeApplicationSession: async (candidate, target) => {
+            const proof = await verifyLocationApplicationSession(candidate, target);
+            log.info(`session_application_probe:${JSON.stringify(proof)}`);
+            return proof;
+          },
           verifyRefreshCandidate: async (candidate, target) => {
             const proof = await verifyLocationApplicationSession(candidate, target);
             log.info(`session_application_probe:${JSON.stringify(proof)}`);

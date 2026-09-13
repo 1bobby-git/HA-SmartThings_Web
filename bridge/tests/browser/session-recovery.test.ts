@@ -58,13 +58,13 @@ describe("session rejection and non-destructive SSO recovery", () => {
     f.original.evaluate.mockResolvedValue("failed");
     f.advance(30_001);
     f.probe.goto.mockImplementation(async (url: string) => {
-      f.probe.address = url === KEEPER_URL ? `${KEEPER_URL}/sso-home` : url;
+      f.probe.address = url.startsWith(KEEPER_URL) ? `${KEEPER_URL}/sso-home` : url;
     });
     f.probe.evaluate.mockResolvedValue("ok");
 
     expect(await f.manager.ensureKeeper()).toBe(f.probe);
     expect(f.probe.goto.mock.calls.map(([url]) => url)).toEqual([
-      "https://account.samsung.com/", KEEPER_URL
+      `${KEEPER_URL}/fixture-home`
     ]);
     expect(f.manager.currentKeeper()).toBe(f.probe);
     expect(f.original.close).toHaveBeenCalledOnce();
@@ -79,7 +79,7 @@ describe("session rejection and non-destructive SSO recovery", () => {
     f.original.evaluate.mockResolvedValue("failed");
     f.advance(30_001);
     f.probe.goto.mockImplementation(async (url: string) => {
-      f.probe.address = url === KEEPER_URL ? loginUrl : url;
+      f.probe.address = url.startsWith(KEEPER_URL) ? loginUrl : url;
     });
     // Model an actual visible sign-in form, not just a Samsung URL.
     f.probe.evaluate.mockResolvedValue("password_input");
@@ -108,14 +108,13 @@ describe("session rejection and non-destructive SSO recovery", () => {
   test("when SSO still needs MFA, the original sign-in form is never navigated or closed", async () => {
     const f = await setup(); await f.manager.touchAuthenticatedSession();
     f.original.address = loginUrl; await f.manager.ensureKeeper(); f.advance(30_001);
-    f.probe.goto.mockImplementation(async () => { f.probe.address = loginUrl; });
-    // The recovery page presents a real OTP input and must stop escalation.
-    f.probe.evaluate.mockResolvedValue("otp_input");
+    // A real existing OTP form must not be navigated and must not spawn probes.
+    f.original.evaluate.mockResolvedValue("otp_input");
     expect(await f.manager.ensureKeeper()).toBe(f.original);
     expect(f.original.goto).not.toHaveBeenCalled(); expect(f.original.close).not.toHaveBeenCalled();
-    expect(f.probe.close).toHaveBeenCalledOnce();
+    expect(f.create).not.toHaveBeenCalled();
     expect(f.recovery).toHaveBeenCalledWith("login_required");
-    f.advance(30_001); await f.manager.ensureKeeper(); expect(f.create).toHaveBeenCalledOnce();
+    f.advance(30_001); await f.manager.ensureKeeper(); expect(f.create).not.toHaveBeenCalled();
   });
   test.each(["reauth", "failed"])("a returned app shell with protected read %s never becomes authenticated", async result => {
     const f = await setup(); await f.manager.touchAuthenticatedSession();

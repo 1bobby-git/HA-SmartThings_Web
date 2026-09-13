@@ -67,6 +67,7 @@ from .room_assignment import resolve_room_area, sync_device_area, subscribe_room
 from .naming import (
     canonical_entity_object_id,
     canonical_primary_control_object_id,
+    state_object_id_name,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -1821,6 +1822,26 @@ def _canonical_generated_state_entity_id(
     if state is None:
         return None
     domain_value = getattr(domain, "value", domain)
+    if domain_value in {"binary_sensor", "sensor", "event", "number"}:
+        target_object_id = canonical_entity_object_id(
+            inventory, device, state_object_id_name(inventory, device, state)
+        )
+        current_object_id = str(getattr(entity_entry, "entity_id", "")).partition(".")[2]
+        generated = {
+            slugify(value) for value in (
+                getattr(entity_entry, "suggested_object_id", None),
+                canonical_entity_object_id(inventory, device, getattr(entity_entry, "original_name", None)),
+                canonical_entity_object_id(inventory, device, getattr(entity_entry, "object_id_base", None)),
+            ) if isinstance(value, str) and value.strip()
+        }
+        if target_object_id and current_object_id != target_object_id and any(
+            current_object_id == candidate or (
+                current_object_id.startswith(f"{candidate}_")
+                and current_object_id[len(candidate) + 1:].isdigit()
+                and int(current_object_id[len(candidate) + 1:]) >= 2
+            ) for candidate in generated
+        ):
+            return f"{domain_value}.{target_object_id}"
     if _registry_state_is_primary_control(domain, device, state):
         object_id = canonical_primary_control_object_id(inventory, device)
         if not object_id:
@@ -2134,7 +2155,9 @@ def _generated_registry_state_name(
     state: object,
     inventory: BridgeInventory,
 ) -> str:
-    """Return the entity-local name that current setup would suggest."""
+    """Return a machine-type restore hint, independent of translated names."""
+    if getattr(state, "attribute", None) != "switch":
+        return state_object_id_name(inventory, device, state)
     base = None
     for candidate in (
         # original_name is the entity-local display label. The
