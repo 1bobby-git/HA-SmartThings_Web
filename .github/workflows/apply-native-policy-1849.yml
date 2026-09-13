@@ -25,17 +25,13 @@ jobs:
           boundary = 'NJcvAAZyTBDj5IW0f0'
           assert chunks[2].count(boundary) == 1
           chunks[2] = chunks[2].split(boundary)[0] + boundary
-          encoded = ''.join(chunks)
-          patch = zlib.decompress(base64.b64decode(encoded, validate=True))
+          patch = zlib.decompress(base64.b64decode(''.join(chunks), validate=True))
           assert hashlib.sha256(patch).hexdigest() == 'fe0840db501545ae0847055809cecadbc84532a63dbce68fe834e4d0add4cc20'
           Path('/tmp/native-policy.patch').write_bytes(patch)
           subprocess.run(['git', 'apply', '--check', '/tmp/native-policy.patch'], check=True)
           subprocess.run(['git', 'apply', '/tmp/native-policy.patch'], check=True)
-          # A real HTTP fixture needs an explicit charset for its Korean DOM.
-          # Keep all production selectors and success criteria unchanged.
           p = Path('tools/ci-native-login-policy-smoke.mjs')
-          s = p.read_text()
-          s = s.replace('<head><title>Synthetic settings', '<head><meta charset="utf-8"><title>Synthetic settings')
+          s = p.read_text().replace('<head><title>Synthetic settings', '<head><meta charset="utf-8"><title>Synthetic settings')
           s = s.replace("contentType: 'text/html'", "contentType: 'text/html; charset=utf-8'")
           s = s.replace('  const result = await ensureNativeKeepSignedIn(page, target, { enabled: !opts.optOut, timeoutMs: 350 });', "  assert.equal(await page.locator('#open').getAttribute('aria-label'), opts.english ? 'Settings' : '설정', 'fixture labels must retain their UTF-8 encoding');\n  const result = await ensureNativeKeepSignedIn(page, target, { enabled: !opts.optOut, timeoutMs: 350 });")
           p.write_text(s)
@@ -46,15 +42,17 @@ jobs:
           cache: npm
       - name: Unit and boundary tests
         run: |
-          npm ci
-          npm test
+          npm ci --silent
+          npm test > /tmp/unit.log 2>&1 || { tail -80 /tmp/unit.log; exit 1; }
+          tail -8 /tmp/unit.log
           npm run typecheck
           npm run build
           npm run audit:api-free
       - name: Real Chromium native settings and existing session regressions
         run: |
-          npx playwright-core install --with-deps chromium
-          xvfb-run -a node tools/ci-native-login-policy-smoke.mjs
+          npx playwright-core install --with-deps chromium > /tmp/browser-install.log 2>&1 || { tail -40 /tmp/browser-install.log; exit 1; }
+          xvfb-run -a env DEBUG=pw:api node tools/ci-native-login-policy-smoke.mjs > /tmp/native-smoke.log 2>&1 || { tail -100 /tmp/native-smoke.log; exit 1; }
+          grep -E '^PASS|"suite"' /tmp/native-smoke.log
           xvfb-run -a node tools/ci-session-continuity-smoke.mjs
       - name: Remove temporary transport and commit tested changes
         run: |
