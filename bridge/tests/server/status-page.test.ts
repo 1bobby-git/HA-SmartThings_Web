@@ -5,7 +5,7 @@ import { renderStatusPage } from "../../src/server/status-page.js";
 import { RuntimeStatusStore, type RuntimeStatusPatch } from "../../src/state/runtime-state.js";
 
 describe("renderStatusPage", () => {
-  test("renders green verified protocol evidence from safe health fields only", () => {
+  test("renders verified protocol evidence from safe health fields only", () => {
     const html = renderStatusPage(reportFor({
       state: "CONNECTED",
       protocolVersion: "1:abcdef1234567890",
@@ -23,12 +23,12 @@ describe("renderStatusPage", () => {
     }));
 
     expect(html).toContain('data-protocol-state="verified"');
-    expect(html).toContain("Protocol verified");
+    expect(html).toContain("프로토콜이 확인되었습니다");
     expect(html).toContain("1:abcdef1234567890");
     expect(html).not.toMatch(/https?:|deviceId|locationId|token|secret|raw-/i);
   });
 
-  test("renders amber discovery incomplete protocol evidence", () => {
+  test("renders discovery-incomplete protocol evidence in Korean", () => {
     const html = renderStatusPage(reportFor({
       state: "DISCOVERING_PROTOCOL",
       protocolVersion: "1:discovering",
@@ -37,7 +37,7 @@ describe("renderStatusPage", () => {
     }));
 
     expect(html).toContain('data-protocol-state="discovering"');
-    expect(html).toContain("Protocol discovery incomplete");
+    expect(html).toContain("프로토콜을 확인하고 있습니다");
     expect(html).toContain("1:discovering");
     expect(html).toContain(
       'href="novnc-ui/vnc.html?autoconnect=1&amp;resize=scale&amp;path=websockify"'
@@ -45,7 +45,7 @@ describe("renderStatusPage", () => {
     expect(html).not.toContain('href="/novnc');
   });
 
-  test("renders red protocol-changed evidence and escapes safe field values", () => {
+  test("renders protocol-changed evidence and escapes safe field values", () => {
     const html = renderStatusPage(reportFor({
       state: "PROTOCOL_CHANGED",
       protocolVersion: '1:<probe"',
@@ -56,16 +56,16 @@ describe("renderStatusPage", () => {
     }));
 
     expect(html).toContain('data-protocol-state="changed"');
-    expect(html).toContain("Protocol changed");
-    expect(html).toContain("Readiness blocked");
-    expect(html).toContain("Phase 2 remains closed");
+    expect(html).toContain("프로토콜 변경이 감지되었습니다");
+    expect(html).toContain("준비 상태 차단됨");
+    expect(html).toContain("Phase 2는 계속 차단됨");
     expect(html).toContain("snapshot:scenes:response_shape");
     expect(html).toContain("1:&lt;probe&quot;");
     expect(html).not.toContain('1:<probe"');
     expect(html).not.toMatch(/https?:|deviceId|locationId|token|secret|raw-/i);
   });
 
-  test("renders green protocol evidence for compatible status with historical changes", () => {
+  test("renders verified evidence for compatible status with historical changes", () => {
     const html = renderStatusPage(reportFor({
       state: "CONNECTED",
       protocolVersion: "1:abcdef1234567890",
@@ -83,33 +83,43 @@ describe("renderStatusPage", () => {
     }));
 
     expect(html).toContain('data-protocol-state="verified"');
-    expect(html).toContain("Protocol verified");
-    expect(html).not.toContain("Phase 2 remains closed");
+    expect(html).toContain("프로토콜이 확인되었습니다");
+    expect(html).not.toContain("Phase 2는 계속 차단됨");
   });
 
-  test("renders design-system hierarchy with accessible primary actions and collapsed diagnostics", () => {
-    const html = renderStatusPage(reportFor({
-      state: "CONNECTED",
-      protocolVersion: "1:abcdef1234567890",
-      protocolChangeCount: 0,
-      dbAvailable: true,
-      chromiumRunning: true,
-      keeperPresent: true,
-      authenticated: true,
-      pushConnected: true,
-      initialSnapshotComplete: true,
-      parserHealthy: true,
-      lastSnapshotAtMs: 9_900,
-      lastParserSuccessAtMs: 9_950,
-      lastPushAtMs: 9_975
-    }));
+  test("renders the guide-aligned white header, packaged logo and Korean hierarchy", () => {
+    const html = renderStatusPage(
+      reportFor({
+        state: "CONNECTED",
+        protocolVersion: "1:abcdef1234567890",
+        protocolChangeCount: 0,
+        dbAvailable: true,
+        chromiumRunning: true,
+        keeperPresent: true,
+        authenticated: true,
+        pushConnected: true,
+        initialSnapshotComplete: true,
+        parserHealthy: true,
+        lastSnapshotAtMs: 9_900,
+        lastParserSuccessAtMs: 9_950,
+        lastPushAtMs: 9_975
+      }),
+      { brandLogoDataUri: "data:image/png;base64,ZmFrZS1sb2dv" }
+    );
 
-    expect(html).toContain('data-overall-state="ready"');
-    expect(html).toContain("SmartThings connection at a glance");
-    expect(html).toContain('class="hc-button hc-button-primary"');
+    expect(html).toContain('<html lang="ko-KR">');
+    expect(html).toContain('class="hc-header-surface"');
+    expect(html).toContain("background: #ffffff");
+    expect(html).toContain('class="hc-brand-logo"');
+    expect(html).toContain('src="data:image/png;base64,ZmFrZS1sb2dv"');
+    expect(html).toContain("SmartThings 연결 상태를 한눈에.");
+    expect(html).toContain("브릿지가 준비되었습니다");
+    expect(html).toContain("HA 연결됨");
+    expect(html).toContain("페어링 코드 생성");
+    expect(html).toContain('class="hc-tab" href="#overview" aria-current="page">한눈에</a>');
     expect(html).toContain('id="pairing-result" role="status" aria-live="polite"');
     expect(html).toContain('<details class="hc-card hc-details">');
-    expect(html).toContain("View technical details");
+    expect(html).toContain("기술 세부 정보 보기");
     expect(html).not.toContain("live=true ready=true");
   });
 
@@ -126,11 +136,26 @@ describe("renderStatusPage", () => {
     }));
 
     expect(startingHtml).toContain('data-overall-state="starting"');
-    expect(startingHtml).toContain("Bridge is starting");
-    expect(startingHtml).toContain("Not ready");
+    expect(startingHtml).toContain("브릿지를 준비하고 있습니다");
+    expect(startingHtml).toContain("준비 중");
     expect(attentionHtml).toContain('data-overall-state="attention"');
-    expect(attentionHtml).toContain("Bridge needs attention");
-    expect(attentionHtml).toContain("Offline");
+    expect(attentionHtml).toContain("브릿지 확인이 필요합니다");
+    expect(attentionHtml).toContain("오프라인");
+  });
+
+  test("localizes runtime and diagnostic labels", () => {
+    const html = renderStatusPage(reportFor({
+      state: "LOGIN_REQUIRED",
+      protocolVersion: "1:discovering",
+      dbAvailable: true,
+      sessionTouchLastOutcome: "reauth",
+      sessionTouchCount: 3
+    }));
+
+    expect(html).toContain("로그인 필요");
+    expect(html).toContain("세션 유지 시도");
+    expect(html).toContain("최근 세션 유지 결과");
+    expect(html).toContain("재인증 필요");
   });
 });
 
