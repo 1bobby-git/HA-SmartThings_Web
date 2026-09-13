@@ -61,7 +61,7 @@ describe("session lifecycle regressions", () => {
     await manager.ensureKeeper(); await manager.touchAuthenticatedSession(); now += 11;
     candidate.goto.mockImplementation(async () => { candidate.address = login; });
     expect(await manager.refreshAuthenticatedSessionIfDue()).toBe("verified");
-    expect(candidate.goto).toHaveBeenCalledExactlyOnceWith(`${KEEPER_URL}/fixture`, { waitUntil: "domcontentloaded", timeout: 10_000 });
+    expect(candidate.goto).toHaveBeenCalledExactlyOnceWith(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });
     expect(candidate.waitForURL).toHaveBeenCalledOnce();
     expect(manager.currentKeeper()).toBe(original);
     expect(original.close).not.toHaveBeenCalled(); expect(candidate.close).toHaveBeenCalledOnce();
