@@ -1,4 +1,4 @@
-import { inspectAuthenticationPage } from "./session-application-proof.js";
+import { inspectAuthenticationPage, type ApplicationSessionProof } from "./session-application-proof.js";
 
 export const KEEPER_URL = "https://my.smartthings.com/location";
 export const ADVANCED_URL = "https://my.smartthings.com/advanced";
@@ -58,6 +58,8 @@ export interface SessionProbeDiagnostic {
 
 export interface KeeperPageManagerOptions {
   verifyRefreshCandidate?: (page: BrowserPageLike, expectedUrl: string) => Promise<boolean>;
+  probeApplicationSession?: (page: BrowserPageLike, expectedUrl: string) => Promise<ApplicationSessionProof>;
+  unsettledRecoveryGraceMs?: number;
   onLoginPage?: (page: BrowserPageLike, stage: "refresh" | "recovery" | "sso") => Promise<void>;
   onSessionProbe?: (diagnostic: SessionProbeDiagnostic) => void;
   now?: () => number;
@@ -73,6 +75,8 @@ export interface KeeperPageManagerOptions {
     | "login_required"
     | "login_page_unsettled"
     | "sso_page_unsettled"
+    | "login_page_pending"
+    | "login_page_stalled"
     | "failed"
     | "stale"
     | "refresh_attempt"
@@ -171,6 +175,11 @@ export class KeeperPageManager {
   readonly #onSessionProbe: KeeperPageManagerOptions["onSessionProbe"];
   readonly #verifyRefreshCandidate: KeeperPageManagerOptions["verifyRefreshCandidate"];
   readonly #onLoginPage: KeeperPageManagerOptions["onLoginPage"];
+  readonly #probeApplicationSession: KeeperPageManagerOptions["probeApplicationSession"];
+  readonly #unsettledRecoveryGraceMs: number;
+  #pendingLoginProbe: { page: BrowserPageLike; original: BrowserPageLike; originalUrl: string; since: number } | undefined;
+  #stalledLoginPage: { page: BrowserPageLike; url: string } | undefined;
+  #lastAuthenticatedUrl: string | undefined;
   #authenticatedOnce = false;
   #touchGeneration = 0;
 
@@ -182,6 +191,8 @@ export class KeeperPageManager {
     this.#onRecovery = options.onRecovery;
     this.#onSessionProbe = options.onSessionProbe;
     this.#verifyRefreshCandidate = options.verifyRefreshCandidate;
+    this.#probeApplicationSession = options.probeApplicationSession;
+    this.#unsettledRecoveryGraceMs = validDelay(options.unsettledRecoveryGraceMs, 120_000);
     this.#onLoginPage = options.onLoginPage;
     this.#canNavigate = options.canNavigate ?? (() => true);
     this.#sessionReauthRecoveryDelayMs = validDelay(
@@ -213,6 +224,7 @@ export class KeeperPageManager {
   /** A definitive rejection of THIS page's protected request. No request is replayed. */
   reportAuthenticationFailure(page: BrowserPageLike, url: string): boolean {
     if (this.currentKeeper() !== page || page.isClosed() || page.url() !== url || !isKeeperSettledUrl(url)) return false;
+    this.invalidateTouch();
     this.observeSessionTouchOutcome("reauth", url);
     return true;
   }
@@ -284,6 +296,7 @@ export class KeeperPageManager {
 
   private async ensureKeeperOnce(): Promise<BrowserPageLike> {
     await this.reconcileRestoredPages();
+    await this.resumePendingLoginProbe();
     const candidates = this.context
       .pages()
       .filter(
@@ -357,6 +370,7 @@ export class KeeperPageManager {
     if (!this.#canNavigate() || candidate.isClosed() || !isKeeperSettledUrl(candidate.url())) {
       return false;
     }
+    if (isConcreteLocationUrl(candidate.url())) this.#lastAuthenticatedUrl = candidate.url();
     const current = this.currentKeeper();
     if (current === candidate) {
       this.#authenticatedOnce = true;
@@ -410,6 +424,11 @@ export class KeeperPageManager {
     const flight = { page: keeper, url, result: Promise.resolve("failed" as SessionTouchOutcome) };
     this.#touchInFlight = flight;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let operationSettled = false;
+    let resultSettled = false;
+    const releaseLease = () => {
+      if (operationSettled && resultSettled && this.#touchInFlight === flight) this.#touchInFlight = undefined;
+    };
     // Keep the evaluate lease after a renderer timeout until it actually settles.
     const operation = Promise.resolve().then(() => keeper.evaluate!<
       SessionProbeDiagnostic | SessionTouchOutcome, { path: string; authPath: string; timeout: number }
@@ -463,7 +482,8 @@ export class KeeperPageManager {
         return request(authPath, Math.max(1, timeout - pageBudget), true);
       }, { path: SESSION_TOUCH_PATH, authPath: SESSION_TOUCH_AUTH_PATH, timeout }
     )).catch(() => ({ outcome: "failed", reason: "evaluation_failed" } as const)).finally(() => {
-      if (this.#touchInFlight === flight) this.#touchInFlight = undefined;
+      operationSettled = true;
+      releaseLease();
     });
     flight.result = Promise.race([
       operation,
@@ -471,14 +491,25 @@ export class KeeperPageManager {
         timer = setTimeout(() => resolve({ outcome: "failed", reason: "renderer_timeout" }), timeout + 1_000);
         timer.unref?.();
       })
-    ]).then((value) => {
+    ]).then(async (value) => {
       if (generation !== this.#touchGeneration || this.currentKeeper() !== keeper || keeper.isClosed() || keeper.url() !== url) return "stale";
       const outcome = typeof value === "string" ? value : value?.outcome;
-      const result: SessionTouchOutcome = outcome === "ok" || outcome === "reauth" ? outcome : "failed";
+      let result: SessionTouchOutcome = outcome === "ok" || outcome === "reauth" ? outcome : "failed";
       this.reportProbe(result, value);
+      if (result === "ok" && this.#probeApplicationSession) {
+        try {
+          const native = await this.#probeApplicationSession(keeper, url);
+          result = native.outcome === "ok" ? "ok" : native.outcome === "reauth" ? "reauth" : "failed";
+        } catch { result = "failed"; }
+        if (generation !== this.#touchGeneration || this.currentKeeper() !== keeper || keeper.isClosed() || keeper.url() !== url) return "stale";
+      }
       this.observeSessionTouchOutcome(result, url);
       return result;
-    }).finally(() => { if (timer !== undefined) clearTimeout(timer); });
+    }).finally(() => {
+      resultSettled = true;
+      releaseLease();
+      if (timer !== undefined) clearTimeout(timer);
+    });
     return flight.result;
   }
 
@@ -531,16 +562,8 @@ export class KeeperPageManager {
       probe = await this.context.newPage();
       this.#commandPages.add(probe);
       const target = this.#verifyRefreshCandidate && isConcreteLocationUrl(expectedUrl) ? expectedUrl : KEEPER_URL;
-      await probe.goto(SAMSUNG_ACCOUNT_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });
-      await waitForSettledKeeperPage(probe, 5_000);
-      if (isSamsungLoginUrl(probe.url())) {
-        const accountDiagnostic = await inspectAuthenticationPage(probe);
-        if (hasVisibleAuthenticationInput(accountDiagnostic.surface)) {
-          await this.recordLoginPage(probe, "refresh");
-          this.recoveryDiagnostic("refresh_login_required");
-          return "login_required";
-        }
-      }
+      // Enter the application's own page and preserve its existing sign-in handoff.
+      // An unrelated Samsung Account home navigation can start a competing flow.
       if (!this.#canNavigate() || this.currentKeeper() !== expectedKeeper || expectedKeeper.isClosed() || expectedKeeper.url() !== expectedUrl) {
         this.recoveryDiagnostic("refresh_stale");
         return "stale";
@@ -666,7 +689,9 @@ export class KeeperPageManager {
   }
 
   private async recoverRememberedSessionIfDue(keeper: BrowserPageLike): Promise<void> {
-    if (!this.#canNavigate()) return;
+    if (!this.#canNavigate() || this.#pendingLoginProbe) return;
+    if (this.#stalledLoginPage?.page === keeper && this.#stalledLoginPage.url === keeper.url()) return;
+    this.#stalledLoginPage = undefined;
     const now = this.#now();
     const loginPage = isSamsungLoginUrl(keeper.url());
     if (loginPage) {
@@ -704,7 +729,11 @@ export class KeeperPageManager {
       this.recoveryDiagnostic("attempt");
       try {
         this.invalidateTouch();
-        await keeper.goto(KEEPER_URL, { waitUntil: "domcontentloaded" });
+        const target = this.#probeApplicationSession
+          ? (isConcreteLocationUrl(keeper.url()) ? keeper.url() : this.#lastAuthenticatedUrl ?? KEEPER_URL)
+          : KEEPER_URL;
+        await keeper.goto(target, { waitUntil: "domcontentloaded" });
+        if (this.#probeApplicationSession) await waitForSettledKeeperPage(keeper);
       } catch {
         return;
       }
@@ -753,18 +782,12 @@ export class KeeperPageManager {
     try {
       probe = await this.context.newPage();
       this.#commandPages.add(probe);
-      await probe.goto(SAMSUNG_ACCOUNT_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });
-      // Let Samsung's ordinary redirect/cookie bootstrap finish before leaving
-      // its document. All waits are bounded and the user's tab stays untouched.
-      await waitForSettledKeeperPage(probe, 5_000);
+      const target = isConcreteLocationUrl(originalUrl) ? originalUrl : this.#lastAuthenticatedUrl ?? KEEPER_URL;
+      await probe.goto(target, { waitUntil: "domcontentloaded", timeout: 10_000 });
+      await waitForSettledKeeperPage(probe);
       if (!originalIsCurrent()) {
         this.recoveryDiagnostic("sso_stale");
         return;
-      }
-
-      if (!isKeeperSettledUrl(probe.url())) {
-        await probe.goto(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });
-        await waitForSettledKeeperPage(probe);
       }
       if (isSamsungLoginUrl(probe.url())) {
         await this.recordLoginPage(probe, "sso");
@@ -777,6 +800,8 @@ export class KeeperPageManager {
           // A blank/iframe/custom/loading page is unknown, not proof of an MFA
           // requirement. Never replace a recoverable keeper with that page.
           this.recoveryDiagnostic("sso_page_unsettled");
+          this.retainPendingLoginProbe(probe, original);
+          probe = undefined;
           return;
         }
         if (isSamsungLoginUrl(originalUrl)) {
@@ -838,7 +863,11 @@ export class KeeperPageManager {
   }
 
   private async verifyRecoveredApplication(candidate: BrowserPageLike): Promise<boolean> {
-    if (!this.#verifyRefreshCandidate) return true;
+    if (!this.#verifyRefreshCandidate) {
+      if (!this.#probeApplicationSession) return true;
+      const target = candidate.url();
+      return isConcreteLocationUrl(target) && (await this.#probeApplicationSession(candidate, target)).outcome === "ok";
+    }
     const target = candidate.url();
     // Reuse the runtime's existing read-only native Location proof. Advanced
     // HTTP success alone must not promote a disconnected application shell.
@@ -866,7 +895,7 @@ export class KeeperPageManager {
       }
       probe = await this.context.newPage();
       this.#commandPages.add(probe);
-      await probe.goto(KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });
+      await probe.goto(this.#lastAuthenticatedUrl ?? KEEPER_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });
       await waitForSettledKeeperPage(probe);
       if (!isKeeperSettledUrl(probe.url())) {
         await this.recordLoginPage(probe, "recovery");
@@ -878,13 +907,18 @@ export class KeeperPageManager {
         const samsungLogin = isSamsungLoginUrl(probe.url());
         if (samsungLogin && !hasVisibleAuthenticationInput(diagnostic.surface)) {
           this.recoveryDiagnostic("login_page_unsettled");
-          // This route was previously missing once the keeper itself reached
-          // Samsung Account: every retry just repeated the same failed URL.
-          // Absence of inputs is NOT proof that no challenge exists; use only
-          // ordinary navigation in a separate tab, never credential injection.
-          if (this.#authenticatedOnce) await this.recoverViaSamsungSsoInSeparatePage(original);
+          // Keep this exact authorization document alive. Opening a second SSO
+          // flow and closing the first can invalidate the shared redirect state.
+          this.retainPendingLoginProbe(probe, original);
+          probe = undefined;
+        } else if (samsungLogin) {
+          // Keep the candidate's challenge. The previous document was input-less;
+          // resumePendingLoginProbe rechecks that it still has no active form.
+          this.retainPendingLoginProbe(probe, original);
+          probe = undefined;
+          this.recoveryDiagnostic("login_required");
         } else {
-          this.recoveryDiagnostic(samsungLogin ? "login_required" : "failed");
+          this.recoveryDiagnostic("failed");
         }
         return;
       }
@@ -913,10 +947,15 @@ export class KeeperPageManager {
         this.recoveryDiagnostic("stale");
         return;
       }
+      if (hasVisibleAuthenticationInput((await inspectAuthenticationPage(original)).surface) || !originalIsCurrent()) {
+        this.recoveryDiagnostic("stale");
+        return;
+      }
       this.invalidateTouch();
       this.#keeper = candidate;
       this.#commandPages.delete(candidate);
       this.#authenticatedOnce = true;
+      if (isConcreteLocationUrl(candidateUrl)) this.#lastAuthenticatedUrl = candidateUrl;
       this.clearRecoveryState();
       probe = undefined;
       await original.close().catch(() => undefined);
@@ -929,9 +968,90 @@ export class KeeperPageManager {
     }
   }
 
+  private retainPendingLoginProbe(page: BrowserPageLike, original: BrowserPageLike): void {
+    this.#pendingLoginProbe = { page, original, originalUrl: original.url(), since: this.#now() };
+    this.recoveryDiagnostic("login_page_pending");
+  }
+
+  private async resumePendingLoginProbe(): Promise<void> {
+    const pending = this.#pendingLoginProbe;
+    if (!pending || !this.#canNavigate()) return;
+    const { page, original, originalUrl } = pending;
+    const originalIsCurrent = () => this.currentKeeper() === original &&
+      !original.isClosed() && original.url() === originalUrl;
+    const discard = async () => {
+      this.#pendingLoginProbe = undefined;
+      this.#commandPages.delete(page);
+      await page.close().catch(() => undefined);
+    };
+    if (page.isClosed() || !originalIsCurrent()) { await discard(); return; }
+    if (isSamsungLoginUrl(originalUrl)) {
+      const currentForm = await inspectAuthenticationPage(original);
+      if (!originalIsCurrent() || hasVisibleAuthenticationInput(currentForm.surface)) {
+        await discard();
+        return;
+      }
+    }
+    if (isKeeperSettledUrl(page.url())) {
+      const candidateUrl = page.url();
+      const verifier = new KeeperPageManager(
+        { pages: () => [page], newPage: async () => page }, { canNavigate: () => false }
+      );
+      await verifier.reconcileRestoredPages();
+      const proof = await verifier.touchAuthenticatedSession();
+      if (proof !== "ok" || !(await this.verifyRecoveredApplication(page))) {
+        await discard();
+        this.recoveryDiagnostic(proof === "reauth" ? "login_required" : "failed");
+        return;
+      }
+      if (isSamsungLoginUrl(originalUrl) &&
+          hasVisibleAuthenticationInput((await inspectAuthenticationPage(original)).surface)) {
+        await discard();
+        return;
+      }
+      if (!originalIsCurrent() || page.isClosed() || page.url() !== candidateUrl ||
+          !(await this.promoteVerifiedKeeper(page))) {
+        await discard();
+        return;
+      }
+      this.#pendingLoginProbe = undefined;
+      this.#lastAuthenticatedUrl = isConcreteLocationUrl(candidateUrl) ? candidateUrl : this.#lastAuthenticatedUrl;
+      if (isSamsungLoginUrl(originalUrl)) await original.close().catch(() => undefined);
+      return;
+    }
+    if (!isSamsungLoginUrl(page.url())) {
+      await discard();
+      this.recoveryDiagnostic("failed");
+      return;
+    }
+    const diagnostic = await inspectAuthenticationPage(page);
+    if (!originalIsCurrent() || page.isClosed() || !this.#canNavigate()) { await discard(); return; }
+    const interactive = hasVisibleAuthenticationInput(diagnostic.surface);
+    if (!interactive && this.#now() - pending.since < this.#unsettledRecoveryGraceMs) return;
+    if (isSamsungLoginUrl(originalUrl) &&
+        hasVisibleAuthenticationInput((await inspectAuthenticationPage(original)).surface)) {
+      await discard();
+      return;
+    }
+    if (!originalIsCurrent() || !this.#canNavigate()) { await discard(); return; }
+    // This is NOT an authenticated promotion: keep readiness blocked. Preserve
+    // the current nonce/redirect/MFA document for the user's browser action.
+    this.invalidateTouch();
+    this.#keeper = page;
+    this.#commandPages.delete(page);
+    this.#pendingLoginProbe = undefined;
+    this.#loginObservedAtMs ??= this.#now();
+    this.#stalledLoginPage = { page, url: page.url() };
+    await page.bringToFront?.().catch(() => undefined);
+    await original.close().catch(() => undefined);
+    this.recoveryDiagnostic(interactive ? "login_required" : "login_page_stalled");
+    await this.recordLoginPage(page, "recovery");
+  }
+
   private observeSessionTouchOutcome(outcome: SessionTouchOutcome, url: string): void {
     if (outcome === "ok") {
       this.#authenticatedOnce = true;
+      if (isConcreteLocationUrl(url)) this.#lastAuthenticatedUrl = url;
       this.#lastProactiveRefreshAtMs ??= this.#now();
       this.clearRecoveryState();
       return;
@@ -973,7 +1093,8 @@ export async function waitForSettledKeeperPage(
 }
 
 function hasVisibleAuthenticationInput(surface: string): boolean {
-  return surface === "password_input" || surface === "otp_input" || surface === "email_input" || surface === "embedded_auth_input";
+  return surface === "password_input" || surface === "otp_input" || surface === "email_input" ||
+    surface === "embedded_auth_input" || surface === "auth_action" || surface === "captcha";
 }
 
 function validDelay(value: number | undefined, fallback: number): number {

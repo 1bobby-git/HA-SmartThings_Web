@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
+
 from homeassistant.util import slugify
 
-from .models import BridgeDevice, BridgeInventory
+from .models import BridgeDevice, BridgeInventory, BridgeState, disambiguated_state_names
 
 
 def canonical_entity_object_id(
@@ -93,3 +95,27 @@ def _collapse_repeated_slug_prefix(value: str, prefix: str) -> str:
     while value.startswith(duplicate_prefix):
         value = value[len(prefix) + 1 :]
     return value
+
+
+def state_object_id_name(
+    inventory: BridgeInventory, device: BridgeDevice, state: BridgeState,
+) -> str:
+    """Use protocol attribute types, never translated display labels, for IDs.
+
+    Device/role labels may be localized; the data-point type must not change
+    when HA's language or a SmartThings presentation label changes. Reuse the
+    established role disambiguation for multi-channel devices.
+    """
+    base = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", state.attribute).lower()
+    siblings = [item for item in device.states.values() if item.attribute == state.attribute]
+    names = disambiguated_state_names(
+        [(item, base) for item in siblings],
+        all_states=device.states.values(),
+        main_presence_name=(inventory.locations.get(device.location_id)
+                            if state.attribute == "presence" else None),
+    )
+    name = names.get(state.key, base)
+    prefix = f"{base} ("
+    if name.startswith(prefix) and name.endswith(")"):
+        return f"{base} {name[len(prefix):-1]}"
+    return name

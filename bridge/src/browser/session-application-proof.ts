@@ -87,7 +87,7 @@ export async function verifyLocationApplicationSession(
   finally { if (timer !== undefined) clearTimeout(timer); }
 }
 
-export type AuthenticationSurface = "password_input" | "otp_input" | "email_input" | "embedded_auth_input" | "no_visible_auth_input" | "unavailable";
+export type AuthenticationSurface = "password_input" | "otp_input" | "email_input" | "embedded_auth_input" | "auth_action" | "captcha" | "no_visible_auth_input" | "unavailable";
 export type AuthenticationPageCategory = "samsung_account" | "smartthings_account" | "smartthings_location" | "other";
 export interface AuthenticationPageDiagnostic {
   page: AuthenticationPageCategory;
@@ -118,9 +118,9 @@ export async function inspectAuthenticationPage(page: BrowserPageLike): Promise<
       };
       const scan = (root: Document | ShadowRoot): AuthenticationSurface | undefined => {
         const visible = (selector: string) => Array.from(root.querySelectorAll<HTMLInputElement>(selector)).some(isVisible);
-        if (visible('input[autocomplete="one-time-code"]')) return "otp_input";
+        if (visible('input[autocomplete="one-time-code"], input[name*="otp" i], input[id*="otp" i], input[name="verificationCode"], input[id="mfa"]')) return "otp_input";
         if (visible('input[type="password"]')) return "password_input";
-        if (visible('input[type="email"], input[autocomplete="email"], input[autocomplete="username"]')) return "email_input";
+        if (visible('input[type="email"], input[autocomplete="email"], input[autocomplete="username"], input[name="loginId"], input[id="loginId"], input[name="username"], input[type="tel"]')) return "email_input";
         for (const element of Array.from(root.querySelectorAll<HTMLElement>("*"))) {
           if (element.shadowRoot) { const nested = scan(element.shadowRoot); if (nested) return nested; }
         }
@@ -129,6 +129,9 @@ export async function inspectAuthenticationPage(page: BrowserPageLike): Promise<
           try { if (frame.contentDocument) { const nested = scan(frame.contentDocument); if (nested) return nested; } } catch {}
           try { const src = new URL(frame.src, location.href); if (src.hostname === "account.samsung.com" || src.hostname.endsWith(".samsung.com")) return "embedded_auth_input"; } catch {}
         }
+        if (visible('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], [data-sitekey]')) return "captcha";
+        const actions = Array.from(root.querySelectorAll<HTMLElement>('button, a, [role="button"]'));
+        if (actions.some(element => isVisible(element) && /^(?:sign[ -]?in|log[ -]?in|continue|next|use (?:another|this) account|로그인|계속|다음|다른 계정 사용|이 계정으로 계속)(?:\s|$)/iu.test((element.textContent ?? "").trim()))) return "auth_action";
         return undefined;
       };
       return scan(document) ?? "no_visible_auth_input";
@@ -136,7 +139,7 @@ export async function inspectAuthenticationPage(page: BrowserPageLike): Promise<
     const surface = await Promise.race([work, new Promise<AuthenticationSurface>(resolve => {
       timer = setTimeout(() => resolve("unavailable"), 1_500);
     })]);
-    const allowed = ["password_input", "otp_input", "email_input", "embedded_auth_input", "no_visible_auth_input"];
+    const allowed = ["password_input", "otp_input", "email_input", "embedded_auth_input", "auth_action", "captcha", "no_visible_auth_input"];
     return { page: category, surface: page.url() === initialUrl && allowed.includes(surface) ? surface : "unavailable" };
   } catch { return { page: category, surface: "unavailable" }; }
   finally { if (timer !== undefined) clearTimeout(timer); }

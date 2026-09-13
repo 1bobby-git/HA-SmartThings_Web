@@ -127,6 +127,33 @@ class FakeEntityRegistry:
 class SmartThingsWebEntityPushTests(unittest.IsolatedAsyncioTestCase):
     """Prove a Bridge state push reaches Home Assistant state writing."""
 
+    def test_machine_attribute_suffix_is_independent_of_display_language(self) -> None:
+        for attribute, translated, expected in (
+            ("contact", "열림 감지", "contact"),
+            ("battery", "배터리", "battery"),
+            ("temperature", "온도", "temperature"),
+            ("relativeHumidity", "습도", "relative_humidity"),
+            ("signalMetrics", "수신 신호 메트릭", "signal_metrics"),
+        ):
+            with self.subTest(attribute=attribute):
+                state = BridgeState("main", "fixtureCapability", attribute, 1, None, "2026-09-14T00:00:00Z")
+                device = BridgeDevice("dev_door", "loc_001", None, "Hwajangsil Doeosenseo", "sensor", True, states={state.key: state})
+                inventory = BridgeInventory(1, True, "1.8.48", "1", {"loc_001": "Home"}, {}, {device.device_id: device})
+                runtime = SmartThingsWebRuntime(None, "loc_001", inventory)
+                item = SmartThingsWebEntity(runtime, device, state, translated)
+                self.assertEqual(item._attr_suggested_object_id, f"hwajangsil_doeosenseo_{expected}")
+                self.assertEqual(item._attr_name, translated)
+                self.assertEqual(item._attr_unique_id, f"dev_door_main_fixtureCapability_{attribute}")
+
+    def test_numeric_state_control_does_not_use_translated_label_for_id(self) -> None:
+        state = BridgeState("main", "counter", "peopleCount", 2, None, "2026-09-14T00:00:00Z")
+        device = BridgeDevice("dev_count", "loc_001", None, "Bathroom Counter", "sensor", True, states={state.key: state})
+        inventory = BridgeInventory(1, True, "1.8.48", "1", {"loc_001": "Home"}, {}, {device.device_id: device})
+        runtime = SmartThingsWebRuntime(None, "loc_001", inventory)
+        item = SmartThingsWebDeviceEntity(runtime, device, "_".join(state.key), "인원수")
+        self.assertEqual(item._attr_suggested_object_id, "bathroom_counter_people_count")
+        self.assertEqual(item._attr_name, "인원수")
+
     def test_existing_generated_name_is_refined_without_overwriting_user_name(self) -> None:
         registry = FakeEntityRegistry()
         entity_under_test.er.async_get = lambda _hass: registry

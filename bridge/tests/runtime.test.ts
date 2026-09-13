@@ -120,6 +120,12 @@ class FakePage extends FakeEmitter {
       await this.onNativeCommand?.(argument as { command: string });
       return "sent";
     }
+    if (typeof argument === "object" && argument !== null &&
+        typeof (argument as { id?: unknown }).id === "string" &&
+        typeof (argument as { budget?: unknown }).budget === "number") {
+      this.applicationProbeCalls.push(argument);
+      return this.applicationProbeOutcome;
+    }
     this.evaluateCalls.push([pageFunction, argument]);
     if (
       typeof argument === "object" &&
@@ -134,6 +140,8 @@ class FakePage extends FakeEmitter {
   readonly close = vi.fn(async () => {
     this.closed = true;
   });
+  readonly applicationProbeCalls: unknown[] = [];
+  applicationProbeOutcome = { outcome: "ok", reason: "verified" };
   readonly evaluateCalls: unknown[][] = [];
   readonly advancedRequestCalls: unknown[] = [];
   readonly advancedResponses = new Map<string, unknown>();
@@ -834,7 +842,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
 
     expect(log.info.mock.calls.slice(0, 14)).toEqual([
-      ["bridge_init:version:1.8.47:home_monitor_direct"],
+      ["bridge_init:version:1.8.48:home_monitor_direct"],
       ["bridge_init:data_paths"],
       ["bridge_init:data_paths:data_dir"],
       ["bridge_init:data_paths:profile_dir"],
@@ -1344,6 +1352,23 @@ describe("createBridgeRuntime", () => {
     expect(keeper.goto).not.toHaveBeenCalled();
   });
 
+  test("Advanced success cannot hide the native application's authentication rejection", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(10_000);
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    keeper.applicationProbeOutcome = { outcome: "reauth", reason: "http_401" };
+    const root = createTempRoot();
+    const runtime = await createBridgeRuntime(createDeps(root, {
+      chromium: { launchPersistentContext: vi.fn(async () => new FakeContext([keeper])) },
+      config: { dataDir: root, host: "127.0.0.1", port: 0, browserMaxRestarts: 0, heartbeatIntervalMs: 1_000, browserRetryDelayMs: 0 }
+    }));
+    runtimes.push(runtime); await runtime.browserStartup;
+    runtime.status.update({ authenticated: true, keeperPresent: true, state: "STALE" });
+    await vi.advanceTimersByTimeAsync(301_000);
+    expect(keeper.sessionTouchOutcome).toBe("ok");
+    expect(keeper.applicationProbeCalls).toHaveLength(1);
+    expect(runtime.status.getSnapshot()).toMatchObject({ authenticated: false, sessionTouchLastOutcome: "reauth" });
+  });
+
   test("reauth recovery verifies the protected endpoint again before permitting authentication", async () => {
     vi.useFakeTimers(); vi.setSystemTime(10_000);
     const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
@@ -1451,6 +1476,7 @@ describe("createBridgeRuntime", () => {
     expect(keeper.goto).not.toHaveBeenCalled();
     expect(keeper.evaluateCalls).toHaveLength(1);
     expect(keeper.evaluateCalls[0]?.[1]).toMatchObject({ path: "/location" });
+    expect(keeper.applicationProbeCalls).toEqual([{ id: "loc-synthetic-001", budget: 10_000 }]);
     expect(String(keeper.evaluateCalls[0]?.[0])).not.toMatch(
       /cupcake-api|api\/devices|api\/device|api\/scene|command|cookie|localStorage|sessionStorage|document/i
     );
