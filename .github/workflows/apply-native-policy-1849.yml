@@ -30,10 +30,45 @@ jobs:
           Path('/tmp/native-policy.patch').write_bytes(patch)
           subprocess.run(['git', 'apply', '--check', '/tmp/native-policy.patch'], check=True)
           subprocess.run(['git', 'apply', '/tmp/native-policy.patch'], check=True)
+          p = Path('bridge/src/browser/native-login-policy.ts')
+          s = p.read_text().replace('  let touchedUi = false;', '''  const focusOwnedPage = async () => {
+              if (!valid()) throw new Error("page_changed");
+              // Headed Chromium can suspend animation frames in a background tab.
+              // Activate only this owned candidate; do not force past actionability.
+              if (page.bringToFront) await bounded(page.bringToFront(), timeout);
+              if (!valid()) throw new Error("page_changed");
+            };
+            let touchedUi = false;
+            let unresolvedExistingUi = false;''')
+          s = s.replace('    if (existing.result !== "missing") return existing;', '''    if (existing.result !== "missing") {
+                unresolvedExistingUi = ["blocked", "ambiguous", "unknown"].includes(existing.result);
+                return existing;
+              }''')
+          s = s.replace('    await page.locator(selector).click({ timeout });', '    await focusOwnedPage();\n    await page.locator(selector).click({ timeout });')
+          s = s.replace('      state = await probe("control");\n      if (state.result === "off")', '      await focusOwnedPage();\n      state = await probe("control");\n      if (state.result === "off")')
+          s = s.replace('    // Close only our own UI', '''    // A pre-existing challenge or ambiguous modal was not opened by us.
+              // Do not dismiss it, or promote its document merely because a background
+              // Location read still works. The caller preserves the live keeper.
+              if (unresolvedExistingUi) return report("attention", reason, false);
+              // Close only our own UI''')
+          p.write_text(s)
+          p = Path('bridge/tests/browser/native-login-policy.test.ts')
+          s = p.read_text().replace('  test("unsupported browser', '''  test.each(["blocked", "ambiguous", "unknown"])("pre-existing %s UI is not a clean keeper candidate", async result => {
+              const browser = { ...page(), locator: vi.fn() };
+              browser.evaluate.mockResolvedValue({result});
+              const outcome = await ensureNativeKeepSignedIn(browser, target, {enabled:true});
+              expect(outcome.report.state).toBe("attention");
+              expect(outcome.clean).toBe(false);
+              expect(browser.goto).not.toHaveBeenCalled();
+              expect(browser.locator).not.toHaveBeenCalled();
+            });
+            test("unsupported browser''')
+          p.write_text(s)
           p = Path('tools/ci-native-login-policy-smoke.mjs')
           s = p.read_text().replace('<head><title>Synthetic settings', '<head><meta charset="utf-8"><title>Synthetic settings')
           s = s.replace("contentType: 'text/html'", "contentType: 'text/html; charset=utf-8'")
           s = s.replace('  const result = await ensureNativeKeepSignedIn(page, target, { enabled: !opts.optOut, timeoutMs: 350 });', "  assert.equal(await page.locator('#open').getAttribute('aria-label'), opts.english ? 'Settings' : '설정', 'fixture labels must retain their UTF-8 encoding');\n  // Use the production timeout; headed Chromium needs real stable frames.\n  const result = await ensureNativeKeepSignedIn(page, target, { enabled: !opts.optOut });")
+          s = s.replace("    assert.equal(result.report.state, 'attention'); assert.equal((await readCounters(page)).keep, 0);", "    assert.equal(result.report.state, 'attention'); assert.equal((await readCounters(page)).keep, 0);\n    if (opts.blocked) assert.equal(result.clean, false, 'pre-existing challenge must prevent keeper promotion');")
           p.write_text(s)
           PY
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
