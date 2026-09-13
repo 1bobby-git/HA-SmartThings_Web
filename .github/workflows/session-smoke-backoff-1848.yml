@@ -1,0 +1,44 @@
+name: Validate real Chromium recovery backoff
+on:
+  push:
+    branches: [fix/entity-ids-session-recovery-1.8.48]
+    paths: [.github/workflows/session-smoke-backoff-1848.yml]
+permissions:
+  contents: write
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/entity-ids-session-recovery-1.8.48
+      - name: Align synthetic clock with bounded exponential retry
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tools/ci-session-continuity-smoke.mjs')
+          t = p.read_text()
+          assert t.count('clock += 300_001') == 4
+          t = t.replace('clock += 300_001', 'clock += 30 * 60_000 + 1')
+          t = t.replace('  // Model the user completing the challenge; an input-less relay can now resume.', '  // Model challenge completion after the maximum exponential retry window.\n  // Only the manager clock advances; the 25-second browser relay below is real.')
+          t = t.replace('  assert.notEqual(recovered, original);', '  assert.notEqual(recovered, original, JSON.stringify({ phases: recoveryPhases, touches }));')
+          p.write_text(t)
+          Path('.github/workflows/session-smoke-backoff-1848.yml').unlink()
+          PY
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'test: respect exponential recovery backoff in isolated Chromium fixtures'
+          git push origin HEAD:fix/entity-ids-session-recovery-1.8.48
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - run: npm ci && npm run build
+      - run: npx playwright-core install --with-deps chromium
+      - name: Verify session continuity and a real 25-second relay
+        timeout-minutes: 3
+        run: xvfb-run -a node tools/ci-session-continuity-smoke.mjs
