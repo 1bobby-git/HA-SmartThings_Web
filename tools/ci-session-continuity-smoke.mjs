@@ -129,14 +129,15 @@ try {
   assert.equal(keeper.authenticationRecoveryPending(), true);
   assert.ok(recoveryPhases.includes('login_required'));
   // Advanced 200 is not permission to erase a visible user's OTP challenge.
-  clock += 300_001; responseStatus = 200;
+  clock += 30 * 60_000 + 1; responseStatus = 200;
   assert.equal(await keeper.ensureKeeper(), original);
   assert.equal(await original.locator('#mfa').inputValue(), 'fixture-in-progress');
-  // Model the user completing the challenge; an input-less relay can now resume.
+  // Model challenge completion after the maximum exponential retry window.
+  // Only the manager clock advances; the 25-second browser relay below is real.
   await original.setContent('<p>Authorization processing</p>');
-  clock += 300_001;
+  clock += 30 * 60_000 + 1;
   const recovered = await keeper.ensureKeeper();
-  assert.notEqual(recovered, original);
+  assert.notEqual(recovered, original, JSON.stringify({ phases: recoveryPhases, touches }));
   assert.equal(original.isClosed(), true);
   assert.equal(context.pages().length, 1);
   assert.equal(keeper.authenticationRecoveryPending(), false);
@@ -160,11 +161,11 @@ try {
 
   await recovered.setContent('<p>Authorization processing</p>');
   // Try an input-less relay with rejected credentials. It must not be promoted.
-  clock += 300_001; responseStatus = 401;
+  clock += 30 * 60_000 + 1; responseStatus = 401;
   assert.equal(await keeper.ensureKeeper(), recovered);
   assert.equal(completedRelayPages, 1);
   assert.equal(context.pages().length, 1);
-  clock += 300_001; responseStatus = 200; delayedRedirectsRemaining = 1;
+  clock += 30 * 60_000 + 1; responseStatus = 200; delayedRedirectsRemaining = 1;
   const touchesBeforeRecovery = touches;
   const delayedRecovery = await keeper.ensureKeeper();
   assert.notEqual(delayedRecovery, recovered);
