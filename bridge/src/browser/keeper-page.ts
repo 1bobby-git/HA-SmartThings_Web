@@ -562,7 +562,7 @@ export class KeeperPageManager {
       probe = await this.context.newPage();
       this.#commandPages.add(probe);
       const target = this.#verifyRefreshCandidate && isConcreteLocationUrl(expectedUrl) ? expectedUrl : KEEPER_URL;
-      // Enter SmartThings directly, preserving the real application's OAuth state.
+      // Enter the application's own page and preserve its existing sign-in handoff.
       // An unrelated Samsung Account home navigation can start a competing flow.
       if (!this.#canNavigate() || this.currentKeeper() !== expectedKeeper || expectedKeeper.isClosed() || expectedKeeper.url() !== expectedUrl) {
         this.recoveryDiagnostic("refresh_stale");
