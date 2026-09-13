@@ -1,3 +1,16 @@
+## 1.8.46
+
+- v1.8.45의 Bridge 상태 페이지를 승인된 HA Component Design System 기준 화면에 다시 맞췄습니다.
+- 헤더를 본문과 분리된 전체 폭 흰색 영역으로 변경하고, 기준 화면과 동일하게 브랜드/상태 상단 행과 `한눈에 · HA 연결 · 진단` 내비게이션 행을 구성했습니다.
+- 저장소의 기존 `custom_components/smartthings_web/brand/logo.png`를 그대로 Bridge 앱에 포함해 실제 로고가 오프라인에서도 표시되도록 했습니다. 로고를 새로 만들거나 외부 URL에 의존하지 않습니다.
+- Bridge 상태, 실행 상태, Home Assistant 연결, 페어링, 프로토콜 상태와 상세 진단 등 사용자에게 보이는 문구를 한글화했습니다.
+- 밝은 회색 본문, 흰 카드, 네이비 핵심 상태 카드, 반응형 레이아웃, 키보드 포커스, reduced-motion, forced-colors 접근성은 디자인 가이드 토큰에 맞춰 유지했습니다.
+- 시작/대기 화면도 동일한 흰색 헤더·실제 로고·한글 정보 구조로 통일했습니다.
+- 기존 상대 noVNC 브라우저 로그인, 8자리·10분 페어링 코드, Protocol Changed 시 readiness/Phase 2 차단, HTML 이스케이프와 안전한 진단 데이터 정책은 유지합니다.
+- Bridge 앱 패키저가 `rootfs` 아래 PNG를 바이너리로 보존하도록 보강하고, 실제 `logo.png`가 패키징 전후 바이트 단위로 동일한지 자동 테스트합니다.
+- PR #83에서 Node 테스트·typecheck·build·실제 Chromium 시나리오·세션 연속성·Python 테스트·HACS·Hassfest·HAOS runtime smoke·Home Assistant 통합 테스트·Security checks를 모두 통과한 변경을 배포합니다.
+- 새 디자인을 적용하려면 SmartThings Web Bridge 앱을 1.8.46으로 업데이트해야 합니다.
+
 ## 1.8.45
 
 - SmartThings Web Bridge 상태 페이지를 HA Component Design System v1.0 기준으로 전면 재구성했습니다.
