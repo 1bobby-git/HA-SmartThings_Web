@@ -1,0 +1,94 @@
+name: Prepare SmartThings Web 1.8.45
+
+on:
+  push:
+    branches: [release/1.8.45]
+    paths: [.github/workflows/prepare-release-1-8-45.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: release/1.8.45
+      - name: Apply 1.8.45 release metadata in one commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          version='1.8.45'
+          previous='1.8.44'
+
+          p=Path('package.json')
+          data=json.loads(p.read_text(encoding='utf-8'))
+          assert data['version']==previous
+          data['version']=version
+          p.write_text(json.dumps(data, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+
+          p=Path('package-lock.json')
+          data=json.loads(p.read_text(encoding='utf-8'))
+          assert data['version']==previous
+          assert data['packages']['']['version']==previous
+          data['version']=version
+          data['packages']['']['version']=version
+          p.write_text(json.dumps(data, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+
+          p=Path('custom_components/smartthings_web/manifest.json')
+          data=json.loads(p.read_text(encoding='utf-8'))
+          assert data['version']==previous
+          data['version']=version
+          p.write_text(json.dumps(data, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+
+          p=Path('protocol/version.json')
+          data=json.loads(p.read_text(encoding='utf-8'))
+          assert data['bridge_version']==previous
+          data['bridge_version']=version
+          p.write_text(json.dumps(data, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+
+          p=Path('addon/smartthings_web_bridge/config.yaml')
+          text=p.read_text(encoding='utf-8')
+          assert f'version: {previous}' in text
+          p.write_text(text.replace(f'version: {previous}', f'version: {version}', 1), encoding='utf-8')
+
+          for name in [
+              'bridge/src/runtime.ts',
+              'bridge/tests/runtime.test.ts',
+              'tests/addon-config.test.ts',
+              'tests/protocol-version-contract.test.ts',
+          ]:
+              p=Path(name)
+              text=p.read_text(encoding='utf-8')
+              assert previous in text, name
+              p.write_text(text.replace(previous, version), encoding='utf-8')
+
+          notes='''## 1.8.45
+
+- SmartThings Web Bridge 상태 페이지를 HA Component Design System v1.0 기준으로 전면 재구성했습니다.
+- 원시 `live/ready` 표기를 사용자 중심의 Ready / Starting / Needs attention 상태 계층으로 바꾸고, 핵심 현황 → Home Assistant 연결 → 프로토콜 무결성 → 상세 진단 순서로 정보 구조를 개선했습니다.
+- Home Assistant 10분 페어링 코드 생성, 브라우저 로그인, Protocol Changed 시 readiness/Phase 2 차단, 진단 정보 및 HTML 이스케이프 동작은 그대로 유지합니다.
+- 라이트/다크 모드, 모바일 반응형, 44px 이상 조작 영역, 키보드 focus-visible, reduced-motion, forced-colors 접근성을 추가했습니다.
+- Bridge 시작 중 대체 화면도 동일한 디자인 체계로 통일했으며 5초 자동 재확인과 로그인 진입 동작은 유지합니다.
+- API, 인증, 세션, 명령, 엔티티, persistence, protocol contract에는 변경이 없습니다.
+- PR #81에서 Node 테스트·typecheck·build·실제 Chromium 시나리오·세션 연속성·Python 테스트·HACS·Hassfest·HAOS runtime smoke·Security checks를 모두 통과한 UI 변경을 1.8.45로 배포합니다.
+- Bridge 웹 UI 변경이므로 새 화면을 적용하려면 SmartThings Web Bridge 앱을 1.8.45로 업데이트해야 합니다.
+
+'''
+          for name in ['CHANGELOG.md','addon/smartthings_web_bridge/CHANGELOG.md']:
+              p=Path(name)
+              p.write_text(notes + p.read_text(encoding='utf-8'), encoding='utf-8')
+
+          Path('release-notes/1.8.45.md').write_text(notes.split('\n\n',1)[1], encoding='utf-8')
+          Path('.github/workflows/prepare-release-1-8-45.yml').unlink()
+          PY
+          git diff --check
+          git add -A
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'release: SmartThings Web 1.8.45 bridge UI refresh'
+          git push origin HEAD:refs/heads/release/1.8.45
