@@ -1,0 +1,47 @@
+name: Clarify handoff documentation and validate API boundary
+on:
+  push:
+    branches: [fix/entity-ids-session-recovery-1.8.48]
+    paths: [.github/workflows/final-docs-1848.yml]
+permissions:
+  contents: write
+jobs:
+  docs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/entity-ids-session-recovery-1.8.48
+      - name: Clarify the comment and synchronize migration notes
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('bridge/src/browser/keeper-page.ts')
+          t = p.read_text()
+          old = "// Enter SmartThings directly, preserving the real application's OAuth state."
+          assert t.count(old) == 1
+          t = t.replace(old, "// Enter the application's own page and preserve its existing sign-in handoff.")
+          p.write_text(t)
+          notes = Path('release-notes/1.8.48.md').read_text().strip()
+          for name in ['CHANGELOG.md', 'addon/smartthings_web_bridge/CHANGELOG.md']:
+              p = Path(name); text = p.read_text()
+              assert text.startswith('## 1.8.48\n') and text.count('## 1.8.47\n') == 1
+              previous = text[text.index('## 1.8.47\n'):]
+              p.write_text('## 1.8.48\n\n' + notes + '\n\n' + previous)
+          PY
+          git diff --check
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - run: npm ci && npm run audit:api-free && npm run audit:secrets && npm run audit:fixtures
+      - name: Commit documentation only on the feature branch
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add bridge/src/browser/keeper-page.ts CHANGELOG.md addon/smartthings_web_bridge/CHANGELOG.md
+          git commit -m 'docs: clarify browser handoff and safe entity migration; retain API boundary rules'
+          git push origin HEAD:fix/entity-ids-session-recovery-1.8.48
