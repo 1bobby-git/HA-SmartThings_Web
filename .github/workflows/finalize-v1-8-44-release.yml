@@ -1,0 +1,71 @@
+name: Finalize public v1.8.44 release
+on:
+  push:
+    branches: [ops/publish-v1.8.44-20260913]
+    paths: [.github/workflows/finalize-v1-8-44-release.yml]
+permissions:
+  contents: write
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_SHA: 5e9ab253bb47267fc9b9f65ecddce63f3fac6f2d
+      VERSION: 1.8.44
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Build exact release packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')" == "${RELEASE_SHA}" ]]
+          npm ci
+          npm run build
+          npm run package:addon
+          tar -C custom_components -czf "smartthings-web-integration-${VERSION}.tgz" smartthings_web
+          tar -C dist-addon -czf "smartthings-web-bridge-${VERSION}.tgz" smartthings_web_bridge
+          tar -tzf "smartthings-web-integration-${VERSION}.tgz" >/dev/null
+          tar -tzf "smartthings-web-bridge-${VERSION}.tgz" >/dev/null
+      - name: Repair and publish release atomically
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          if ! gh release view "${tag}" >/dev/null 2>&1; then
+            gh release create "${tag}" --target "${RELEASE_SHA}" --title "SmartThings Web ${VERSION}" --notes-file "release-notes/${VERSION}.md"
+          fi
+          gh release upload "${tag}" \
+            "smartthings-web-bridge-${VERSION}.tgz#SmartThings Web Bridge 앱 (${VERSION})" \
+            "smartthings-web-integration-${VERSION}.tgz#Home Assistant 통합" --clobber
+          gh release edit "${tag}" --draft=false --prerelease=false --target "${RELEASE_SHA}" --title "SmartThings Web ${VERSION}" --notes-file "release-notes/${VERSION}.md"
+      - name: Verify public release contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5 6; do
+            json="$(gh api "/repos/${GITHUB_REPOSITORY}/releases/tags/v${VERSION}" 2>/dev/null || true)"
+            if [[ -n "${json}" ]]; then
+              JSON="${json}" VERSION="${VERSION}" RELEASE_SHA="${RELEASE_SHA}" python - <<'PY'
+          import json, os
+          r=json.loads(os.environ['JSON'])
+          assert r['tag_name']==f"v{os.environ['VERSION']}"
+          assert r['draft'] is False and r['prerelease'] is False
+          names={a['name'] for a in r.get('assets', [])}
+          expected={f"smartthings-web-bridge-{os.environ['VERSION']}.tgz", f"smartthings-web-integration-{os.environ['VERSION']}.tgz"}
+          assert expected <= names, (expected, names)
+          assert r['target_commitish']==os.environ['RELEASE_SHA'], r['target_commitish']
+          print(json.dumps({'tag':r['tag_name'],'draft':r['draft'],'prerelease':r['prerelease'],'assets':sorted(names),'target':r['target_commitish']}))
+          PY
+              exit 0
+            fi
+            sleep $((attempt * 3))
+          done
+          echo 'Public release endpoint did not become available.' >&2
+          exit 1
