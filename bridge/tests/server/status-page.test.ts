@@ -86,6 +86,52 @@ describe("renderStatusPage", () => {
     expect(html).toContain("Protocol verified");
     expect(html).not.toContain("Phase 2 remains closed");
   });
+
+  test("renders design-system hierarchy with accessible primary actions and collapsed diagnostics", () => {
+    const html = renderStatusPage(reportFor({
+      state: "CONNECTED",
+      protocolVersion: "1:abcdef1234567890",
+      protocolChangeCount: 0,
+      dbAvailable: true,
+      chromiumRunning: true,
+      keeperPresent: true,
+      authenticated: true,
+      pushConnected: true,
+      initialSnapshotComplete: true,
+      parserHealthy: true,
+      lastSnapshotAtMs: 9_900,
+      lastParserSuccessAtMs: 9_950,
+      lastPushAtMs: 9_975
+    }));
+
+    expect(html).toContain('data-overall-state="ready"');
+    expect(html).toContain("SmartThings connection at a glance");
+    expect(html).toContain('class="hc-button hc-button-primary"');
+    expect(html).toContain('id="pairing-result" role="status" aria-live="polite"');
+    expect(html).toContain('<details class="hc-card hc-details">');
+    expect(html).toContain("View technical details");
+    expect(html).not.toContain("live=true ready=true");
+  });
+
+  test("distinguishes live-but-not-ready from unavailable without relying on color alone", () => {
+    const startingHtml = renderStatusPage(reportFor({
+      state: "CONNECTED",
+      protocolVersion: "1:abcdef1234567890",
+      dbAvailable: true
+    }));
+    const attentionHtml = renderStatusPage(reportFor({
+      state: "BROWSER_FAILED",
+      protocolVersion: "1:abcdef1234567890",
+      dbAvailable: false
+    }));
+
+    expect(startingHtml).toContain('data-overall-state="starting"');
+    expect(startingHtml).toContain("Bridge is starting");
+    expect(startingHtml).toContain("Not ready");
+    expect(attentionHtml).toContain('data-overall-state="attention"');
+    expect(attentionHtml).toContain("Bridge needs attention");
+    expect(attentionHtml).toContain("Offline");
+  });
 });
 
 function reportFor(patch: RuntimeStatusPatch) {

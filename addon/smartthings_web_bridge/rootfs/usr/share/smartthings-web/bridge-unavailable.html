@@ -3,27 +3,134 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <meta http-equiv="refresh" content="5">
   <title>SmartThings Web Bridge 시작 중</title>
   <style>
-    body { margin: 0; font: 15px/1.6 system-ui, sans-serif; background: #101418; color: #e8eef2; }
-    main { max-width: 720px; margin: 0 auto; padding: 32px 24px; }
-    section { border: 1px solid #34414c; border-left: 6px solid #fbbf24; border-radius: 8px; background: #161d24; padding: 18px 20px; }
-    h1 { margin: 0 0 12px; font-size: 23px; }
-    p { margin: 8px 0; }
-    a { color: #80c7ff; }
-    code { color: #f7d794; }
+    :root {
+      color-scheme: light;
+      --hc-bg: #f7f8fa;
+      --hc-surface: #ffffff;
+      --hc-ink: #191f28;
+      --hc-muted: #667182;
+      --hc-line: #e9ecf1;
+      --hc-soft: #f1f3f6;
+      --hc-blue: #2563eb;
+      --hc-warning: #805500;
+      --hc-warning-soft: #fff4dc;
+      --hc-primary-bg: #2563eb;
+      --hc-primary-ink: #ffffff;
+      --hc-focus: #2563eb;
+      --hc-shadow: 0 8px 32px #19243b05;
+      --hc-hero-bg: radial-gradient(ellipse at 95% -20%, #314774 0, transparent 63%), #182237;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --hc-bg: #11151c;
+        --hc-surface: #1b222c;
+        --hc-ink: #f1f4fa;
+        --hc-muted: #afbacb;
+        --hc-line: #303b4b;
+        --hc-soft: #252e3c;
+        --hc-blue: #91b6ff;
+        --hc-warning: #f8d992;
+        --hc-warning-soft: #3a3020;
+        --hc-focus: #91b6ff;
+        --hc-shadow: none;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--hc-bg);
+      color: var(--hc-ink);
+      font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Pretendard", "Noto Sans CJK KR", "Malgun Gothic", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    :focus-visible { outline: 3px solid var(--hc-focus); outline-offset: 3px; }
+    .hc-shell { width: 100%; max-width: 1248px; margin: 0 auto; padding: 0 40px 48px; }
+    .hc-header {
+      min-height: 94px;
+      display: flex;
+      align-items: center;
+      border-bottom: 1px solid var(--hc-line);
+      font-weight: 750;
+      letter-spacing: -0.025em;
+    }
+    main { padding-top: 40px; }
+    .hc-title-block { max-width: 760px; margin-bottom: 30px; }
+    .hc-eyebrow { margin: 0 0 8px; color: var(--hc-blue); font-size: 13px; font-weight: 750; letter-spacing: .045em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(28px, 4vw, 38px); line-height: 1.35; font-weight: 750; letter-spacing: -0.045em; word-break: keep-all; }
+    .hc-lead { margin: 12px 0 0; color: var(--hc-muted); }
+    .hc-hero { padding: 28px; border-radius: 24px; background: var(--hc-hero-bg); color: #ffffff; }
+    .hc-status { display: flex; align-items: center; gap: 10px; }
+    .hc-status-icon { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 999px; background: #fff1cc; color: #775000; font-weight: 900; }
+    .hc-hero h2 { margin: 0; font-size: 32px; line-height: 1.25; font-weight: 750; letter-spacing: -0.04em; }
+    .hc-hero p { margin: 10px 0 0; color: #d8e2f3; max-width: 720px; }
+    .hc-card { margin-top: 36px; padding: 24px; border: 1px solid var(--hc-line); border-radius: 19px; background: var(--hc-surface); box-shadow: var(--hc-shadow); }
+    .hc-card h2 { margin: 0; font-size: 23px; line-height: 1.4; font-weight: 720; letter-spacing: -0.035em; }
+    .hc-card p { margin: 8px 0 0; color: var(--hc-muted); }
+    code { padding: 2px 5px; border-radius: 6px; background: var(--hc-soft); color: var(--hc-ink); font-size: .92em; }
+    .hc-button {
+      min-height: 50px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 18px;
+      padding: 0 18px;
+      border-radius: 12px;
+      background: var(--hc-primary-bg);
+      color: var(--hc-primary-ink);
+      font-weight: 750;
+      text-decoration: none;
+    }
+    .hc-note { margin-top: 16px; padding: 12px 14px; border-radius: 12px; background: var(--hc-warning-soft); color: var(--hc-warning); }
+    .hc-note p { margin: 0; color: inherit; }
+    @media (max-width: 870px) { .hc-shell { padding-inline: 28px; } }
+    @media (max-width: 560px) {
+      .hc-shell { padding: 0 20px 36px; }
+      .hc-header { min-height: 76px; }
+      main { padding-top: 26px; }
+      .hc-title-block { margin-bottom: 23px; }
+      .hc-hero { padding: 22px 20px; border-radius: 20px; }
+      .hc-hero h2 { font-size: 25px; }
+      .hc-card { margin-top: 27px; padding: 20px 16px; }
+      .hc-button { width: 100%; }
+    }
+    @media (max-width: 350px) { .hc-shell { padding-inline: 16px; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+    @media (forced-colors: active) { .hc-card, .hc-button { border: 1px solid CanvasText; } }
   </style>
 </head>
 <body>
-  <main>
-    <section role="status" aria-live="polite">
-      <h1>SmartThings Web Bridge를 시작하는 중입니다</h1>
-      <p>Ingress는 실행 중이지만 내부 Bridge HTTP 서비스(<code>127.0.0.1:8098</code>)가 아직 준비되지 않았습니다.</p>
-      <p>이 페이지는 5초마다 자동으로 다시 확인합니다. 계속 표시되면 앱 로그의 <code>bridge_start_failed:</code>, <code>bridge_init:</code>, <code>data_prep_</code> 항목을 확인하세요.</p>
-      <p><a id="login-link" href="novnc-ui/vnc.html?autoconnect=1&amp;resize=scale&amp;path=websockify">브라우저 로그인 화면 열기</a></p>
-    </section>
-  </main>
+  <div class="hc-shell">
+    <header class="hc-header">SmartThings Web Bridge</header>
+    <main>
+      <div class="hc-title-block">
+        <p class="hc-eyebrow">Bridge status</p>
+        <h1>연결을 준비하고 있습니다</h1>
+        <p class="hc-lead">브릿지 내부 서비스가 준비되면 이 화면은 자동으로 정상 상태 화면으로 전환됩니다.</p>
+      </div>
+
+      <section class="hc-hero" role="status" aria-live="polite">
+        <div class="hc-status">
+          <span class="hc-status-icon" aria-hidden="true">…</span>
+          <h2>SmartThings Web Bridge 시작 중</h2>
+        </div>
+        <p>Ingress는 실행 중이며 내부 Bridge HTTP 서비스(<code>127.0.0.1:8098</code>)의 준비 완료를 기다리고 있습니다.</p>
+      </section>
+
+      <section class="hc-card" aria-labelledby="startup-help">
+        <h2 id="startup-help">지금 할 수 있는 작업</h2>
+        <p>로그인이 필요한 경우 브라우저 로그인 화면을 열 수 있습니다. 이 페이지는 5초마다 브릿지 상태를 다시 확인합니다.</p>
+        <a class="hc-button" id="login-link" href="novnc-ui/vnc.html?autoconnect=1&amp;resize=scale&amp;path=websockify">브라우저 로그인 화면 열기</a>
+        <div class="hc-note">
+          <p>계속 이 화면이 표시되면 앱 로그의 <code>bridge_start_failed:</code>, <code>bridge_init:</code>, <code>data_prep_</code> 항목을 확인하세요.</p>
+        </div>
+      </section>
+    </main>
+  </div>
   <script>
     const link = document.getElementById("login-link");
     const base = window.location.pathname.endsWith("/")
