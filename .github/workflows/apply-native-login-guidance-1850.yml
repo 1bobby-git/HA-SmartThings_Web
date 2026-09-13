@@ -1,0 +1,170 @@
+name: Apply native login guidance 1.8.50
+on:
+  push:
+    branches: [fix/native-login-guidance-1.8.49]
+    paths: [.github/workflows/apply-native-login-guidance-1850.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/native-login-guidance-1.8.49
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Apply user-facing guidance and 1.8.50 metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import json, re
+
+          status = Path('bridge/src/server/status-page.ts')
+          text = status.read_text(encoding='utf-8')
+          css_anchor = '    .hc-protocol { overflow: hidden; }'
+          css = '''    .hc-native-login-guidance {
+      grid-column: 1 / -1;
+      margin-top: 2px;
+      padding: 13px 14px;
+      border: 1px solid #ecd9a4;
+      border-radius: 12px;
+      background: var(--hc-warning-soft);
+      color: var(--hc-warning);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .hc-native-login-guidance[data-tone="ready"] {
+      border-color: #cfe8dc;
+      background: var(--hc-green-soft);
+      color: var(--hc-green);
+    }
+    .hc-native-login-guidance strong { font-weight: 800; }
+
+'''
+          if 'hc-native-login-guidance' not in text:
+              if css_anchor not in text:
+                  raise SystemExit('status-page CSS anchor not found')
+              text = text.replace(css_anchor, css + css_anchor, 1)
+
+          pattern = re.compile(r'function renderNativeLoginPolicy\(report: HealthReport\): string \{.*?\n\}\n\nfunction formatDiagnosticLabel', re.S)
+          replacement = '''function renderNativeLoginPolicy(report: HealthReport): string {
+  const state = report.details.nativeLoginPolicyState ?? "pending";
+  const reason = report.details.nativeLoginPolicyReason ?? "not_checked";
+  // Green means a verified preference in the active authenticated document,
+  // never that this account has an unlimited server-side session.
+  const effective = !report.details.authenticated && state === "enabled" ? "pending" : state;
+  const tone: StatusTone = effective === "enabled" ? "ready" : "warning";
+  const guidanceTone = effective === "enabled" ? "ready" : "warning";
+  const guidance = effective === "enabled"
+    ? '<strong>중요 설정 확인됨:</strong> SmartThings 웹의 ‘로그인 유지’가 켜져 있습니다. 브릿지를 장시간 연결할 때 권장되는 상태입니다.'
+    : '<strong>중요:</strong> 브릿지의 장기 로그인 유지를 위해 반드시 브릿지 내부 브라우저(noVNC)의 SmartThings 설정에서 <strong>‘로그인 유지’</strong>를 켜 주세요. 꺼져 있으면 2시간·8시간·24시간으로 선택한 세션 길이에 따라 자동 로그아웃될 수 있습니다.';
+  return `<section class="hc-section" aria-labelledby="native-login-heading">
+    <div class="hc-card hc-integration" data-native-login-policy="${escapeHtml(effective)}">
+      <div><h3 id="native-login-heading">SmartThings 로그인 유지</h3>
+        <p class="hc-status-value">${renderStatusGlyph(tone, "hc-status-leading-icon")}${escapeHtml(NATIVE_POLICY_LABELS[effective] ?? NATIVE_POLICY_LABELS.pending!)}</p>
+        <p>${escapeHtml(NATIVE_POLICY_LABELS[effective !== state ? "not_checked" : reason] ?? NATIVE_POLICY_LABELS.not_checked!)}</p>
+        <p>브릿지 내부 브라우저의 웹 설정입니다. 휴대폰이나 다른 브라우저의 설정과는 별개이며, 브라우저 종료 후 인증 복원과도 별도로 재확인합니다.</p>
+      </div>
+      <div class="hc-actions"><a class="hc-button hc-button-secondary" href="novnc-ui/vnc.html?autoconnect=1&amp;resize=scale&amp;path=websockify">브라우저에서 설정 확인</a>
+        <a class="hc-button hc-button-secondary" href=".">상태 다시 확인</a></div>
+      <div class="hc-native-login-guidance" data-tone="${guidanceTone}" role="note">${guidance}</div>
+    </div>
+  </section>`;
+}
+
+function formatDiagnosticLabel'''
+          text2, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'renderNativeLoginPolicy replacement count={count}')
+          status.write_text(text2, encoding='utf-8')
+
+          test_path = Path('bridge/tests/server/status-page.test.ts')
+          tests = test_path.read_text(encoding='utf-8')
+          marker = '  test("localizes runtime and diagnostic labels", () => {'
+          added = '''  test("shows login-maintenance as an important bridge-browser instruction", () => {
+    const pending = renderStatusPage(reportFor({
+      state: "CONNECTED",
+      protocolVersion: "1:abcdef1234567890",
+      dbAvailable: true,
+      authenticated: true,
+      nativeLoginPolicyState: "pending",
+      nativeLoginPolicyReason: "not_checked"
+    }));
+    const enabled = renderStatusPage(reportFor({
+      state: "CONNECTED",
+      protocolVersion: "1:abcdef1234567890",
+      dbAvailable: true,
+      authenticated: true,
+      nativeLoginPolicyState: "enabled",
+      nativeLoginPolicyReason: "already_enabled"
+    }));
+
+    expect(pending).toContain("중요:");
+    expect(pending).toContain("반드시 브릿지 내부 브라우저(noVNC)");
+    expect(pending).toContain("‘로그인 유지’");
+    expect(pending).toContain("2시간·8시간·24시간");
+    expect(enabled).toContain("중요 설정 확인됨:");
+    expect(enabled).toContain('class="hc-native-login-guidance" data-tone="ready"');
+    expect(enabled).not.toContain("2시간·8시간·24시간");
+  });
+
+'''
+          if 'shows login-maintenance as an important bridge-browser instruction' not in tests:
+              if marker not in tests:
+                  raise SystemExit('status-page test marker not found')
+              tests = tests.replace(marker, added + marker, 1)
+          test_path.write_text(tests, encoding='utf-8')
+
+          old, new = '1.8.49', '1.8.50'
+          replace_files = [
+              'package.json', 'package-lock.json',
+              'custom_components/smartthings_web/manifest.json',
+              'addon/smartthings_web_bridge/config.yaml',
+              'protocol/version.json', 'bridge/src/runtime.ts',
+              'tests/addon-config.test.ts', 'tests/protocol-version-contract.test.ts'
+          ]
+          for name in replace_files:
+              p = Path(name)
+              body = p.read_text(encoding='utf-8')
+              if old not in body:
+                  raise SystemExit(f'{old} not found in {name}')
+              p.write_text(body.replace(old, new), encoding='utf-8')
+
+          notes = '''- 브릿지 상태 페이지의 `SmartThings 로그인 유지` 카드에 **중요 안내**를 추가했습니다. 장기 세션 사용을 위해 반드시 브릿지 내부 브라우저(noVNC)의 SmartThings 설정에서 `로그인 유지`를 켜도록 명확히 안내합니다.
+- 로그인 유지가 아직 확인되지 않았거나 꺼져 있으면 2시간·8시간·24시간 세션 길이에 따라 자동 로그아웃될 수 있음을 함께 표시합니다. 휴대폰이나 다른 브라우저에서 켠 설정과 브릿지 내부 Chromium 설정은 별개임을 명시합니다.
+- 로그인 유지가 실제로 켜져 있음이 확인되면 경고 대신 초록색 정상 안내인 `중요 설정 확인됨`을 표시합니다.
+'''
+          for name in ['CHANGELOG.md', 'addon/smartthings_web_bridge/CHANGELOG.md']:
+              p = Path(name)
+              body = p.read_text(encoding='utf-8')
+              heading = '## 1.8.50\n\n'
+              if not body.startswith(heading):
+                  p.write_text(heading + notes + '\n' + body, encoding='utf-8')
+          Path('release-notes/1.8.50.md').write_text(notes, encoding='utf-8')
+
+          wf = Path('.github/workflows/apply-native-login-guidance-1850.yml')
+          if wf.exists():
+              wf.unlink()
+          PY
+      - name: Validate focused change
+        run: |
+          npm ci
+          npm test
+          npm run typecheck
+          npm run build
+      - name: Commit patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'feat: emphasize native login-maintenance guidance (1.8.50)'
+          git push origin HEAD:fix/native-login-guidance-1.8.49
