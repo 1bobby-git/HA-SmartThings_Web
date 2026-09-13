@@ -17,6 +17,7 @@ jobs:
         run: |
           mkdir -p workbench
           git archive --format=tar HEAD > workbench/source.tar
+          python -m pip download --no-deps voluptuous==0.15.2 -d workbench
           git ls-files '*AGENTS.md'
           curl --fail --location https://raw.githubusercontent.com/home-assistant/core/2026.9.0/homeassistant/helpers/entity_registry.py -o workbench/ha-entity-registry.py
           curl --fail --location https://raw.githubusercontent.com/home-assistant/core/2026.9.0/homeassistant/helpers/entity_platform.py -o workbench/ha-entity-platform.py
