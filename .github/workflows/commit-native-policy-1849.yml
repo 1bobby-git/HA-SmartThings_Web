@@ -1,0 +1,51 @@
+name: Commit verified native login policy source
+on:
+  push:
+    branches: [fix/native-keep-signed-in-1.8.49]
+    paths: [.github/workflows/commit-native-policy-1849.yml]
+permissions:
+  contents: write
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/native-keep-signed-in-1.8.49
+      - name: Apply the exact previously tested source transformations
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess, textwrap
+          path = '.github/workflows/apply-native-policy-1849.yml'
+          assert subprocess.check_output(['git', 'hash-object', path], text=True).strip() == 'bfcd26b22e69e9b9792306c8300e2539642f2f7b'
+          text = Path(path).read_text()
+          script = text.split("          python - <<'PY'\n", 1)[1].split('\n          PY\n', 1)[0]
+          subprocess.run(['python', '-c', textwrap.dedent(script)], check=True)
+          PY
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Validate source and browser behavior
+        run: |
+          npm ci --silent
+          npm test > /tmp/unit.log 2>&1 || { tail -80 /tmp/unit.log; exit 1; }
+          tail -8 /tmp/unit.log
+          npm run typecheck
+          npm run build
+          npm run audit:api-free
+          npx playwright-core install --with-deps chromium > /tmp/install.log 2>&1 || { tail -40 /tmp/install.log; exit 1; }
+          xvfb-run -a node tools/ci-native-login-policy-smoke.mjs
+          xvfb-run -a node tools/ci-session-continuity-smoke.mjs
+      - name: Commit only source contents; leave workflow edits to authorized connector
+        run: |
+          git restore --source=HEAD -- .github/workflows
+          rm .maintenance/native-policy-1849.part{1,2,3,4,5}
+          git add -A
+          test -z "$(git diff --cached --name-only -- .github/workflows)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat: apply and verify native SmartThings keep-signed-in setting (1.8.49)'
+          git push origin HEAD:fix/native-keep-signed-in-1.8.49
