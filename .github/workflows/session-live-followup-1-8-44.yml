@@ -1,4 +1,4 @@
-name: Prepare live session continuity follow-up
+name: Finalize live session continuity follow-up
 on:
   push:
     branches: [fix/session-continuity-1.8.44]
@@ -13,37 +13,29 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: fix/session-continuity-1.8.44
-      - name: Apply session follow-up
+      - name: Align lifecycle regression
         shell: bash
         run: |
+          set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          p=Path('bridge/src/browser/session-application-proof.ts'); t=p.read_text()
-          t=t.replace('export type AuthenticationSurface = "password_input" | "otp_input" | "email_input" | "no_visible_auth_input" | "unavailable";', 'export type AuthenticationSurface = "password_input" | "otp_input" | "email_input" | "embedded_auth_input" | "no_visible_auth_input" | "unavailable";')
-          old='''    const work = page.evaluate((): AuthenticationSurface => {\n      const visible = (selector: string) => Array.from(document.querySelectorAll<HTMLInputElement>(selector)).some(input => {\n        const style = getComputedStyle(input);\n        return input.getClientRects().length > 0 && style.visibility !== "hidden" && style.display !== "none";\n      });\n      if (visible('input[autocomplete="one-time-code"]')) return "otp_input";\n      if (visible('input[type="password"]')) return "password_input";\n      if (visible('input[type="email"]')) return "email_input";\n      return "no_visible_auth_input";\n    }, undefined);'''
-          new='''    const work = page.evaluate((): AuthenticationSurface => {\n      const isVisible = (element: Element): boolean => {\n        const html = element as HTMLElement;\n        const style = getComputedStyle(html);\n        return html.getClientRects().length > 0 && style.visibility !== "hidden" && style.display !== "none";\n      };\n      const scan = (root: Document | ShadowRoot): AuthenticationSurface | undefined => {\n        const visible = (selector: string) => Array.from(root.querySelectorAll<HTMLInputElement>(selector)).some(isVisible);\n        if (visible('input[autocomplete="one-time-code"]')) return "otp_input";\n        if (visible('input[type="password"]')) return "password_input";\n        if (visible('input[type="email"], input[autocomplete="email"], input[autocomplete="username"]')) return "email_input";\n        for (const element of Array.from(root.querySelectorAll<HTMLElement>("*"))) {\n          if (element.shadowRoot) { const nested = scan(element.shadowRoot); if (nested) return nested; }\n        }\n        for (const frame of Array.from(root.querySelectorAll<HTMLIFrameElement>("iframe"))) {\n          if (!isVisible(frame)) continue;\n          try { if (frame.contentDocument) { const nested = scan(frame.contentDocument); if (nested) return nested; } } catch {}\n          try { const src = new URL(frame.src, location.href); if (src.hostname === "account.samsung.com" || src.hostname.endsWith(".samsung.com")) return "embedded_auth_input"; } catch {}\n        }\n        return undefined;\n      };\n      return scan(document) ?? "no_visible_auth_input";\n    }, undefined);'''
-          assert old in t; t=t.replace(old,new)
-          t=t.replace('const allowed = ["password_input", "otp_input", "email_input", "no_visible_auth_input"];','const allowed = ["password_input", "otp_input", "email_input", "embedded_auth_input", "no_visible_auth_input"];')
-          p.write_text(t)
-          p=Path('bridge/src/browser/keeper-page.ts'); t=p.read_text()
-          old='''      probe = await this.context.newPage();\n      this.#commandPages.add(probe);\n      const target = this.#verifyRefreshCandidate && isConcreteLocationUrl(expectedUrl) ? expectedUrl : KEEPER_URL;\n      await probe.goto(target, { waitUntil: "domcontentloaded", timeout: 10_000 });\n      await waitForSettledKeeperPage(probe);'''
-          new='''      probe = await this.context.newPage();\n      this.#commandPages.add(probe);\n      const target = this.#verifyRefreshCandidate && isConcreteLocationUrl(expectedUrl) ? expectedUrl : KEEPER_URL;\n      await probe.goto(SAMSUNG_ACCOUNT_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });\n      await waitForSettledKeeperPage(probe, 5_000);\n      if (isSamsungLoginUrl(probe.url())) {\n        const accountDiagnostic = await inspectAuthenticationPage(probe);\n        if (hasVisibleAuthenticationInput(accountDiagnostic.surface)) {\n          await this.recordLoginPage(probe, "refresh");\n          this.recoveryDiagnostic("refresh_login_required");\n          return "login_required";\n        }\n      }\n      if (!this.#canNavigate() || this.currentKeeper() !== expectedKeeper || expectedKeeper.isClosed() || expectedKeeper.url() !== expectedUrl) {\n        this.recoveryDiagnostic("refresh_stale");\n        return "stale";\n      }\n      await probe.goto(target, { waitUntil: "domcontentloaded", timeout: 10_000 });\n      await waitForSettledKeeperPage(probe);'''
-          assert old in t; t=t.replace(old,new)
-          t=t.replace('return surface === "password_input" || surface === "otp_input" || surface === "email_input";','return surface === "password_input" || surface === "otp_input" || surface === "email_input" || surface === "embedded_auth_input";')
-          p.write_text(t)
-          p=Path('bridge/tests/browser/session-proactive-refresh.test.ts'); t=p.read_text(); t=t.replace('''    expect(context.created[0]?.gotoCalls).toEqual([{\n      url: KEEPER_URL,\n      options: { waitUntil: "domcontentloaded", timeout: 10_000 }\n    }]);''','''    expect(context.created[0]?.gotoCalls).toEqual([\n      { url: "https://account.samsung.com/", options: { waitUntil: "domcontentloaded", timeout: 10_000 } },\n      { url: KEEPER_URL, options: { waitUntil: "domcontentloaded", timeout: 10_000 } }\n    ]);''',1); p.write_text(t)
-          p=Path('bridge/tests/browser/session-login-continuity.test.ts'); t=p.read_text().replace('["password_input", "otp_input", "email_input"] as const','["password_input", "otp_input", "email_input", "embedded_auth_input"] as const'); p.write_text(t)
+          p=Path('bridge/tests/browser/session-lifecycle.test.ts')
+          t=p.read_text()
+          anchor='''    expect(await manager.refreshAuthenticatedSessionIfDue()).toBe("verified");\n    expect(candidate.waitForURL).toHaveBeenCalledOnce();\n    expect(manager.currentKeeper()).toBe(original);'''
+          replacement='''    expect(await manager.refreshAuthenticatedSessionIfDue()).toBe("verified");\n    expect(candidate.waitForURL).toHaveBeenCalledTimes(2);\n    expect(manager.currentKeeper()).toBe(original);'''
+          assert t.count(anchor)==1
+          p.write_text(t.replace(anchor,replacement))
           PY
           git diff --check
-          git add bridge/src/browser/session-application-proof.ts bridge/src/browser/keeper-page.ts bridge/tests/browser/session-proactive-refresh.test.ts bridge/tests/browser/session-login-continuity.test.ts
-          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: refresh Samsung web session before SmartThings handoff'
+          git add bridge/tests/browser/session-lifecycle.test.ts
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'test: cover Samsung-first proactive refresh lifecycle'
           git push origin HEAD:refs/heads/fix/session-continuity-1.8.44
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 24.18.1
           cache: npm
       - run: npm ci
-      - run: npx vitest run bridge/tests/browser/session-proactive-refresh.test.ts bridge/tests/browser/session-login-continuity.test.ts bridge/tests/browser/session-recovery.test.ts
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
+      - run: npm run audit:api-free && npm run audit:secrets && npm run audit:fixtures
