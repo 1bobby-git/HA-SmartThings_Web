@@ -1,0 +1,26 @@
+name: Refine session regression coverage
+on:
+  push:
+    branches: [fix/entity-ids-session-recovery-1.8.48]
+    paths: [.github/workflows/refine-1848.yml]
+permissions:
+  contents: write
+jobs:
+  refine:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/entity-ids-session-recovery-1.8.48
+      - name: Apply test fixtures without changing production proof requirements
+        run: |
+          set -euo pipefail
+          python .maintenance/refine-1848.py
+          rm .maintenance/refine-1848.py .github/workflows/refine-1848.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'test: require native session proof and preserve a real slow SSO relay'
+          git push origin HEAD:fix/entity-ids-session-recovery-1.8.48
