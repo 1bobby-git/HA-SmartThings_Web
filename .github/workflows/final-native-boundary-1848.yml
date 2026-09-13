@@ -1,0 +1,46 @@
+name: Final native recovery boundary
+on:
+  push:
+    branches: [fix/entity-ids-session-recovery-1.8.48]
+    paths: [.github/workflows/final-native-boundary-1848.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/entity-ids-session-recovery-1.8.48
+      - name: Keep native validation mandatory throughout recovery
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('bridge/src/browser/keeper-page.ts')
+          t = p.read_text()
+          old = 'if (result === "ok" && this.#probeApplicationSession && isConcreteLocationUrl(url))'
+          assert t.count(old) == 1
+          t = t.replace(old, 'if (result === "ok" && this.#probeApplicationSession)')
+          old = '        await keeper.goto(KEEPER_URL, { waitUntil: "domcontentloaded" });'
+          assert t.count(old) == 1
+          t = t.replace(old, '        const target = this.#probeApplicationSession\n          ? (isConcreteLocationUrl(keeper.url()) ? keeper.url() : this.#lastAuthenticatedUrl ?? KEEPER_URL)\n          : KEEPER_URL;\n        await keeper.goto(target, { waitUntil: "domcontentloaded" });\n        if (this.#probeApplicationSession) await waitForSettledKeeperPage(keeper);')
+          old = '    if (!this.#verifyRefreshCandidate) return true;'
+          assert t.count(old) == 1
+          t = t.replace(old, '    if (!this.#verifyRefreshCandidate) {\n      if (!this.#probeApplicationSession) return true;\n      const target = candidate.url();\n      return isConcreteLocationUrl(target) && (await this.#probeApplicationSession(candidate, target)).outcome === "ok";\n    }')
+          p.write_text(t)
+          p = Path('bridge/tests/browser/session-native-keepalive.test.ts')
+          t = p.read_text()
+          marker = '  test("a transient native error is not declared session expiry", async () => {'
+          assert t.count(marker) == 1
+          tests = '  test("a generic application root cannot bypass a configured native proof", async () => {\n    const native = vi.fn(async (): Promise<ApplicationSessionProof> => ({ outcome: "failed", reason: "invalid_target" }));\n    const f = await setup(native);\n    await f.page.goto(KEEPER_URL);\n    expect(await f.manager.touchAuthenticatedSession()).toBe("failed");\n    expect(native).toHaveBeenCalledWith(f.page, KEEPER_URL);\n  });\n  test("reauth recovery retains the known Location target for native verification", async () => {\n    vi.useFakeTimers();\n    try {\n      const native = vi.fn(async (): Promise<ApplicationSessionProof> => ({ outcome: "ok", reason: "verified" }));\n      const f = await setup(native);\n      await f.manager.touchAuthenticatedSession();\n      f.manager.reportAuthenticationFailure(f.page, f.page.url());\n      await vi.advanceTimersByTimeAsync(30_001);\n      expect(await f.manager.ensureKeeper()).toBe(f.page);\n      expect(f.page.url()).toBe(`${KEEPER_URL}/fixture-home`);\n      expect(f.manager.authenticationRecoveryPending()).toBe(false);\n      expect(native).toHaveBeenCalledTimes(2);\n    } finally { vi.useRealTimers(); }\n  });\n'
+          p.write_text(t.replace(marker, tests + marker))
+          Path('.github/workflows/final-native-boundary-1848.yml').unlink()
+          PY
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: preserve native proof and concrete Location target across recovery'
+          git push origin HEAD:fix/entity-ids-session-recovery-1.8.48
