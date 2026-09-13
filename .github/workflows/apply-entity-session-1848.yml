@@ -1,0 +1,69 @@
+name: Apply and validate entity and session fixes
+on:
+  push:
+    branches: [fix/entity-ids-session-recovery-1.8.48]
+    paths: [.github/workflows/apply-entity-session-1848.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/entity-ids-session-recovery-1.8.48
+      - name: Apply verified patch and commit feature branch only
+        id: patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64, gzip, hashlib, subprocess
+          from pathlib import Path
+          parts = [Path(f'.maintenance/1848.part{i}') for i in range(1, 6)]
+          data = gzip.decompress(base64.b64decode(''.join(p.read_text().strip() for p in parts), validate=True))
+          assert hashlib.sha256(data).hexdigest() == 'e72316ad73f61daa02041415dec72c01af652ab822b82b9748688f18d1932d48'
+          subprocess.run(['git', 'apply', '--check', '-'], input=data, check=True)
+          subprocess.run(['git', 'apply', '-'], input=data, check=True)
+          for p in parts: p.unlink()
+          Path('.github/workflows/inspect-entity-session-1848.yml').unlink()
+          Path('.github/workflows/apply-entity-session-1848.yml').unlink()
+          PY
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: stable entity type IDs and non-destructive Samsung session recovery (1.8.48)'
+          git push origin HEAD:fix/entity-ids-session-recovery-1.8.48
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+      - name: Install Node dependencies
+        run: npm ci
+      - name: Type-check
+        run: npm run typecheck
+      - name: Node regression tests
+        if: success() || (failure() && steps.patch.outcome == 'success')
+        run: npm test > /tmp/node-tests.log 2>&1 || { tail -250 /tmp/node-tests.log; exit 1; }
+      - name: Python regression tests
+        if: success() || (failure() && steps.patch.outcome == 'success')
+        run: |
+          python3 -m venv /tmp/stw-venv
+          /tmp/stw-venv/bin/pip install aiohttp voluptuous
+          /tmp/stw-venv/bin/python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py' > /tmp/python-tests.log 2>&1 || { tail -250 /tmp/python-tests.log; exit 1; }
+      - name: Build
+        run: npm run build
+      - name: Real Chromium session continuity
+        run: |
+          npx playwright-core install --with-deps chromium
+          timeout 180 xvfb-run -a node tools/ci-session-continuity-smoke.mjs
+      - name: Keep validation output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: entity-session-validation
+          path: |
+            /tmp/node-tests.log
+            /tmp/python-tests.log
+          retention-days: 2
