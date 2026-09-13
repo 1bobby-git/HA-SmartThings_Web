@@ -116,3 +116,11 @@ This decision rubric is the only Phase 2 gate input.
 - STOP: DOM text is the only state source, push is absent, only visible devices update, full inventory/snapshot is unavailable, direct paid/public SmartThings API is required, frames are not stably interpretable, automation is blocked, or CAPTCHA bypass would be needed.
 
 Phase 2 remains closed until real sanitized traffic supports `DECISION: GO`.
+
+## Native keep-signed-in policy (1.8.49) — live validation pending
+
+- In the Bridge's own noVNC Chromium (not a phone browser), start with the native setting OFF. Update the Bridge; verify the setting becomes ON, its timed-session selector disappears, and the Bridge reports a verified preference after rereading it. Do not change Support data access.
+- Start already ON and check it never flips OFF. Repeat a normal keeper refresh and Bridge restart using the same dedicated profile. Confirm authentication separately after each restart.
+- Set `keep_signed_in_enabled: false`; verify there are no automatic preference changes and an existing native ON is not turned OFF.
+- Test unknown/ambiguous/disabled UI and slow loads: no guessed clicks, no falsely enabled indicator, no loss of a working keeper, and bounded owned-tab cleanup. Check device commands and realtime updates during the attempt.
+- Separately observe a live Samsung account beyond the original 8-hour and 24-hour boundaries with Chromium continuously running. Record elapsed time, authentication state and native preference state only. Do not record account identifiers, cookies, URLs with query strings, screenshots with personal data or response bodies. Synthetic tests are not this live soak.

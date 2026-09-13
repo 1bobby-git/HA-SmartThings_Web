@@ -50,7 +50,9 @@ jobs:
 
       - name: Verify session continuity with a persistent Chromium profile
         timeout-minutes: 3
-        run: xvfb-run -a node tools/ci-session-continuity-smoke.mjs
+        run: |
+          xvfb-run -a node tools/ci-session-continuity-smoke.mjs
+          xvfb-run -a node tools/ci-native-login-policy-smoke.mjs
 
       - name: Run Python tests
         shell: bash

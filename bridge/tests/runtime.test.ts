@@ -79,11 +79,14 @@ class FakeRoleLocator {
 }
 
 class FakePage extends FakeEmitter {
+  nativePolicyOn = false;
   readonly goto = vi.fn(async (url: string) => {
     this.onGoto?.();
     this.currentUrl = url;
   });
   readonly evaluate = vi.fn(async (pageFunction?: unknown, argument?: unknown) => {
+    if (this.nativePolicyOn && typeof argument === "object" && argument !== null &&
+        (argument as {action?: string}).action === "control") return {result:"on"};
     if (
       typeof argument === "object" &&
       argument !== null &&
@@ -249,14 +252,7 @@ function createDeps(
   overrides: Partial<BridgeRuntimeDependencies> = {}
 ): BridgeRuntimeDependencies {
   return {
-    config: {
-      dataDir: root,
-      host: "127.0.0.1",
-      port: 0,
-      heartbeatIntervalMs: 10_000,
-      browserMaxRestarts: 2,
-      browserRetryDelayMs: 0
-    },
+
     chromium: {
       launchPersistentContext: vi.fn(async () => new FakeContext())
     },
@@ -265,11 +261,61 @@ function createDeps(
       warn: vi.fn(),
       info: vi.fn()
     },
-    ...overrides
+    ...overrides,
+    // Legacy timing/command fixtures have no settings DOM. Keep their original
+    // cadence under explicit opt-out; dedicated tests below enable the policy.
+    config: {
+      dataDir: root, host: "127.0.0.1", port: 0, heartbeatIntervalMs: 10_000,
+      browserMaxRestarts: 2, browserRetryDelayMs: 0, keepSignedInEnabled: false,
+      ...overrides.config
+    }
   };
 }
 
 describe("createBridgeRuntime", () => {
+  test("native policy requests one early verified handoff and reports only the active candidate", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(10_000);
+    const root = createTempRoot();
+    const original = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    const context = new FakeContext([original]);
+    const createPage = context.newPage.bind(context);
+    const newPage = vi.spyOn(context, "newPage").mockImplementation(async () => {
+      const page = await createPage(); page.nativePolicyOn = true; return page;
+    });
+    const deps = createDeps(root, {chromium:{launchPersistentContext:vi.fn(async () => context)}});
+    deps.config.keepSignedInEnabled = true;
+    const runtime = await createBridgeRuntime(deps);
+    runtimes.push(runtime); await runtime.browserStartup;
+    original.goto.mockClear();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(runtime.status.getSnapshot()).toMatchObject({nativeLoginPolicyState:"enabled", nativeLoginPolicyReason:"already_enabled", authenticated:true});
+    expect(newPage).toHaveBeenCalledTimes(1);
+    expect(original.goto).not.toHaveBeenCalled();
+    expect(original.isClosed()).toBe(true);
+    const active = context.pages().filter(page => !page.isClosed());
+    expect(active).toHaveLength(1);
+    expect(active[0]!.applicationProbeCalls.length).toBeGreaterThanOrEqual(2);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(newPage).toHaveBeenCalledTimes(1);
+  });
+
+  test("native policy never changes settings before native authentication is verified", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(10_000);
+    const root = createTempRoot();
+    const original = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    original.applicationProbeOutcome = {outcome:"reauth",reason:"http_401"};
+    const context = new FakeContext([original]);
+    const newPage = vi.spyOn(context, "newPage");
+    const deps = createDeps(root, {chromium:{launchPersistentContext:vi.fn(async () => context)}});
+    deps.config.keepSignedInEnabled = true;
+    const runtime = await createBridgeRuntime(deps);
+    runtimes.push(runtime); await runtime.browserStartup;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(runtime.status.getSnapshot()).toMatchObject({authenticated:false, nativeLoginPolicyState:"pending"});
+    expect(newPage).not.toHaveBeenCalled();
+    expect(original.evaluateCalls.some(([, args]) => (args as {action?:string})?.action)).toBe(false);
+  });
+
   test("recognizes the fallback whole Advanced device snapshot URL", () => {
     expect(
       isWholeAdvancedDevicesSnapshotUrl(
@@ -842,7 +888,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
 
     expect(log.info.mock.calls.slice(0, 14)).toEqual([
-      ["bridge_init:version:1.8.48:home_monitor_direct"],
+      ["bridge_init:version:1.8.49:home_monitor_direct"],
       ["bridge_init:data_paths"],
       ["bridge_init:data_paths:data_dir"],
       ["bridge_init:data_paths:profile_dir"],

@@ -28,6 +28,8 @@ const DIAGNOSTIC_LABELS: Record<string, string> = {
   detailDiscoveryFailureCount: "상세 탐색 실패",
   protocolChangeCount: "프로토콜 변경 횟수",
   protocolMismatchSurface: "프로토콜 불일치 위치",
+  nativeLoginPolicyState: "SmartThings 로그인 유지 설정",
+  nativeLoginPolicyReason: "로그인 유지 설정 확인 결과",
   sessionTouchCount: "세션 유지 시도",
   sessionTouchConsecutiveFailures: "연속 세션 유지 실패",
   sessionTouchLastOutcome: "최근 세션 유지 결과",
@@ -480,6 +482,8 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
       </div>
     </section>
 
+    ${renderNativeLoginPolicy(report)}
+
     <section class="hc-section" aria-labelledby="protocol-heading">
       <div class="hc-section-heading">
         <div>
@@ -693,12 +697,45 @@ function formatRuntimeState(value: HealthReport["details"]["state"]): string {
   return labels[value];
 }
 
+const NATIVE_POLICY_LABELS: Record<string, string> = {
+  disabled: "자동 적용 꺼짐", pending: "로그인 후 확인 예정", enabled: "로그인 유지 켜짐 확인", attention: "설정 확인 필요",
+  not_checked: "이 브라우저에서 아직 확인하지 않았습니다.", automation_disabled: "자동 적용을 끈 상태입니다. 웹의 기존 설정은 변경하지 않습니다.",
+  already_enabled: "SmartThings 웹 설정이 이미 켜져 있어 변경하지 않았습니다.",
+  enabled_and_verified: "웹 설정을 켜고 페이지를 다시 열어 유지되는 것을 확인했습니다.",
+  browser_unsupported: "브라우저에서 설정을 직접 확인해 주세요.", invalid_target: "기기 화면에서 다시 확인해야 합니다.",
+  settings_not_found: "SmartThings 설정 버튼을 찾지 못했습니다.", control_not_found: "로그인 유지 스위치를 확인하지 못했습니다.",
+  ambiguous: "설정 대상이 명확하지 않아 변경하지 않았습니다.", blocked: "다른 창이나 사용자 입력이 있어 변경하지 않았습니다.",
+  state_unknown: "스위치의 켜짐 여부를 판독하지 못했습니다.", not_saved: "설정 저장을 확인하지 못했습니다.",
+  page_changed: "페이지 또는 인증 상태가 바뀌어 확인을 중단했습니다.", ui_timeout: "설정 확인이 지연되어 중단했습니다."
+};
+
+function renderNativeLoginPolicy(report: HealthReport): string {
+  const state = report.details.nativeLoginPolicyState ?? "pending";
+  const reason = report.details.nativeLoginPolicyReason ?? "not_checked";
+  // Green means a verified preference in the active authenticated document,
+  // never that this account has an unlimited server-side session.
+  const effective = !report.details.authenticated && state === "enabled" ? "pending" : state;
+  const tone: StatusTone = effective === "enabled" ? "ready" : "warning";
+  return `<section class="hc-section" aria-labelledby="native-login-heading">
+    <div class="hc-card hc-integration" data-native-login-policy="${escapeHtml(effective)}">
+      <div><h3 id="native-login-heading">SmartThings 로그인 유지</h3>
+        <p class="hc-status-value">${renderStatusGlyph(tone, "hc-status-leading-icon")}${escapeHtml(NATIVE_POLICY_LABELS[effective] ?? NATIVE_POLICY_LABELS.pending!)}</p>
+        <p>${escapeHtml(NATIVE_POLICY_LABELS[effective !== state ? "not_checked" : reason] ?? NATIVE_POLICY_LABELS.not_checked!)}</p>
+        <p>브릿지 내부 브라우저의 웹 설정입니다. 브라우저 종료 후 인증 복원과는 별개이며, 재시작 후 다시 확인합니다.</p>
+      </div>
+      <div class="hc-actions"><a class="hc-button hc-button-secondary" href="novnc-ui/vnc.html?autoconnect=1&amp;resize=scale&amp;path=websockify">브라우저에서 설정 확인</a>
+        <a class="hc-button hc-button-secondary" href=".">상태 다시 확인</a></div>
+    </div>
+  </section>`;
+}
+
 function formatDiagnosticLabel(value: string): string {
   return DIAGNOSTIC_LABELS[value] ?? value;
 }
 
 function formatDiagnosticValue(key: string, value: unknown): string {
   if (value === undefined || value === null || value === "") return "—";
+  if ((key === "nativeLoginPolicyState" || key === "nativeLoginPolicyReason") && typeof value === "string") return NATIVE_POLICY_LABELS[value] ?? "확인 필요";
   if (key === "state" && typeof value === "string") return formatRuntimeState(value as HealthReport["details"]["state"]);
   if (key === "urlCategory" && typeof value === "string") return formatUrlCategory(value);
   if (key === "sessionTouchLastOutcome" && typeof value === "string") return formatSessionOutcome(value);

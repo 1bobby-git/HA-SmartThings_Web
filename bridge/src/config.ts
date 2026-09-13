@@ -13,6 +13,7 @@ export interface BridgeConfig {
   statusRecheckEnabled?: boolean;
   inventoryReconciliationIntervalMs?: number;
   debugProtocolLogging?: boolean;
+  keepSignedInEnabled?: boolean;
 }
 
 export function readBridgeConfig(
@@ -55,6 +56,10 @@ export function readBridgeConfig(
         900,
         604_800
       ) * 1_000,
+    keepSignedInEnabled: parseBoolean(
+      env.STW_KEEP_SIGNED_IN_ENABLED ?? String(options.keep_signed_in_enabled ?? true),
+      "STW_KEEP_SIGNED_IN_ENABLED"
+    ),
     debugProtocolLogging: parseBoolean(
       env.STW_DEBUG_PROTOCOL_LOGGING ?? String(options.debug_protocol_logging ?? false),
       "STW_DEBUG_PROTOCOL_LOGGING"
