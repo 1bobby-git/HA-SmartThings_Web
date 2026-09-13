@@ -496,7 +496,7 @@ export class KeeperPageManager {
       const outcome = typeof value === "string" ? value : value?.outcome;
       let result: SessionTouchOutcome = outcome === "ok" || outcome === "reauth" ? outcome : "failed";
       this.reportProbe(result, value);
-      if (result === "ok" && this.#probeApplicationSession && isConcreteLocationUrl(url)) {
+      if (result === "ok" && this.#probeApplicationSession) {
         try {
           const native = await this.#probeApplicationSession(keeper, url);
           result = native.outcome === "ok" ? "ok" : native.outcome === "reauth" ? "reauth" : "failed";
@@ -729,7 +729,11 @@ export class KeeperPageManager {
       this.recoveryDiagnostic("attempt");
       try {
         this.invalidateTouch();
-        await keeper.goto(KEEPER_URL, { waitUntil: "domcontentloaded" });
+        const target = this.#probeApplicationSession
+          ? (isConcreteLocationUrl(keeper.url()) ? keeper.url() : this.#lastAuthenticatedUrl ?? KEEPER_URL)
+          : KEEPER_URL;
+        await keeper.goto(target, { waitUntil: "domcontentloaded" });
+        if (this.#probeApplicationSession) await waitForSettledKeeperPage(keeper);
       } catch {
         return;
       }
@@ -859,7 +863,11 @@ export class KeeperPageManager {
   }
 
   private async verifyRecoveredApplication(candidate: BrowserPageLike): Promise<boolean> {
-    if (!this.#verifyRefreshCandidate) return true;
+    if (!this.#verifyRefreshCandidate) {
+      if (!this.#probeApplicationSession) return true;
+      const target = candidate.url();
+      return isConcreteLocationUrl(target) && (await this.#probeApplicationSession(candidate, target)).outcome === "ok";
+    }
     const target = candidate.url();
     // Reuse the runtime's existing read-only native Location proof. Advanced
     // HTTP success alone must not promote a disconnected application shell.

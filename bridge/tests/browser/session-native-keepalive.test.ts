@@ -29,6 +29,27 @@ describe("periodic native application session proof", () => {
     expect(f.manager.authenticationRecoveryPending()).toBe(false);
     expect(native).toHaveBeenCalledWith(f.page, `${KEEPER_URL}/fixture-home`);
   });
+  test("a generic application root cannot bypass a configured native proof", async () => {
+    const native = vi.fn(async (): Promise<ApplicationSessionProof> => ({ outcome: "failed", reason: "invalid_target" }));
+    const f = await setup(native);
+    await f.page.goto(KEEPER_URL);
+    expect(await f.manager.touchAuthenticatedSession()).toBe("failed");
+    expect(native).toHaveBeenCalledWith(f.page, KEEPER_URL);
+  });
+  test("reauth recovery retains the known Location target for native verification", async () => {
+    vi.useFakeTimers();
+    try {
+      const native = vi.fn(async (): Promise<ApplicationSessionProof> => ({ outcome: "ok", reason: "verified" }));
+      const f = await setup(native);
+      await f.manager.touchAuthenticatedSession();
+      f.manager.reportAuthenticationFailure(f.page, f.page.url());
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(await f.manager.ensureKeeper()).toBe(f.page);
+      expect(f.page.url()).toBe(`${KEEPER_URL}/fixture-home`);
+      expect(f.manager.authenticationRecoveryPending()).toBe(false);
+      expect(native).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
   test("a transient native error is not declared session expiry", async () => {
     const f = await setup(async () => ({ outcome: "failed", reason: "read_failed" }));
     expect(await f.manager.touchAuthenticatedSession()).toBe("failed");
