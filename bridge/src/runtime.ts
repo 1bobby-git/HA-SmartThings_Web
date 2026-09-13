@@ -17,6 +17,7 @@ import {
   waitForSettledKeeperPage
 } from "./browser/keeper-page.js";
 import { verifyLocationApplicationSession, inspectAuthenticationPage } from "./browser/session-application-proof.js";
+import { ensureNativeKeepSignedIn, supportsNativeLoginPolicy, type NativeLoginPolicyReport } from "./browser/native-login-policy.js";
 import { SessionMaintenanceGate } from "./browser/session-maintenance.js";
 import { BrowserSupervisor } from "./browser/browser-supervisor.js";
 import { SmartThingsWebUiCommandExecutor } from "./browser/command-page.js";
@@ -114,7 +115,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.48";
+const bridgeVersion = "1.8.49";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -209,6 +210,13 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   let currentContext: ObservableContext | undefined;
   let currentKeeperManager: KeeperPageManager | undefined;
   let recoverCurrentPushSocket: (() => void) | undefined;
+  const nativePolicyReports = new WeakMap<BrowserPageLike, NativeLoginPolicyReport>();
+  const nativePolicyEnabled = deps.config.keepSignedInEnabled !== false;
+  const pendingNativePolicy: NativeLoginPolicyReport = nativePolicyEnabled
+    ? { state: "pending", reason: "not_checked" }
+    : { state: "disabled", reason: "automation_disabled" };
+  let lastNativePolicy = pendingNativePolicy;
+  let initialPolicyRefreshRequested = false;
   let sessionTouchInFlight = false;
   let nextSessionTouchAtMs: number | undefined;
   let sessionTouchFailures = 0;
@@ -611,12 +619,20 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       if (stopped) return;
       await reconcileActiveKeeper();
       if (stopped) return;
+      const initialKeeper = currentKeeperManager?.currentKeeper();
+      if (nativePolicyEnabled && !initialPolicyRefreshRequested && initialKeeper && supportsNativeLoginPolicy(initialKeeper) &&
+          nextSessionTouchAtMs === undefined) nextSessionTouchAtMs = 0;
       await touchAuthenticatedSessionIfDue();
       const manager = currentKeeperManager;
       const context = currentContext;
       const generation = activeContextGeneration;
       if (stopped || !manager || !context) return;
       const beforeRefresh = manager.currentKeeper();
+      if (nativePolicyEnabled && !initialPolicyRefreshRequested && beforeRefresh && supportsNativeLoginPolicy(beforeRefresh) &&
+          status.getSnapshot().sessionTouchLastOutcome === "ok") {
+        initialPolicyRefreshRequested = true;
+        manager.requestProactiveRefresh();
+      }
       if (await manager.refreshAuthenticatedSessionIfDue() === "verified" &&
           !stopped && generation === activeContextGeneration &&
           manager === currentKeeperManager && context === currentContext) {
@@ -723,7 +739,28 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           verifyRefreshCandidate: async (candidate, target) => {
             const proof = await verifyLocationApplicationSession(candidate, target);
             log.info(`session_application_probe:${JSON.stringify(proof)}`);
-            return proof.outcome === "ok";
+            if (proof.outcome !== "ok") return false;
+            // Settings are changed only in this owned candidate, never in the
+            // keeper that is currently serving device commands and push events.
+            const policy = await ensureNativeKeepSignedIn(candidate, target, {
+              enabled: nativePolicyEnabled,
+              canContinue: () => !stopped && currentContext === context && canNavigateKeeper()
+            });
+            if (stopped || currentContext !== context) return false;
+            // A preference is NOT authentication proof. Recheck the Location
+            // application after any UI navigation, before keeper promotion.
+            const finalProof = supportsNativeLoginPolicy(candidate) && nativePolicyEnabled && policy.clean
+              ? await verifyLocationApplicationSession(candidate, target) : proof;
+            if (stopped || currentContext !== context) return false;
+            if (!policy.clean || finalProof.outcome !== "ok") {
+              lastNativePolicy = { state: "attention", reason: policy.clean ? "page_changed" : policy.report.reason };
+              log.info(`native_login_policy:${JSON.stringify(lastNativePolicy)}`);
+              return false;
+            }
+            log.info(`native_login_policy:${JSON.stringify(policy.report)}`);
+            nativePolicyReports.set(candidate, policy.report);
+            lastNativePolicy = policy.report;
+            return true;
           },
           onLoginPage: async (page, stage) => {
             const diagnostic = await inspectAuthenticationPage(page);
@@ -783,6 +820,9 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         );
         currentContext = context;
         currentKeeperManager = keeperManager;
+        initialPolicyRefreshRequested = false;
+        lastNativePolicy = pendingNativePolicy;
+        status.update({ nativeLoginPolicyState: pendingNativePolicy.state, nativeLoginPolicyReason: pendingNativePolicy.reason });
         nextSessionTouchAtMs = undefined;
         sessionTouchFailures = 0;
         sessionTouchOperation = undefined;
@@ -884,6 +924,10 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
                 urlCategory: classifySmartThingsUrl(keeper.url())
               }
             : statusForKeeperUrl(keeper.url());
+        const policy = keeperStatus.authenticated === true
+          ? nativePolicyReports.get(keeper) ?? (lastNativePolicy.state === "attention" ? lastNativePolicy : pendingNativePolicy)
+          : pendingNativePolicy;
+        status.update({ nativeLoginPolicyState: policy.state, nativeLoginPolicyReason: policy.reason });
         const currentState = status.getSnapshot().state;
         if (
           keeperStatus.authenticated === true &&

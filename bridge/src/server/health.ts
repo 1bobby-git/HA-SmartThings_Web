@@ -20,6 +20,8 @@ export interface HealthDetails {
   detailDiscoveryFailureCount: number;
   protocolChangeCount: number;
   protocolMismatchSurface?: RuntimeStatusSnapshot["protocolMismatchSurface"];
+  nativeLoginPolicyState?: RuntimeStatusSnapshot["nativeLoginPolicyState"];
+  nativeLoginPolicyReason?: string;
   sessionTouchCount?: number;
   sessionTouchConsecutiveFailures?: number;
   sessionTouchLastOutcome?: RuntimeStatusSnapshot["sessionTouchLastOutcome"];
@@ -131,6 +133,8 @@ export function createHealthReport(
       protocolChangeCount: snapshot.protocolChangeCount,
       protocolMismatchSurface: snapshot.protocolMismatchSurface,
       restartCount: snapshot.restartCount,
+      nativeLoginPolicyState: snapshot.nativeLoginPolicyState,
+      nativeLoginPolicyReason: snapshot.nativeLoginPolicyReason,
       sessionTouchCount: snapshot.sessionTouchCount,
       sessionTouchConsecutiveFailures: snapshot.sessionTouchConsecutiveFailures,
       sessionTouchLastOutcome: snapshot.sessionTouchLastOutcome,

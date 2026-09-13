@@ -513,6 +513,11 @@ export class KeeperPageManager {
     return flight.result;
   }
 
+  /** Request one early refresh; all normal authentication/command/backoff gates still apply. */
+  requestProactiveRefresh(): void {
+    this.#lastProactiveRefreshAtMs = this.#now() - this.#proactiveRefreshIntervalMs;
+  }
+
   async refreshAuthenticatedSessionIfDue(): Promise<ProactiveSessionRefreshOutcome> {
     const keeper = this.currentKeeper();
     if (

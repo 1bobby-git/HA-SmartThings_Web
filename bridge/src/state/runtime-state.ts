@@ -53,6 +53,8 @@ export interface RuntimeStatusSnapshot {
   detailDiscoveryFailureCount: number;
   protocolChangeCount: number;
   protocolMismatchSurface: ProtocolMismatchSurface | undefined;
+  nativeLoginPolicyState?: "disabled" | "pending" | "enabled" | "attention";
+  nativeLoginPolicyReason?: string;
   sessionTouchCount?: number;
   sessionTouchConsecutiveFailures?: number;
   sessionTouchLastOutcome?: "ok" | "failed" | "reauth" | "stale" | undefined;
@@ -120,6 +122,8 @@ const snapshotKeys = new Set<keyof RuntimeStatusSnapshot>([
   "detailDiscoveryFailureCount",
   "protocolChangeCount",
   "protocolMismatchSurface",
+  "nativeLoginPolicyState",
+  "nativeLoginPolicyReason",
   "sessionTouchCount",
   "sessionTouchConsecutiveFailures",
   "sessionTouchLastOutcome",
@@ -349,6 +353,12 @@ function validatePatch(patch: RuntimeStatusPatch, now: number): void {
     if (value !== undefined && booleanKeys.has(key) && typeof value !== "boolean") {
       throw new Error(`runtime status flag must be boolean: ${String(key)}`);
     }
+    if (key === "nativeLoginPolicyState" && value !== undefined &&
+        !["disabled", "pending", "enabled", "attention"].includes(value as string)) throw new Error("invalid native login policy state");
+    if (key === "nativeLoginPolicyReason" && value !== undefined &&
+        !["not_checked", "automation_disabled", "already_enabled", "enabled_and_verified", "browser_unsupported",
+          "invalid_target", "settings_not_found", "control_not_found", "ambiguous", "blocked", "state_unknown",
+          "not_saved", "page_changed", "ui_timeout"].includes(value as string)) throw new Error("invalid native login policy reason");
     if (key === "sessionTouchLastOutcome" && value !== undefined &&
         !["ok", "failed", "reauth", "stale"].includes(value as string)) {
       throw new Error("invalid session touch outcome");

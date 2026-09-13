@@ -19,7 +19,8 @@ describe("readBridgeConfig", () => {
       commandConfirmationTimeoutMs: 30_000,
       statusRecheckEnabled: true,
       inventoryReconciliationIntervalMs: 21_600_000,
-      debugProtocolLogging: false
+      debugProtocolLogging: false,
+      keepSignedInEnabled: true
     });
   });
 
@@ -67,6 +68,7 @@ describe("readBridgeConfig", () => {
       { STW_COMMAND_CONFIRMATION_TIMEOUT_SECONDS: "0" },
       { STW_STATUS_RECHECK_ENABLED: "yes" },
       { STW_INVENTORY_RECONCILIATION_SECONDS: "60" },
+      { STW_KEEP_SIGNED_IN_ENABLED: "yes" },
       { STW_DEBUG_PROTOCOL_LOGGING: "yes" }
     ]) {
       expect(() => readBridgeConfig(env)).toThrow(/invalid bridge config/i);
