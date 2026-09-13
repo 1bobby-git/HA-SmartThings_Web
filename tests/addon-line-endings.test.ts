@@ -11,6 +11,7 @@ const requiredAttributes = [
   "addon/smartthings_web_bridge/apparmor.txt text eol=lf",
   "addon/smartthings_web_bridge/config.yaml text eol=lf",
   "addon/smartthings_web_bridge/rootfs/** text eol=lf",
+  "addon/smartthings_web_bridge/rootfs/**/*.png binary",
   "docker/** text eol=lf",
   "*.sh text eol=lf"
 ];
