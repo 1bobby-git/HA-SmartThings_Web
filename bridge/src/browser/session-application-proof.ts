@@ -87,7 +87,7 @@ export async function verifyLocationApplicationSession(
   finally { if (timer !== undefined) clearTimeout(timer); }
 }
 
-export type AuthenticationSurface = "password_input" | "otp_input" | "email_input" | "no_visible_auth_input" | "unavailable";
+export type AuthenticationSurface = "password_input" | "otp_input" | "email_input" | "embedded_auth_input" | "no_visible_auth_input" | "unavailable";
 export type AuthenticationPageCategory = "samsung_account" | "smartthings_account" | "smartthings_location" | "other";
 export interface AuthenticationPageDiagnostic {
   page: AuthenticationPageCategory;
@@ -111,19 +111,32 @@ export async function inspectAuthenticationPage(page: BrowserPageLike): Promise<
   const initialUrl = page.url();
   try {
     const work = page.evaluate((): AuthenticationSurface => {
-      const visible = (selector: string) => Array.from(document.querySelectorAll<HTMLInputElement>(selector)).some(input => {
-        const style = getComputedStyle(input);
-        return input.getClientRects().length > 0 && style.visibility !== "hidden" && style.display !== "none";
-      });
-      if (visible('input[autocomplete="one-time-code"]')) return "otp_input";
-      if (visible('input[type="password"]')) return "password_input";
-      if (visible('input[type="email"]')) return "email_input";
-      return "no_visible_auth_input";
+      const isVisible = (element: Element): boolean => {
+        const html = element as HTMLElement;
+        const style = getComputedStyle(html);
+        return html.getClientRects().length > 0 && style.visibility !== "hidden" && style.display !== "none";
+      };
+      const scan = (root: Document | ShadowRoot): AuthenticationSurface | undefined => {
+        const visible = (selector: string) => Array.from(root.querySelectorAll<HTMLInputElement>(selector)).some(isVisible);
+        if (visible('input[autocomplete="one-time-code"]')) return "otp_input";
+        if (visible('input[type="password"]')) return "password_input";
+        if (visible('input[type="email"], input[autocomplete="email"], input[autocomplete="username"]')) return "email_input";
+        for (const element of Array.from(root.querySelectorAll<HTMLElement>("*"))) {
+          if (element.shadowRoot) { const nested = scan(element.shadowRoot); if (nested) return nested; }
+        }
+        for (const frame of Array.from(root.querySelectorAll<HTMLIFrameElement>("iframe"))) {
+          if (!isVisible(frame)) continue;
+          try { if (frame.contentDocument) { const nested = scan(frame.contentDocument); if (nested) return nested; } } catch {}
+          try { const src = new URL(frame.src, location.href); if (src.hostname === "account.samsung.com" || src.hostname.endsWith(".samsung.com")) return "embedded_auth_input"; } catch {}
+        }
+        return undefined;
+      };
+      return scan(document) ?? "no_visible_auth_input";
     }, undefined);
     const surface = await Promise.race([work, new Promise<AuthenticationSurface>(resolve => {
       timer = setTimeout(() => resolve("unavailable"), 1_500);
     })]);
-    const allowed = ["password_input", "otp_input", "email_input", "no_visible_auth_input"];
+    const allowed = ["password_input", "otp_input", "email_input", "embedded_auth_input", "no_visible_auth_input"];
     return { page: category, surface: page.url() === initialUrl && allowed.includes(surface) ? surface : "unavailable" };
   } catch { return { page: category, surface: "unavailable" }; }
   finally { if (timer !== undefined) clearTimeout(timer); }

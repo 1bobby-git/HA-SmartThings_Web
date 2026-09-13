@@ -86,10 +86,10 @@ describe("KeeperPageManager proactive session refresh", () => {
 
     await expect(manager.refreshAuthenticatedSessionIfDue()).resolves.toBe("verified");
     expect(context.created).toHaveLength(1);
-    expect(context.created[0]?.gotoCalls).toEqual([{
-      url: KEEPER_URL,
-      options: { waitUntil: "domcontentloaded", timeout: 10_000 }
-    }]);
+    expect(context.created[0]?.gotoCalls).toEqual([
+      { url: "https://account.samsung.com/", options: { waitUntil: "domcontentloaded", timeout: 10_000 } },
+      { url: KEEPER_URL, options: { waitUntil: "domcontentloaded", timeout: 10_000 } }
+    ]);
     expect(context.created[0]?.closed).toBe(true);
     expect(keeper.gotoCalls).toHaveLength(0);
     expect(keeper.closed).toBe(false);

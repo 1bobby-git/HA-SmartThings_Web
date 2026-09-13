@@ -110,7 +110,7 @@ describe("Samsung login session continuity", () => {
     expect(s.phases).not.toContain("login_required");
   });
 
-  test.each(["password_input", "otp_input", "email_input"] as const)(
+  test.each(["password_input", "otp_input", "email_input", "embedded_auth_input"] as const)(
     "does not navigate or replace the user's visible %s form", async (surface) => {
       const s = await scenario({ originalSurface: surface });
       await s.manager.ensureKeeper();

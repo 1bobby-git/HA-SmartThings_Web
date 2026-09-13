@@ -531,6 +531,20 @@ export class KeeperPageManager {
       probe = await this.context.newPage();
       this.#commandPages.add(probe);
       const target = this.#verifyRefreshCandidate && isConcreteLocationUrl(expectedUrl) ? expectedUrl : KEEPER_URL;
+      await probe.goto(SAMSUNG_ACCOUNT_URL, { waitUntil: "domcontentloaded", timeout: 10_000 });
+      await waitForSettledKeeperPage(probe, 5_000);
+      if (isSamsungLoginUrl(probe.url())) {
+        const accountDiagnostic = await inspectAuthenticationPage(probe);
+        if (hasVisibleAuthenticationInput(accountDiagnostic.surface)) {
+          await this.recordLoginPage(probe, "refresh");
+          this.recoveryDiagnostic("refresh_login_required");
+          return "login_required";
+        }
+      }
+      if (!this.#canNavigate() || this.currentKeeper() !== expectedKeeper || expectedKeeper.isClosed() || expectedKeeper.url() !== expectedUrl) {
+        this.recoveryDiagnostic("refresh_stale");
+        return "stale";
+      }
       await probe.goto(target, { waitUntil: "domcontentloaded", timeout: 10_000 });
       await waitForSettledKeeperPage(probe);
       if (isSamsungLoginUrl(probe.url())) {
@@ -959,7 +973,7 @@ export async function waitForSettledKeeperPage(
 }
 
 function hasVisibleAuthenticationInput(surface: string): boolean {
-  return surface === "password_input" || surface === "otp_input" || surface === "email_input";
+  return surface === "password_input" || surface === "otp_input" || surface === "email_input" || surface === "embedded_auth_input";
 }
 
 function validDelay(value: number | undefined, fallback: number): number {
