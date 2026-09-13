@@ -100,6 +100,7 @@ describe("renderStatusPage", () => {
         pushConnected: true,
         initialSnapshotComplete: true,
         parserHealthy: true,
+        initialSnapshotCompletedAtMs: 9_900,
         lastSnapshotAtMs: 9_900,
         lastParserSuccessAtMs: 9_950,
         lastPushAtMs: 9_975

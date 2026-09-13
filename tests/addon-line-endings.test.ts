@@ -72,7 +72,9 @@ describe("add-on runtime line endings", () => {
       "addon/smartthings_web_bridge/apparmor.txt",
       "addon/smartthings_web_bridge/config.yaml",
       "docker/Dockerfile",
-      ...regularFilesUnder("addon/smartthings_web_bridge/rootfs").map((path) => relative(process.cwd(), path).replace(/\\/g, "/")),
+      ...regularFilesUnder("addon/smartthings_web_bridge/rootfs")
+        .filter((path) => !path.toLowerCase().endsWith(".png"))
+        .map((path) => relative(process.cwd(), path).replace(/\\/g, "/")),
       ...regularFilesUnder("docker").map((path) => relative(process.cwd(), path).replace(/\\/g, "/"))
     ]);
 
