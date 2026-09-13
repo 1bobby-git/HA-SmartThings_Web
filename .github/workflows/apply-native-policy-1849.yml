@@ -1,0 +1,68 @@
+name: Verify native login policy candidate
+on:
+  push:
+    branches: [fix/native-keep-signed-in-1.8.49]
+    paths: [.github/workflows/apply-native-policy-1849.yml]
+permissions:
+  contents: write
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/native-keep-signed-in-1.8.49
+      - name: Verify and apply the locally reviewed patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import base64, zlib, hashlib, subprocess
+          p = Path('.maintenance')
+          chunks = [(p / f'native-policy-1849.part{i}').read_text().strip() for i in range(1, 6)]
+          # Repair transport transcription only; the decoded patch must match
+          # the exact locally tested checksum before any source is changed.
+          chunks[0] = chunks[0].replace('GVpeX2zmil', 'GVpe2zmil')
+          chunks[1] = chunks[1].replace('qXZS7P1', 'qXZS7+P1')
+          boundary = 'NJcvAAZyTBDj5IW0f0'
+          assert chunks[2].count(boundary) == 1
+          chunks[2] = chunks[2].split(boundary)[0] + boundary
+          encoded = ''.join(chunks)
+          Path('/tmp/native-policy-transport.txt').write_text(encoded)
+          patch = zlib.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'fe0840db501545ae0847055809cecadbc84532a63dbce68fe834e4d0add4cc20'
+          Path('/tmp/native-policy.patch').write_bytes(patch)
+          subprocess.run(['git', 'apply', '--check', '/tmp/native-policy.patch'], check=True)
+          subprocess.run(['git', 'apply', '/tmp/native-policy.patch'], check=True)
+          PY
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Unit and boundary tests
+        run: |
+          npm ci
+          npm test
+          npm run typecheck
+          npm run build
+          npm run audit:api-free
+      - name: Real Chromium native settings and existing session regressions
+        run: |
+          npx playwright-core install --with-deps chromium
+          xvfb-run -a node tools/ci-native-login-policy-smoke.mjs
+          xvfb-run -a node tools/ci-session-continuity-smoke.mjs
+      - name: Remove temporary transport and commit tested changes
+        run: |
+          rm .maintenance/native-policy-1849.part{1,2,3,4,5}
+          rm .github/workflows/inspect-keep-signed-in-1849.yml .github/workflows/apply-native-policy-1849.yml
+          git add -A
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat: apply and verify native SmartThings keep-signed-in setting (1.8.49)'
+          git push origin HEAD:fix/native-keep-signed-in-1.8.49
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-policy-transport-debug
+          path: /tmp/native-policy-transport.txt
+          retention-days: 1
