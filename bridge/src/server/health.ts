@@ -9,6 +9,7 @@ export interface HealthReportOptions {
 export interface HealthDetails {
   state: RuntimeStatusSnapshot["state"];
   urlCategory: RuntimeStatusSnapshot["urlCategory"];
+  authenticated: boolean;
   activeConnections: number;
   observedDeviceCount: number;
   decodedDeviceEventCount: number;
@@ -118,6 +119,7 @@ export function createHealthReport(
     details: stripUndefined({
       state: snapshot.state,
       urlCategory: snapshot.urlCategory,
+      authenticated: snapshot.authenticated,
       activeConnections: snapshot.activeConnections,
       observedDeviceCount: snapshot.observedDeviceCount,
       decodedDeviceEventCount: snapshot.decodedDeviceEventCount,
