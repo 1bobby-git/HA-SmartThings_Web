@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko">
+<html lang="ko-KR">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -18,10 +18,8 @@
       --hc-blue: #2563eb;
       --hc-warning: #805500;
       --hc-warning-soft: #fff4dc;
-      --hc-primary-bg: #2563eb;
-      --hc-primary-ink: #ffffff;
       --hc-focus: #2563eb;
-      --hc-shadow: 0 8px 32px #19243b05;
+      --hc-shadow: 0 8px 32px #19243b08;
       --hc-hero-bg: radial-gradient(ellipse at 95% -20%, #314774 0, transparent 63%), #182237;
     }
     @media (prefers-color-scheme: dark) {
@@ -41,101 +39,97 @@
       }
     }
     * { box-sizing: border-box; }
+    html { background: var(--hc-bg); }
     body {
       margin: 0;
       background: var(--hc-bg);
       color: var(--hc-ink);
-      font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Pretendard", "Noto Sans CJK KR", "Malgun Gothic", sans-serif;
+      font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Pretendard", "Noto Sans KR", "Noto Sans CJK KR", "Malgun Gothic", sans-serif;
       -webkit-font-smoothing: antialiased;
     }
     :focus-visible { outline: 3px solid var(--hc-focus); outline-offset: 3px; }
-    .hc-shell { width: 100%; max-width: 1248px; margin: 0 auto; padding: 0 40px 48px; }
-    .hc-header {
-      min-height: 94px;
-      display: flex;
-      align-items: center;
-      border-bottom: 1px solid var(--hc-line);
-      font-weight: 750;
-      letter-spacing: -0.025em;
-    }
-    main { padding-top: 40px; }
-    .hc-title-block { max-width: 760px; margin-bottom: 30px; }
-    .hc-eyebrow { margin: 0 0 8px; color: var(--hc-blue); font-size: 13px; font-weight: 750; letter-spacing: .045em; text-transform: uppercase; }
-    h1 { margin: 0; font-size: clamp(28px, 4vw, 38px); line-height: 1.35; font-weight: 750; letter-spacing: -0.045em; word-break: keep-all; }
-    .hc-lead { margin: 12px 0 0; color: var(--hc-muted); }
-    .hc-hero { padding: 28px; border-radius: 24px; background: var(--hc-hero-bg); color: #ffffff; }
+    .hc-container { width: 100%; max-width: 1248px; margin: 0 auto; padding-inline: 40px; }
+    .hc-header-surface { width: 100%; background: #fff; color: #191f28; border-bottom: 1px solid #e9ecf1; }
+    .hc-topbar { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .hc-brand-logo { display: block; width: auto; height: 38px; max-width: min(280px, 44vw); object-fit: contain; object-position: left center; }
+    .hc-status-label { min-height: 44px; display: inline-flex; align-items: center; gap: 7px; color: #667182; font-size: 13px; font-weight: 700; white-space: nowrap; }
+    .hc-dot { width: 7px; height: 7px; border-radius: 99px; background: #c18400; }
+    .hc-tabs { min-height: 48px; display: flex; align-items: end; gap: 30px; }
+    .hc-tab { position: relative; min-height: 48px; display: inline-flex; align-items: center; color: #191f28; font-size: 14px; font-weight: 800; text-decoration: none; }
+    .hc-tab::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 99px 99px 0 0; background: #191f28; }
+    main { padding-top: 38px; padding-bottom: 48px; }
+    .hc-title-block { max-width: 760px; margin-bottom: 26px; }
+    .hc-eyebrow { margin: 0 0 8px; color: var(--hc-blue); font-size: 12px; font-weight: 800; letter-spacing: .12em; }
+    h1 { margin: 0; font-size: clamp(28px, 4vw, 38px); line-height: 1.3; font-weight: 780; letter-spacing: -0.045em; word-break: keep-all; }
+    .hc-lead { margin: 10px 0 0; color: var(--hc-muted); }
+    .hc-hero { padding: 30px; border-radius: 24px; background: var(--hc-hero-bg); color: #fff; }
+    .hc-kicker { margin: 0 0 8px; color: #9fb9e7; font-size: 12px; font-weight: 750; }
     .hc-status { display: flex; align-items: center; gap: 10px; }
     .hc-status-icon { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 999px; background: #fff1cc; color: #775000; font-weight: 900; }
-    .hc-hero h2 { margin: 0; font-size: 32px; line-height: 1.25; font-weight: 750; letter-spacing: -0.04em; }
-    .hc-hero p { margin: 10px 0 0; color: #d8e2f3; max-width: 720px; }
-    .hc-card { margin-top: 36px; padding: 24px; border: 1px solid var(--hc-line); border-radius: 19px; background: var(--hc-surface); box-shadow: var(--hc-shadow); }
-    .hc-card h2 { margin: 0; font-size: 23px; line-height: 1.4; font-weight: 720; letter-spacing: -0.035em; }
+    .hc-hero h2 { margin: 0; font-size: clamp(25px, 3vw, 34px); line-height: 1.28; font-weight: 780; letter-spacing: -0.04em; }
+    .hc-hero p:last-child { margin: 10px 0 0; color: #d8e2f3; max-width: 720px; }
+    .hc-card { margin-top: 34px; padding: 24px; border: 1px solid var(--hc-line); border-radius: 19px; background: var(--hc-surface); box-shadow: var(--hc-shadow); }
+    .hc-card h2 { margin: 0; font-size: 22px; line-height: 1.4; font-weight: 760; letter-spacing: -0.035em; }
     .hc-card p { margin: 8px 0 0; color: var(--hc-muted); }
     code { padding: 2px 5px; border-radius: 6px; background: var(--hc-soft); color: var(--hc-ink); font-size: .92em; }
-    .hc-button {
-      min-height: 50px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      margin-top: 18px;
-      padding: 0 18px;
-      border-radius: 12px;
-      background: var(--hc-primary-bg);
-      color: var(--hc-primary-ink);
-      font-weight: 750;
-      text-decoration: none;
-    }
+    .hc-button { min-height: 50px; display: inline-flex; align-items: center; justify-content: center; margin-top: 18px; padding: 0 18px; border-radius: 12px; background: #2563eb; color: #fff; font-weight: 760; text-decoration: none; }
     .hc-note { margin-top: 16px; padding: 12px 14px; border-radius: 12px; background: var(--hc-warning-soft); color: var(--hc-warning); }
     .hc-note p { margin: 0; color: inherit; }
-    @media (max-width: 870px) { .hc-shell { padding-inline: 28px; } }
+    @media (max-width: 870px) { .hc-container { padding-inline: 28px; } }
     @media (max-width: 560px) {
-      .hc-shell { padding: 0 20px 36px; }
-      .hc-header { min-height: 76px; }
-      main { padding-top: 26px; }
-      .hc-title-block { margin-bottom: 23px; }
+      .hc-container { padding-inline: 20px; }
+      .hc-topbar { min-height: 68px; }
+      .hc-brand-logo { height: 32px; max-width: 52vw; }
+      .hc-tabs { gap: 24px; }
+      main { padding-top: 28px; padding-bottom: 36px; }
+      .hc-title-block { margin-bottom: 22px; }
       .hc-hero { padding: 22px 20px; border-radius: 20px; }
-      .hc-hero h2 { font-size: 25px; }
-      .hc-card { margin-top: 27px; padding: 20px 16px; }
+      .hc-card { margin-top: 28px; padding: 20px 16px; }
       .hc-button { width: 100%; }
     }
-    @media (max-width: 350px) { .hc-shell { padding-inline: 16px; } }
+    @media (max-width: 350px) { .hc-container { padding-inline: 16px; } }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
     @media (forced-colors: active) { .hc-card, .hc-button { border: 1px solid CanvasText; } }
   </style>
 </head>
 <body>
-  <div class="hc-shell">
-    <header class="hc-header">SmartThings Web Bridge</header>
-    <main>
-      <div class="hc-title-block">
-        <p class="hc-eyebrow">Bridge status</p>
-        <h1>연결을 준비하고 있습니다</h1>
-        <p class="hc-lead">브릿지 내부 서비스가 준비되면 이 화면은 자동으로 정상 상태 화면으로 전환됩니다.</p>
+  <header class="hc-header-surface">
+    <div class="hc-container">
+      <div class="hc-topbar">
+        <img class="hc-brand-logo" src="brand/logo.png" alt="SmartThings Web Bridge">
+        <span class="hc-status-label"><span class="hc-dot" aria-hidden="true"></span>브릿지 시작 중</span>
       </div>
+      <nav class="hc-tabs" aria-label="페이지 바로가기"><a class="hc-tab" href="#status">한눈에</a></nav>
+    </div>
+  </header>
 
-      <section class="hc-hero" role="status" aria-live="polite">
-        <div class="hc-status">
-          <span class="hc-status-icon" aria-hidden="true">…</span>
-          <h2>SmartThings Web Bridge 시작 중</h2>
-        </div>
-        <p>Ingress는 실행 중이며 내부 Bridge HTTP 서비스(<code>127.0.0.1:8098</code>)의 준비 완료를 기다리고 있습니다.</p>
-      </section>
+  <main class="hc-container" id="status">
+    <div class="hc-title-block">
+      <p class="hc-eyebrow">BRIDGE STATUS</p>
+      <h1>SmartThings 연결을 준비하고 있습니다.</h1>
+      <p class="hc-lead">브릿지 내부 서비스가 준비되면 이 화면은 자동으로 정상 상태 화면으로 전환됩니다.</p>
+    </div>
 
-      <section class="hc-card" aria-labelledby="startup-help">
-        <h2 id="startup-help">지금 할 수 있는 작업</h2>
-        <p>로그인이 필요한 경우 브라우저 로그인 화면을 열 수 있습니다. 이 페이지는 5초마다 브릿지 상태를 다시 확인합니다.</p>
-        <a class="hc-button" id="login-link" href="novnc-ui/vnc.html?autoconnect=1&amp;resize=scale&amp;path=websockify">브라우저 로그인 화면 열기</a>
-        <div class="hc-note">
-          <p>계속 이 화면이 표시되면 앱 로그의 <code>bridge_start_failed:</code>, <code>bridge_init:</code>, <code>data_prep_</code> 항목을 확인하세요.</p>
-        </div>
-      </section>
-    </main>
-  </div>
+    <section class="hc-hero" role="status" aria-live="polite">
+      <p class="hc-kicker">현재 브릿지 상태</p>
+      <div class="hc-status">
+        <span class="hc-status-icon" aria-hidden="true">…</span>
+        <h2>SmartThings Web Bridge 시작 중</h2>
+      </div>
+      <p>Ingress는 실행 중이며 내부 Bridge HTTP 서비스(<code>127.0.0.1:8098</code>)가 준비되기를 기다리고 있습니다.</p>
+    </section>
+
+    <section class="hc-card" aria-labelledby="startup-help">
+      <h2 id="startup-help">지금 할 수 있는 작업</h2>
+      <p>로그인이 필요한 경우 브라우저 로그인 화면을 열 수 있습니다. 이 페이지는 5초마다 브릿지 상태를 다시 확인합니다.</p>
+      <a class="hc-button" id="login-link" href="novnc-ui/vnc.html?autoconnect=1&amp;resize=scale&amp;path=websockify">브라우저 로그인 열기</a>
+      <div class="hc-note"><p>계속 이 화면이 표시되면 앱 로그의 <code>bridge_start_failed:</code>, <code>bridge_init:</code>, <code>data_prep_</code> 항목을 확인하세요.</p></div>
+    </section>
+  </main>
+
   <script>
     const link = document.getElementById("login-link");
-    const base = window.location.pathname.endsWith("/")
-      ? window.location.pathname
-      : `${window.location.pathname}/`;
+    const base = window.location.pathname.endsWith("/") ? window.location.pathname : `${window.location.pathname}/`;
     link.href = `${base}novnc-ui/vnc.html?autoconnect=1&resize=scale&path=websockify`;
   </script>
 </body>
