@@ -38,10 +38,7 @@
       }
     }
     * { box-sizing: border-box; }
-    *, *::before, *::after {
-      border-radius: 0 !important;
-      box-shadow: none !important;
-    }
+    *, *::before, *::after { box-shadow: none !important; }
     html { background: var(--hc-bg); }
     body {
       margin: 0;
@@ -59,25 +56,25 @@
     .hc-dot { width: 7px; height: 7px; border-radius: 99px; background: #c18400; }
     .hc-tabs { min-height: 48px; display: flex; align-items: end; gap: 30px; }
     .hc-tab { position: relative; min-height: 48px; display: inline-flex; align-items: center; color: #191f28; font-size: 14px; font-weight: 800; text-decoration: none; }
-    .hc-tab::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 99px 99px 0 0; background: #191f28; }
+    .hc-tab::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 2px 2px 0 0; background: #191f28; }
     main { padding-top: 38px; padding-bottom: 48px; }
     .hc-title-block { max-width: 760px; margin-bottom: 26px; }
     .hc-eyebrow { margin: 0 0 8px; color: var(--hc-blue); font-size: 12px; font-weight: 800; letter-spacing: .12em; }
     h1 { margin: 0; font-size: clamp(28px, 4vw, 38px); line-height: 1.3; font-weight: 780; letter-spacing: -0.045em; word-break: keep-all; }
     .hc-lead { margin: 10px 0 0; color: var(--hc-muted); }
-    .hc-hero { padding: 30px; border: 1px solid #efe2bd; border-radius: 24px; background: var(--hc-surface); color: var(--hc-ink); box-shadow: var(--hc-shadow); }
+    .hc-hero { padding: 30px; border: 1px solid #efe2bd; border-radius: 18px; background: var(--hc-surface); color: var(--hc-ink); box-shadow: var(--hc-shadow); }
     .hc-kicker { margin: 0 0 8px; color: var(--hc-muted); font-size: 12px; font-weight: 750; }
     .hc-status { display: flex; align-items: center; gap: 12px; }
-    .hc-status-icon { width: 44px; height: 44px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 14px; background: var(--hc-warning-soft); color: var(--hc-warning); font-weight: 900; }
+    .hc-status-icon { width: 44px; height: 44px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 11px; background: var(--hc-warning-soft); color: var(--hc-warning); font-weight: 900; }
     .hc-status-icon svg { width: 24px; height: 24px; }
     .hc-hero h2 { margin: 0; font-size: clamp(25px, 3vw, 34px); line-height: 1.28; font-weight: 780; letter-spacing: -0.04em; }
     .hc-hero p:last-child { margin: 10px 0 0 56px; color: var(--hc-muted); max-width: 720px; }
-    .hc-card { margin-top: 34px; padding: 24px; border: 1px solid var(--hc-line); border-radius: 19px; background: var(--hc-surface); box-shadow: var(--hc-shadow); }
+    .hc-card { margin-top: 34px; padding: 24px; border: 1px solid var(--hc-line); border-radius: 14px; background: var(--hc-surface); box-shadow: var(--hc-shadow); }
     .hc-card h2 { margin: 0; font-size: 22px; line-height: 1.4; font-weight: 760; letter-spacing: -0.035em; }
     .hc-card p { margin: 8px 0 0; color: var(--hc-muted); }
-    code { padding: 2px 5px; border-radius: 6px; background: var(--hc-soft); color: var(--hc-ink); font-size: .92em; }
-    .hc-button { min-height: 50px; display: inline-flex; align-items: center; justify-content: center; margin-top: 18px; padding: 0 18px; border-radius: 12px; background: #2563eb; color: #fff; font-weight: 760; text-decoration: none; }
-    .hc-note { margin-top: 16px; padding: 12px 14px; border-radius: 12px; background: var(--hc-warning-soft); color: var(--hc-warning); }
+    code { padding: 2px 5px; border-radius: 4px; background: var(--hc-soft); color: var(--hc-ink); font-size: .92em; }
+    .hc-button { min-height: 50px; display: inline-flex; align-items: center; justify-content: center; margin-top: 18px; padding: 0 18px; border-radius: 10px; background: #2563eb; color: #fff; font-weight: 760; text-decoration: none; }
+    .hc-note { margin-top: 16px; padding: 12px 14px; border-radius: 10px; background: var(--hc-warning-soft); color: var(--hc-warning); }
     .hc-note p { margin: 0; color: inherit; }
     @media (max-width: 870px) { .hc-container { padding-inline: 28px; } }
     @media (max-width: 560px) {
@@ -87,7 +84,7 @@
       .hc-tabs { gap: 24px; }
       main { padding-top: 28px; padding-bottom: 36px; }
       .hc-title-block { margin-bottom: 22px; }
-      .hc-hero { padding: 22px 20px; border-radius: 20px; }
+      .hc-hero { padding: 22px 20px; border-radius: 16px; }
       .hc-card { margin-top: 28px; padding: 20px 16px; }
       .hc-button { width: 100%; }
     }

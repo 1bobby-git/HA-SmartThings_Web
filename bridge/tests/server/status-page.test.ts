@@ -215,7 +215,7 @@ describe("renderStatusPage", () => {
     expect(enabled).not.toContain("2시간·8시간·24시간");
   });
 
-  test("uses a flat visual system without shadows or rounded corners", () => {
+  test("keeps shadows disabled while restoring compact rounded corners", () => {
     const html = renderStatusPage(reportFor({
       state: "CONNECTED",
       protocolVersion: "1:abcdef1234567890",
@@ -223,9 +223,12 @@ describe("renderStatusPage", () => {
       authenticated: true
     }));
 
-    expect(html).toContain("border-radius: 0 !important");
     expect(html).toContain("box-shadow: none !important");
     expect(html).toContain("--hc-shadow: none");
+    expect(html).not.toContain("border-radius: 0 !important");
+    expect(html).toContain("border-radius: 18px");
+    expect(html).toContain("border-radius: 14px");
+    expect(html).toContain("border-radius: 10px");
     expect(html).not.toContain("box-shadow: 0 8px 24px #19243b20");
   });
 
