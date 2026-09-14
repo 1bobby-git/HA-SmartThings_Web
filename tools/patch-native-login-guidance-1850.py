@@ -76,6 +76,7 @@ for name in [
     "addon/smartthings_web_bridge/config.yaml",
     "protocol/version.json",
     "bridge/src/runtime.ts",
+    "bridge/tests/runtime.test.ts",
     "tests/addon-config.test.ts",
     "tests/protocol-version-contract.test.ts",
 ]:
