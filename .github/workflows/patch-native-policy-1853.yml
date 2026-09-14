@@ -27,6 +27,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          runtime = Path('bridge/src/runtime.ts').read_text()
+          anchor = '  const browserStartup = waitForProfileMaintenance('
+          assert runtime.count(anchor) == 1
+          p = Path('tools/patch-native-policy-1853.py')
+          text = p.read_text()
+          previous = '  const touchAuthenticatedSessionIfDue = async () => {'
+          assert text.count(previous) == 2
+          p.write_text(text.replace(previous, anchor))
+          PY
           python tools/patch-native-policy-1853.py
           python - <<'PY'
           from pathlib import Path
