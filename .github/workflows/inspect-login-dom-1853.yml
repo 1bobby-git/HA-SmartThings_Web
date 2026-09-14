@@ -1,0 +1,46 @@
+name: Inspect native login DOM
+on:
+  push:
+    branches: [fix/native-login-dom-1.8.53]
+    paths: [.github/workflows/inspect-login-dom-1853.yml]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Collect source and public UI evidence
+        run: |
+          mkdir -p /tmp/login-dom-evidence
+          git archive HEAD -o /tmp/login-dom-evidence/source.tar
+          python3 - <<'PY'
+          from pathlib import Path
+          import urllib.request, re
+          p=Path('bridge/src/runtime.ts')
+          lines=p.read_text().splitlines()
+          indices=set()
+          for i,line in enumerate(lines):
+              if 'nativeLogin' in line or 'NativeKeep' in line or 'nativePolicy' in line:
+                  indices.update(range(max(0,i-12),min(len(lines),i+22)))
+          print('\nRUNTIME HOOKS\n')
+          for i in sorted(indices): print(f'{i+1}: {lines[i]}')
+          base='https://d7zh21xt4294z.cloudfront.net/assets/2.57.0/'
+          for filename in ['58329.js', 'main.js']:
+              try:
+                  req=urllib.request.Request(base+filename,headers={'User-Agent':'Mozilla/5.0'})
+                  with urllib.request.urlopen(req,timeout=20) as response: text=response.read(15000000).decode('utf-8')
+                  Path('/tmp/login-dom-evidence/'+filename).write_text(text)
+                  print('\nPUBLIC ASSET',filename)
+                  matches=list(re.finditer(r'user-settings|settings-link|settings-button|toggle-switch-stayLoggedIn|keep-signed-in|icon-settings',text))
+                  for match in matches[:25]: print(text[max(0,match.start()-220):match.end()+260])
+              except Exception as exc: print('public_asset_unavailable',type(exc).__name__)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: login-dom-evidence
+          path: /tmp/login-dom-evidence
+          retention-days: 2
