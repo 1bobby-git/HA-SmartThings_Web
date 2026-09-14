@@ -716,12 +716,16 @@ function renderNativeLoginPolicy(report: HealthReport): string {
   // never that this account has an unlimited server-side session.
   const effective = !report.details.authenticated && state === "enabled" ? "pending" : state;
   const tone: StatusTone = effective === "enabled" ? "ready" : "warning";
+  const importantGuidance = effective === "enabled"
+    ? "중요 설정 확인됨: SmartThings 웹의 ‘로그인 유지’가 켜져 있습니다. 브릿지를 장시간 연결할 때 권장되는 상태입니다."
+    : "중요: 브릿지의 장기 로그인 유지를 위해 반드시 브릿지 내부 브라우저(noVNC)의 SmartThings 설정에서 ‘로그인 유지’를 켜 주세요. 꺼져 있으면 2시간·8시간·24시간으로 선택한 세션 길이에 따라 자동 로그아웃될 수 있습니다.";
   return `<section class="hc-section" aria-labelledby="native-login-heading">
     <div class="hc-card hc-integration" data-native-login-policy="${escapeHtml(effective)}">
       <div><h3 id="native-login-heading">SmartThings 로그인 유지</h3>
         <p class="hc-status-value">${renderStatusGlyph(tone, "hc-status-leading-icon")}${escapeHtml(NATIVE_POLICY_LABELS[effective] ?? NATIVE_POLICY_LABELS.pending!)}</p>
         <p>${escapeHtml(NATIVE_POLICY_LABELS[effective !== state ? "not_checked" : reason] ?? NATIVE_POLICY_LABELS.not_checked!)}</p>
-        <p>브릿지 내부 브라우저의 웹 설정입니다. 브라우저 종료 후 인증 복원과는 별개이며, 재시작 후 다시 확인합니다.</p>
+        <p>브릿지 내부 브라우저의 웹 설정입니다. 휴대폰이나 다른 브라우저의 설정과는 별개이며, 브라우저 종료 후 인증 복원과도 별도로 재확인합니다.</p>
+        <p role="note"><strong>${escapeHtml(importantGuidance.split(":")[0] + ":")}</strong>${escapeHtml(importantGuidance.slice(importantGuidance.indexOf(":") + 1))}</p>
       </div>
       <div class="hc-actions"><a class="hc-button hc-button-secondary" href="novnc-ui/vnc.html?autoconnect=1&amp;resize=scale&amp;path=websockify">브라우저에서 설정 확인</a>
         <a class="hc-button hc-button-secondary" href=".">상태 다시 확인</a></div>
