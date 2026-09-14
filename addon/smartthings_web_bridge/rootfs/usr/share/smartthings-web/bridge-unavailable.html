@@ -19,7 +19,7 @@
       --hc-warning: #805500;
       --hc-warning-soft: #fff4dc;
       --hc-focus: #2563eb;
-      --hc-shadow: 0 8px 32px #19243b08;
+      --hc-shadow: none;
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -38,6 +38,10 @@
       }
     }
     * { box-sizing: border-box; }
+    *, *::before, *::after {
+      border-radius: 0 !important;
+      box-shadow: none !important;
+    }
     html { background: var(--hc-bg); }
     body {
       margin: 0;

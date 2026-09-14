@@ -215,6 +215,20 @@ describe("renderStatusPage", () => {
     expect(enabled).not.toContain("2시간·8시간·24시간");
   });
 
+  test("uses a flat visual system without shadows or rounded corners", () => {
+    const html = renderStatusPage(reportFor({
+      state: "CONNECTED",
+      protocolVersion: "1:abcdef1234567890",
+      dbAvailable: true,
+      authenticated: true
+    }));
+
+    expect(html).toContain("border-radius: 0 !important");
+    expect(html).toContain("box-shadow: none !important");
+    expect(html).toContain("--hc-shadow: none");
+    expect(html).not.toContain("box-shadow: 0 8px 24px #19243b20");
+  });
+
   test("localizes runtime and diagnostic labels", () => {
     const html = renderStatusPage(reportFor({
       state: "LOGIN_REQUIRED",
