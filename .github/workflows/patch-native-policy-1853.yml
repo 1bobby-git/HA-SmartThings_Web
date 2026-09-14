@@ -1,0 +1,63 @@
+name: Assemble native login detection 1.8.53
+on:
+  push:
+    branches: [fix/native-login-policy-detection-1.8.53]
+    paths:
+      - tools/patch-native-policy-1853.py
+      - .github/workflows/patch-native-policy-1853.yml
+permissions:
+  contents: write
+concurrency:
+  group: native-login-detection-1853
+  cancel-in-progress: false
+jobs:
+  patch:
+    if: github.event.deleted == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/native-login-policy-detection-1.8.53
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Apply focused patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/patch-native-policy-1853.py
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('bridge/tests/server/native-login-recheck.test.ts')
+          p.write_text(p.read_text().replace('evaluate: vi.fn(async () => { url = ', 'evaluate: vi.fn().mockImplementation(async () => { url = '))
+          p = Path('.github/workflows/validate.yml')
+          text = p.read_text()
+          anchor = '          xvfb-run -a node tools/ci-native-login-policy-smoke.mjs'
+          assert text.count(anchor) == 1
+          p.write_text(text.replace(anchor, anchor + '\n          node tools/ci-native-login-recheck-smoke.mjs'))
+          PY
+      - name: Validate Node and browser behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm test
+          npm run typecheck
+          npm run build
+          npx playwright-core install --with-deps chromium
+          node tools/ci-native-login-recheck-smoke.mjs
+          xvfb-run -a node tools/ci-native-login-policy-smoke.mjs
+      - name: Commit only validated candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm tools/patch-native-policy-1853.py .github/workflows/patch-native-policy-1853.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m 'fix: detect manual login-maintenance settings and perform real rechecks (1.8.53)'
+          git push origin HEAD:fix/native-login-policy-detection-1.8.53
