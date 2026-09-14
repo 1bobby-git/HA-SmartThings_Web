@@ -37,6 +37,7 @@ jobs:
           git apply --check /tmp/session-candidate.patch
           git apply /tmp/session-candidate.patch
           python3 tools/_session_fixture_fix.py
+          python3 tools/_session_compiled_fix.py
           git diff --check
       - name: Unit, type, build and security validation
         shell: bash
@@ -57,11 +58,14 @@ jobs:
           node tools/ci-native-login-dom-regression.mjs 2>&1 | tee /tmp/native-session-validation/dom.log
           xvfb-run -a node tools/ci-native-login-policy-smoke.mjs 2>&1 | tee /tmp/native-session-validation/policy.log
           xvfb-run -a node tools/ci-session-continuity-smoke.mjs 2>&1 | tee /tmp/native-session-validation/continuity.log
-      - name: Commit validated production candidate only
+      - name: Commit validated production source
         shell: bash
         run: |
           set -euo pipefail
-          rm tools/_session_candidate_*.b64 tools/_session_fixture_fix.py .github/workflows/session-validation-toolchain.yml .github/workflows/validate-session-candidate.yml
+          # Workflow changes are applied separately through the authorized
+          # repository connector; this runner only commits source files.
+          git restore --source=HEAD -- .github/workflows
+          rm tools/_session_candidate_*.b64 tools/_session_fixture_fix.py tools/_session_compiled_fix.py
           git add -A
           git diff --cached --check
           git diff --cached --stat
