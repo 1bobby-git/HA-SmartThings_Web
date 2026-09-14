@@ -1,0 +1,22 @@
+name: Source snapshot 1855
+on:
+  push:
+    branches: [fix/native-session-shape-1.8.55]
+    paths: [.github/workflows/source-1855.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 0ac7d9ee21ef8a228fba3d71fc98219b1b57775b
+          persist-credentials: false
+      - run: git archive --format=tar.gz -o /tmp/source-1854.tgz HEAD
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: source-1854
+          path: /tmp/source-1854.tgz
+          retention-days: 1
