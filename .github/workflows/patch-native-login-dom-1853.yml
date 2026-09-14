@@ -31,7 +31,7 @@ jobs:
           npm run typecheck 2>&1 | tee /tmp/native-login-validation/typecheck.log
           npm test 2>&1 | tee /tmp/native-login-validation/unit.log
           npm run build
-      - name: Real Chromium regressions
+      - name: Real Chromium and window-lifecycle regressions
         run: |
           set -euo pipefail
           npx playwright-core install --with-deps chromium
@@ -54,7 +54,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import json, hashlib
-          paths=['bridge/src/browser/native-login-policy.ts','bridge/src/runtime.ts','bridge/src/server/http-server.ts','bridge/src/server/status-page.ts','bridge/src/state/runtime-state.ts','bridge/tests/runtime.test.ts','bridge/tests/browser/native-login-policy.test.ts','bridge/tests/server/http-server.test.ts','bridge/tests/server/status-page.test.ts','tools/ci-native-login-dom-regression.mjs']
+          paths=['bridge/src/browser/native-login-policy.ts','bridge/src/runtime.ts','bridge/src/server/http-server.ts','bridge/src/server/status-page.ts','bridge/src/state/runtime-state.ts','bridge/tests/runtime.test.ts','bridge/tests/browser/native-login-policy.test.ts','bridge/tests/server/http-server.test.ts','bridge/tests/server/status-page.test.ts','tools/ci-native-login-dom-regression.mjs','tools/ci-native-login-policy-smoke.mjs']
           print(json.dumps({p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in paths},indent=2))
           PY
       - uses: actions/upload-artifact@v4
