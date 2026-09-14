@@ -55,8 +55,10 @@ export interface RuntimeStatusSnapshot {
   protocolMismatchSurface: ProtocolMismatchSurface | undefined;
   nativeLoginPolicyState?: "disabled" | "pending" | "enabled" | "attention";
   nativeLoginPolicyReason?: string;
+  nativeSessionFlagType?: "missing" | "null" | "boolean" | "number" | "zero" | "negative" | "non_finite" | "string" | "other" | undefined;
+  nativeSessionExpiryType?: RuntimeStatusSnapshot["nativeSessionFlagType"];
   nativeSessionState?: "unknown" | "checking" | "active" | "renewing" | "attention";
-  nativeSessionReason?: "observer_missing" | "store_missing" | "session_not_ready" | "preference_not_ready" | "socket_not_ready" | "session_schema_unknown" | "capture_ambiguous" | "invalid_target" | "renewal_unsupported" | "unsupported" | "setting_pending" | "session_verified" | "renewed" | "applied" | "unconfirmed" | "expired" | "busy" | "deferred" | "read_failed" | "reauth" | "stale";
+  nativeSessionReason?: "observer_missing" | "store_missing" | "session_not_ready" | "preference_not_ready" | "socket_not_ready" | "session_schema_unknown" | "session_flag_missing" | "session_flag_invalid" | "capture_ambiguous" | "invalid_target" | "renewal_unsupported" | "unsupported" | "setting_pending" | "session_verified" | "renewed" | "applied" | "unconfirmed" | "expired" | "busy" | "deferred" | "read_failed" | "reauth" | "stale";
   nativeSessionUiKeepSignedIn?: boolean | undefined;
   nativeSessionKeepSignedIn?: boolean | undefined;
   nativeSessionStorageAllowed?: boolean | undefined;
@@ -134,6 +136,8 @@ const snapshotKeys = new Set<keyof RuntimeStatusSnapshot>([
   "protocolMismatchSurface",
   "nativeLoginPolicyState",
   "nativeLoginPolicyReason",
+  "nativeSessionFlagType",
+  "nativeSessionExpiryType",
   "nativeSessionState",
   "nativeSessionReason",
   "nativeSessionUiKeepSignedIn",
@@ -381,16 +385,18 @@ function validatePatch(patch: RuntimeStatusPatch, now: number): void {
     if (value !== undefined && booleanKeys.has(key) && typeof value !== "boolean") {
       throw new Error(`runtime status flag must be boolean: ${String(key)}`);
     }
+    if ((key === "nativeSessionFlagType" || key === "nativeSessionExpiryType") && value !== undefined &&
+        !["missing", "null", "boolean", "number", "zero", "negative", "non_finite", "string", "other"].includes(value as string)) throw new Error("invalid native session field type");
     if (key === "nativeSessionState" && value !== undefined &&
         !["unknown", "checking", "active", "renewing", "attention"].includes(value as string)) throw new Error("invalid native session state");
     if (key === "nativeSessionReason" && value !== undefined &&
-        !["observer_missing", "store_missing", "session_not_ready", "preference_not_ready", "socket_not_ready", "session_schema_unknown", "capture_ambiguous", "invalid_target", "renewal_unsupported", "unsupported", "setting_pending", "session_verified", "renewed", "applied", "unconfirmed", "expired", "busy", "deferred", "read_failed", "reauth", "stale"].includes(value as string)) throw new Error("invalid native session reason");
+        !["observer_missing", "store_missing", "session_not_ready", "preference_not_ready", "socket_not_ready", "session_schema_unknown", "session_flag_missing", "session_flag_invalid", "capture_ambiguous", "invalid_target", "renewal_unsupported", "unsupported", "setting_pending", "session_verified", "renewed", "applied", "unconfirmed", "expired", "busy", "deferred", "read_failed", "reauth", "stale"].includes(value as string)) throw new Error("invalid native session reason");
     if (key === "nativeSessionRemainingMs" && value !== undefined && Number(value) > 31 * 86400_000) throw new Error("invalid native session duration");
     if (key === "nativeLoginPolicyState" && value !== undefined &&
         !["disabled", "pending", "enabled", "attention"].includes(value as string)) throw new Error("invalid native login policy state");
     if (key === "nativeLoginPolicyReason" && value !== undefined &&
         !["not_checked", "automation_disabled", "already_enabled", "enabled_and_verified", "browser_unsupported",
-          "invalid_target", "settings_not_found", "control_not_found", "ambiguous", "blocked", "state_unknown",
+          "invalid_target", "settings_not_found", "control_not_found", "ambiguous", "blocked", "auth_input_present", "challenge_present", "other_dialog_present", "control_disabled", "command_busy", "state_unknown",
           "not_saved", "page_changed", "ui_timeout", "observed_enabled", "observed_disabled", "session_verified"].includes(value as string)) throw new Error("invalid native login policy reason");
     if (key === "sessionTouchLastOutcome" && value !== undefined &&
         !["ok", "failed", "reauth", "stale"].includes(value as string)) {

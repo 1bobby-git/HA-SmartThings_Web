@@ -40,9 +40,10 @@ describe("read capability is independent of native renewal capability", () => {
     const status=new RuntimeStatusStore({initial:{authenticated:true,nativeSessionState:"active",nativeSessionReason:"session_verified",nativeSessionObservedAtMs:Date.now()}});
     expect(renderStatusPage(createHealthReport(status.getSnapshot()))).toContain("웹 앱에서 제공하지 않음");
   });
-  test.each(["invalid", null, Infinity, NaN, -1])("malformed expiry fails closed (%s)", exp=>{
+  test.each(["invalid", null, Infinity, NaN, -1, 0])("unreadable optional expiry preserves observation but never permits renewal (%s)", exp=>{
     const f=fixture();f.root.user.user.session.exp=exp;f.capture("store",f.store);
-    expect(f.api.read()).toMatchObject({available:false,diagnostic:"session_schema_unknown"});
+    expect(f.api.read()).toMatchObject({available:true,sessionKeepSignedIn:true,renewalSupported:false});
+    expect(f.api.read().expiresInMs).toBeUndefined();
     expect(f.api.begin(true)).toBe("unsupported");
   });
   test("effective OFF plus unknown native mutation still uses recovery, never reports ON", async()=>{
@@ -78,5 +79,45 @@ describe("read capability is independent of native renewal capability", () => {
   test("unallowlisted diagnostic cannot become a log or health string",async()=>{
     const f=fixture();f.page.evaluate.mockResolvedValue({schema:1,available:false,diagnostic:"secret@example.test"});
     expect((await new NativeSessionMaintenance(vi.fn()).run(f.page,opts)).observation.reason).toBe("unsupported");
+  });
+});
+
+
+describe("1.8.54 log field-shape regressions", () => {
+  test.each([undefined, null, 0, "1789370000", "invalid", NaN])("ON with unknown expiry still requires protected proof (%s)", async exp => {
+    const f=fixture(); f.root.user.user.session.exp=exp; f.capture("store",f.store);
+    const proof=vi.fn(async()=>({outcome:"ok",reason:"verified"} as const));
+    const result=await new NativeSessionMaintenance(proof).run(f.page,opts);
+    expect(result).toMatchObject({handled:true,observation:{state:"active",sessionKeepSignedIn:true}});
+    expect(result.observation.remainingMs).toBeUndefined(); expect(proof).toHaveBeenCalledOnce();
+    expect(f.store.dispatch).not.toHaveBeenCalled(); expect(f.api.begin(true)).toBe("unsupported");
+  });
+  test.each([undefined,null,0,1,"true","false",{},[]])("never coerce an unknown effective flag into ON (%s)", async flag=>{
+    const f=fixture();f.root.user.user.session.stayLoggedIn=flag;f.capture("store",f.store);
+    const proof=vi.fn(); const result=await new NativeSessionMaintenance(proof).run(f.page,opts);
+    expect(result.observation).toMatchObject({state:"unknown",uiKeepSignedIn:true,
+      reason:flag==null?"session_flag_missing":"session_flag_invalid"});
+    expect(result.observation.sessionKeepSignedIn).toBeUndefined();
+    expect(proof).not.toHaveBeenCalled(); expect(f.api.begin(true)).toBe("unsupported");
+  });
+  test("an elapsed web logout deadline with effective ON is not a server rejection", async()=>{
+    const f=fixture(); f.root.user.user.session.exp=Date.now()/1000-60;f.capture("store",f.store);
+    const proof=vi.fn(async()=>({outcome:"ok",reason:"verified"} as const));
+    expect(await new NativeSessionMaintenance(proof).run(f.page,opts)).toMatchObject({handled:true,observation:{state:"active"}});
+    expect(proof).toHaveBeenCalledOnce();expect(f.store.dispatch).not.toHaveBeenCalled();
+  });
+  test("401 remains authentication rejection with null expiry",async()=>{
+    const f=fixture(); f.root.user.user.session.exp=null;f.capture("store",f.store);
+    expect(await new NativeSessionMaintenance(async()=>({outcome:"reauth",reason:"http_401"})).run(f.page,opts))
+      .toMatchObject({handled:false,authenticationRejected:true,observation:{reason:"reauth"}});
+  });
+  test("only field-type enums survive unknown-state logging and health",async()=>{
+    const f=fixture();f.page.evaluate.mockResolvedValue({schema:1,available:false,diagnostic:"session_flag_invalid",sessionFlagType:"string",sessionExpiryType:"secret",uiKeepSignedIn:true,token:"secret"});
+    const result=await new NativeSessionMaintenance(vi.fn()).run(f.page,opts);
+    expect(result.observation).toMatchObject({sessionFlagType:"string",uiKeepSignedIn:true});
+    expect(result.observation.sessionExpiryType).toBeUndefined();expect(JSON.stringify(result)).not.toContain("secret");
+    const status=new RuntimeStatusStore({initial:{nativeSessionFlagType:"string",nativeSessionExpiryType:"null"}});
+    expect(createHealthReport(status.getSnapshot()).details).toMatchObject({nativeSessionFlagType:"string",nativeSessionExpiryType:"null"});
+    expect(()=>status.update({nativeSessionFlagType:"secret" as any})).toThrow();
   });
 });

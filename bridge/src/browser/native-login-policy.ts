@@ -7,7 +7,7 @@ export type NativeLoginPolicyReason =
   | "not_checked" | "automation_disabled" | "already_enabled" | "enabled_and_verified"
   | "observed_enabled" | "observed_disabled" | "session_verified"
   | "browser_unsupported" | "invalid_target" | "settings_not_found" | "control_not_found"
-  | "ambiguous" | "blocked" | "state_unknown" | "not_saved" | "page_changed" | "ui_timeout";
+  | "ambiguous" | "blocked" | "auth_input_present" | "challenge_present" | "other_dialog_present" | "control_disabled" | "command_busy" | "state_unknown" | "not_saved" | "page_changed" | "ui_timeout";
 export interface NativeLoginPolicyReport {
   state: NativeLoginPolicyState;
   reason: NativeLoginPolicyReason;
@@ -19,7 +19,7 @@ export interface NativeLoginPolicyResult {
 }
 
 type SettingsPage = BrowserPageLike & Pick<Page, "locator">;
-type DomProbe = { result: "opener" | "menu" | "on" | "off" | "missing" | "ambiguous" | "blocked" | "unknown"; native?: boolean };
+type DomProbe = { result: "clear" | "opener" | "menu" | "on" | "off" | "missing" | "ambiguous" | "blocked" | "unknown"; native?: boolean; reason?: NativeLoginPolicyReason; settingsOpen?: boolean };
 const MARKER = "data-stw-login-policy";
 
 export function supportsNativeLoginPolicy(page: BrowserPageLike): page is SettingsPage {
@@ -48,8 +48,22 @@ export async function readNativeKeepSignedIn(page: BrowserPageLike): Promise<Nat
     if (probe.result === "off") return { state: "attention", reason: "observed_disabled" };
     if (probe.result === "unknown") return { state: "attention", reason: "state_unknown" };
     if (probe.result === "ambiguous") return { state: "attention", reason: "ambiguous" };
-    return undefined;
-  } catch { return undefined; }
+  } catch { /* Try read-only application preference below. */ }
+  // UI preference is readable independently of the effective session schema.
+  // This never dispatches, clicks, navigates, or labels a session as verified.
+  if (!page.evaluate || page.isClosed() || page.url() !== target) return undefined;
+  try {
+    const value = await bounded(page.evaluate(({ target }) => {
+      if (location.href !== target || location.origin !== "https://my.smartthings.com") return undefined;
+      const api = (window as unknown as Record<symbol, {read(): Record<string, unknown>}>)[Symbol.for("smartthings_web_bridge.native_session")];
+      const s = typeof api?.read === "function" ? api.read() : undefined;
+      return s?.schema === 1 && typeof s.uiKeepSignedIn === "boolean" ? s.uiKeepSignedIn : undefined;
+    }, { target }), 1_500);
+    if (page.isClosed() || page.url() !== target) return undefined;
+    if (typeof value === "boolean") return { state: value ? "enabled" : "attention",
+      reason: value ? "observed_enabled" : "observed_disabled" };
+  } catch { /* Observation is optional and must not interrupt the live tab. */ }
+  return undefined;
 }
 
 /** This runs ONLY in an owned, freshly authenticated candidate tab, never the
@@ -67,6 +81,19 @@ export async function ensureNativeKeepSignedIn(
   if (!options.enabled) return report("disabled", "automation_disabled");
   if (!nativeLoginTarget(target) || page.url() !== target || page.isClosed()) return report("attention", "invalid_target", false);
   if (!supportsNativeLoginPolicy(page)) return report("attention", "browser_unsupported");
+  let settingsOpen = false;
+  try {
+    const guard = await bounded(page.evaluate!(inspectLoginSettingsDom, { action: "guard", marker: "", target }), 1_500);
+    settingsOpen = guard.settingsOpen === true;
+    if (guard.result === "blocked" || guard.result === "ambiguous") return report("attention", guard.reason ?? (guard.result === "ambiguous" ? "ambiguous" : "blocked"), false);
+  } catch { return report("attention", "ui_timeout", false); }
+  const existingPreference = await readNativeKeepSignedIn(page);
+  if (page.isClosed() || page.url() !== target) return report("attention", "page_changed", false);
+  if (!(options.canContinue?.() ?? true)) return report("attention", "command_busy", false);
+  // Already ON is read-only evidence of a preference, not of server expiry
+  // extension or persistence after restart. Do not reload it just to re-read.
+  // The caller still verifies the candidate's application authentication.
+  if (existingPreference?.state === "enabled") return { report: existingPreference, clean: !settingsOpen };
   const marker = randomUUID();
   const selector = `[${MARKER}="${marker}"]`;
   const timeout = Math.max(100, Math.min(5_000, options.timeoutMs ?? 3_000));
@@ -124,7 +151,7 @@ export async function ensureNativeKeepSignedIn(
       found = await waitForOpener(true);
     }
     if (found.result !== "opener") {
-      reason = found.result === "missing" ? "settings_not_found" : found.result === "ambiguous" ? "ambiguous" : "blocked";
+      reason = found.result === "missing" ? "settings_not_found" : found.result === "ambiguous" ? "ambiguous" : found.reason ?? "blocked";
       return found;
     }
     if (!valid()) throw new Error("page_changed");
@@ -149,8 +176,7 @@ export async function ensureNativeKeepSignedIn(
         if (state?.schema !== 1 || state.available !== true) return "unsupported";
         if (state.outcome === "unconfirmed" || state.outcome === "stale") return "failed";
         return !state.busy && state.uiKeepSignedIn === true && state.sessionKeepSignedIn === true &&
-          state.socketConnected === true && state.socketAuthenticated === true &&
-          typeof state.expiresInMs === "number" && state.expiresInMs > 0 ? "applied" : "pending";
+          state.socketConnected === true && state.socketAuthenticated === true ? "applied" : "pending";
       }, { target }), 1_500);
       if (result === "unsupported" || result === "applied") return;
       if (result === "failed" || result === "changed") throw new Error("native_apply_failed");
@@ -190,7 +216,7 @@ export async function ensureNativeKeepSignedIn(
       }
       reason = confirmed ? "enabled_and_verified" : "not_saved";
     } else if (reason === "ui_timeout") {
-      reason = state.result === "ambiguous" ? "ambiguous" : state.result === "blocked" ? "blocked" :
+      reason = state.result === "ambiguous" ? "ambiguous" : state.result === "blocked" ? state.reason ?? "blocked" :
         state.result === "unknown" ? "state_unknown" : "control_not_found";
     }
     // A pre-existing challenge or ambiguous modal was not opened by us.
@@ -205,7 +231,8 @@ export async function ensureNativeKeepSignedIn(
   } catch {
     // A timed-out/changed document must never become the live keeper. The
     // caller owns this candidate and will close it, leaving the keeper intact.
-    return report("attention", valid() ? "ui_timeout" : "page_changed", false);
+    return report("attention", page.isClosed() || page.url() !== target ? "page_changed" :
+      !(options.canContinue?.() ?? true) ? "command_busy" : "ui_timeout", false);
   }
 }
 
@@ -223,14 +250,17 @@ async function bounded<T>(operation: Promise<T>, timeout: number): Promise<T> {
  * Playwright click, not a coordinate or a guessed switch position.
  */
 function inspectLoginSettingsDom({ action, marker, target }: {
-  action: "opener" | "control" | "read"; marker: string; target: string;
+  action: "opener" | "control" | "read" | "guard"; marker: string; target: string;
 }): DomProbe {
   if (location.href !== target || location.origin !== "https://my.smartthings.com") return { result: "blocked" };
   if (action === "read" && !document.querySelector('.user-settings, #stayLoggedIn, [role="dialog"], dialog[open], [aria-modal="true"]')) return { result: "missing" };
   const normalize = (text: string | null | undefined) => (text ?? "").replace(/\s+/gu, " ").trim();
   const visible = (element: Element): boolean => {
     const style = getComputedStyle(element);
-    return element.getClientRects().length > 0 && style.display !== "none" && style.visibility !== "hidden" &&
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 &&
+      (typeof element.checkVisibility !== "function" || element.checkVisibility({ opacityProperty: true, visibilityProperty: true })) &&
+      style.display !== "none" && style.visibility !== "hidden" &&
       !element.closest('[hidden], [inert], [aria-hidden="true"]');
   };
   // A large inventory can legitimately contain tens of thousands of nodes.
@@ -262,8 +292,10 @@ function inspectLoginSettingsDom({ action, marker, target }: {
     return normalize(element.getAttribute("aria-label") ?? element.getAttribute("title") ?? element.textContent);
   };
   if (all.some(element => visible(element) && element.matches(
-    'input[type="password"], input[autocomplete="one-time-code"], input[name="loginId"], iframe[src*="recaptcha"], iframe[src*="hcaptcha"]'
-  ))) return { result: "blocked" };
+    'input[type="password"], input[autocomplete="one-time-code"], input[name="loginId"]'
+  ))) return { result: "blocked", reason: "auth_input_present" };
+  if (all.some(element => visible(element) && element.matches('iframe[src*="recaptcha"], iframe[src*="hcaptcha"]')))
+    return { result: "blocked", reason: "challenge_present" };
   const roots = new Set<Element>();
   // Inspect titles first and bound text matching to the settings dialog.
   // The inventory behind the modal must never exhaust the settings budget.
@@ -283,11 +315,12 @@ function inspectLoginSettingsDom({ action, marker, target }: {
   const modals = all.filter(element => visible(element) && element.matches('dialog[open], [role="dialog"], [aria-modal="true"]'));
   if (roots.size > 1) return { result: "ambiguous" };
   const root = [...roots][0];
-  if (modals.some(modal => !root || (!modal.contains(root) && !root.contains(modal)))) return { result: "blocked" };
+  if (modals.some(modal => !root || (!modal.contains(root) && !root.contains(modal)))) return { result: "blocked", reason: "other_dialog_present" };
+  if (action === "guard") return { result: "clear", settingsOpen: !!root };
   const mark = (element: HTMLElement, result: DomProbe): DomProbe => {
     if (action === "read") return result;
-    if (element instanceof HTMLInputElement && element.readOnly) return { result: "blocked" };
-    if (element.matches(':disabled, [aria-disabled="true"]') || element.closest('[aria-disabled="true"], [inert]')) return { result: "blocked" };
+    if (element instanceof HTMLInputElement && element.readOnly) return { result: "blocked", reason: "control_disabled" };
+    if (element.matches(':disabled, [aria-disabled="true"]') || element.closest('[aria-disabled="true"], [inert]')) return { result: "blocked", reason: "control_disabled" };
     for (const prior of document.querySelectorAll('[data-stw-login-policy]')) prior.removeAttribute("data-stw-login-policy");
     element.setAttribute("data-stw-login-policy", marker);
     return result;
