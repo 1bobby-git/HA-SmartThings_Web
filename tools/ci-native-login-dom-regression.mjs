@@ -20,7 +20,7 @@ function fixture(mode) {
     .user-settings { background: #fff; padding: 16px; }
     [hidden] { display: none !important; }
   </style><body><header data-testid="header"><button id="menu" aria-label="App settings">Menu</button></header>
-  <main>Fixture dashboard</main><script>
+  <main>Fixture dashboard${mode.large ? "<span>Device</span>".repeat(20_000) : ""}</main><script>
     const mode = ${JSON.stringify(mode)};
     let checked = localStorage.getItem('fixture-preference') === null ? !!mode.on : localStorage.getItem('fixture-preference') === 'true';
     const count = key => localStorage.setItem(key, String(Number(localStorage.getItem(key) || 0) + 1));
@@ -130,6 +130,33 @@ try {
   await scenario('opt-out leaves menu and setting untouched', { on: true }, async page => {
     assert.equal((await ensureNativeKeepSignedIn(page, target, { enabled: false })).report.state, 'disabled');
     assert.equal(await page.evaluate(() => localStorage.getItem('menuClicks')), null);
+  });
+  await scenario('20,000 dashboard elements cannot block the known settings dialog', { on: true, large: true }, async page => {
+    assert.equal(await readNativeKeepSignedIn(page), undefined, 'closed dialog remains unknown');
+    await openSettings(page);
+    await page.locator('#toggle').focus();
+    const before = await page.content();
+    assert.deepEqual(await readNativeKeepSignedIn(page), { state: 'enabled', reason: 'observed_enabled' });
+    assert.equal(await page.content(), before, 'read-only observation does not mutate a large dashboard');
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'toggle');
+    assert.equal(await toggles(page), 0);
+  });
+  await scenario('large dashboard OFF -> ON uses only the actual switch once', { large: true }, async page => {
+    assert.deepEqual(await ensureNativeKeepSignedIn(page, target, { enabled: true }), {
+      report: { state: 'enabled', reason: 'enabled_and_verified' }, clean: true
+    });
+    assert.equal(await toggles(page), 1);
+  });
+  await scenario('large dashboard still protects real authentication challenges', { on: true, large: true }, async page => {
+    await openSettings(page);
+    await page.evaluate(() => document.body.insertAdjacentHTML('beforeend', '<div role="dialog" aria-label="Verification"><input autocomplete="one-time-code"></div>'));
+    const before = await page.content();
+    assert.equal(await readNativeKeepSignedIn(page), undefined);
+    const result = await ensureNativeKeepSignedIn(page, target, { enabled: true });
+    assert.equal(result.report.reason, 'blocked');
+    assert.equal(result.clean, false);
+    assert.equal(await page.content(), before);
+    assert.equal(await toggles(page), 0);
   });
   console.log(JSON.stringify({ suite: 'native-login-real-dom-regression', passed, scope: 'synthetic Chromium, no live Samsung account' }));
 } finally { await browser.close(); }

@@ -56,7 +56,7 @@ export interface RuntimeStatusSnapshot {
   nativeLoginPolicyState?: "disabled" | "pending" | "enabled" | "attention";
   nativeLoginPolicyReason?: string;
   nativeSessionState?: "unknown" | "checking" | "active" | "renewing" | "attention";
-  nativeSessionReason?: "unsupported" | "setting_pending" | "session_verified" | "renewed" | "applied" | "unconfirmed" | "expired" | "busy" | "deferred" | "read_failed" | "reauth" | "stale";
+  nativeSessionReason?: "observer_missing" | "store_missing" | "session_not_ready" | "preference_not_ready" | "socket_not_ready" | "session_schema_unknown" | "capture_ambiguous" | "invalid_target" | "renewal_unsupported" | "unsupported" | "setting_pending" | "session_verified" | "renewed" | "applied" | "unconfirmed" | "expired" | "busy" | "deferred" | "read_failed" | "reauth" | "stale";
   nativeSessionUiKeepSignedIn?: boolean | undefined;
   nativeSessionKeepSignedIn?: boolean | undefined;
   nativeSessionStorageAllowed?: boolean | undefined;
@@ -384,7 +384,7 @@ function validatePatch(patch: RuntimeStatusPatch, now: number): void {
     if (key === "nativeSessionState" && value !== undefined &&
         !["unknown", "checking", "active", "renewing", "attention"].includes(value as string)) throw new Error("invalid native session state");
     if (key === "nativeSessionReason" && value !== undefined &&
-        !["unsupported", "setting_pending", "session_verified", "renewed", "applied", "unconfirmed", "expired", "busy", "deferred", "read_failed", "reauth", "stale"].includes(value as string)) throw new Error("invalid native session reason");
+        !["observer_missing", "store_missing", "session_not_ready", "preference_not_ready", "socket_not_ready", "session_schema_unknown", "capture_ambiguous", "invalid_target", "renewal_unsupported", "unsupported", "setting_pending", "session_verified", "renewed", "applied", "unconfirmed", "expired", "busy", "deferred", "read_failed", "reauth", "stale"].includes(value as string)) throw new Error("invalid native session reason");
     if (key === "nativeSessionRemainingMs" && value !== undefined && Number(value) > 31 * 86400_000) throw new Error("invalid native session duration");
     if (key === "nativeLoginPolicyState" && value !== undefined &&
         !["disabled", "pending", "enabled", "attention"].includes(value as string)) throw new Error("invalid native login policy state");

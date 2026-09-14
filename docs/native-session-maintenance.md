@@ -15,3 +15,11 @@ The DOM fallback waits for native application before reloading an owned candidat
 ## Regression coverage
 
 Unit tests cover preference/session mismatch, no ACK, swallowed failure, native in-flight suppression, expiry extension vs application, storage consent OFF, stale contexts/documents/users, active commands, renderer deadlines and non-sensitive health projection. Synthetic Chromium tests exercise the real init-script and natural webpack capture plus delayed callbacks without connecting a real account. Existing DOM, persistent-profile, runtime, integration and security suites remain enabled. Real account soak and performance benchmarking are separate operational checks.
+
+## Observation versus renewal capabilities (1.8.54)
+
+An already initialized Redux store can expose a valid effective session before a duration preference or native action delegate becomes available. Read-only observation does not require renewal capabilities. Supplemental mutations still require the verified native delegate, both matching action creators, a finite positive observed expiry, and a recognized duration. A missing optional expiry is omitted from the health projection, never defaulted or treated as an infinite session. Even in read-only mode, active status requires effective ON and a protected Location read; an actual 401 still wins over the displayed switches.
+
+Only matched, naturally executed module export namespaces are retained in a bounded list to handle late/cyclic getters. Reading one unavailable sibling does not discard other ready exports. No module is force-executed for capture. Diagnostics use fixed enums and do not return raw state, user IDs, URLs or credentials.
+
+Native settings detection bounds its scan to a settings heading and its local dialog, not the complete device dashboard. More than 8,000 unrelated device elements is not an authentication challenge. Large-dashboard regressions must also show that real OTP/password/foreign modal guards and read-only DOM/focus preservation remain intact.

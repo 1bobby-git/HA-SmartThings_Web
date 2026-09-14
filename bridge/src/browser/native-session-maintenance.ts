@@ -4,7 +4,9 @@ import { verifyLocationApplicationSession, type ApplicationSessionProof } from "
 
 export type NativeSessionState = "unknown" | "checking" | "active" | "renewing" | "attention";
 export type NativeSessionReason = "unsupported" | "setting_pending" | "session_verified" | "renewed" |
-  "applied" | "unconfirmed" | "expired" | "busy" | "deferred" | "read_failed" | "reauth" | "stale";
+  "applied" | "unconfirmed" | "expired" | "busy" | "deferred" | "read_failed" | "reauth" | "stale" |
+  "observer_missing" | "store_missing" | "session_not_ready" | "preference_not_ready" |
+  "socket_not_ready" | "session_schema_unknown" | "capture_ambiguous" | "invalid_target" | "renewal_unsupported";
 export interface NativeSessionObservation {
   state: NativeSessionState;
   reason: NativeSessionReason;
@@ -23,7 +25,8 @@ interface NativeSnapshot {
   socketConnected: boolean;
   socketAuthenticated: boolean;
   storageAllowed?: boolean;
-  expiresInMs: number;
+  expiresInMs?: number;
+  renewalSupported?: boolean;
   busy: boolean;
   busyAgeMs: number;
   outcome: "idle" | "requested" | "renewed" | "applied" | "unconfirmed" | "stale";
@@ -84,22 +87,29 @@ export class NativeSessionMaintenance {
     if (!current()) return unknown("stale");
     this.lastReadAtMs = Date.now();
     const snapshot = sanitizeSnapshot(raw);
-    if (!snapshot) return unknown();
+    if (!snapshot) {
+      const diagnostic = raw && typeof raw === "object" ? (raw as Record<string, unknown>).diagnostic : undefined;
+      const reasons: NativeSessionReason[] = ["observer_missing", "store_missing", "session_not_ready", "preference_not_ready",
+        "socket_not_ready", "session_schema_unknown", "capture_ambiguous", "invalid_target"];
+      return unknown(reasons.includes(diagnostic as NativeSessionReason) ? diagnostic as NativeSessionReason : "unsupported");
+    }
     const observation: NativeSessionObservation = {
       state: "checking", reason: "setting_pending", uiKeepSignedIn: snapshot.uiKeepSignedIn,
       sessionKeepSignedIn: snapshot.sessionKeepSignedIn, socketConnected: snapshot.socketConnected,
-      socketAuthenticated: snapshot.socketAuthenticated, remainingMs: Math.max(0, snapshot.expiresInMs),
+      socketAuthenticated: snapshot.socketAuthenticated,
+      ...(snapshot.expiresInMs === undefined ? {} : { remainingMs: Math.max(0, snapshot.expiresInMs) }),
       ...(snapshot.storageAllowed === undefined ? {} : { storageAllowed: snapshot.storageAllowed })
     };
     if (!options.enabled) return { handled: false, observation };
     if (snapshot.busy && snapshot.busyAgeMs < 60_000) {
       return { handled: true, observation: { ...observation, state: "renewing", reason: "busy" } };
     }
-    if (snapshot.expiresInMs <= 0 || !snapshot.socketConnected || !snapshot.socketAuthenticated ||
+    const expired = snapshot.expiresInMs !== undefined && snapshot.expiresInMs <= 0;
+    if (expired || !snapshot.socketConnected || !snapshot.socketAuthenticated ||
         snapshot.outcome === "stale" || snapshot.outcome === "unconfirmed" || snapshot.busy) {
       this.#proofKey = undefined;
       return { handled: false, observation: { ...observation, state: "attention",
-        reason: snapshot.expiresInMs <= 0 ? "expired" : snapshot.outcome === "unconfirmed" ? "unconfirmed" : "read_failed" } };
+        reason: expired ? "expired" : snapshot.outcome === "unconfirmed" ? "unconfirmed" : "read_failed" } };
     }
     if (!options.canRun()) return { handled: true, observation: { ...observation, reason: "deferred" } };
     const key = `${snapshot.instance}:${snapshot.revision}`;
@@ -117,7 +127,12 @@ export class NativeSessionMaintenance {
           !checked.socketAuthenticated || !checked.socketConnected || checked.busy) return unknown("stale");
       this.#proofKey = key; this.#proofAt = this.now();
     }
-    if (!snapshot.uiKeepSignedIn || !snapshot.sessionKeepSignedIn || snapshot.expiresInMs <= 5 * 60_000) {
+    if (!snapshot.uiKeepSignedIn || !snapshot.sessionKeepSignedIn ||
+        (snapshot.expiresInMs !== undefined && snapshot.expiresInMs <= 5 * 60_000)) {
+      // Observability and authorization to invoke native renewal are distinct.
+      // Never invent a duration/expiry or suppress fallback when mutation isn't supported.
+      if (snapshot.renewalSupported === false) return { handled: false,
+        observation: { ...observation, state: "attention", reason: "renewal_unsupported" } };
       if (!current() || !options.canRun()) return { handled: true, observation: { ...observation, reason: "deferred" } };
       const result = await evaluateBounded(page, { action: "begin", target: url, instance: snapshot.instance, revision: snapshot.revision });
       if (!current()) return unknown("stale");
@@ -145,7 +160,7 @@ function nativeSessionOperation({ action, target, instance, revision, deadline }
   if (Date.now() > deadline) return undefined;
   if (location.href !== target || location.origin !== "https://my.smartthings.com") return undefined;
   const api = (window as unknown as Record<symbol, { read(): any; begin(enable: boolean): string }>)[Symbol.for("smartthings_web_bridge.native_session")];
-  if (typeof api?.read !== "function") return undefined;
+  if (typeof api?.read !== "function") return { schema: 1, available: false, diagnostic: "observer_missing" };
   if (action === "read") return api.read();
   if (typeof api.begin !== "function" || (api.read()?.instance !== instance || api.read()?.revision !== revision)) return "unsupported";
   return api.begin(true);
@@ -156,12 +171,15 @@ function sanitizeSnapshot(raw: unknown): NativeSnapshot | undefined {
   if (r.schema !== 1 || r.available !== true || typeof r.instance !== "string" ||
       !/^[a-f0-9-]{36}$/.test(r.instance) || !Number.isSafeInteger(r.revision) || Number(r.revision) < 0 ||
       !["uiKeepSignedIn", "sessionKeepSignedIn", "socketConnected", "socketAuthenticated", "busy"].every(k => typeof r[k] === "boolean") ||
-      !Number.isFinite(r.expiresInMs) || Number(r.expiresInMs) < -86400_000 || Number(r.expiresInMs) > 31 * 86400_000 ||
+      (r.expiresInMs !== undefined && (!Number.isFinite(r.expiresInMs) || Number(r.expiresInMs) < -86400_000 || Number(r.expiresInMs) > 31 * 86400_000)) ||
+      (r.renewalSupported !== undefined && typeof r.renewalSupported !== "boolean") ||
       !Number.isFinite(r.busyAgeMs) || Number(r.busyAgeMs) < 0 ||
       !["idle", "requested", "renewed", "applied", "unconfirmed", "stale"].includes(String(r.outcome))) return undefined;
   return { instance: r.instance, revision: Number(r.revision), uiKeepSignedIn: r.uiKeepSignedIn as boolean,
     sessionKeepSignedIn: r.sessionKeepSignedIn as boolean, socketConnected: r.socketConnected as boolean,
-    socketAuthenticated: r.socketAuthenticated as boolean, expiresInMs: Number(r.expiresInMs),
+    socketAuthenticated: r.socketAuthenticated as boolean,
+    ...(r.expiresInMs === undefined ? {} : { expiresInMs: Number(r.expiresInMs) }),
+    ...(typeof r.renewalSupported === "boolean" ? { renewalSupported: r.renewalSupported } : {}),
     busy: r.busy as boolean, busyAgeMs: Number(r.busyAgeMs), outcome: r.outcome as NativeSnapshot["outcome"],
     ...(typeof r.storageAllowed === "boolean" ? { storageAllowed: r.storageAllowed } : {}) };
 }

@@ -233,8 +233,12 @@ function inspectLoginSettingsDom({ action, marker, target }: {
     return element.getClientRects().length > 0 && style.display !== "none" && style.visibility !== "hidden" &&
       !element.closest('[hidden], [inert], [aria-hidden="true"]');
   };
-  const all = Array.from(document.querySelectorAll<HTMLElement>("*"));
-  if (all.length > 8_000) return { result: "blocked" };
+  // A large inventory can legitimately contain tens of thousands of nodes.
+  // Query only actionable controls/modal boundaries, not every device node.
+  const all = Array.from(document.querySelectorAll<HTMLElement>(
+    'button, a, [role="button"], [role="menuitem"], dialog[open], [role="dialog"], [aria-modal="true"], ' +
+    'input[type="password"], input[autocomplete="one-time-code"], input[name="loginId"], iframe[src*="recaptcha"], iframe[src*="hcaptcha"]'
+  ));
   const exact = (root: Element, pattern: RegExp) => Array.from(root.querySelectorAll<HTMLElement>("*"))
     .filter(element => visible(element) && pattern.test(normalize(element.textContent)) &&
       !Array.from(element.children).some(child => pattern.test(normalize(child.textContent))));
@@ -261,12 +265,19 @@ function inspectLoginSettingsDom({ action, marker, target }: {
     'input[type="password"], input[autocomplete="one-time-code"], input[name="loginId"], iframe[src*="recaptcha"], iframe[src*="hcaptcha"]'
   ))) return { result: "blocked" };
   const roots = new Set<Element>();
-  for (const heading of exact(document.body, title)) {
+  // Inspect titles first and bound text matching to the settings dialog.
+  // The inventory behind the modal must never exhaust the settings budget.
+  const headings = Array.from(document.querySelectorAll<HTMLElement>('h1, h2, h3, [role="heading"], .modal-header'))
+    .filter(element => visible(element) && title.test(normalize(element.textContent)));
+  for (const heading of headings) {
+    const boundary = heading.closest('dialog, [role="dialog"], [aria-modal="true"], .user-settings, .modal, aside');
     let parent = heading.parentElement;
     for (let level = 0; parent && parent !== document.body && level < 8; level++, parent = parent.parentElement) {
+      if (parent.querySelectorAll('*').length > 2_000) break;
       if (exact(parent, web).length === 1 && exact(parent, keep).length === 1) {
         roots.add(parent); break;
       }
+      if (parent === boundary) break;
     }
   }
   const modals = all.filter(element => visible(element) && element.matches('dialog[open], [role="dialog"], [aria-modal="true"]'));

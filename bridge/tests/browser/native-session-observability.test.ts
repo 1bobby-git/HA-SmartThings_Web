@@ -1,18 +1,4 @@
-from pathlib import Path
-r=Path('.')
-p=r/'bridge/src/browser/cake-client-capture.ts'
-s=p.read_text()
-old='(source.includes("socketAuthenticated") || (source.includes("reducer:") && source.includes("client:") && source.includes("user:")))'
-new='(source.includes("socketAuthenticated") || (/\\breducer\\s*:/u.test(source) && /\\bclient\\s*:/u.test(source) && /\\buser\\s*:/u.test(source)))'
-assert s.count(old)==1
-p.write_text(s.replace(old,new))
-p=r/'bridge/tests/browser/native-session-maintenance.test.ts'
-s=p.read_text()
-old='const f=nativeFixture(); f.client.reauthenticate=()=>Promise.resolve(); expect(f.api.read().available).toBe(false); expect(f.api.begin(true)).toBe("unsupported");'
-new='const f=nativeFixture(); f.client.reauthenticate=()=>Promise.resolve(); expect(f.api.read()).toMatchObject({available:true,renewalSupported:false}); expect(f.api.begin(true)).toBe("unsupported");'
-assert s.count(old)==1
-p.write_text(s.replace(old,new))
-(r/'bridge/tests/browser/native-session-observability.test.ts').write_text('''import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { installNativeSessionObserver } from "../../src/browser/native-session-observer.js";
 import { NativeSessionMaintenance } from "../../src/browser/native-session-maintenance.js";
 import { RuntimeStatusStore } from "../../src/state/runtime-state.js";
@@ -94,4 +80,3 @@ describe("read capability is independent of native renewal capability", () => {
     expect((await new NativeSessionMaintenance(vi.fn()).run(f.page,opts)).observation.reason).toBe("unsupported");
   });
 });
-''')

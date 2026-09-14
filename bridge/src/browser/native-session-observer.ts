@@ -9,10 +9,12 @@ export function installNativeSessionObserver(): void {
   if (host[apiKey]) return;
   type Store = { getState(): any; dispatch(action: unknown): unknown };
   type Action = ((value: unknown) => unknown) & { typePrefix?: string };
+  const namespaces: { kind: string; exports: unknown; verified: boolean }[] = [];
   let store: Store | undefined;
   let reauthenticate: Action | undefined;
   let updateStayLoggedIn: Action | undefined;
   let contract = false;
+  const inspectedClients = new WeakSet<object>();
   let ambiguous = false;
   const instance = crypto.randomUUID();
   let revision = 0;
@@ -42,9 +44,19 @@ export function installNativeSessionObserver(): void {
   };
   const known = (s: ReturnType<typeof state>) => !!s && typeof s.user === "string" &&
     typeof s.session.stayLoggedIn === "boolean" && typeof s.prefs.stayLoggedIn === "boolean" &&
-    Number.isFinite(s.session.exp) && s.session.exp > 0 &&
-    [7200, 28800, 86400].includes(s.prefs.sessionLength) &&
+    (s.session.exp === undefined || (Number.isFinite(s.session.exp) && s.session.exp > 0)) &&
     typeof s.client.socketConnected === "boolean" && typeof s.client.socketAuthenticated === "boolean";
+  const canRenew = (s: ReturnType<typeof state>) => known(s) && contract && !!reauthenticate && !!updateStayLoggedIn &&
+    Number.isFinite(s!.session.exp) && [7200, 28800, 86400].includes(s!.prefs.sessionLength);
+  const captureDiagnostic = (s: ReturnType<typeof state>) => {
+    if (!locationAllowed()) return "invalid_target";
+    if (ambiguous) return "capture_ambiguous";
+    if (!store) return "store_missing";
+    if (!s || typeof s.user !== "string") return "session_not_ready";
+    if (typeof s.prefs.stayLoggedIn !== "boolean") return "preference_not_ready";
+    if (typeof s.client.socketConnected !== "boolean" || typeof s.client.socketAuthenticated !== "boolean") return "socket_not_ready";
+    return "session_schema_unknown";
+  };
   const visible = (e: Element) => e.getClientRects().length > 0 &&
     getComputedStyle(e).visibility !== "hidden" && !e.closest('[hidden],[inert],[aria-hidden="true"]');
   const userInteracting = () => Array.from(document.querySelectorAll(
@@ -81,15 +93,22 @@ export function installNativeSessionObserver(): void {
     return s;
   };
   const read = () => {
+    // Only previously matched, naturally loaded exports. Never execute or
+    // enumerate an unknown module to repair a late/cyclic initialization.
+    for (const entry of namespaces) {
+      try { capture(entry.kind, entry.exports, entry.verified); } catch { /* Retry safely on the next read. */ }
+    }
     const s = refresh();
-    if (!locationAllowed() || ambiguous || !contract || !store || !reauthenticate || !updateStayLoggedIn || !known(s)) {
+    if (!locationAllowed() || ambiguous || !store || !known(s)) {
       return { schema: 1, available: false, busy: pendingCalls > 0 || !!nativeLease,
-        outcome: "unsupported" };
+        outcome: "unsupported", diagnostic: captureDiagnostic(s) };
     }
     observedAt = performance.now();
     return { schema: 1, available: true, instance, revision, uiKeepSignedIn: s!.prefs.stayLoggedIn,
       sessionKeepSignedIn: s!.session.stayLoggedIn,
-      expiresInMs: Math.round(Math.max(-86400_000, Math.min(31 * 86400_000, s!.session.exp * 1000 - Date.now()))),
+      ...(s!.session.exp === undefined ? {} : {
+        expiresInMs: Math.round(Math.max(-86400_000, Math.min(31 * 86400_000, s!.session.exp * 1000 - Date.now()))) }),
+      renewalSupported: canRenew(s),
       socketConnected: s!.client.socketConnected, socketAuthenticated: s!.client.socketAuthenticated,
       ...(typeof s!.storage === "boolean" ? { storageAllowed: s!.storage } : {}),
       busy: pendingCalls > 0 || !!nativeLease || !!operation,
@@ -99,7 +118,7 @@ export function installNativeSessionObserver(): void {
   const begin = (enable: boolean) => {
     const snapshot = read();
     const s = state();
-    if (!snapshot.available || !known(s)) return "unsupported";
+    if (!snapshot.available || !canRenew(s)) return "unsupported";
     if (snapshot.busy) return "busy";
     if (!enable) return "disabled";
     // Stay on the current authenticated page; never work around a login,
@@ -133,8 +152,10 @@ export function installNativeSessionObserver(): void {
   };
   function capture(kind: string, exports: unknown, authFactoryVerified = false): void {
     let candidates: unknown[];
-    try { candidates = record(exports) ? [exports, ...Object.values(exports)] : [exports]; }
-    catch { return; }
+    candidates = [exports];
+    if (record(exports)) for (const key of Object.keys(exports)) {
+      try { candidates.push(exports[key]); } catch { /* A cyclic ESM export may not be initialized yet. */ }
+    }
     for (const candidate of candidates) {
       if (kind === "store" && record(candidate) && typeof candidate.getState === "function" &&
           typeof candidate.dispatch === "function" && typeof candidate.subscribe === "function") {
@@ -145,6 +166,7 @@ export function installNativeSessionObserver(): void {
         if (action.typePrefix === "user/reauthenticate") reauthenticate = action;
         if (action.typePrefix === "ui.slice.actions/updateStayLoggedIn") updateStayLoggedIn = action;
       } else if (kind === "client" && record(candidate) && typeof candidate.service === "function") {
+        if (inspectedClients.has(candidate)) continue;
         const descriptor = Object.getOwnPropertyDescriptor(candidate, "reauthenticate");
         if (descriptor && (!descriptor.configurable || descriptor.get || descriptor.set)) continue;
         let wrapped: unknown;
@@ -174,12 +196,19 @@ export function installNativeSessionObserver(): void {
         assign(descriptor?.value);
         Object.defineProperty(candidate, "reauthenticate", { configurable: true, enumerable: true,
           get: () => wrapped, set: assign });
+        inspectedClients.add(candidate);
       }
     }
   }
   Object.defineProperty(host, apiKey, { configurable: true, value: Object.freeze({ read, begin }) });
   const captureKey = Symbol.for("smartthings_web_bridge.native_session_capture");
-  host[captureKey] = (kind: string, exports: unknown, verified = false) => { try { capture(kind, exports, verified === true); } catch { /* Do not break app startup. */ } };
+  host[captureKey] = (kind: string, exports: unknown, verified = false) => {
+    if (!["store", "user", "settings", "client"].includes(kind)) return;
+    if (namespaces.length < 8 && !namespaces.some(entry => entry.kind === kind && entry.exports === exports)) {
+      namespaces.push({ kind, exports, verified: verified === true });
+    }
+    try { capture(kind, exports, verified === true); } catch { /* Do not break app startup. */ }
+  };
   const queueKey = Symbol.for("smartthings_web_bridge.native_session_modules");
   for (const entry of (host[queueKey] ?? [])) host[captureKey](entry[0], entry[1], entry[2]);
   delete host[queueKey];

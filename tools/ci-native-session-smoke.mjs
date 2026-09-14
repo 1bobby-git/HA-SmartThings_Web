@@ -18,11 +18,14 @@ const epochNow=Date.now()/1000;
 const root={user:{user:{uuid:'fixture-user',session:{stayLoggedIn:mode.effective??true,exp:epochNow+(mode.near?120:3600)}}},
   ui:{settings:{user:{stayLoggedIn:mode.ui??true,sessionLength:28800}},cookieConsent:{functionality_settings:false}},
   client:{socketConnected:true,socketAuthenticated:true}};
+if(mode.noDuration) delete root.ui.settings.user.sessionLength;
+if(mode.noExpiry) delete root.user.user.session.exp;
 const calls={renew:0,proof:0,logout:0,support:0,unrelated:0};
 const originalNow=performance.now.bind(performance); let shift=0; performance.now=()=>originalNow()+shift;
 const factories={
   'random-store':function(module,exports,require) {
-    // serializableCheck deviceHealth: socketAuthenticated
+    // serializableCheck deviceHealth: reducer: client: user:
+    if(mode.cyclicExport) Object.defineProperty(exports,'uninitializedSibling',{enumerable:true,get(){throw new ReferenceError('cyclic fixture');}});
     exports.renamed={getState:()=>root,subscribe:()=>()=>{},dispatch:action=>action()};
   },
   'random-client':function(module,exports,require) {
@@ -143,6 +146,22 @@ try{
      return target.evaluate(fn,args);
    };const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;}});
    assert.equal((await controller.run(proxy,options)).handled,false);assert.equal((await data()).calls.renew,0);
+ });
+ await scenario('actual session can be read before the optional duration preference initializes',{noDuration:true},async({maintain,data})=>{
+   assert.equal((await data()).snapshot.renewalSupported,false);
+   assert.equal((await maintain()).observation.state,'active');
+   const result=await data();assert.equal(result.calls.renew,0);assert.equal(result.calls.proof,1);
+ });
+ await scenario('absent expiry is not fabricated and does not hide verified native session',{noExpiry:true},async({maintain,data})=>{
+   const result=await maintain();assert.equal(result.observation.state,'active');assert.equal(result.observation.remainingMs,undefined);
+   assert.equal((await data()).snapshot.renewalSupported,false);assert.equal((await data()).calls.renew,0);
+ });
+ await scenario('read support never authorizes renewal with uninitialized arguments',{noDuration:true,effective:false},async({maintain,data})=>{
+   const result=await maintain();assert.equal(result.handled,false);assert.equal(result.observation.reason,'renewal_unsupported');
+   assert.equal((await data()).calls.renew,0);
+ });
+ await scenario('cyclic sibling export cannot hide the naturally loaded Redux store',{cyclicExport:true},async({maintain,data})=>{
+   assert.equal((await maintain()).observation.state,'active');assert.equal((await data()).calls.renew,0);
  });
  console.log(JSON.stringify({suite:'verified-native-session',passed,scope:'isolated synthetic Chromium; no live Samsung account or wall-clock 8/24-hour soak'}));
 }finally{await browser.close();}

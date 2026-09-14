@@ -752,7 +752,7 @@ const NATIVE_POLICY_LABELS: Record<string, string> = {
   enabled_and_verified: "웹 설정을 켜고 페이지를 다시 열어 유지되는 것을 확인했습니다.",
   browser_unsupported: "브라우저에서 설정을 직접 확인해 주세요.", invalid_target: "기기 화면에서 다시 확인해야 합니다.",
   settings_not_found: "SmartThings 설정 메뉴를 자동으로 찾지 못했습니다. 꺼짐을 의미하지는 않습니다. 브릿지 브라우저에서 설정 창을 열고 다시 확인해 주세요.", control_not_found: "로그인 유지 스위치를 확인하지 못했습니다.",
-  ambiguous: "설정 대상이 명확하지 않아 변경하지 않았습니다.", blocked: "다른 창이나 사용자 입력이 있어 변경하지 않았습니다.",
+  ambiguous: "설정 대상이 명확하지 않아 변경하지 않았습니다.", blocked: "현재 화면에서 설정을 안전하게 확인할 수 없습니다. 로그인 유지가 꺼졌다는 뜻은 아닙니다.",
   state_unknown: "스위치의 켜짐 여부를 판독하지 못했습니다.", not_saved: "설정 저장을 확인하지 못했습니다.",
   page_changed: "페이지 또는 인증 상태가 바뀌어 확인을 중단했습니다.", ui_timeout: "설정 확인이 지연되어 중단했습니다."
 };
@@ -794,7 +794,11 @@ function formatDiagnosticValue(key: string, value: unknown): string {
       unsupported:"현재 웹 구조에서 직접 확인 불가", setting_pending:"실제 적용 대기", session_verified:"실제 세션과 보호된 읽기 확인됨",
       renewed:"만료 연장 확인됨", applied:"실제 설정 적용 확인됨", unconfirmed:"갱신 결과 미확인", expired:"현재 세션 만료",
       busy:"웹의 인증 처리 진행 중", deferred:"기기 제어 또는 사용자 작업 종료 대기", read_failed:"인증 읽기 확인 실패",
-      reauth:"재로그인 필요", stale:"이전 페이지 결과 폐기" } as Record<string,string>)[value] ?? "확인 필요";
+      reauth:"재로그인 필요", stale:"이전 페이지 결과 폐기", observer_missing:"현재 문서의 세션 관찰기 없음",
+      store_missing:"웹 앱 상태 저장소 연결 대기", session_not_ready:"실제 세션 데이터 준비 대기",
+      preference_not_ready:"설정값 준비 대기", socket_not_ready:"소켓 인증 상태 준비 대기",
+      session_schema_unknown:"실제 세션 값의 형식 확인 필요", capture_ambiguous:"상태 저장소 중복 감지",
+      invalid_target:"기기 페이지 확인 필요", renewal_unsupported:"읽기 가능 · 자동 갱신 기능 확인 불가" } as Record<string,string>)[value] ?? "확인 필요";
   }
   if (key === "nativeSessionRemainingMs" && typeof value === "number") return formatDuration(value);
   if (key === "state" && typeof value === "string") return formatRuntimeState(value as HealthReport["details"]["state"]);
@@ -863,7 +867,16 @@ function renderNativeSession(report: HealthReport): string {
     renewing: "SmartThings 인증 갱신 중", attention: "세션 갱신 확인 필요"
   };
   const reason: Record<string, string> = {
-    unsupported: "현재 웹 버전에서 세션 정보를 읽지 못했습니다. 기존 브라우저 복구 방식은 유지됩니다.",
+    unsupported: "세션 정보를 아직 확인하지 못했습니다. 로그인 유지가 꺼졌거나 로그아웃됐다는 뜻은 아닙니다.",
+    observer_missing: "현재 브라우저 문서에 세션 관찰기가 아직 연결되지 않았습니다. 기존 인증 복구 경로에서 다시 확인합니다.",
+    store_missing: "웹 앱의 세션 저장소를 아직 찾지 못했습니다. 로그인 상태와는 별도로 확인합니다.",
+    session_not_ready: "웹 앱의 사용자 세션이 아직 준비되지 않았습니다. 인증 정보를 기다립니다.",
+    preference_not_ready: "웹 앱의 로그인 유지 설정값이 아직 준비되지 않았습니다. 꺼짐으로 판단하지 않습니다.",
+    socket_not_ready: "웹 앱의 연결·인증 상태가 아직 준비되지 않았습니다. 잠시 후 다시 확인합니다.",
+    session_schema_unknown: "웹 앱이 제공한 세션 정보의 형식을 확인하지 못했습니다. 현재 로그인을 임의로 변경하지 않습니다.",
+    capture_ambiguous: "둘 이상의 세션 저장소가 발견되어 자동 선택하지 않았습니다. 기존 인증 복구 경로를 유지합니다.",
+    invalid_target: "SmartThings 기기 화면에서 세션을 다시 확인해야 합니다.",
+    renewal_unsupported: "실제 세션 상태는 읽었지만 자동 갱신 기능 또는 세션 길이를 확인하지 못했습니다. 기존 인증 복구 경로를 유지합니다.",
     setting_pending: "설정 화면의 켜짐과 실제 세션 적용 여부를 따로 확인합니다.",
     session_verified: "로그인 유지가 실제 세션에 적용되었고 인증 확인도 성공했습니다.",
     renewed: "새 인증 결과와 만료 시각 연장을 확인했습니다.",
@@ -878,7 +891,7 @@ function renderNativeSession(report: HealthReport): string {
   const yesno = (v: boolean | undefined) => !current || v === undefined ? "확인 대기" : v ? "켜짐" : "꺼짐";
   const tone: StatusTone = state === "active" ? "ready" : "warning";
   const remaining = current && d.nativeSessionRemainingMs !== undefined
-    ? `${Math.ceil(d.nativeSessionRemainingMs / 60000)}분` : "확인 대기";
+    ? `${Math.ceil(d.nativeSessionRemainingMs / 60000)}분` : state === "active" ? "웹 앱에서 제공하지 않음" : "확인 대기";
   return `<section class="hc-section" aria-labelledby="native-session-heading"><div class="hc-card hc-integration" data-native-session-state="${state}">
     <div><h3 id="native-session-heading">실제 로그인 세션</h3>
     <p class="hc-status-value">${renderStatusGlyph(tone, "hc-status-leading-icon")}${labels[state]}</p>

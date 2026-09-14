@@ -23,7 +23,7 @@ export interface HealthDetails {
   nativeLoginPolicyState?: RuntimeStatusSnapshot["nativeLoginPolicyState"];
   nativeLoginPolicyReason?: string;
   nativeSessionState?: "unknown" | "checking" | "active" | "renewing" | "attention";
-  nativeSessionReason?: "unsupported" | "setting_pending" | "session_verified" | "renewed" | "applied" | "unconfirmed" | "expired" | "busy" | "deferred" | "read_failed" | "reauth" | "stale";
+  nativeSessionReason?: RuntimeStatusSnapshot["nativeSessionReason"];
   nativeSessionUiKeepSignedIn?: boolean;
   nativeSessionKeepSignedIn?: boolean;
   nativeSessionStorageAllowed?: boolean;
