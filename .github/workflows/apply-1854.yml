@@ -28,6 +28,7 @@ jobs:
           python3 tools/_1854_finish_edits.py
           python3 tools/_1854_finish_more.py
           python3 tools/_1854_add_regressions.py
+          python3 tools/_1854_local_parity.py
           python3 tools/_1854_release_edit.py
           git diff --check
       - name: Full Node and security validation
@@ -53,7 +54,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f tools/_1854_edit.py tools/_1854_finish_edits.py tools/_1854_finish_more.py tools/_1854_add_regressions.py tools/_1854_release_edit.py
+          rm -f tools/_1854_edit.py tools/_1854_finish_edits.py tools/_1854_finish_more.py tools/_1854_add_regressions.py tools/_1854_local_parity.py tools/_1854_release_edit.py
           rm -f tools/_release_1854_patch.b64 tools/_release_1854_01.b64 tools/_release_1854_02.b64 tools/_release_1854_03.b64 tools/_release_1854_04.b64 tools/_capture_1854_1.b64
           git add -A
           git diff --cached --check
