@@ -21,6 +21,7 @@ jobs:
         run: |
           python3 tools/_patch_native_login_1853.py
           python3 tools/_patch_native_login_tests_1853.py
+          python3 tools/_patch_native_login_auth_1853.py
           git diff --check
       - name: Node validation
         run: |
@@ -38,7 +39,7 @@ jobs:
           xvfb-run -a node tools/ci-native-login-policy-smoke.mjs 2>&1 | tee /tmp/native-login-validation/policy.log
       - name: Commit only validated candidate
         run: |
-          rm .github/workflows/patch-native-login-dom-1853.yml tools/_patch_native_login_1853.py tools/_patch_native_login_tests_1853.py
+          rm .github/workflows/patch-native-login-dom-1853.yml tools/_patch_native_login_1853.py tools/_patch_native_login_tests_1853.py tools/_patch_native_login_auth_1853.py
           git add -A
           git diff --cached --check
           git config user.name 'github-actions[bot]'
@@ -53,7 +54,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import json, hashlib
-          paths=['bridge/src/browser/native-login-policy.ts','bridge/src/runtime.ts','bridge/src/server/http-server.ts','bridge/src/server/status-page.ts','bridge/src/state/runtime-state.ts','bridge/tests/browser/native-login-policy.test.ts','bridge/tests/server/http-server.test.ts','bridge/tests/server/status-page.test.ts','tools/ci-native-login-dom-regression.mjs']
+          paths=['bridge/src/browser/native-login-policy.ts','bridge/src/runtime.ts','bridge/src/server/http-server.ts','bridge/src/server/status-page.ts','bridge/src/state/runtime-state.ts','bridge/tests/runtime.test.ts','bridge/tests/browser/native-login-policy.test.ts','bridge/tests/server/http-server.test.ts','bridge/tests/server/status-page.test.ts','tools/ci-native-login-dom-regression.mjs']
           print(json.dumps({p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in paths},indent=2))
           PY
       - uses: actions/upload-artifact@v4
