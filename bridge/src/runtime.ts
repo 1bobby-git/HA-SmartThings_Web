@@ -17,7 +17,8 @@ import {
   waitForSettledKeeperPage
 } from "./browser/keeper-page.js";
 import { verifyLocationApplicationSession, inspectAuthenticationPage } from "./browser/session-application-proof.js";
-import { ensureNativeKeepSignedIn, supportsNativeLoginPolicy, type NativeLoginPolicyReport } from "./browser/native-login-policy.js";
+import { ensureNativeKeepSignedIn, readNativeKeepSignedIn, supportsNativeLoginPolicy, type NativeLoginPolicyReport } from "./browser/native-login-policy.js";
+import { NativeSessionMaintenance } from "./browser/native-session-maintenance.js";
 import { SessionMaintenanceGate } from "./browser/session-maintenance.js";
 import { BrowserSupervisor } from "./browser/browser-supervisor.js";
 import { SmartThingsWebUiCommandExecutor } from "./browser/command-page.js";
@@ -115,7 +116,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.52";
+const bridgeVersion = "1.8.53";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -217,6 +218,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     : { state: "disabled", reason: "automation_disabled" };
   let lastNativePolicy = pendingNativePolicy;
   let initialPolicyRefreshRequested = false;
+  let nativePolicyCheckQueued = false;
+  const nativeSession = new NativeSessionMaintenance();
   let sessionTouchInFlight = false;
   let nextSessionTouchAtMs: number | undefined;
   let sessionTouchFailures = 0;
@@ -560,6 +563,32 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     devices,
     commands,
     maintenance: {
+      requestNativeLoginPolicyCheck: async () => {
+        if (!nativePolicyEnabled) return "disabled";
+        const manager = currentKeeperManager;
+        const context = currentContext;
+        const generation = activeContextGeneration;
+        const keeper = manager?.currentKeeper();
+        if (stopped || !manager || !context || !keeper || !status.getSnapshot().authenticated || status.getSnapshot().sessionTouchLastOutcome !== "ok" || manager.authenticationRecoveryPending()) return "unavailable";
+        const observed = await readNativeKeepSignedIn(keeper);
+        if (stopped || generation !== activeContextGeneration || currentContext !== context || currentKeeperManager !== manager || manager.currentKeeper() !== keeper || !status.getSnapshot().authenticated || status.getSnapshot().sessionTouchLastOutcome !== "ok" || manager.authenticationRecoveryPending()) return "unavailable";
+        if (observed) {
+          nativePolicyReports.set(keeper, observed);
+          lastNativePolicy = observed;
+          status.update({ nativeLoginPolicyState: observed.state, nativeLoginPolicyReason: observed.reason });
+          return "observed";
+        }
+        // Coalesce clicks and leave navigation to the existing maintenance
+        // transaction, which waits for commands/probes and verifies handoff.
+        if (!nativePolicyCheckQueued) {
+          nativePolicyCheckQueued = true;
+          nativePolicyReports.delete(keeper);
+          lastNativePolicy = pendingNativePolicy;
+          status.update({ nativeLoginPolicyState: "pending", nativeLoginPolicyReason: "not_checked" });
+          manager.requestProactiveRefresh();
+        }
+        return "queued";
+      },
       reloadInventory: async () => await reconciliation.request("reload"),
       reconnectRealtime: async () => {
         if (!recoverCurrentPushSocket) throw new Error("realtime_reconnect_unavailable");
@@ -628,12 +657,66 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
       const generation = activeContextGeneration;
       if (stopped || !manager || !context) return;
       const beforeRefresh = manager.currentKeeper();
+      // Observe the native application's effective session independently of the
+      // settings switch. Prefer same-document maintenance over periodic tab
+      // replacement, but retain the existing verified fallback for unknown UI.
+      if (nativePolicyEnabled && beforeRefresh && status.getSnapshot().authenticated &&
+          status.getSnapshot().sessionTouchLastOutcome === "ok" && !manager.authenticationRecoveryPending()) {
+        const native = await nativeSession.run(beforeRefresh, {
+          enabled: nativePolicyEnabled, force: nativePolicyCheckQueued,
+          canRun: () => !commandWorkBusy() && !legacyCommandExecutor.hasForegroundOperation() &&
+            !sessionTouchInFlight &&
+            physicalActionProbe.snapshot(getProbeEvidence()).state !== "armed",
+          current: () => !stopped && context === currentContext && manager === currentKeeperManager &&
+            generation === activeContextGeneration && manager.currentKeeper() === beforeRefresh &&
+            status.getSnapshot().authenticated && !manager.authenticationRecoveryPending()
+        });
+        if (stopped || context !== currentContext || manager !== currentKeeperManager ||
+            generation !== activeContextGeneration || manager.currentKeeper() !== beforeRefresh) return;
+        const n = native.observation;
+        const old = status.getSnapshot();
+        status.update({ nativeSessionState: n.state, nativeSessionReason: n.reason,
+          nativeSessionUiKeepSignedIn: n.uiKeepSignedIn, nativeSessionKeepSignedIn: n.sessionKeepSignedIn,
+          nativeSessionStorageAllowed: n.storageAllowed, nativeSessionSocketConnected: n.socketConnected,
+          nativeSessionSocketAuthenticated: n.socketAuthenticated, nativeSessionRemainingMs: n.remainingMs,
+          nativeSessionObservedAtMs: nativeSession.lastReadAtMs });
+        if (old.nativeSessionState !== n.state || old.nativeSessionReason !== n.reason) {
+          log.info(`native_session:${JSON.stringify({state:n.state,reason:n.reason})}`);
+        }
+        if (native.authenticationRejected) {
+          manager.reportAuthenticationFailure(beforeRefresh, beforeRefresh.url());
+          status.update({ authenticated: false, state: "LOGIN_REQUIRED" });
+          nextSessionTouchAtMs = 0;
+          return;
+        }
+        if (native.handled) {
+          if (n.state === "active") {
+            const policy: NativeLoginPolicyReport = { state: "enabled", reason: "session_verified" };
+            nativePolicyReports.set(beforeRefresh, policy); lastNativePolicy = policy;
+            status.update({ nativeLoginPolicyState: policy.state, nativeLoginPolicyReason: policy.reason });
+            nativePolicyCheckQueued = false; initialPolicyRefreshRequested = true;
+            if (old.nativeSessionState !== "active" || old.nativeSessionReason !== n.reason) {
+              await persistSessionStateIfHealthy(context, sessionStateStore, status, log, "native_session");
+            }
+          }
+          return;
+        }
+        if (n.state === "attention") manager.requestProactiveRefresh();
+      }
       if (nativePolicyEnabled && !initialPolicyRefreshRequested && beforeRefresh && supportsNativeLoginPolicy(beforeRefresh) &&
           status.getSnapshot().sessionTouchLastOutcome === "ok") {
         initialPolicyRefreshRequested = true;
         manager.requestProactiveRefresh();
       }
-      if (await manager.refreshAuthenticatedSessionIfDue() === "verified" &&
+      const refreshOutcome = await manager.refreshAuthenticatedSessionIfDue();
+      if (generation === activeContextGeneration && context === currentContext && manager === currentKeeperManager && refreshOutcome !== "skipped") {
+        if (nativePolicyCheckQueued && refreshOutcome !== "verified" && lastNativePolicy.state === "pending") {
+          lastNativePolicy = { state: "attention", reason: "ui_timeout" };
+          status.update({ nativeLoginPolicyState: lastNativePolicy.state, nativeLoginPolicyReason: lastNativePolicy.reason });
+        }
+        nativePolicyCheckQueued = false;
+      }
+      if (refreshOutcome === "verified" &&
           !stopped && generation === activeContextGeneration &&
           manager === currentKeeperManager && context === currentContext) {
         await reconcileActiveKeeper();
@@ -821,6 +904,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         currentContext = context;
         currentKeeperManager = keeperManager;
         initialPolicyRefreshRequested = false;
+        nativePolicyCheckQueued = false;
         lastNativePolicy = pendingNativePolicy;
         status.update({ nativeLoginPolicyState: pendingNativePolicy.state, nativeLoginPolicyReason: pendingNativePolicy.reason });
         nextSessionTouchAtMs = undefined;
@@ -915,7 +999,13 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     }
     try {
       const keeper = await keeperManager.ensureKeeper();
-      if (generation === activeContextGeneration && context === currentContext && !stopped) {
+      const observedPolicy = nativePolicyEnabled && status.getSnapshot().authenticated && status.getSnapshot().sessionTouchLastOutcome === "ok" && !keeperManager.authenticationRecoveryPending()
+        ? await readNativeKeepSignedIn(keeper) : undefined;
+      if (generation === activeContextGeneration && context === currentContext && currentKeeperManager === keeperManager && keeperManager.currentKeeper() === keeper && !stopped) {
+        if (observedPolicy && !keeperManager.authenticationRecoveryPending()) {
+          nativePolicyReports.set(keeper, observedPolicy);
+          lastNativePolicy = observedPolicy;
+        }
         const keeperStatus: RuntimeStatusPatch =
           keeperManager.authenticationRecoveryPending()
             ? {
@@ -928,6 +1018,14 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           ? nativePolicyReports.get(keeper) ?? (lastNativePolicy.state === "attention" ? lastNativePolicy : pendingNativePolicy)
           : pendingNativePolicy;
         status.update({ nativeLoginPolicyState: policy.state, nativeLoginPolicyReason: policy.reason });
+        if (keeperStatus.authenticated !== true) {
+          nativeSession.reset();
+          status.update({ nativeSessionState: "unknown", nativeSessionReason: "stale",
+            nativeSessionUiKeepSignedIn: undefined, nativeSessionKeepSignedIn: undefined,
+            nativeSessionStorageAllowed: undefined, nativeSessionRemainingMs: undefined,
+            nativeSessionSocketConnected: undefined, nativeSessionSocketAuthenticated: undefined,
+            nativeSessionObservedAtMs: undefined });
+        }
         const currentState = status.getSnapshot().state;
         if (
           keeperStatus.authenticated === true &&

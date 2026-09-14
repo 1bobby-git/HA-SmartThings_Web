@@ -118,6 +118,12 @@ function isApiFinding(
   ) {
     return false;
   }
+  if (rule === "direct-http-client" && relativePath === "bridge/src/server/status-page.ts" &&
+      /fetch\(\s*"health\/details"\s*,/u.test(line) &&
+      /method:\s*"GET"/u.test(line) && /credentials:\s*"same-origin"/u.test(line)) {
+    // Fixed relative Bridge health read in its own UI, not an upstream client.
+    return false;
+  }
   if (
     rule === "direct-http-client" &&
     relativePath === "bridge/src/advanced/authenticated-session.ts" &&

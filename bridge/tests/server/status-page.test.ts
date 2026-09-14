@@ -5,6 +5,17 @@ import { renderStatusPage } from "../../src/server/status-page.js";
 import { RuntimeStatusStore, type RuntimeStatusPatch } from "../../src/state/runtime-state.js";
 
 describe("renderStatusPage", () => {
+  test("rechecks the browser through an explicit UI POST and distinguishes unknown from OFF", () => {
+    const html = renderStatusPage(reportFor({state:"CONNECTED",dbAvailable:true,authenticated:true,
+      nativeLoginPolicyState:"attention",nativeLoginPolicyReason:"settings_not_found"}));
+    expect(html).toContain('id="native-policy-check"');
+    expect(html).toContain('api/v1/native-login-policy/check');
+    expect(html).toContain('"x-stw-ui-action": "native-login-policy"');
+    expect(html).toContain('aria-describedby="native-policy-check-result"');
+    expect(html).toContain("꺼짐을 의미하지는 않습니다");
+    expect(html).not.toContain('href=".">상태 다시 확인');
+  });
+
   test("renders verified protocol evidence from safe health fields only", () => {
     const html = renderStatusPage(reportFor({
       state: "CONNECTED",

@@ -107,6 +107,17 @@ describe("api-free production audit", () => {
     expect(auditSmartThingsApiFree({ cwd: root })).toEqual([]);
   });
 
+  test("only the Bridge status page may GET its fixed same-origin health endpoint", () => {
+    const root = seededTempDir();
+    const code = 'const response = await fetch("health/details", {method:"GET",credentials:"same-origin"});';
+    write(root, "bridge/src/server/status-page.ts", code);
+    expect(auditSmartThingsApiFree({cwd:root})).toEqual([]);
+    write(root, "bridge/src/server/status-page.ts", code.replace('health/details','https://example.test/health/details'));
+    expect(auditSmartThingsApiFree({cwd:root}).map(f=>f.rule)).toContain("direct-http-client");
+    write(root, "bridge/src/server/status-page.ts", code.replace('"GET"','"POST"'));
+    expect(auditSmartThingsApiFree({cwd:root}).map(f=>f.rule)).toContain("direct-http-client");
+  });
+
   test("allows SmartThings Web UI observer class names without treating them as SDK clients", () => {
     const root = seededTempDir();
     write(

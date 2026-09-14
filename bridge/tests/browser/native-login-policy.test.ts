@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { ensureNativeKeepSignedIn, nativeLoginTarget } from "../../src/browser/native-login-policy.js";
+import { ensureNativeKeepSignedIn, readNativeKeepSignedIn, nativeLoginTarget } from "../../src/browser/native-login-policy.js";
 import { RuntimeStatusStore } from "../../src/state/runtime-state.js";
 import { createHealthReport } from "../../src/server/health.js";
 import { renderStatusPage } from "../../src/server/status-page.js";
@@ -11,6 +11,28 @@ import { join } from "node:path";
 const target = "https://my.smartthings.com/location/fixture";
 const page = () => ({url: () => target, isClosed: () => false, goto: vi.fn(), close: vi.fn(), evaluate: vi.fn()});
 describe("native login preference safety and integration contracts", () => {
+  test("observes an open setting without locator clicks, navigation or auth proof", async () => {
+    const browser = page();
+    browser.evaluate.mockResolvedValue({ result: "on" });
+    expect(await readNativeKeepSignedIn(browser)).toEqual({ state: "enabled", reason: "observed_enabled" });
+    browser.evaluate.mockResolvedValue({ result: "off" });
+    expect(await readNativeKeepSignedIn(browser)).toEqual({ state: "attention", reason: "observed_disabled" });
+    browser.evaluate.mockResolvedValue({ result: "missing" });
+    expect(await readNativeKeepSignedIn(browser)).toBeUndefined();
+    expect(browser.goto).not.toHaveBeenCalled();
+    expect(browser.close).not.toHaveBeenCalled();
+    const store = new RuntimeStatusStore({initial:{authenticated:false}});
+    store.update({nativeLoginPolicyState:"enabled",nativeLoginPolicyReason:"observed_enabled"});
+    expect(createHealthReport(store.getSnapshot()).ready).toBe(false);
+  });
+  test("discards observed state after navigation", async () => {
+    let url = target;
+    const browser = {...page(),url: () => url};
+    browser.evaluate.mockImplementation(async () => { url = "https://account.samsung.com/"; return {result:"on"}; });
+    expect(await readNativeKeepSignedIn(browser)).toBeUndefined();
+    expect(browser.goto).not.toHaveBeenCalled();
+  });
+
   test("opt-out is side effect free", async () => {
     const browser = page();
     expect(await ensureNativeKeepSignedIn(browser, target, {enabled:false})).toEqual({report:{state:"disabled",reason:"automation_disabled"},clean:true});

@@ -1,3 +1,5 @@
+import { installNativeSessionObserver } from "./native-session-observer.js";
+
 export const CAKE_CLIENT_SYMBOL_KEY = "smartthings_web_bridge.cake_client";
 
 interface CakeClientCaptureContext {
@@ -8,6 +10,7 @@ export async function installCakeClientCapture(
   context: CakeClientCaptureContext
 ): Promise<boolean> {
   if (!context.addInitScript) return false;
+  await context.addInitScript(installNativeSessionObserver);
   await context.addInitScript(captureCakeClientAtInitialization);
   return true;
 }
@@ -89,25 +92,36 @@ function captureCakeClientAtInitialization(): void {
       } catch {
         continue;
       }
-      if (
-        !source.includes("cake_session") ||
-        !source.includes("api/device") ||
-        !source.includes("api/subscription")
-      ) {
-        continue;
-      }
+      const kind = source.includes("cake_session") && source.includes("api/device") && source.includes("api/subscription") ? "client"
+        : source.includes("serializableCheck") && source.includes("deviceHealth:") && source.includes("socketAuthenticated") ? "store"
+        : source.includes("/setLogoutTimer") && source.includes("/reauthenticate") ? "user"
+        : source.includes("/updateStayLoggedIn") && source.includes("functionality_settings") ? "settings" : undefined;
+      if (!kind) continue;
+      // Babel's public method is a small delegate; the auth implementation
+      // lives in this naturally loaded factory, not in method.toString().
+      const authFactoryVerified = kind === "client" && source.includes('"api/auth"') &&
+        source.includes("reauthenticate=") && source.includes("sessionLength") && source.includes("stayLoggedIn");
       const captureClient: WebpackFactory = function captureClient(
         module,
         exports,
         requireFunction
       ): void {
         factory.call(this, module, exports, requireFunction);
-        const client = findClient(module.exports);
-        if (!client) return;
-        Object.defineProperty(pageWindow, clientSymbol, {
-          configurable: true,
-          value: client
-        });
+        try {
+          if (kind === "client") {
+            const client = findClient(module.exports);
+            if (client) Object.defineProperty(pageWindow, clientSymbol, { configurable: true, value: client });
+          }
+          const sink = pageWindow[Symbol.for("smartthings_web_bridge.native_session_capture")];
+          if (typeof sink === "function") sink(kind, module.exports, authFactoryVerified);
+          else {
+            // Init-script ordering is unspecified. Queue only the few matched,
+            // naturally loaded exports; never execute a module to inspect it.
+            const key = Symbol.for("smartthings_web_bridge.native_session_modules");
+            const queue = (pageWindow[key] ??= []) as unknown[];
+            if (queue.length < 8) queue.push([kind, module.exports, authFactoryVerified]);
+          }
+        } catch { /* Capture must not change native module behavior. */ }
       };
       Object.defineProperty(captureClient, factorySymbol, { value: true });
       factories[moduleId] = captureClient;
