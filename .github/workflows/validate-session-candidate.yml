@@ -1,0 +1,83 @@
+name: Validate native session candidate
+on:
+  push:
+    branches: [fix/verified-native-session-1.8.53]
+    paths: [.github/workflows/validate-session-candidate.yml]
+permissions:
+  contents: write
+concurrency:
+  group: verified-native-session-candidate
+  cancel-in-progress: false
+jobs:
+  candidate:
+    if: github.event.deleted == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/verified-native-session-1.8.53
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - name: Verify and apply candidate patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/native-session-validation
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, lzma, hashlib
+          encoded = ''.join(Path(f'tools/_session_candidate_{i:02}.b64').read_text().strip() for i in range(1, 5))
+          data = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(data).hexdigest() == '41e0b5d1937948a754c28bca42d9bf5aa7221287ca1e8ccf9f0107e902d5ff67'
+          Path('/tmp/session-candidate.patch').write_bytes(data)
+          PY
+          git apply --check /tmp/session-candidate.patch
+          git apply /tmp/session-candidate.patch
+          git diff --check
+      - name: Unit, type, build and security validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm test 2>&1 | tee /tmp/native-session-validation/unit.log
+          npm run typecheck
+          npm run build
+          npm run audit:api-free
+          npm run audit:secrets
+      - name: Real Chromium session regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx playwright-core install --with-deps chromium
+          node tools/ci-native-session-smoke.mjs 2>&1 | tee /tmp/native-session-validation/session.log
+          node tools/ci-native-login-dom-regression.mjs 2>&1 | tee /tmp/native-session-validation/dom.log
+          xvfb-run -a node tools/ci-native-login-policy-smoke.mjs 2>&1 | tee /tmp/native-session-validation/policy.log
+          xvfb-run -a node tools/ci-session-continuity-smoke.mjs 2>&1 | tee /tmp/native-session-validation/continuity.log
+      - name: Commit validated production candidate only
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm tools/_session_candidate_*.b64 .github/workflows/session-validation-toolchain.yml .github/workflows/validate-session-candidate.yml
+          git add -A
+          git diff --cached --check
+          git diff --cached --stat
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: verify native session maintenance without healthy-tab churn (1.8.53)'
+          git push origin HEAD:fix/verified-native-session-1.8.53
+      - name: Capture validation evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p /tmp/native-session-validation
+          git diff > /tmp/native-session-validation/remaining.patch
+          git rev-parse HEAD > /tmp/native-session-validation/commit.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: native-session-validation
+          path: /tmp/native-session-validation
+          retention-days: 3
