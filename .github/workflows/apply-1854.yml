@@ -27,7 +27,8 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import base64, hashlib, lzma
-          data=lzma.decompress(base64.b64decode(Path('tools/_release_1854_patch.b64').read_text().strip(), validate=True))
+          encoded=''.join(Path(f'tools/_release_1854_{i:02}.b64').read_text().strip() for i in range(1,5))
+          data=lzma.decompress(base64.b64decode(encoded, validate=True))
           assert hashlib.sha256(data).hexdigest() == '3d7f00ca645b1d44426bab4abdf141f12756816e155c06b892a5f086ad5882da'
           Path('/tmp/1854.patch').write_bytes(data)
           PY
