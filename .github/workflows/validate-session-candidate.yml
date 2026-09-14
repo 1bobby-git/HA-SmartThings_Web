@@ -36,6 +36,7 @@ jobs:
           PY
           git apply --check /tmp/session-candidate.patch
           git apply /tmp/session-candidate.patch
+          python3 tools/_session_fixture_fix.py
           git diff --check
       - name: Unit, type, build and security validation
         shell: bash
@@ -60,7 +61,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm tools/_session_candidate_*.b64 .github/workflows/session-validation-toolchain.yml .github/workflows/validate-session-candidate.yml
+          rm tools/_session_candidate_*.b64 tools/_session_fixture_fix.py .github/workflows/session-validation-toolchain.yml .github/workflows/validate-session-candidate.yml
           git add -A
           git diff --cached --check
           git diff --cached --stat
