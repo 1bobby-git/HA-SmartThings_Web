@@ -107,7 +107,7 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
       --hc-warning: #805500;
       --hc-warning-soft: #fff4dc;
       --hc-focus: #2563eb;
-      --hc-shadow: 0 8px 32px #19243b08;
+      --hc-shadow: none;
     }
 
     @media (prefers-color-scheme: dark) {
@@ -133,6 +133,10 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
     }
 
     * { box-sizing: border-box; }
+    *, *::before, *::after {
+      border-radius: 0 !important;
+      box-shadow: none !important;
+    }
     html { scroll-behavior: smooth; background: var(--hc-bg); }
     body {
       margin: 0;
@@ -158,7 +162,7 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
       border-radius: 10px;
       background: #ffffff;
       color: #191f28;
-      box-shadow: 0 8px 24px #19243b20;
+      box-shadow: none;
     }
     .hc-skip-link:focus { transform: translateY(0); }
 
