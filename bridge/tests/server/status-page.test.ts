@@ -188,6 +188,33 @@ describe("renderStatusPage", () => {
     expect(attentionHtml).toContain("오프라인");
   });
 
+  test("marks native login maintenance as an important bridge-browser instruction", () => {
+    const pending = renderStatusPage(reportFor({
+      state: "CONNECTED",
+      protocolVersion: "1:abcdef1234567890",
+      dbAvailable: true,
+      authenticated: true,
+      nativeLoginPolicyState: "pending",
+      nativeLoginPolicyReason: "not_checked"
+    }));
+    const enabled = renderStatusPage(reportFor({
+      state: "CONNECTED",
+      protocolVersion: "1:abcdef1234567890",
+      dbAvailable: true,
+      authenticated: true,
+      nativeLoginPolicyState: "enabled",
+      nativeLoginPolicyReason: "already_enabled"
+    }));
+
+    expect(pending).toContain("중요:");
+    expect(pending).toContain("반드시 브릿지 내부 브라우저(noVNC)");
+    expect(pending).toContain("‘로그인 유지’를 켜 주세요");
+    expect(pending).toContain("2시간·8시간·24시간");
+    expect(pending).toContain('role="note"');
+    expect(enabled).toContain("중요 설정 확인됨:");
+    expect(enabled).not.toContain("2시간·8시간·24시간");
+  });
+
   test("localizes runtime and diagnostic labels", () => {
     const html = renderStatusPage(reportFor({
       state: "LOGIN_REQUIRED",
