@@ -1,0 +1,5 @@
+from pathlib import Path
+r=Path('.')
+p=r/'bridge/src/server/health.ts';s=p.read_text();start=s.index('  nativeSessionReason?:');end=s.index(';',start)+1;s=s[:start]+'  nativeSessionReason?: RuntimeStatusSnapshot["nativeSessionReason"];'+s[end:];p.write_text(s)
+p=r/'bridge/src/browser/native-session-observer.ts';s=p.read_text().replace('for (const entry of namespaces) capture(entry.kind, entry.exports, entry.verified);','for (const entry of namespaces) {\n      try { capture(entry.kind, entry.exports, entry.verified); } catch { /* Retry safely on the next read. */ }\n    }');p.write_text(s)
+p=r/'bridge/tests/browser/native-session-maintenance.test.ts';s=p.read_text().replace('expect(f.api.read().available).toBe(false);expect(f.api.begin(true)).toBe("unsupported");','expect(f.api.read()).toMatchObject({available:true,renewalSupported:false});expect(f.api.begin(true)).toBe("unsupported");').replace('expect(f.api.read().available).toBe(verified);','expect(f.api.read()).toMatchObject({available:true,renewalSupported:verified});');p.write_text(s)
