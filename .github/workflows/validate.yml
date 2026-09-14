@@ -53,6 +53,8 @@ jobs:
         run: |
           xvfb-run -a node tools/ci-session-continuity-smoke.mjs
           xvfb-run -a node tools/ci-native-login-policy-smoke.mjs
+          node tools/ci-native-login-dom-regression.mjs
+          node tools/ci-native-session-smoke.mjs
 
       - name: Run Python tests
         shell: bash
