@@ -159,13 +159,13 @@ describe("in-page native action lifecycle",()=>{
     const f=nativeFixture("normal",true); expect(f.api.begin(true)).toBe("healthy"); expect(f.mutations).not.toHaveBeenCalled();
   });
   test("unknown native method contract fails closed",()=>{
-    const f=nativeFixture(); f.client.reauthenticate=()=>Promise.resolve(); expect(f.api.read().available).toBe(false); expect(f.api.begin(true)).toBe("unsupported");
+    const f=nativeFixture(); f.client.reauthenticate=()=>Promise.resolve(); expect(f.api.read()).toMatchObject({available:true,renewalSupported:false}); expect(f.api.begin(true)).toBe("unsupported");
   });
   test.each([false,true])("compiled auth delegate requires matched factory evidence (%s)",async verified=>{
     const f=nativeFixture("normal",false,verified);
     const delegate=f.client.reauthenticate;
     f.client.reauthenticate=function(arg:any){return delegate.apply(this,arguments);};
-    expect(f.api.read().available).toBe(verified);
+    expect(f.api.read()).toMatchObject({available:true,renewalSupported:verified});
     expect(f.api.begin(true)).toBe(verified ? "requested" : "unsupported");
     await vi.advanceTimersByTimeAsync(600);
     expect(f.mutations).toHaveBeenCalledTimes(verified ? 1 : 0);

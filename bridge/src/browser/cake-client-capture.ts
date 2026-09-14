@@ -93,7 +93,8 @@ function captureCakeClientAtInitialization(): void {
         continue;
       }
       const kind = source.includes("cake_session") && source.includes("api/device") && source.includes("api/subscription") ? "client"
-        : source.includes("serializableCheck") && source.includes("deviceHealth:") && source.includes("socketAuthenticated") ? "store"
+        : source.includes("serializableCheck") && source.includes("deviceHealth:") &&
+          (source.includes("socketAuthenticated") || (/\breducer\s*:/u.test(source) && /\bclient\s*:/u.test(source) && /\buser\s*:/u.test(source))) ? "store"
         : source.includes("/setLogoutTimer") && source.includes("/reauthenticate") ? "user"
         : source.includes("/updateStayLoggedIn") && source.includes("functionality_settings") ? "settings" : undefined;
       if (!kind) continue;
