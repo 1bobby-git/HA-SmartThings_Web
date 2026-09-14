@@ -30,6 +30,8 @@ const DIAGNOSTIC_LABELS: Record<string, string> = {
   protocolMismatchSurface: "프로토콜 불일치 위치",
   nativeSessionState: "실제 세션 상태",
   nativeSessionReason: "실제 세션 확인 결과",
+  nativeSessionFlagType: "로그인 유지 필드 형식",
+  nativeSessionExpiryType: "세션 종료 시각 필드 형식",
   nativeSessionUiKeepSignedIn: "화면 로그인 유지 설정",
   nativeSessionKeepSignedIn: "실제 세션 로그인 유지 적용",
   nativeSessionStorageAllowed: "기능성 설정 저장 동의",
@@ -747,12 +749,17 @@ const NATIVE_POLICY_LABELS: Record<string, string> = {
   not_checked: "이 브라우저에서 아직 확인하지 않았습니다.", automation_disabled: "자동 적용을 끈 상태입니다. 웹의 기존 설정은 변경하지 않습니다.",
   already_enabled: "SmartThings 웹 설정이 이미 켜져 있어 변경하지 않았습니다.",
   session_verified: "실제 세션에 로그인 유지가 적용되어 있고 현재 앱의 인증 읽기도 성공했습니다.",
-  observed_enabled: "현재 브릿지 브라우저에 열린 SmartThings 설정에서 로그인 유지 켜짐을 확인했습니다.",
-  observed_disabled: "현재 브릿지 브라우저에 열린 SmartThings 설정에서 로그인 유지가 꺼져 있습니다.",
+  observed_enabled: "현재 브릿지의 SmartThings 웹 설정에서 로그인 유지 켜짐을 읽었습니다. 실제 세션 적용은 아래에서 별도로 확인합니다.",
+  observed_disabled: "현재 브릿지의 SmartThings 웹 설정에서 로그인 유지 꺼짐을 읽었습니다.",
   enabled_and_verified: "웹 설정을 켜고 페이지를 다시 열어 유지되는 것을 확인했습니다.",
   browser_unsupported: "브라우저에서 설정을 직접 확인해 주세요.", invalid_target: "기기 화면에서 다시 확인해야 합니다.",
   settings_not_found: "SmartThings 설정 메뉴를 자동으로 찾지 못했습니다. 꺼짐을 의미하지는 않습니다. 브릿지 브라우저에서 설정 창을 열고 다시 확인해 주세요.", control_not_found: "로그인 유지 스위치를 확인하지 못했습니다.",
   ambiguous: "설정 대상이 명확하지 않아 변경하지 않았습니다.", blocked: "현재 화면에서 설정을 안전하게 확인할 수 없습니다. 로그인 유지가 꺼졌다는 뜻은 아닙니다.",
+  auth_input_present: "비밀번호 또는 인증번호 입력 화면이 있어 자동 설정을 보류했습니다. 입력창을 변경하거나 닫지 않았습니다.",
+  challenge_present: "보안 확인 화면이 감지되어 자동 설정을 보류했습니다. 보안 확인을 임의로 통과하거나 닫지 않습니다.",
+  other_dialog_present: "SmartThings 설정 이외의 대화상자가 열려 있어 자동 설정을 보류했습니다.",
+  control_disabled: "로그인 유지 컨트롤이 비활성 또는 읽기 전용이어서 변경하지 않았습니다.",
+  command_busy: "기기 명령 처리가 시작되어 설정 작업을 보류했습니다. 페이지 변경이나 로그아웃을 뜻하지 않습니다.",
   state_unknown: "스위치의 켜짐 여부를 판독하지 못했습니다.", not_saved: "설정 저장을 확인하지 못했습니다.",
   page_changed: "페이지 또는 인증 상태가 바뀌어 확인을 중단했습니다.", ui_timeout: "설정 확인이 지연되어 중단했습니다."
 };
@@ -797,6 +804,7 @@ function formatDiagnosticValue(key: string, value: unknown): string {
       reauth:"재로그인 필요", stale:"이전 페이지 결과 폐기", observer_missing:"현재 문서의 세션 관찰기 없음",
       store_missing:"웹 앱 상태 저장소 연결 대기", session_not_ready:"실제 세션 데이터 준비 대기",
       preference_not_ready:"설정값 준비 대기", socket_not_ready:"소켓 인증 상태 준비 대기",
+      session_flag_missing:"실제 세션에 로그인 유지 필드 없음", session_flag_invalid:"실제 세션 로그인 유지 값의 형식 확인 필요",
       session_schema_unknown:"실제 세션 값의 형식 확인 필요", capture_ambiguous:"상태 저장소 중복 감지",
       invalid_target:"기기 페이지 확인 필요", renewal_unsupported:"읽기 가능 · 자동 갱신 기능 확인 불가" } as Record<string,string>)[value] ?? "확인 필요";
   }
@@ -873,6 +881,8 @@ function renderNativeSession(report: HealthReport): string {
     session_not_ready: "웹 앱의 사용자 세션이 아직 준비되지 않았습니다. 인증 정보를 기다립니다.",
     preference_not_ready: "웹 앱의 로그인 유지 설정값이 아직 준비되지 않았습니다. 꺼짐으로 판단하지 않습니다.",
     socket_not_ready: "웹 앱의 연결·인증 상태가 아직 준비되지 않았습니다. 잠시 후 다시 확인합니다.",
+    session_flag_missing: "실제 세션에 로그인 유지 값이 제공되지 않았습니다. 화면 설정을 실제 세션 값으로 대신 사용하지 않습니다.",
+    session_flag_invalid: "실제 세션의 로그인 유지 값이 지원하는 참·거짓 형식이 아닙니다. 임의로 켜짐으로 변환하지 않습니다.",
     session_schema_unknown: "웹 앱이 제공한 세션 정보의 형식을 확인하지 못했습니다. 현재 로그인을 임의로 변경하지 않습니다.",
     capture_ambiguous: "둘 이상의 세션 저장소가 발견되어 자동 선택하지 않았습니다. 기존 인증 복구 경로를 유지합니다.",
     invalid_target: "SmartThings 기기 화면에서 세션을 다시 확인해야 합니다.",
@@ -890,13 +900,16 @@ function renderNativeSession(report: HealthReport): string {
   };
   const yesno = (v: boolean | undefined) => !current || v === undefined ? "확인 대기" : v ? "켜짐" : "꺼짐";
   const tone: StatusTone = state === "active" ? "ready" : "warning";
+  const fieldLabels: Record<string, string> = { missing: "미제공", null: "빈 값(null)", boolean: "참·거짓", number: "숫자", zero: "0", negative: "음수", non_finite: "유효하지 않은 숫자", string: "문자열", other: "지원하지 않는 형식" };
+  const shape = current && (d.nativeSessionFlagType || d.nativeSessionExpiryType)
+    ? `<p class="hc-muted">필드 형식: 로그인 유지 ${fieldLabels[d.nativeSessionFlagType ?? "missing"] ?? "확인 대기"} · 종료 시각 ${fieldLabels[d.nativeSessionExpiryType ?? "missing"] ?? "확인 대기"}</p>` : "";
   const remaining = current && d.nativeSessionRemainingMs !== undefined
-    ? `${Math.ceil(d.nativeSessionRemainingMs / 60000)}분` : state === "active" ? "웹 앱에서 제공하지 않음" : "확인 대기";
+    ? `${Math.ceil(d.nativeSessionRemainingMs / 60000)}분` : state === "active" ? "웹 앱에서 제공하지 않음 또는 판독 불가" : "확인 대기";
   return `<section class="hc-section" aria-labelledby="native-session-heading"><div class="hc-card hc-integration" data-native-session-state="${state}">
     <div><h3 id="native-session-heading">실제 로그인 세션</h3>
     <p class="hc-status-value">${renderStatusGlyph(tone, "hc-status-leading-icon")}${labels[state]}</p>
     <p>${escapeHtml(reason[current ? d.nativeSessionReason ?? "unsupported" : "stale"] ?? reason.unsupported!)}</p>
-    <p>설정값 ${yesno(d.nativeSessionUiKeepSignedIn)} · 실제 세션 적용 ${yesno(d.nativeSessionKeepSignedIn)} · 현재 유효 시간 ${remaining}</p>
-    <p>브라우저 종료 후 영구 로그인을 보장하는 설정은 아닙니다. 사용자 인증이 필요하면 브라우저 화면을 유지합니다.</p>
+    <p>설정값 ${yesno(d.nativeSessionUiKeepSignedIn)} · 실제 세션 적용 ${yesno(d.nativeSessionKeepSignedIn)} · 웹 세션 종료 시각까지 ${remaining}</p>${shape}
+    <p>로그인 유지가 켜지면 웹의 자동 로그아웃 타이머와 서버 인증 유효성은 별도로 확인합니다. 브라우저 종료 후 영구 로그인을 보장하는 설정은 아닙니다. 사용자 인증이 필요하면 브라우저 화면을 유지합니다.</p>
     </div></div></section>`;
 }

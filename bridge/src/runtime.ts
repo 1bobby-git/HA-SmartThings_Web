@@ -116,7 +116,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.54";
+const bridgeVersion = "1.8.55";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -676,12 +676,21 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         const n = native.observation;
         const old = status.getSnapshot();
         status.update({ nativeSessionState: n.state, nativeSessionReason: n.reason,
+          nativeSessionFlagType: n.sessionFlagType, nativeSessionExpiryType: n.sessionExpiryType,
           nativeSessionUiKeepSignedIn: n.uiKeepSignedIn, nativeSessionKeepSignedIn: n.sessionKeepSignedIn,
           nativeSessionStorageAllowed: n.storageAllowed, nativeSessionSocketConnected: n.socketConnected,
           nativeSessionSocketAuthenticated: n.socketAuthenticated, nativeSessionRemainingMs: n.remainingMs,
           nativeSessionObservedAtMs: nativeSession.lastReadAtMs });
-        if (old.nativeSessionState !== n.state || old.nativeSessionReason !== n.reason) {
-          log.info(`native_session:${JSON.stringify({state:n.state,reason:n.reason})}`);
+        if (old.nativeSessionState !== n.state || old.nativeSessionReason !== n.reason ||
+            old.nativeSessionFlagType !== n.sessionFlagType || old.nativeSessionExpiryType !== n.sessionExpiryType) {
+          log.info(`native_session:${JSON.stringify({state:n.state,reason:n.reason,sessionFlagType:n.sessionFlagType,sessionExpiryType:n.sessionExpiryType})}`);
+        }
+        if (typeof n.uiKeepSignedIn === "boolean" && !native.authenticationRejected) {
+          const policy: NativeLoginPolicyReport = { state: n.uiKeepSignedIn ? "enabled" : "attention",
+            reason: n.uiKeepSignedIn ? "observed_enabled" : "observed_disabled" };
+          if (n.uiKeepSignedIn) { initialPolicyRefreshRequested = true; nativePolicyCheckQueued = false; }
+          nativePolicyReports.set(beforeRefresh, policy); lastNativePolicy = policy;
+          status.update({ nativeLoginPolicyState: policy.state, nativeLoginPolicyReason: policy.reason });
         }
         if (native.authenticationRejected) {
           manager.reportAuthenticationFailure(beforeRefresh, beforeRefresh.url());
@@ -1021,6 +1030,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
         if (keeperStatus.authenticated !== true) {
           nativeSession.reset();
           status.update({ nativeSessionState: "unknown", nativeSessionReason: "stale",
+            nativeSessionFlagType: undefined, nativeSessionExpiryType: undefined,
             nativeSessionUiKeepSignedIn: undefined, nativeSessionKeepSignedIn: undefined,
             nativeSessionStorageAllowed: undefined, nativeSessionRemainingMs: undefined,
             nativeSessionSocketConnected: undefined, nativeSessionSocketAuthenticated: undefined,

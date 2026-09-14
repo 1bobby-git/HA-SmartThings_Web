@@ -23,3 +23,22 @@ An already initialized Redux store can expose a valid effective session before a
 Only matched, naturally executed module export namespaces are retained in a bounded list to handle late/cyclic getters. Reading one unavailable sibling does not discard other ready exports. No module is force-executed for capture. Diagnostics use fixed enums and do not return raw state, user IDs, URLs or credentials.
 
 Native settings detection bounds its scan to a settings heading and its local dialog, not the complete device dashboard. More than 8,000 unrelated device elements is not an authentication challenge. Large-dashboard regressions must also show that real OTP/password/foreign modal guards and read-only DOM/focus preservation remain intact.
+
+## 1.8.55: field-level observation and non-mutating preference inspection
+
+A 1.8.54 user log proves authenticated probes succeed while `session_schema_unknown`,
+`blocked` and `page_changed` recur. It does not contain the actual session field
+values or DOM blocker; do not claim which field value or modal the user has.
+
+Observe a boolean effective flag independently from optional expiry. A null,
+string, zero or otherwise unreadable deadline is not a server auth rejection and
+never authorizes supplemental renewal. Missing/non-boolean flags remain unknown.
+The Web 2.57.0 native setLogoutTimer uses the deadline only when the effective
+stayLoggedIn flag is OFF. ON plus an elapsed deadline still requires a fresh
+protected Location read; 401 still invalidates authentication.
+
+Read the app preference without opening a modal/reloading an already-ON page.
+UI preference alone is never effective-session or persistence proof. Explicit
+blocker reasons preserve credential/challenge/modal protection. Diagnostic field
+TYPE enums only (no values, account IDs, storage, cookie or token data) cross the
+page boundary. Unit and browser fixtures cover variants, not live account state.

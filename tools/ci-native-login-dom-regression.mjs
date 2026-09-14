@@ -115,7 +115,7 @@ try {
     ['conflicting live checkbox / ARIA values', { disagree: true }, 'state_unknown'],
     ['ambiguous duplicate switch', { duplicate: true }, 'ambiguous'],
     ['missing ARIA state', { unknown: true }, 'state_unknown'],
-    ['disabled real button', { disabled: true }, 'blocked']
+    ['disabled real button', { disabled: true }, 'control_disabled']
   ]) await scenario(name, mode, async page => {
     const result = await ensureNativeKeepSignedIn(page, target, { enabled: true });
     assert.equal(result.report.state, 'attention');
@@ -153,10 +153,44 @@ try {
     const before = await page.content();
     assert.equal(await readNativeKeepSignedIn(page), undefined);
     const result = await ensureNativeKeepSignedIn(page, target, { enabled: true });
-    assert.equal(result.report.reason, 'blocked');
+    assert.equal(result.report.reason, 'auth_input_present');
     assert.equal(result.clean, false);
     assert.equal(await page.content(), before);
     assert.equal(await toggles(page), 0);
+  });
+
+  await scenario('native preference ON can be read without effective session schema or UI navigation', { on: true }, async page => {
+    await page.evaluate(() => Object.defineProperty(window, Symbol.for('smartthings_web_bridge.native_session'), {value:{read:()=>({schema:1,available:false,diagnostic:'session_flag_missing',uiKeepSignedIn:true})}}));
+    const before=await page.content(); const href=page.url();
+    assert.deepEqual(await readNativeKeepSignedIn(page), {state:'enabled',reason:'observed_enabled'});
+    assert.deepEqual(await ensureNativeKeepSignedIn(page,target,{enabled:true}), {report:{state:'enabled',reason:'observed_enabled'},clean:true});
+    assert.equal(await page.content(),before);assert.equal(page.url(),href);assert.equal(await toggles(page),0);
+  });
+  await scenario('native ON preference cannot dismiss a visible OTP challenge', { on: true }, async page => {
+    await page.evaluate(() => {
+      Object.defineProperty(window,Symbol.for('smartthings_web_bridge.native_session'),{value:{read:()=>({schema:1,available:false,uiKeepSignedIn:true})}});
+      document.body.insertAdjacentHTML('beforeend','<div role="dialog"><input autocomplete="one-time-code"></div>');
+    });
+    const before=await page.content();
+    assert.deepEqual(await ensureNativeKeepSignedIn(page,target,{enabled:true}),{report:{state:'attention',reason:'auth_input_present'},clean:false});
+    assert.equal(await page.content(),before);
+  });
+  await scenario('transparent inactive challenge container does not block inspection', { on: true }, async page => {
+    await openSettings(page);
+    await page.evaluate(() => document.body.insertAdjacentHTML('beforeend','<div style="opacity:0"><iframe src="https://www.google.com/recaptcha/api2/bframe"></iframe></div>'));
+    const before=await page.content();
+    assert.deepEqual(await readNativeKeepSignedIn(page),{state:'enabled',reason:'observed_enabled'});
+    assert.equal(await page.content(),before);assert.equal(await toggles(page),0);
+  });
+  await scenario('other modal has its own diagnostic and is preserved', { on: true }, async page => {
+    await page.evaluate(() => document.body.insertAdjacentHTML('beforeend','<div role="dialog">Device operation</div>'));
+    const before=await page.content();
+    assert.deepEqual(await ensureNativeKeepSignedIn(page,target,{enabled:true}),{report:{state:'attention',reason:'other_dialog_present'},clean:false});
+    assert.equal(await page.content(),before);
+  });
+  await scenario('command gate is not reported as a changed page', { on: true }, async page => {
+    assert.equal((await ensureNativeKeepSignedIn(page,target,{enabled:true,canContinue:()=>false})).report.reason,'command_busy');
+    assert.equal(await page.evaluate(()=>localStorage.getItem('menuClicks')),null);
   });
   console.log(JSON.stringify({ suite: 'native-login-real-dom-regression', passed, scope: 'synthetic Chromium, no live Samsung account' }));
 } finally { await browser.close(); }

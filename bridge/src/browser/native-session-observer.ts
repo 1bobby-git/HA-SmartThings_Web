@@ -42,12 +42,20 @@ export function installNativeSessionObserver(): void {
         storage: root.ui.cookieConsent?.functionality_settings };
     } catch { return undefined; }
   };
+  // Field shape is diagnostic metadata only: never export raw values or infer
+  // a flag from truthiness. A missing/invalid optional expiry is not a logout.
+  const fieldType = (v: unknown) => v === undefined ? "missing" : v === null ? "null" :
+    typeof v === "boolean" ? "boolean" : typeof v === "number" ?
+      (!Number.isFinite(v) ? "non_finite" : v === 0 ? "zero" : v < 0 ? "negative" : "number") :
+    typeof v === "string" ? "string" : "other";
+  const expiry = (s: ReturnType<typeof state>): number | undefined =>
+    typeof s?.session.exp === "number" && Number.isFinite(s.session.exp) && s.session.exp > 0
+      ? s.session.exp : undefined;
   const known = (s: ReturnType<typeof state>) => !!s && typeof s.user === "string" &&
     typeof s.session.stayLoggedIn === "boolean" && typeof s.prefs.stayLoggedIn === "boolean" &&
-    (s.session.exp === undefined || (Number.isFinite(s.session.exp) && s.session.exp > 0)) &&
     typeof s.client.socketConnected === "boolean" && typeof s.client.socketAuthenticated === "boolean";
   const canRenew = (s: ReturnType<typeof state>) => known(s) && contract && !!reauthenticate && !!updateStayLoggedIn &&
-    Number.isFinite(s!.session.exp) && [7200, 28800, 86400].includes(s!.prefs.sessionLength);
+    expiry(s) !== undefined && [7200, 28800, 86400].includes(s!.prefs.sessionLength);
   const captureDiagnostic = (s: ReturnType<typeof state>) => {
     if (!locationAllowed()) return "invalid_target";
     if (ambiguous) return "capture_ambiguous";
@@ -55,6 +63,8 @@ export function installNativeSessionObserver(): void {
     if (!s || typeof s.user !== "string") return "session_not_ready";
     if (typeof s.prefs.stayLoggedIn !== "boolean") return "preference_not_ready";
     if (typeof s.client.socketConnected !== "boolean" || typeof s.client.socketAuthenticated !== "boolean") return "socket_not_ready";
+    if (s.session.stayLoggedIn === undefined || s.session.stayLoggedIn === null) return "session_flag_missing";
+    if (typeof s.session.stayLoggedIn !== "boolean") return "session_flag_invalid";
     return "session_schema_unknown";
   };
   const visible = (e: Element) => e.getClientRects().length > 0 &&
@@ -99,15 +109,19 @@ export function installNativeSessionObserver(): void {
       try { capture(entry.kind, entry.exports, entry.verified); } catch { /* Retry safely on the next read. */ }
     }
     const s = refresh();
+    const fields = !locationAllowed() || ambiguous || !store || !s || typeof s.user !== "string" ? {} : {
+      sessionFlagType: fieldType(s.session.stayLoggedIn), sessionExpiryType: fieldType(s.session.exp),
+      ...(typeof s.prefs.stayLoggedIn === "boolean" ? { uiKeepSignedIn: s.prefs.stayLoggedIn } : {})
+    };
     if (!locationAllowed() || ambiguous || !store || !known(s)) {
       return { schema: 1, available: false, busy: pendingCalls > 0 || !!nativeLease,
-        outcome: "unsupported", diagnostic: captureDiagnostic(s) };
+        outcome: "unsupported", diagnostic: captureDiagnostic(s), ...fields };
     }
     observedAt = performance.now();
-    return { schema: 1, available: true, instance, revision, uiKeepSignedIn: s!.prefs.stayLoggedIn,
+    return { schema: 1, available: true, instance, revision, ...fields, uiKeepSignedIn: s!.prefs.stayLoggedIn,
       sessionKeepSignedIn: s!.session.stayLoggedIn,
-      ...(s!.session.exp === undefined ? {} : {
-        expiresInMs: Math.round(Math.max(-86400_000, Math.min(31 * 86400_000, s!.session.exp * 1000 - Date.now()))) }),
+      ...(expiry(s) === undefined ? {} : {
+        expiresInMs: Math.round(Math.max(-86400_000, Math.min(31 * 86400_000, expiry(s)! * 1000 - Date.now()))) }),
       renewalSupported: canRenew(s),
       socketConnected: s!.client.socketConnected, socketAuthenticated: s!.client.socketAuthenticated,
       ...(typeof s!.storage === "boolean" ? { storageAllowed: s!.storage } : {}),

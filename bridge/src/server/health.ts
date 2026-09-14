@@ -22,6 +22,8 @@ export interface HealthDetails {
   protocolMismatchSurface?: RuntimeStatusSnapshot["protocolMismatchSurface"];
   nativeLoginPolicyState?: RuntimeStatusSnapshot["nativeLoginPolicyState"];
   nativeLoginPolicyReason?: string;
+  nativeSessionFlagType?: RuntimeStatusSnapshot["nativeSessionFlagType"];
+  nativeSessionExpiryType?: RuntimeStatusSnapshot["nativeSessionExpiryType"];
   nativeSessionState?: "unknown" | "checking" | "active" | "renewing" | "attention";
   nativeSessionReason?: RuntimeStatusSnapshot["nativeSessionReason"];
   nativeSessionUiKeepSignedIn?: boolean;
@@ -145,6 +147,8 @@ export function createHealthReport(
       restartCount: snapshot.restartCount,
       nativeLoginPolicyState: snapshot.nativeLoginPolicyState,
       nativeLoginPolicyReason: snapshot.nativeLoginPolicyReason,
+      nativeSessionFlagType: snapshot.nativeSessionFlagType,
+      nativeSessionExpiryType: snapshot.nativeSessionExpiryType,
       nativeSessionState: snapshot.nativeSessionState,
       nativeSessionReason: snapshot.nativeSessionReason,
       nativeSessionUiKeepSignedIn: snapshot.nativeSessionUiKeepSignedIn,

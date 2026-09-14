@@ -6,8 +6,20 @@ export type NativeSessionState = "unknown" | "checking" | "active" | "renewing" 
 export type NativeSessionReason = "unsupported" | "setting_pending" | "session_verified" | "renewed" |
   "applied" | "unconfirmed" | "expired" | "busy" | "deferred" | "read_failed" | "reauth" | "stale" |
   "observer_missing" | "store_missing" | "session_not_ready" | "preference_not_ready" |
-  "socket_not_ready" | "session_schema_unknown" | "capture_ambiguous" | "invalid_target" | "renewal_unsupported";
+  "socket_not_ready" | "session_schema_unknown" | "session_flag_missing" | "session_flag_invalid" | "capture_ambiguous" | "invalid_target" | "renewal_unsupported";
+export type NativeSessionFieldType = "missing" | "null" | "boolean" | "number" | "zero" | "negative" | "non_finite" | "string" | "other";
+function safeFields(raw: unknown): { sessionFlagType?: NativeSessionFieldType; sessionExpiryType?: NativeSessionFieldType; uiKeepSignedIn?: boolean } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const r = raw as Record<string, unknown>;
+  if (r.schema !== 1) return {};
+  const allowed = ["missing", "null", "boolean", "number", "zero", "negative", "non_finite", "string", "other"];
+  return { ...(allowed.includes(r.sessionFlagType as string) ? { sessionFlagType: r.sessionFlagType as NativeSessionFieldType } : {}),
+    ...(allowed.includes(r.sessionExpiryType as string) ? { sessionExpiryType: r.sessionExpiryType as NativeSessionFieldType } : {}),
+    ...(typeof r.uiKeepSignedIn === "boolean" ? { uiKeepSignedIn: r.uiKeepSignedIn } : {}) };
+}
 export interface NativeSessionObservation {
+  sessionFlagType?: NativeSessionFieldType;
+  sessionExpiryType?: NativeSessionFieldType;
   state: NativeSessionState;
   reason: NativeSessionReason;
   uiKeepSignedIn?: boolean;
@@ -77,8 +89,8 @@ export class NativeSessionMaintenance {
   }
 
   async #run(page: BrowserPageLike, options: { enabled: boolean; canRun: () => boolean; current: () => boolean }): Promise<NativeMaintenanceResult> {
-    const unknown = (reason: NativeSessionReason = "unsupported"): NativeMaintenanceResult =>
-      ({ handled: false, observation: { state: "unknown", reason } });
+    const unknown = (reason: NativeSessionReason = "unsupported", raw?: unknown): NativeMaintenanceResult =>
+      ({ handled: false, observation: { state: "unknown", reason, ...safeFields(raw) } });
     const url = page.url();
     const generation = this.#generation;
     const current = () => this.#generation === generation && this.#page === page && options.current() && !page.isClosed() && page.url() === url;
@@ -90,11 +102,11 @@ export class NativeSessionMaintenance {
     if (!snapshot) {
       const diagnostic = raw && typeof raw === "object" ? (raw as Record<string, unknown>).diagnostic : undefined;
       const reasons: NativeSessionReason[] = ["observer_missing", "store_missing", "session_not_ready", "preference_not_ready",
-        "socket_not_ready", "session_schema_unknown", "capture_ambiguous", "invalid_target"];
-      return unknown(reasons.includes(diagnostic as NativeSessionReason) ? diagnostic as NativeSessionReason : "unsupported");
+        "socket_not_ready", "session_schema_unknown", "session_flag_missing", "session_flag_invalid", "capture_ambiguous", "invalid_target"];
+      return unknown(reasons.includes(diagnostic as NativeSessionReason) ? diagnostic as NativeSessionReason : "unsupported", raw);
     }
     const observation: NativeSessionObservation = {
-      state: "checking", reason: "setting_pending", uiKeepSignedIn: snapshot.uiKeepSignedIn,
+      state: "checking", reason: "setting_pending", ...safeFields(raw), uiKeepSignedIn: snapshot.uiKeepSignedIn,
       sessionKeepSignedIn: snapshot.sessionKeepSignedIn, socketConnected: snapshot.socketConnected,
       socketAuthenticated: snapshot.socketAuthenticated,
       ...(snapshot.expiresInMs === undefined ? {} : { remainingMs: Math.max(0, snapshot.expiresInMs) }),
@@ -104,7 +116,10 @@ export class NativeSessionMaintenance {
     if (snapshot.busy && snapshot.busyAgeMs < 60_000) {
       return { handled: true, observation: { ...observation, state: "renewing", reason: "busy" } };
     }
-    const expired = snapshot.expiresInMs !== undefined && snapshot.expiresInMs <= 0;
+    // This is the web logout deadline, not independent evidence that the
+    // server rejected authentication. The native app disables this timer for
+    // effective stayLoggedIn=ON; require protected proof instead.
+    const expired = !snapshot.sessionKeepSignedIn && snapshot.expiresInMs !== undefined && snapshot.expiresInMs <= 0;
     if (expired || !snapshot.socketConnected || !snapshot.socketAuthenticated ||
         snapshot.outcome === "stale" || snapshot.outcome === "unconfirmed" || snapshot.busy) {
       this.#proofKey = undefined;
@@ -128,7 +143,7 @@ export class NativeSessionMaintenance {
       this.#proofKey = key; this.#proofAt = this.now();
     }
     if (!snapshot.uiKeepSignedIn || !snapshot.sessionKeepSignedIn ||
-        (snapshot.expiresInMs !== undefined && snapshot.expiresInMs <= 5 * 60_000)) {
+        (snapshot.expiresInMs !== undefined && snapshot.expiresInMs > 0 && snapshot.expiresInMs <= 5 * 60_000)) {
       // Observability and authorization to invoke native renewal are distinct.
       // Never invent a duration/expiry or suppress fallback when mutation isn't supported.
       if (snapshot.renewalSupported === false) return { handled: false,
