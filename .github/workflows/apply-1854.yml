@@ -20,20 +20,15 @@ jobs:
         with:
           node-version: 24.18.1
           cache: npm
-      - name: Apply exact locally validated patch
+      - name: Apply deterministic 1.8.54 edits
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import base64, hashlib, lzma
-          encoded=''.join(Path(f'tools/_release_1854_{i:02}.b64').read_text().strip() for i in range(1,5))
-          data=lzma.decompress(base64.b64decode(encoded, validate=True))
-          assert hashlib.sha256(data).hexdigest() == '3d7f00ca645b1d44426bab4abdf141f12756816e155c06b892a5f086ad5882da'
-          Path('/tmp/1854.patch').write_bytes(data)
-          PY
-          git apply --check /tmp/1854.patch
-          git apply /tmp/1854.patch
+          python3 tools/_1854_edit.py
+          python3 tools/_1854_finish_edits.py
+          python3 tools/_1854_finish_more.py
+          python3 tools/_1854_add_regressions.py
+          python3 tools/_1854_release_edit.py
           git diff --check
       - name: Full Node and security validation
         shell: bash
@@ -58,6 +53,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          rm -f tools/_1854_edit.py tools/_1854_finish_edits.py tools/_1854_finish_more.py tools/_1854_add_regressions.py tools/_1854_release_edit.py
+          rm -f tools/_release_1854_patch.b64 tools/_release_1854_01.b64 tools/_release_1854_02.b64 tools/_release_1854_03.b64 tools/_release_1854_04.b64 tools/_capture_1854_1.b64
           git add -A
           git diff --cached --check
           git diff --cached --stat
