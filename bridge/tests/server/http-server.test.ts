@@ -19,6 +19,44 @@ afterEach(async () => {
 });
 
 describe("createBridgeHttpServer", () => {
+  test("native preference recheck is a guarded POST, never a cached page reload or cross-site action", async () => {
+    const requestNativeLoginPolicyCheck = vi.fn(async () => "queued" as const);
+    const server = await createBridgeHttpServer({
+      store: createStore(), host: "127.0.0.1", port: 0,
+      auth: new BridgeAuth("e".repeat(32)), devices: new DeviceStore(),
+      maintenance: { reloadInventory: vi.fn(), reconnectRealtime: vi.fn(), requestNativeLoginPolicyCheck }
+    });
+    servers.push(server);
+    const url = `http://127.0.0.1:${server.port}/api/v1/native-login-policy/check`;
+    const headers = { "content-type": "application/json", "x-stw-ui-action": "native-login-policy" };
+    expect((await fetch(url)).status).toBe(405);
+    expect((await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status).toBe(403);
+    expect((await fetch(url, { method: "POST", headers: { ...headers, "sec-fetch-site": "cross-site" }, body: "{}" })).status).toBe(403);
+    expect((await fetch(url, { method: "POST", headers: { ...headers, "content-type": "text/plain" }, body: "{}" })).status).toBe(415);
+    expect((await fetch(url, { method: "POST", headers, body: '{"enabled":false}' })).status).toBe(400);
+    expect(requestNativeLoginPolicyCheck).not.toHaveBeenCalled();
+    const response = await fetch(url, { method: "POST", headers, body: "{}" });
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ outcome: "queued" });
+    expect(response.headers.get("access-control-allow-origin")).toBeNull();
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(requestNativeLoginPolicyCheck).toHaveBeenCalledTimes(1);
+  });
+
+  test.each(["observed", "disabled", "unavailable"] as const)("native preference recheck reports %s honestly", async outcome => {
+    const server = await createBridgeHttpServer({
+      store: createStore(), host: "127.0.0.1", port: 0,
+      auth: new BridgeAuth("e".repeat(32)), devices: new DeviceStore(),
+      maintenance: { reloadInventory: vi.fn(), reconnectRealtime: vi.fn(), requestNativeLoginPolicyCheck: async () => outcome }
+    });
+    servers.push(server);
+    const response = await fetch(`http://127.0.0.1:${server.port}/api/v1/native-login-policy/check`, {
+      method: "POST", headers: { "content-type": "application/json", "x-stw-ui-action": "native-login-policy" }, body: "{}"
+    });
+    expect(response.status).toBe(outcome === "unavailable" ? 409 : 200);
+    expect(await response.json()).toEqual(outcome === "unavailable" ? { error: "browser_not_ready" } : { outcome });
+  });
+
   test("serves safe health and status routes with live/ready HTTP semantics", async () => {
     const now = Date.now();
     const store = new RuntimeStatusStore({

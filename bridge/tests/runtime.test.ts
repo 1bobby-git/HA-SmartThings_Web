@@ -80,11 +80,26 @@ class FakeRoleLocator {
 
 class FakePage extends FakeEmitter {
   nativePolicyOn = false;
+  nativeSessionSnapshot: Record<string, unknown> | undefined;
+  nativeSessionBegins = 0;
+  nativePolicyObserved: "on" | "off" | undefined;
   readonly goto = vi.fn(async (url: string) => {
     this.onGoto?.();
     this.currentUrl = url;
   });
   readonly evaluate = vi.fn(async (pageFunction?: unknown, argument?: unknown) => {
+    if (typeof pageFunction === "function" && pageFunction.name === "nativeSessionOperation" && this.nativeSessionSnapshot) {
+      if ((argument as {action?: string})?.action === "begin") {
+        this.nativeSessionBegins++;
+        this.nativeSessionSnapshot = { ...this.nativeSessionSnapshot, busy: true, busyAgeMs: 0, outcome: "requested" };
+        return "requested";
+      }
+      return this.nativeSessionSnapshot;
+    }
+
+    if (typeof argument === "object" && argument !== null && (argument as {action?:string}).action === "read" && this.nativePolicyObserved !== undefined) {
+      return { result: this.nativePolicyObserved };
+    }
     if (this.nativePolicyOn && typeof argument === "object" && argument !== null &&
         (argument as {action?: string}).action === "control") return {result:"on"};
     if (
@@ -273,6 +288,62 @@ function createDeps(
 }
 
 describe("createBridgeRuntime", () => {
+  const nativeEvidence = (patch: Record<string, unknown> = {}) => ({schema:1,available:true,
+    instance:"00000000-0000-4000-8000-000000000001",revision:1,uiKeepSignedIn:true,sessionKeepSignedIn:true,
+    expiresInMs:3600_000,socketConnected:true,socketAuthenticated:true,busy:false,busyAgeMs:0,outcome:"idle",...patch});
+
+  test("verified native sessions preserve the original tab beyond the old 15-minute replacement interval", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(10_000);
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    keeper.nativeSessionSnapshot = nativeEvidence();
+    const context = new FakeContext([keeper]);
+    const newPage = vi.spyOn(context,"newPage");
+    const deps = createDeps(createTempRoot(), {chromium:{launchPersistentContext:vi.fn(async()=>context)}});
+    deps.config.keepSignedInEnabled = true;
+    const runtime = await createBridgeRuntime(deps); runtimes.push(runtime); await runtime.browserStartup;
+    keeper.goto.mockClear();
+    await vi.advanceTimersByTimeAsync(16 * 60_000);
+    expect(runtime.status.getSnapshot()).toMatchObject({authenticated:true,nativeSessionState:"active",nativeSessionReason:"session_verified",nativeLoginPolicyReason:"session_verified"});
+    expect(keeper.nativeSessionBegins).toBe(0);
+    expect(newPage).not.toHaveBeenCalled(); expect(keeper.goto).not.toHaveBeenCalled(); expect(keeper.isClosed()).toBe(false);
+    expect(keeper.applicationProbeCalls.length).toBeGreaterThan(1);
+  });
+
+  test("native session mismatch waits for actual session evidence and proof before becoming active", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(10_000);
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    keeper.nativeSessionSnapshot = nativeEvidence({sessionKeepSignedIn:false});
+    const context = new FakeContext([keeper]); const newPage = vi.spyOn(context,"newPage");
+    const deps = createDeps(createTempRoot(), {chromium:{launchPersistentContext:vi.fn(async()=>context)}});
+    deps.config.keepSignedInEnabled = true;
+    const runtime = await createBridgeRuntime(deps); runtimes.push(runtime); await runtime.browserStartup;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(keeper.nativeSessionBegins).toBe(1);
+    expect(runtime.status.getSnapshot()).toMatchObject({nativeSessionState:"renewing",nativeSessionKeepSignedIn:false});
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(keeper.nativeSessionBegins).toBe(1); expect(newPage).not.toHaveBeenCalled();
+    keeper.nativeSessionSnapshot = nativeEvidence({revision:2,outcome:"applied"});
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(runtime.status.getSnapshot()).toMatchObject({nativeSessionState:"active",nativeSessionReason:"applied",nativeSessionKeepSignedIn:true});
+    expect(newPage).not.toHaveBeenCalled();
+  });
+
+  test("supplemental native work waits until pending device commands finish", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(10_000);
+    const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    keeper.nativeSessionSnapshot = nativeEvidence({sessionKeepSignedIn:false});
+    const context = new FakeContext([keeper]); const newPage = vi.spyOn(context,"newPage");
+    const deps = createDeps(createTempRoot(), {chromium:{launchPersistentContext:vi.fn(async()=>context)}});
+    deps.config.keepSignedInEnabled = true;
+    const runtime = await createBridgeRuntime(deps); runtimes.push(runtime); await runtime.browserStartup;
+    runtime.status.update({pendingCommandCount:1});
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(keeper.nativeSessionBegins).toBe(0); expect(newPage).not.toHaveBeenCalled();
+    expect(runtime.status.getSnapshot().nativeSessionReason).toBe("deferred");
+    runtime.status.update({pendingCommandCount:0}); await vi.advanceTimersByTimeAsync(10_000);
+    expect(keeper.nativeSessionBegins).toBe(1);
+  });
+
   test("native policy requests one early verified handoff and reports only the active candidate", async () => {
     vi.useFakeTimers(); vi.setSystemTime(10_000);
     const root = createTempRoot();
@@ -314,6 +385,44 @@ describe("createBridgeRuntime", () => {
     expect(runtime.status.getSnapshot()).toMatchObject({authenticated:false, nativeLoginPolicyState:"pending"});
     expect(newPage).not.toHaveBeenCalled();
     expect(original.evaluateCalls.some(([, args]) => (args as {action?:string})?.action)).toBe(false);
+  });
+
+  test("manual native recheck reads the active modal and coalesces closed-modal refresh requests", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(10_000);
+    const original = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+    const context = new FakeContext([original]);
+    const createPage = context.newPage.bind(context);
+    const newPage = vi.spyOn(context, "newPage").mockImplementation(async () => {
+      const page = await createPage(); page.nativePolicyOn = true; return page;
+    });
+    const deps = createDeps(createTempRoot(), {chromium:{launchPersistentContext:vi.fn(async () => context)}});
+    deps.config.keepSignedInEnabled = true;
+    const runtime = await createBridgeRuntime(deps);
+    runtimes.push(runtime); await runtime.browserStartup;
+    const check = () => fetch(`http://127.0.0.1:${runtime.port}/api/v1/native-login-policy/check`, {
+      method:"POST",headers:{"content-type":"application/json","x-stw-ui-action":"native-login-policy"},body:"{}"
+    });
+    // URL-only authentication at startup cannot authorize settings inspection.
+    expect((await check()).status).toBe(409);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(runtime.status.getSnapshot().sessionTouchLastOutcome).toBe("ok");
+    const active = context.pages().find(page => !page.isClosed())!;
+    active.goto.mockClear(); active.nativePolicyObserved = "on";
+    expect(await (await check()).json()).toEqual({outcome:"observed"});
+    expect(runtime.status.getSnapshot()).toMatchObject({authenticated:true,nativeLoginPolicyState:"enabled",nativeLoginPolicyReason:"observed_enabled"});
+    expect(active.goto).not.toHaveBeenCalled();
+    expect(newPage).toHaveBeenCalledTimes(1);
+    active.nativePolicyObserved = "off";
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(runtime.status.getSnapshot()).toMatchObject({authenticated:true,nativeLoginPolicyState:"attention",nativeLoginPolicyReason:"observed_disabled"});
+    expect(active.goto).not.toHaveBeenCalled();
+    active.nativePolicyObserved = undefined;
+    expect(await (await check()).json()).toEqual({outcome:"queued"});
+    expect(await (await check()).json()).toEqual({outcome:"queued"});
+    expect(newPage).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(newPage).toHaveBeenCalledTimes(2);
+    expect(runtime.status.getSnapshot()).toMatchObject({nativeLoginPolicyState:"enabled",nativeLoginPolicyReason:"already_enabled"});
   });
 
   test("recognizes the fallback whole Advanced device snapshot URL", () => {
@@ -888,7 +997,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
 
     expect(log.info.mock.calls.slice(0, 14)).toEqual([
-      ["bridge_init:version:1.8.52:home_monitor_direct"],
+      ["bridge_init:version:1.8.53:home_monitor_direct"],
       ["bridge_init:data_paths"],
       ["bridge_init:data_paths:data_dir"],
       ["bridge_init:data_paths:profile_dir"],

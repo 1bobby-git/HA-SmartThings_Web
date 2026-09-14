@@ -22,6 +22,16 @@ export interface HealthDetails {
   protocolMismatchSurface?: RuntimeStatusSnapshot["protocolMismatchSurface"];
   nativeLoginPolicyState?: RuntimeStatusSnapshot["nativeLoginPolicyState"];
   nativeLoginPolicyReason?: string;
+  nativeSessionState?: "unknown" | "checking" | "active" | "renewing" | "attention";
+  nativeSessionReason?: "unsupported" | "setting_pending" | "session_verified" | "renewed" | "applied" | "unconfirmed" | "expired" | "busy" | "deferred" | "read_failed" | "reauth" | "stale";
+  nativeSessionUiKeepSignedIn?: boolean;
+  nativeSessionKeepSignedIn?: boolean;
+  nativeSessionStorageAllowed?: boolean;
+  nativeSessionSocketConnected?: boolean;
+  nativeSessionSocketAuthenticated?: boolean;
+  nativeSessionRemainingMs?: number;
+  nativeSessionObservationAgeMs?: number;
+
   sessionTouchCount?: number;
   sessionTouchConsecutiveFailures?: number;
   sessionTouchLastOutcome?: RuntimeStatusSnapshot["sessionTouchLastOutcome"];
@@ -135,6 +145,16 @@ export function createHealthReport(
       restartCount: snapshot.restartCount,
       nativeLoginPolicyState: snapshot.nativeLoginPolicyState,
       nativeLoginPolicyReason: snapshot.nativeLoginPolicyReason,
+      nativeSessionState: snapshot.nativeSessionState,
+      nativeSessionReason: snapshot.nativeSessionReason,
+      nativeSessionUiKeepSignedIn: snapshot.nativeSessionUiKeepSignedIn,
+      nativeSessionKeepSignedIn: snapshot.nativeSessionKeepSignedIn,
+      nativeSessionStorageAllowed: snapshot.nativeSessionStorageAllowed,
+      nativeSessionSocketConnected: snapshot.nativeSessionSocketConnected,
+      nativeSessionSocketAuthenticated: snapshot.nativeSessionSocketAuthenticated,
+      nativeSessionRemainingMs: snapshot.nativeSessionRemainingMs === undefined ? undefined :
+        Math.max(0, snapshot.nativeSessionRemainingMs - (optionalAgeMs(nowMs, snapshot.nativeSessionObservedAtMs) ?? 0)),
+      nativeSessionObservationAgeMs: optionalAgeMs(nowMs, snapshot.nativeSessionObservedAtMs),
       sessionTouchCount: snapshot.sessionTouchCount,
       sessionTouchConsecutiveFailures: snapshot.sessionTouchConsecutiveFailures,
       sessionTouchLastOutcome: snapshot.sessionTouchLastOutcome,

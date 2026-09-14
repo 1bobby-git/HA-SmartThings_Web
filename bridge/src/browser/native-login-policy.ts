@@ -5,6 +5,7 @@ import type { BrowserPageLike } from "./keeper-page.js";
 export type NativeLoginPolicyState = "disabled" | "pending" | "enabled" | "attention";
 export type NativeLoginPolicyReason =
   | "not_checked" | "automation_disabled" | "already_enabled" | "enabled_and_verified"
+  | "observed_enabled" | "observed_disabled" | "session_verified"
   | "browser_unsupported" | "invalid_target" | "settings_not_found" | "control_not_found"
   | "ambiguous" | "blocked" | "state_unknown" | "not_saved" | "page_changed" | "ui_timeout";
 export interface NativeLoginPolicyReport {
@@ -18,7 +19,7 @@ export interface NativeLoginPolicyResult {
 }
 
 type SettingsPage = BrowserPageLike & Pick<Page, "locator">;
-type DomProbe = { result: "opener" | "on" | "off" | "missing" | "ambiguous" | "blocked" | "unknown"; native?: boolean };
+type DomProbe = { result: "opener" | "menu" | "on" | "off" | "missing" | "ambiguous" | "blocked" | "unknown"; native?: boolean };
 const MARKER = "data-stw-login-policy";
 
 export function supportsNativeLoginPolicy(page: BrowserPageLike): page is SettingsPage {
@@ -31,6 +32,24 @@ export function nativeLoginTarget(url: string): boolean {
     return value.origin === "https://my.smartthings.com" && /^\/location\/[^/]+\/?$/u.test(value.pathname) &&
       !value.search && !value.hash && !value.username && !value.password;
   } catch { return false; }
+}
+
+/** Observe a user-opened settings dialog without interacting with the live tab.
+ * An observed preference is not authentication or reload-persistence proof.
+ * Only enum values leave the browser; no account text or storage is returned.
+ */
+export async function readNativeKeepSignedIn(page: BrowserPageLike): Promise<NativeLoginPolicyReport | undefined> {
+  const target = page.url();
+  if (!page.evaluate || page.isClosed() || !nativeLoginTarget(target)) return undefined;
+  try {
+    const probe = await bounded(page.evaluate(inspectLoginSettingsDom, { action: "read", marker: "", target }), 1_500);
+    if (page.isClosed() || page.url() !== target) return undefined;
+    if (probe.result === "on") return { state: "enabled", reason: "observed_enabled" };
+    if (probe.result === "off") return { state: "attention", reason: "observed_disabled" };
+    if (probe.result === "unknown") return { state: "attention", reason: "state_unknown" };
+    if (probe.result === "ambiguous") return { state: "attention", reason: "ambiguous" };
+    return undefined;
+  } catch { return undefined; }
 }
 
 /** This runs ONLY in an owned, freshly authenticated candidate tab, never the
@@ -85,13 +104,25 @@ export async function ensureNativeKeepSignedIn(
       unresolvedExistingUi = ["blocked", "ambiguous", "unknown"].includes(existing.result);
       return existing;
     }
-    const deadline = performance.now() + timeout;
-    let found: DomProbe;
-    do {
-      found = await probe("opener");
-      if (found.result !== "missing") break;
-      await new Promise(resolve => setTimeout(resolve, 100));
-    } while (performance.now() < deadline);
+    const waitForOpener = async (menuOpened = false): Promise<DomProbe> => {
+      const deadline = performance.now() + timeout;
+      let found: DomProbe;
+      do {
+        found = await probe("opener");
+        if (found.result !== "missing" && !(menuOpened && found.result === "menu")) return found;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } while (performance.now() < deadline);
+      return { result: "missing" };
+    };
+    let found = await waitForOpener();
+    if (found.result === "menu") {
+      // Production Location UI: App settings opens a menu; Settings opens the
+      // user-settings modal. Never guess Manage location / Support / Logout.
+      touchedUi = true;
+      await focusOwnedPage();
+      await page.locator(selector).click({ timeout });
+      found = await waitForOpener(true);
+    }
     if (found.result !== "opener") {
       reason = found.result === "missing" ? "settings_not_found" : found.result === "ambiguous" ? "ambiguous" : "blocked";
       return found;
@@ -101,6 +132,31 @@ export async function ensureNativeKeepSignedIn(
     await focusOwnedPage();
     await page.locator(selector).click({ timeout });
     return await waitForControl();
+  };
+  const waitForNativeApplication = async () => {
+    // Optimistic ON is not server application. Do not reload our candidate
+    // while the site's native authenticate callback is still outstanding.
+    // Unknown app versions retain DOM-only verification without claiming
+    // that the effective session was verified.
+    const until = performance.now() + 35_000;
+    do {
+      if (!valid()) throw new Error("page_changed");
+      const result = await bounded(page.evaluate!(({ target }) => {
+        if (location.href !== target) return "changed";
+        const api = (window as unknown as Record<symbol, {read(): Record<string, unknown>}>)[Symbol.for("smartthings_web_bridge.native_session")];
+        if (typeof api?.read !== "function") return "unsupported";
+        const state = api.read();
+        if (state?.schema !== 1 || state.available !== true) return "unsupported";
+        if (state.outcome === "unconfirmed" || state.outcome === "stale") return "failed";
+        return !state.busy && state.uiKeepSignedIn === true && state.sessionKeepSignedIn === true &&
+          state.socketConnected === true && state.socketAuthenticated === true &&
+          typeof state.expiresInMs === "number" && state.expiresInMs > 0 ? "applied" : "pending";
+      }, { target }), 1_500);
+      if (result === "unsupported" || result === "applied") return;
+      if (result === "failed" || result === "changed") throw new Error("native_apply_failed");
+      await new Promise(resolve => setTimeout(resolve, 200));
+    } while (performance.now() < until);
+    throw new Error("native_apply_timeout");
   };
   const reload = async () => {
     if (!valid()) throw new Error("page_changed");
@@ -127,6 +183,7 @@ export async function ensureNativeKeepSignedIn(
       } else if (state.result !== "on") throw new Error("page_changed");
       state = await waitForControl("on");
       if (state.result === "on") {
+        await waitForNativeApplication();
         await reload();
         state = await open();
         confirmed = state.result === "on";
@@ -166,9 +223,10 @@ async function bounded<T>(operation: Promise<T>, timeout: number): Promise<T> {
  * Playwright click, not a coordinate or a guessed switch position.
  */
 function inspectLoginSettingsDom({ action, marker, target }: {
-  action: "opener" | "control"; marker: string; target: string;
+  action: "opener" | "control" | "read"; marker: string; target: string;
 }): DomProbe {
   if (location.href !== target || location.origin !== "https://my.smartthings.com") return { result: "blocked" };
+  if (action === "read" && !document.querySelector('.user-settings, #stayLoggedIn, [role="dialog"], dialog[open], [aria-modal="true"]')) return { result: "missing" };
   const normalize = (text: string | null | undefined) => (text ?? "").replace(/\s+/gu, " ").trim();
   const visible = (element: Element): boolean => {
     const style = getComputedStyle(element);
@@ -181,11 +239,19 @@ function inspectLoginSettingsDom({ action, marker, target }: {
     .filter(element => visible(element) && pattern.test(normalize(element.textContent)) &&
       !Array.from(element.children).some(child => pattern.test(normalize(child.textContent))));
   const title = /^(?:SmartThings 설정|SmartThings settings)$/iu;
-  const web = /^(?:SmartThings 웹|SmartThings web)$/iu;
-  const keep = /^(?:로그인 유지|Keep me signed in|Keep signed in|Stay signed in|Keep me logged in)$/iu;
+  const web = /^(?:SmartThings 웹|SmartThings (?:for )?web)$/iu;
+  const keep = /^(?:로그인 유지|Keep me signed in|Keep signed in|Stay signed in|Stay logged in|Keep me logged in)$/iu;
   const controls = (root: Element) => [...new Set(Array.from(root.querySelectorAll<HTMLElement>(
     'input[type="checkbox"], [role="switch"], [role="checkbox"]'
-  )).map(element => element.querySelector<HTMLInputElement>('input[type="checkbox"]') ?? element))].filter(visible);
+  )).map(element => {
+    // Production switch: the transparent, readonly input is a state mirror;
+    // the sibling button owns the actual React change handler.
+    if (element.matches('input#stayLoggedIn[type="checkbox"]')) {
+      const button = element.parentElement?.querySelector<HTMLElement>('button[data-testid="toggle-switch-stayLoggedIn"][role="switch"]');
+      if (button) return button;
+    }
+    return element.querySelector<HTMLInputElement>('input[type="checkbox"]') ?? element;
+  }))].filter(visible);
   const name = (element: HTMLElement) => {
     const refs = element.getAttribute("aria-labelledby");
     if (refs) return normalize(refs.split(/\s+/u).map(id => document.getElementById(id)?.textContent ?? "").join(" "));
@@ -208,6 +274,8 @@ function inspectLoginSettingsDom({ action, marker, target }: {
   const root = [...roots][0];
   if (modals.some(modal => !root || (!modal.contains(root) && !root.contains(modal)))) return { result: "blocked" };
   const mark = (element: HTMLElement, result: DomProbe): DomProbe => {
+    if (action === "read") return result;
+    if (element instanceof HTMLInputElement && element.readOnly) return { result: "blocked" };
     if (element.matches(':disabled, [aria-disabled="true"]') || element.closest('[aria-disabled="true"], [inert]')) return { result: "blocked" };
     for (const prior of document.querySelectorAll('[data-stw-login-policy]')) prior.removeAttribute("data-stw-login-policy");
     element.setAttribute("data-stw-login-policy", marker);
@@ -222,8 +290,12 @@ function inspectLoginSettingsDom({ action, marker, target }: {
         try { const url = new URL(element.getAttribute("href")!, location.href); return url.origin === location.origin && url.pathname === location.pathname; }
         catch { return false; }
       })()));
-    return openers.length === 1 ? mark(openers[0]!, { result: "opener" }) :
-      { result: openers.length > 1 ? "ambiguous" : "missing" };
+    if (openers.length > 1) return { result: "ambiguous" };
+    if (openers.length === 1) return mark(openers[0]!, { result: "opener" });
+    const menus = all.filter(element => visible(element) && element.matches('button, [role="button"]') &&
+      /^(?:App settings|앱 설정)$/iu.test(name(element)));
+    return menus.length === 1 ? mark(menus[0]!, { result: "menu" }) :
+      { result: menus.length > 1 ? "ambiguous" : "missing" };
   }
   if (!root) return { result: "missing" };
   const labels = exact(root, keep);
@@ -253,5 +325,11 @@ function inspectLoginSettingsDom({ action, marker, target }: {
   if (control instanceof HTMLInputElement) return mark(control, { result: control.checked ? "on" : "off", native: true });
   const checked = control.getAttribute("aria-checked");
   if (checked !== "true" && checked !== "false") return { result: "unknown" };
+  if (control.matches('button[data-testid="toggle-switch-stayLoggedIn"]')) {
+    const mirrors = root.querySelectorAll<HTMLInputElement>('input#stayLoggedIn[type="checkbox"]');
+    if (mirrors.length > 1) return { result: "ambiguous" };
+    // Use the live checked property, not the initial HTML checked attribute.
+    if (mirrors[0] && mirrors[0].checked !== (checked === "true")) return { result: "unknown" };
+  }
   return mark(control, { result: checked === "true" ? "on" : "off", native: false });
 }

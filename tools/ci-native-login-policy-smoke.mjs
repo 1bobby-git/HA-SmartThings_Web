@@ -157,8 +157,13 @@ try {
   assert.equal((await ensureNativeKeepSignedIn(page, target, {enabled:true})).report.reason, 'already_enabled');
   assert.equal((await readCounters(page)).keep, 1);
   console.log(`PASS ${++passed} native preference survives real persistent Chromium restart (synthetic setting)`);
-  for (const p of context.pages()) await p.close();
-  page = await context.newPage(); await page.goto(target); await page.evaluate(() => localStorage.clear()); await page.goto(target);
+  // Headed persistent Chromium exits when its last window is closed. Open
+  // the next fixture before retiring the previous pages; this is test setup,
+  // not a production session workaround or a retry that hides an assertion.
+  const previousPages = context.pages();
+  page = await context.newPage();
+  for (const previous of previousPages) await previous.close();
+  await page.goto(target); await page.evaluate(() => localStorage.clear()); await page.goto(target);
   const manager = new KeeperPageManager(context, {
     probeApplicationSession: verifyLocationApplicationSession,
     verifyRefreshCandidate: async (candidate, expected) => {

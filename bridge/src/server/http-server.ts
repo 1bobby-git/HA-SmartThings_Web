@@ -28,6 +28,7 @@ export interface BridgeHttpServerOptions {
   maintenance?: {
     reloadInventory(): Promise<void>;
     reconnectRealtime(): Promise<void>;
+    requestNativeLoginPolicyCheck?(): Promise<"observed" | "queued" | "disabled" | "unavailable">;
   };
   images?: Pick<CameraImageStore, "get"> & Partial<Pick<CameraImageStore, "subscribe">>;
   physicalActionProbe?: PhysicalActionCorrelationProbe;
@@ -92,6 +93,20 @@ async function handleBridgeApiRequest(
     const method = request.method ?? "GET";
     if (!options.auth || !options.devices) {
       return writeError(response, 503, "bridge_api_unavailable");
+    }
+    if (path === "/api/v1/native-login-policy/check") {
+      if (method !== "POST") return writeError(response, 405, "method_not_allowed");
+      if (!isLoopback(request.socket.remoteAddress)) return writeError(response, 403, "ingress_required");
+      if (request.headers["x-stw-ui-action"] !== "native-login-policy" || request.headers["sec-fetch-site"] === "cross-site") {
+        return writeError(response, 403, "same_origin_required");
+      }
+      if (!isJsonContentType(request.headers["content-type"])) return writeError(response, 415, "content_type_unsupported");
+      const body = await readJsonBody(request, 128);
+      if (!body.ok || !isRecord(body.value) || Object.keys(body.value).length) return writeError(response, 400, "invalid_request");
+      if (!options.maintenance?.requestNativeLoginPolicyCheck) return writeError(response, 503, "maintenance_unavailable");
+      const outcome = await options.maintenance.requestNativeLoginPolicyCheck();
+      if (outcome === "unavailable") return writeError(response, 409, "browser_not_ready");
+      return writeJson(response, outcome === "queued" ? 202 : 200, { outcome });
     }
     if (path === "/api/v1/pairing-code") {
       if (method !== "POST") return writeError(response, 405, "method_not_allowed");

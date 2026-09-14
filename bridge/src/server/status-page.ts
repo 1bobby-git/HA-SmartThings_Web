@@ -28,6 +28,15 @@ const DIAGNOSTIC_LABELS: Record<string, string> = {
   detailDiscoveryFailureCount: "상세 탐색 실패",
   protocolChangeCount: "프로토콜 변경 횟수",
   protocolMismatchSurface: "프로토콜 불일치 위치",
+  nativeSessionState: "실제 세션 상태",
+  nativeSessionReason: "실제 세션 확인 결과",
+  nativeSessionUiKeepSignedIn: "화면 로그인 유지 설정",
+  nativeSessionKeepSignedIn: "실제 세션 로그인 유지 적용",
+  nativeSessionStorageAllowed: "기능성 설정 저장 동의",
+  nativeSessionSocketConnected: "소켓 연결",
+  nativeSessionSocketAuthenticated: "소켓 인증",
+  nativeSessionRemainingMs: "현재 세션 남은 시간",
+  nativeSessionObservationAgeMs: "실제 세션 관찰 경과 시간",
   nativeLoginPolicyState: "SmartThings 로그인 유지 설정",
   nativeLoginPolicyReason: "로그인 유지 설정 확인 결과",
   sessionTouchCount: "세션 유지 시도",
@@ -484,6 +493,7 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
     </section>
 
     ${renderNativeLoginPolicy(report)}
+    ${renderNativeSession(report)}
 
     <section class="hc-section" aria-labelledby="protocol-heading">
       <div class="hc-section-heading">
@@ -512,6 +522,40 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
   </main>
 
   <script>
+    const nativeCheck = document.getElementById("native-policy-check");
+    const nativeResult = document.getElementById("native-policy-check-result");
+    nativeCheck.addEventListener("click", async () => {
+      nativeCheck.disabled = true;
+      nativeCheck.setAttribute("aria-busy", "true");
+      nativeResult.textContent = "브릿지 브라우저의 설정을 확인하고 있습니다…";
+      try {
+        const response = await fetch("api/v1/native-login-policy/check", {
+          method: "POST", credentials: "same-origin",
+          headers: { "content-type": "application/json", "x-stw-ui-action": "native-login-policy" },
+          body: "{}", signal: AbortSignal.timeout(10000)
+        });
+        const body = await response.json();
+        if (!response.ok) throw new Error("check_failed");
+        if (body.outcome === "disabled") {
+          nativeResult.textContent = "자동 확인이 꺼져 있습니다. 브릿지 앱의 로그인 유지 자동 적용 옵션을 확인하세요.";
+          return;
+        }
+        if (body.outcome === "observed") { window.location.reload(); return; }
+        for (let attempt = 0; attempt < 45; attempt++) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          const healthResponse = await fetch("health/details", { method: "GET", cache: "no-store", credentials: "same-origin", signal: AbortSignal.timeout(5000) });
+          if (!healthResponse.ok) throw new Error("check_failed");
+          const health = await healthResponse.json();
+          if (health.details.nativeLoginPolicyState !== "pending") { window.location.reload(); return; }
+        }
+        nativeResult.textContent = "확인 대기 중입니다. 진행 중인 브라우저 작업이 끝난 뒤 다시 확인해 주세요.";
+      } catch {
+        nativeResult.textContent = "확인하지 못했습니다. 브릿지 브라우저의 로그인 상태를 확인한 뒤 다시 시도해 주세요.";
+      } finally {
+        nativeCheck.disabled = false;
+        nativeCheck.removeAttribute("aria-busy");
+      }
+    });
     const pairingButton = document.getElementById("pairing-button");
     const pairingResult = document.getElementById("pairing-result");
     const pairingCode = pairingResult.querySelector(".hc-pairing-code");
@@ -702,9 +746,12 @@ const NATIVE_POLICY_LABELS: Record<string, string> = {
   disabled: "자동 적용 꺼짐", pending: "로그인 후 확인 예정", enabled: "로그인 유지 켜짐 확인", attention: "설정 확인 필요",
   not_checked: "이 브라우저에서 아직 확인하지 않았습니다.", automation_disabled: "자동 적용을 끈 상태입니다. 웹의 기존 설정은 변경하지 않습니다.",
   already_enabled: "SmartThings 웹 설정이 이미 켜져 있어 변경하지 않았습니다.",
+  session_verified: "실제 세션에 로그인 유지가 적용되어 있고 현재 앱의 인증 읽기도 성공했습니다.",
+  observed_enabled: "현재 브릿지 브라우저에 열린 SmartThings 설정에서 로그인 유지 켜짐을 확인했습니다.",
+  observed_disabled: "현재 브릿지 브라우저에 열린 SmartThings 설정에서 로그인 유지가 꺼져 있습니다.",
   enabled_and_verified: "웹 설정을 켜고 페이지를 다시 열어 유지되는 것을 확인했습니다.",
   browser_unsupported: "브라우저에서 설정을 직접 확인해 주세요.", invalid_target: "기기 화면에서 다시 확인해야 합니다.",
-  settings_not_found: "SmartThings 설정 버튼을 찾지 못했습니다.", control_not_found: "로그인 유지 스위치를 확인하지 못했습니다.",
+  settings_not_found: "SmartThings 설정 메뉴를 자동으로 찾지 못했습니다. 꺼짐을 의미하지는 않습니다. 브릿지 브라우저에서 설정 창을 열고 다시 확인해 주세요.", control_not_found: "로그인 유지 스위치를 확인하지 못했습니다.",
   ambiguous: "설정 대상이 명확하지 않아 변경하지 않았습니다.", blocked: "다른 창이나 사용자 입력이 있어 변경하지 않았습니다.",
   state_unknown: "스위치의 켜짐 여부를 판독하지 못했습니다.", not_saved: "설정 저장을 확인하지 못했습니다.",
   page_changed: "페이지 또는 인증 상태가 바뀌어 확인을 중단했습니다.", ui_timeout: "설정 확인이 지연되어 중단했습니다."
@@ -729,7 +776,8 @@ function renderNativeLoginPolicy(report: HealthReport): string {
         <p role="note"><strong>${escapeHtml(importantGuidance.split(":")[0] + ":")}</strong>${escapeHtml(importantGuidance.slice(importantGuidance.indexOf(":") + 1))}</p>
       </div>
       <div class="hc-actions"><a class="hc-button hc-button-secondary" href="novnc-ui/vnc.html?autoconnect=1&amp;resize=scale&amp;path=websockify">브라우저에서 설정 확인</a>
-        <a class="hc-button hc-button-secondary" href=".">상태 다시 확인</a></div>
+        <button class="hc-button hc-button-secondary" id="native-policy-check" type="button" aria-describedby="native-policy-check-result">상태 다시 확인</button>
+        <span id="native-policy-check-result" role="status" aria-live="polite"></span></div>
     </div>
   </section>`;
 }
@@ -741,6 +789,14 @@ function formatDiagnosticLabel(value: string): string {
 function formatDiagnosticValue(key: string, value: unknown): string {
   if (value === undefined || value === null || value === "") return "—";
   if ((key === "nativeLoginPolicyState" || key === "nativeLoginPolicyReason") && typeof value === "string") return NATIVE_POLICY_LABELS[value] ?? "확인 필요";
+  if ((key === "nativeSessionState" || key === "nativeSessionReason") && typeof value === "string") {
+    return ({ unknown:"확인 대기", checking:"적용 확인 중", active:"실제 세션 확인됨", renewing:"인증 갱신 중", attention:"확인 필요",
+      unsupported:"현재 웹 구조에서 직접 확인 불가", setting_pending:"실제 적용 대기", session_verified:"실제 세션과 보호된 읽기 확인됨",
+      renewed:"만료 연장 확인됨", applied:"실제 설정 적용 확인됨", unconfirmed:"갱신 결과 미확인", expired:"현재 세션 만료",
+      busy:"웹의 인증 처리 진행 중", deferred:"기기 제어 또는 사용자 작업 종료 대기", read_failed:"인증 읽기 확인 실패",
+      reauth:"재로그인 필요", stale:"이전 페이지 결과 폐기" } as Record<string,string>)[value] ?? "확인 필요";
+  }
+  if (key === "nativeSessionRemainingMs" && typeof value === "number") return formatDuration(value);
   if (key === "state" && typeof value === "string") return formatRuntimeState(value as HealthReport["details"]["state"]);
   if (key === "urlCategory" && typeof value === "string") return formatUrlCategory(value);
   if (key === "sessionTouchLastOutcome" && typeof value === "string") return formatSessionOutcome(value);
@@ -796,4 +852,38 @@ function escapeHtml(value: string): string {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+function renderNativeSession(report: HealthReport): string {
+  const d = report.details;
+  const current = d.authenticated && (d.nativeSessionObservationAgeMs ?? Infinity) < 90_000;
+  const state = current ? d.nativeSessionState ?? "unknown" : "unknown";
+  const labels: Record<string, string> = {
+    unknown: "실제 세션 확인 대기", checking: "세션 적용 확인 중", active: "실제 세션 유지 확인됨",
+    renewing: "SmartThings 인증 갱신 중", attention: "세션 갱신 확인 필요"
+  };
+  const reason: Record<string, string> = {
+    unsupported: "현재 웹 버전에서 세션 정보를 읽지 못했습니다. 기존 브라우저 복구 방식은 유지됩니다.",
+    setting_pending: "설정 화면의 켜짐과 실제 세션 적용 여부를 따로 확인합니다.",
+    session_verified: "로그인 유지가 실제 세션에 적용되었고 인증 확인도 성공했습니다.",
+    renewed: "새 인증 결과와 만료 시각 연장을 확인했습니다.",
+    applied: "로그인 유지의 세션 적용을 확인했습니다. 만료 시각 연장과는 별개입니다.",
+    unconfirmed: "갱신 요청 뒤 새로운 세션 적용을 확인하지 못했습니다. 기존 복구 경로로 확인합니다.",
+    expired: "관찰한 세션의 유효 시간이 지났습니다. 재인증 상태를 확인합니다.",
+    busy: "웹 앱의 인증 응답을 기다립니다. 같은 갱신 요청을 중복 실행하지 않습니다.",
+    deferred: "진행 중인 기기 제어나 브라우저 작업을 마친 뒤 확인합니다.",
+    read_failed: "현재 앱 연결의 인증을 확인하지 못했습니다. 즉시 로그아웃으로 단정하지 않습니다.",
+    reauth: "현재 앱에서 재인증이 필요하다는 응답을 받았습니다.", stale: "브라우저 또는 로그인 상태가 바뀌어 다시 확인합니다."
+  };
+  const yesno = (v: boolean | undefined) => !current || v === undefined ? "확인 대기" : v ? "켜짐" : "꺼짐";
+  const tone: StatusTone = state === "active" ? "ready" : "warning";
+  const remaining = current && d.nativeSessionRemainingMs !== undefined
+    ? `${Math.ceil(d.nativeSessionRemainingMs / 60000)}분` : "확인 대기";
+  return `<section class="hc-section" aria-labelledby="native-session-heading"><div class="hc-card hc-integration" data-native-session-state="${state}">
+    <div><h3 id="native-session-heading">실제 로그인 세션</h3>
+    <p class="hc-status-value">${renderStatusGlyph(tone, "hc-status-leading-icon")}${labels[state]}</p>
+    <p>${escapeHtml(reason[current ? d.nativeSessionReason ?? "unsupported" : "stale"] ?? reason.unsupported!)}</p>
+    <p>설정값 ${yesno(d.nativeSessionUiKeepSignedIn)} · 실제 세션 적용 ${yesno(d.nativeSessionKeepSignedIn)} · 현재 유효 시간 ${remaining}</p>
+    <p>브라우저 종료 후 영구 로그인을 보장하는 설정은 아닙니다. 사용자 인증이 필요하면 브라우저 화면을 유지합니다.</p>
+    </div></div></section>`;
 }

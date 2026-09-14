@@ -55,6 +55,16 @@ export interface RuntimeStatusSnapshot {
   protocolMismatchSurface: ProtocolMismatchSurface | undefined;
   nativeLoginPolicyState?: "disabled" | "pending" | "enabled" | "attention";
   nativeLoginPolicyReason?: string;
+  nativeSessionState?: "unknown" | "checking" | "active" | "renewing" | "attention";
+  nativeSessionReason?: "unsupported" | "setting_pending" | "session_verified" | "renewed" | "applied" | "unconfirmed" | "expired" | "busy" | "deferred" | "read_failed" | "reauth" | "stale";
+  nativeSessionUiKeepSignedIn?: boolean | undefined;
+  nativeSessionKeepSignedIn?: boolean | undefined;
+  nativeSessionStorageAllowed?: boolean | undefined;
+  nativeSessionSocketConnected?: boolean | undefined;
+  nativeSessionSocketAuthenticated?: boolean | undefined;
+  nativeSessionRemainingMs?: number | undefined;
+  nativeSessionObservedAtMs?: number | undefined;
+
   sessionTouchCount?: number;
   sessionTouchConsecutiveFailures?: number;
   sessionTouchLastOutcome?: "ok" | "failed" | "reauth" | "stale" | undefined;
@@ -124,6 +134,16 @@ const snapshotKeys = new Set<keyof RuntimeStatusSnapshot>([
   "protocolMismatchSurface",
   "nativeLoginPolicyState",
   "nativeLoginPolicyReason",
+  "nativeSessionState",
+  "nativeSessionReason",
+  "nativeSessionUiKeepSignedIn",
+  "nativeSessionKeepSignedIn",
+  "nativeSessionStorageAllowed",
+  "nativeSessionSocketConnected",
+  "nativeSessionSocketAuthenticated",
+  "nativeSessionRemainingMs",
+  "nativeSessionObservedAtMs",
+
   "sessionTouchCount",
   "sessionTouchConsecutiveFailures",
   "sessionTouchLastOutcome",
@@ -159,6 +179,7 @@ const snapshotKeys = new Set<keyof RuntimeStatusSnapshot>([
 ]);
 
 const counterKeys = new Set<keyof RuntimeStatusSnapshot>([
+  "nativeSessionRemainingMs",
   "activeConnections",
   "observedDeviceCount",
   "decodedDeviceEventCount",
@@ -182,6 +203,12 @@ const counterKeys = new Set<keyof RuntimeStatusSnapshot>([
 ]);
 
 const booleanKeys = new Set<keyof RuntimeStatusSnapshot>([
+  "nativeSessionUiKeepSignedIn",
+  "nativeSessionKeepSignedIn",
+  "nativeSessionStorageAllowed",
+  "nativeSessionSocketConnected",
+  "nativeSessionSocketAuthenticated",
+
   "chromiumRunning",
   "keeperPresent",
   "authenticated",
@@ -192,6 +219,7 @@ const booleanKeys = new Set<keyof RuntimeStatusSnapshot>([
 ]);
 
 const timestampKeys = new Set<keyof RuntimeStatusSnapshot>([
+  "nativeSessionObservedAtMs",
   "lastSessionTouchAtMs",
   "lastSessionTouchSuccessAtMs",
   "heartbeatAtMs",
@@ -353,12 +381,17 @@ function validatePatch(patch: RuntimeStatusPatch, now: number): void {
     if (value !== undefined && booleanKeys.has(key) && typeof value !== "boolean") {
       throw new Error(`runtime status flag must be boolean: ${String(key)}`);
     }
+    if (key === "nativeSessionState" && value !== undefined &&
+        !["unknown", "checking", "active", "renewing", "attention"].includes(value as string)) throw new Error("invalid native session state");
+    if (key === "nativeSessionReason" && value !== undefined &&
+        !["unsupported", "setting_pending", "session_verified", "renewed", "applied", "unconfirmed", "expired", "busy", "deferred", "read_failed", "reauth", "stale"].includes(value as string)) throw new Error("invalid native session reason");
+    if (key === "nativeSessionRemainingMs" && value !== undefined && Number(value) > 31 * 86400_000) throw new Error("invalid native session duration");
     if (key === "nativeLoginPolicyState" && value !== undefined &&
         !["disabled", "pending", "enabled", "attention"].includes(value as string)) throw new Error("invalid native login policy state");
     if (key === "nativeLoginPolicyReason" && value !== undefined &&
         !["not_checked", "automation_disabled", "already_enabled", "enabled_and_verified", "browser_unsupported",
           "invalid_target", "settings_not_found", "control_not_found", "ambiguous", "blocked", "state_unknown",
-          "not_saved", "page_changed", "ui_timeout"].includes(value as string)) throw new Error("invalid native login policy reason");
+          "not_saved", "page_changed", "ui_timeout", "observed_enabled", "observed_disabled", "session_verified"].includes(value as string)) throw new Error("invalid native login policy reason");
     if (key === "sessionTouchLastOutcome" && value !== undefined &&
         !["ok", "failed", "reauth", "stale"].includes(value as string)) {
       throw new Error("invalid session touch outcome");
