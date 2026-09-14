@@ -133,10 +133,7 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
     }
 
     * { box-sizing: border-box; }
-    *, *::before, *::after {
-      border-radius: 0 !important;
-      box-shadow: none !important;
-    }
+    *, *::before, *::after { box-shadow: none !important; }
     html { scroll-behavior: smooth; background: var(--hc-bg); }
     body {
       margin: 0;
@@ -159,7 +156,7 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
       z-index: 100;
       transform: translateY(-160%);
       padding: 10px 14px;
-      border-radius: 10px;
+      border-radius: 8px;
       background: #ffffff;
       color: #191f28;
       box-shadow: none;
@@ -217,7 +214,7 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
     .hc-connection[data-state="attention"] .hc-connection-dot { background: #b4233d; }
     .hc-version {
       padding: 4px 8px;
-      border-radius: 6px;
+      border-radius: 5px;
       background: #f1f3f6;
       color: #667182;
       font-size: 12px;
@@ -231,7 +228,7 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
       gap: 9px;
       padding: 7px 12px;
       border: 1px solid #e9ecf1;
-      border-radius: 12px;
+      border-radius: 10px;
       background: #ffffff;
       color: #2563eb;
       font-weight: 750;
@@ -269,7 +266,7 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
       right: 0;
       bottom: 0;
       height: 3px;
-      border-radius: 99px 99px 0 0;
+      border-radius: 2px 2px 0 0;
       background: #191f28;
     }
 
@@ -285,7 +282,7 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
       overflow: hidden;
       padding: 28px;
       border: 1px solid var(--hc-line);
-      border-radius: 24px;
+      border-radius: 18px;
       background: var(--hc-surface);
       color: var(--hc-ink);
       box-shadow: var(--hc-shadow);
@@ -296,7 +293,7 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
     .hc-hero-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(300px, .8fr); gap: 28px; align-items: center; }
     .hc-hero-kicker { margin: 0 0 8px; color: var(--hc-muted); font-size: 12px; font-weight: 750; }
     .hc-state-line { display: flex; align-items: flex-start; gap: 12px; }
-    .hc-state-icon { width: 48px; height: 48px; display: inline-grid; place-items: center; flex: 0 0 auto; border-radius: 16px; }
+    .hc-state-icon { width: 48px; height: 48px; display: inline-grid; place-items: center; flex: 0 0 auto; border-radius: 12px; }
     .hc-state-icon svg { width: 27px; height: 27px; }
     .hc-state-icon[data-status-tone="ready"], .hc-status-leading-icon[data-status-tone="ready"] { background: var(--hc-green-soft); color: var(--hc-green); }
     .hc-state-icon[data-status-tone="warning"], .hc-status-leading-icon[data-status-tone="warning"] { background: var(--hc-warning-soft); color: var(--hc-warning); }
@@ -305,17 +302,17 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
     .hc-hero-copy { margin: 10px 0 0 60px; color: var(--hc-muted); max-width: 660px; }
     .hc-runtime-note { margin: 13px 0 0 60px; color: var(--hc-muted); font-size: 13px; }
     .hc-status-list { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
-    .hc-status-item { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 54px; padding: 10px 13px; border: 1px solid var(--hc-line); border-radius: 14px; background: var(--hc-soft); }
+    .hc-status-item { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 54px; padding: 10px 13px; border: 1px solid var(--hc-line); border-radius: 10px; background: var(--hc-soft); }
     .hc-status-label { color: var(--hc-muted); font-weight: 700; }
     .hc-status-value { display: inline-flex; align-items: center; gap: 8px; text-align: right; color: var(--hc-ink); font-weight: 800; overflow-wrap: anywhere; }
-    .hc-status-leading-icon { width: 28px; height: 28px; display: inline-grid; place-items: center; flex: 0 0 auto; border-radius: 9px; }
+    .hc-status-leading-icon { width: 28px; height: 28px; display: inline-grid; place-items: center; flex: 0 0 auto; border-radius: 7px; }
     .hc-status-leading-icon svg { width: 17px; height: 17px; }
 
     .hc-section { margin-top: 34px; }
     .hc-section-heading { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 14px; }
     .hc-section-heading h2 { margin: 0; font-size: 22px; line-height: 1.4; font-weight: 760; letter-spacing: -0.035em; }
     .hc-section-heading p { margin: 5px 0 0; color: var(--hc-muted); }
-    .hc-card { border: 1px solid var(--hc-line); border-radius: 19px; background: var(--hc-surface); box-shadow: var(--hc-shadow); }
+    .hc-card { border: 1px solid var(--hc-line); border-radius: 14px; background: var(--hc-surface); box-shadow: var(--hc-shadow); }
 
     .hc-summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; }
     .hc-summary-item { min-width: 0; padding: 22px 24px; }
@@ -328,13 +325,13 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
     .hc-integration h3 { margin: 0; font-size: 19px; font-weight: 760; letter-spacing: -0.03em; }
     .hc-integration p { margin: 6px 0 0; color: var(--hc-muted); }
     .hc-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
-    .hc-button { min-height: 50px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 18px; border: 1px solid transparent; border-radius: 12px; font-weight: 760; cursor: pointer; text-decoration: none; }
+    .hc-button { min-height: 50px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 18px; border: 1px solid transparent; border-radius: 10px; font-weight: 760; cursor: pointer; text-decoration: none; }
     .hc-button-primary { background: #2563eb; color: #ffffff; }
     .hc-button-primary:hover { filter: brightness(.96); }
     .hc-button-primary:disabled { cursor: wait; opacity: .7; }
     .hc-button-secondary { border-color: var(--hc-line); background: var(--hc-soft); color: var(--hc-ink); }
     .hc-button-secondary:hover { border-color: var(--hc-blue); color: var(--hc-blue); }
-    .hc-pairing { grid-column: 1 / -1; min-height: 48px; display: flex; align-items: center; gap: 12px; margin-top: -2px; padding: 12px 14px; border-radius: 12px; background: var(--hc-soft); color: var(--hc-muted); }
+    .hc-pairing { grid-column: 1 / -1; min-height: 48px; display: flex; align-items: center; gap: 12px; margin-top: -2px; padding: 12px 14px; border-radius: 10px; background: var(--hc-soft); color: var(--hc-muted); }
     .hc-pairing[data-state="success"] { background: var(--hc-green-soft); color: var(--hc-green); }
     .hc-pairing[data-state="error"] { background: var(--hc-danger-soft); color: var(--hc-danger); }
     .hc-pairing-code { color: var(--hc-ink); font: 800 20px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .12em; font-variant-numeric: tabular-nums; }
@@ -348,7 +345,7 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
     .hc-protocol-title { margin: 0; font-size: 17px; font-weight: 780; }
     .hc-protocol-copy { margin: 3px 0 0; color: var(--hc-muted); font-size: 13px; }
     .hc-protocol-meta { text-align: right; color: var(--hc-muted); font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-    .hc-protocol-alert { margin: 0 24px 20px; padding: 12px 14px; border-radius: 12px; background: var(--hc-danger-soft); color: var(--hc-danger); }
+    .hc-protocol-alert { margin: 0 24px 20px; padding: 12px 14px; border-radius: 10px; background: var(--hc-danger-soft); color: var(--hc-danger); }
     .hc-protocol-alert p { margin: 3px 0; }
 
     .hc-details { overflow: hidden; }
@@ -385,7 +382,7 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
       .hc-tabs { gap: 24px; overflow-x: auto; }
       .hc-main { padding-top: 28px; padding-bottom: 36px; }
       .hc-title-row { margin-bottom: 22px; }
-      .hc-hero { padding: 22px 20px; border-radius: 20px; }
+      .hc-hero { padding: 22px 20px; border-radius: 16px; }
       .hc-status-list { grid-template-columns: 1fr; }
       .hc-section { margin-top: 28px; }
       .hc-summary-item, .hc-integration, .hc-protocol-summary { padding-inline: 16px; }
