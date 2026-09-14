@@ -50,3 +50,14 @@ s=s.replace(anchor,'''  test("manual native recheck reads the active modal and c
 
 '''+anchor)
 p.write_text(s)
+p=Path('tools/ci-native-login-policy-smoke.mjs');s=p.read_text()
+old='''  for (const p of context.pages()) await p.close();
+  page = await context.newPage(); await page.goto(target); await page.evaluate(() => localStorage.clear()); await page.goto(target);'''
+new='''  // Headed persistent Chromium exits when its last window is closed. Open
+  // the next fixture before retiring the previous pages; this is test setup,
+  // not a production session workaround or a retry that hides an assertion.
+  const previousPages = context.pages();
+  page = await context.newPage();
+  for (const previous of previousPages) await previous.close();
+  await page.goto(target); await page.evaluate(() => localStorage.clear()); await page.goto(target);'''
+assert s.count(old)==1;s=s.replace(old,new);p.write_text(s)
