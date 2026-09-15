@@ -1,0 +1,97 @@
+name: Prepare switch confirmation hotfix 1.8.56
+
+on:
+  push:
+    branches:
+      - automation/prepare-switch-hotfix-1.8.56
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prepare-switch-hotfix-1.8.56
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+        working-directory: source
+    steps:
+      - name: Check out reviewed patch payload
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: payload
+          persist-credentials: false
+
+      - name: Check out exact source baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: source
+          ref: c99045af1af377c60ff759731034be183848453c
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up locked Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+          cache-dependency-path: source/package-lock.json
+
+      - name: Apply exact-baseline patch and synchronize release metadata
+        run: |
+          set -euo pipefail
+          python ../payload/.hotfix-1.8.56/apply.py "$PWD"
+          git diff --check
+          git diff --stat
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run complete Node test suite
+        run: npm test
+
+      - name: Typecheck and build release packages
+        run: |
+          set -euo pipefail
+          npm run typecheck
+          npm run build
+          npm run package:addon
+          node tools/ci-inventory-worker-smoke.mjs
+
+      - name: Check API boundary, secrets, and sanitized fixtures
+        run: |
+          set -euo pipefail
+          npm run audit:api-free
+          npm run audit:secrets
+          npm run audit:fixtures
+
+      - name: Verify Home Assistant integration
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --disable-pip-version-check --no-input 'aiohttp>=3.10,<4' 'yarl>=1.9,<2' 'voluptuous>=0.15,<1'
+          python -m unittest discover -s custom_components/smartthings_web/tests -p 'test_*.py'
+          python -m compileall -q custom_components/smartthings_web
+
+      - name: Publish verified candidate branch without bootstrap files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          baseline=c99045af1af377c60ff759731034be183848453c
+          current_main="$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          [[ "$current_main" == "$baseline" ]] || { echo 'Main advanced; refusing a stale candidate.' >&2; exit 1; }
+          [[ "$(git rev-parse HEAD)" == "$baseline" ]]
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add bridge/src/command/light-status-recheck.ts bridge/src/command/command-service.ts bridge/src/state/device-store.ts bridge/src/runtime.ts bridge/tests/command/command-service.test.ts bridge/tests/command/switch-status-recheck.test.ts package.json package-lock.json custom_components/smartthings_web/manifest.json addon/smartthings_web_bridge/config.yaml CHANGELOG.md addon/smartthings_web_bridge/CHANGELOG.md release-notes/1.8.56.md
+          git diff --cached --check
+          git commit -m 'fix: corroborate exact switch status before confirmation (1.8.56)' -m 'Repair undated/equal-time switch cache mismatches using two exact agreeing GETs. Invalidate previous read proofs on newer device commands, retain timestamp replay guards and strict target isolation, and add cache diagnostics plus real-store/service regressions. Complete Node and Python tests, typecheck, build, package and source audits passed in the preparation workflow. Live HA device behavior remains unverified.'
+          git -c credential.helper='!f() { echo username=x-access-token; echo password="$GH_TOKEN"; }; f' push "https://github.com/${GITHUB_REPOSITORY}.git" HEAD:refs/heads/fix/switch-confirmation-1.8.56
+          echo "Prepared candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
