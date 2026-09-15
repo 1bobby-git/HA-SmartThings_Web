@@ -46,6 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           python ../payload/.hotfix-1.8.56/apply.py "$PWD"
+          python ../payload/.hotfix-1.8.56/finalize.py "$PWD"
           git diff --check
           git diff --stat
 
@@ -90,7 +91,7 @@ jobs:
           [[ "$(git rev-parse HEAD)" == "$baseline" ]]
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add bridge/src/command/light-status-recheck.ts bridge/src/command/command-service.ts bridge/src/state/device-store.ts bridge/src/runtime.ts bridge/tests/command/command-service.test.ts bridge/tests/command/switch-status-recheck.test.ts package.json package-lock.json custom_components/smartthings_web/manifest.json addon/smartthings_web_bridge/config.yaml CHANGELOG.md addon/smartthings_web_bridge/CHANGELOG.md release-notes/1.8.56.md
+          git add bridge/src/command/light-status-recheck.ts bridge/src/command/command-service.ts bridge/src/state/device-store.ts bridge/src/runtime.ts bridge/tests/command/command-service.test.ts bridge/tests/command/switch-status-recheck.test.ts bridge/tests/runtime.test.ts tests/addon-config.test.ts tests/protocol-version-contract.test.ts protocol/version.json package.json package-lock.json custom_components/smartthings_web/manifest.json addon/smartthings_web_bridge/config.yaml CHANGELOG.md addon/smartthings_web_bridge/CHANGELOG.md release-notes/1.8.56.md
           git diff --cached --check
           git commit -m 'fix: corroborate exact switch status before confirmation (1.8.56)' -m 'Repair undated/equal-time switch cache mismatches using two exact agreeing GETs. Invalidate previous read proofs on newer device commands, retain timestamp replay guards and strict target isolation, and add cache diagnostics plus real-store/service regressions. Complete Node and Python tests, typecheck, build, package and source audits passed in the preparation workflow. Live HA device behavior remains unverified.'
           git -c credential.helper='!f() { echo username=x-access-token; echo password="$GH_TOKEN"; }; f' push "https://github.com/${GITHUB_REPOSITORY}.git" HEAD:refs/heads/fix/switch-confirmation-1.8.56
