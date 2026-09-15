@@ -12,9 +12,9 @@ import {
 import { bootstrapDataPaths } from "../bridge/src/security/data-paths.js";
 
 describe("protocol version contract", () => {
-  test("keeps integration 1.8.55 compatible with Bridge 1.8.55 and protocol 5", () => {
-    const expectedBridgeVersion = "1.8.55";
-    const expectedIntegrationVersion = "1.8.55";
+  test("keeps integration 1.8.56 compatible with Bridge 1.8.56 and protocol 5", () => {
+    const expectedBridgeVersion = "1.8.56";
+    const expectedIntegrationVersion = "1.8.56";
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as { version?: string };
     const packageLock = JSON.parse(readFileSync("package-lock.json", "utf8")) as {
       version?: string;

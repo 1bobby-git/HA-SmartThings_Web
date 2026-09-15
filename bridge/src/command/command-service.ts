@@ -167,6 +167,8 @@ export interface CommandResyncRequest {
   deviceId?: string;
   /** Internal, prevalidated light-only target for bounded corroborating status reads. */
   lightComponent?: string;
+  /** Internal, exact on/off state binding; never accepted from the HTTP request body. */
+  switchTarget?: Pick<BridgeDeviceState, "component" | "capability">;
 }
 
 export type SafeCommandErrorCode =
@@ -250,7 +252,7 @@ interface SafeCommandServiceOptions {
     reason?: SafeCommandErrorCode;
   }) => void;
   onDeviceDiagnostic?: (event: { deviceId: string; stage: string; attribute: string;
-    elapsedMs: number; stateCount?: number; matches?: boolean; code?: string; commands?: string[]; readMs?: number; skippedCommands?: string[]; preflightMs?: number; preflightReason?: LightPreflightReason; preflightReads?: number; preflightSource?: "recent_read" | "live_read" | "backoff" | undefined;
+    elapsedMs: number; stateCount?: number; matches?: boolean; cacheMatches?: boolean; observedUpdatedAt?: string | null; cachedUpdatedAt?: string | null; code?: string; commands?: string[]; readMs?: number; skippedCommands?: string[]; preflightMs?: number; preflightReason?: LightPreflightReason; preflightReads?: number; preflightSource?: "recent_read" | "live_read" | "backoff" | undefined;
     lightStatus?: { attribute: string; requested: string | number; observed: string | number | null }[] }) => void;
   onRequestTiming?: (event: CommandRequestTiming) => void;
   onPendingCountChange?: (count: number) => void;
@@ -506,7 +508,7 @@ export class SafeCommandService {
   }
 
   #deviceDiagnostic(request: SafeCommandRequest, stage: string, startedAt: number,
-    details: { stateCount?: number; matches?: boolean; code?: string; commands?: string[]; readMs?: number; skippedCommands?: string[]; preflightMs?: number; preflightReason?: LightPreflightReason; preflightReads?: number; preflightSource?: "recent_read" | "live_read" | "backoff" | undefined;
+    details: { stateCount?: number; matches?: boolean; cacheMatches?: boolean; observedUpdatedAt?: string | null; cachedUpdatedAt?: string | null; code?: string; commands?: string[]; readMs?: number; skippedCommands?: string[]; preflightMs?: number; preflightReason?: LightPreflightReason; preflightReads?: number; preflightSource?: "recent_read" | "live_read" | "backoff" | undefined;
       lightStatus?: { attribute: string; requested: string | number; observed: string | number | null }[] } = {}): void {
     try {
       this.options.onDeviceDiagnostic?.({ deviceId: request.targetId, stage,
@@ -608,6 +610,8 @@ export class SafeCommandService {
     if (!device) throw new SafeCommandError("device_not_found");
     if (!device.online) throw new SafeCommandError("device_offline");
     if (request.command === "applyLight") return await this.#executeLight(request, device, signal);
+    // A timed-out previous request may still have a GET in flight. Retire its proof.
+    this.options.devices.beginDeviceCommand(device.id);
     const deviceStartedAt = Date.now();
     const effective = resolveDeviceRequest(device, request);
     if (!effective.component || !effective.capability) {
@@ -783,6 +787,10 @@ export class SafeCommandService {
         throw commandError(error);
       }
     }
+    const switchTarget = attribute === "switch" && (desired === "on" || desired === "off") &&
+      ["on", "off"].includes(effective.nativeCommand ?? effective.command)
+      ? { component: executionInput.component, capability: executionInput.capability }
+      : undefined;
     let receiptCommandId: string | undefined;
     let advancedSentAtMs: number | undefined;
     let wait:
@@ -813,11 +821,17 @@ export class SafeCommandService {
         afterSequence: snapshot.sequence,
         stabilityMs: this.options.confirmationStabilityMs ?? 0,
         resync: async () => {
-          const evidence = await this.options.resync({ deviceId: effective.targetId });
+          const evidence = await this.options.resync({ deviceId: effective.targetId,
+            ...(switchTarget ? { switchTarget } : {}) });
           const candidates = evidence?.observedStates?.filter((candidate) =>
             candidate.component === effective.component && candidate.capability === effective.capability && candidate.attribute === attribute) ?? [];
+          const cached = this.options.devices.commandState(effective.targetId, device.locationId,
+            executionInput.component, executionInput.capability, attribute);
           this.#deviceDiagnostic(effective, "read", deviceStartedAt, { stateCount: candidates.length,
-            matches: candidates.length === 1 && matchesValue(candidates[0]!.value, desired) });
+            matches: candidates.length === 1 && matchesValue(candidates[0]!.value, desired),
+            cacheMatches: cached !== undefined && matchesValue(cached.value, desired),
+            observedUpdatedAt: candidates.length === 1 ? candidates[0]!.updatedAt : null,
+            cachedUpdatedAt: cached?.updatedAt ?? null });
           return evidence;
         },
         minimumEventTimeMs: () =>

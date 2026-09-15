@@ -671,10 +671,15 @@ export class DeviceStore {
     this.#sessionWholeAdvancedDeviceSnapshotSeen = false;
   }
 
-  /** Invalidate older read proofs when a newer light intent begins dispatching. */
-  beginLightCommand(deviceId: string): void {
+  /** Invalidate detached status proofs before a newer device operation. */
+  beginDeviceCommand(deviceId: string): void {
     const device = this.#devices.get(deviceId);
     if (device) this.#commandReadRevisions.set(device, (this.#commandReadRevisions.get(device) ?? 0) + 1);
+  }
+
+  /** Preserve the existing light entry point and its shared per-device revision. */
+  beginLightCommand(deviceId: string): void {
+    this.beginDeviceCommand(deviceId);
   }
 
   commandStateRevision(deviceId: string, locationId: string): number | undefined {

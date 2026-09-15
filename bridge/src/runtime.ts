@@ -116,7 +116,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.55";
+const bridgeVersion = "1.8.56";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -394,7 +394,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
             const rawSnapshot = { items: [{ deviceId: rawDeviceId, locationId: rawLocationId, status: statusPayload }] };
             volatileIdentifiers.observeRawAdvancedDeviceSnapshot(rawSnapshot);
             return redactor(rawSnapshot);
-          }, request.lightComponent);
+          }, request.lightComponent, request.switchTarget);
         if (!request.lightComponent) cameraImages.observeInventory(devices.snapshot());
         log.info("command_diag:advanced_status_refreshed");
         return {
