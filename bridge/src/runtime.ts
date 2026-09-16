@@ -74,6 +74,7 @@ import {
   type BridgeAdvancedCommandCatalogUpdate
 } from "./state/device-store.js";
 import { StateReconciliationCoordinator } from "./state/reconciliation-coordinator.js";
+import { StateSyncWatchdog } from "./state/state-sync-watchdog.js";
 import { LocationRealtimeAdapter } from "./realtime/location-realtime-adapter.js";
 import {
   ProtocolIntegrityStore,
@@ -116,7 +117,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.56";
+const bridgeVersion = "1.8.57";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -316,7 +317,15 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     }
   };
   const reconciliation = new StateReconciliationCoordinator({
-    load: () => advancedInventory.getInventory(),
+    load: async () => {
+      const context = currentContext;
+      const manager = currentKeeperManager;
+      const snapshot = await advancedInventory.getInventory();
+      if (stopped || context !== currentContext || manager !== currentKeeperManager) {
+        throw new Error("inventory_context_changed");
+      }
+      return snapshot;
+    },
     apply: (snapshot) => {
       const rawSnapshot = {
         locations: snapshot.locations,
@@ -630,6 +639,32 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   };
   const heartbeatInterval = setInterval(heartbeat, deps.config.heartbeatIntervalMs);
   const sessionMaintenance = new SessionMaintenanceGate();
+  const stateSyncWatchdog = new StateSyncWatchdog({
+    observe: () => status.getSnapshot(),
+    intervalMs: deps.config.inventoryReconciliationIntervalMs ?? 21_600_000,
+    canRun: () => {
+      const current = status.getSnapshot();
+      const manager = currentKeeperManager;
+      const keeper = manager?.currentKeeper();
+      // Read recovery must NOT depend on healthy push: that is what may be broken.
+      return !stopped && Boolean(currentContext && manager && keeper) &&
+        current.dbAvailable && current.chromiumRunning && current.authenticated &&
+        current.state !== "PROTOCOL_CHANGED" && current.state !== "BROWSER_FAILED" &&
+        classifySmartThingsUrl(keeper?.url() ?? "") === "smartthings_location" &&
+        !manager?.authenticationRecoveryPending() && !commandWorkBusy() &&
+        !legacyCommandExecutor.hasForegroundOperation() && !sessionTouchInFlight &&
+        !sessionMaintenance.isRunning() &&
+        physicalActionProbe.snapshot(getProbeEvidence()).state !== "armed";
+    },
+    refresh: () => reconciliation.request("interval"),
+    onDiagnostic: (event) => {
+      log.info(`state_sync_watchdog:${JSON.stringify(event)}`);
+      if (event.outcome === "failed") {
+        const current = status.getSnapshot();
+        status.update({ adapterFailureCount: current.adapterFailureCount + 1 });
+      }
+    }
+  });
   const keeperInterval = setInterval(() => {
     if (stopped || sessionMaintenance.isRunning()) return;
     const snapshot = status.getSnapshot();
@@ -734,7 +769,10 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
           void reconciliation.request("reconnect").catch(() => log.warn("session_handoff_inventory_sync_failed"));
         }
       }
-    }).catch(() => { log.warn("session_maintenance_failed"); });
+    }).catch(() => { log.warn("session_maintenance_failed"); }).finally(() => {
+      // Same-cadence timers can otherwise always observe maintenance as busy.
+      void stateSyncWatchdog.tick();
+    });
   }, deps.config.heartbeatIntervalMs);
   const detailDiscoveryInterval = setInterval(() => {
     void detailDiscovery.runOne().then((result) => {
@@ -753,15 +791,8 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   }, DETAIL_DISCOVERY_INTERVAL_MS);
   detailDiscoveryInterval.unref();
   const reconciliationInterval = setInterval(() => {
-    if (stopped || !createHealthReport(status.getSnapshot()).ready) return;
-    void reconciliation.request("interval").catch(() => {
-      const current = status.getSnapshot();
-      status.update({ adapterFailureCount: current.adapterFailureCount + 1 });
-      if (deps.config.debugProtocolLogging === true) {
-        log.warn("advanced_interval_reconciliation_failed");
-      }
-    });
-  }, deps.config.inventoryReconciliationIntervalMs ?? 21_600_000);
+    void stateSyncWatchdog.tick();
+  }, deps.config.heartbeatIntervalMs);
   reconciliationInterval.unref();
   heartbeat();
 
@@ -800,7 +831,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     };
   }
 
-  const canNavigateKeeper = () => !stopped && status.getSnapshot().pendingCommandCount === 0 &&
+  const canNavigateKeeper = () => !stopped && !commandWorkBusy() && !reconciliation.snapshot().inFlight &&
     !legacyCommandExecutor.hasForegroundOperation() && !legacyCommandExecutor.hasWarmCommandPage();
 
   const supervisor = new BrowserSupervisor({
@@ -881,19 +912,9 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
               );
             }
           },
-          () => {
-            const report = createHealthReport(status.getSnapshot());
-            return (
-              context === currentContext &&
-              keeperManager === currentKeeperManager &&
-              report.ready &&
-              !legacyCommandExecutor.hasWarmCommandPage() &&
-              !legacyCommandExecutor.hasForegroundOperation() &&
-              !sessionTouchInFlight &&
-              isProbeBrowserIsolated(context, keeperManager) &&
-              physicalActionProbe.snapshot(getProbeEvidence()).state !== "armed"
-            );
-          },
+          () => context === currentContext && keeperManager === currentKeeperManager &&
+            canNavigateKeeper() && !sessionTouchInFlight && !sessionMaintenance.isRunning() &&
+            physicalActionProbe.snapshot(getProbeEvidence()).state !== "armed",
           () => {
             void reconciliation.request("reconnect").catch(() => {
               const current = status.getSnapshot();
@@ -1246,7 +1267,7 @@ async function attachContext(
   resetSnapshotSession: () => void,
   canRecoverSocket: () => boolean,
   onNewPage: () => void,
-  canOpenAdvancedSnapshot: () => boolean,
+  canNavigateRealtime: () => boolean,
   onRealtimeRecovered: () => void,
   onAdvancedDeviceSnapshot: (snapshot: unknown, url: string) => void
 ): Promise<() => void> {
@@ -1259,10 +1280,15 @@ async function attachContext(
 
   let realtime: LocationRealtimeAdapter;
   realtime = new LocationRealtimeAdapter({
-    canRecover: canRecoverSocket,
+    canRecover: () => canRecoverSocket() && canNavigateRealtime() &&
+      status.getSnapshot().authenticated && status.getSnapshot().state !== "PROTOCOL_CHANGED" &&
+      !keeperManager.authenticationRecoveryPending(),
     onRecoveryAttempt: () => {
       resetSnapshotSession();
+      const attempt = realtime.snapshot();
       status.update({
+        reconnectCount: attempt.reconnectCount,
+        lastReconnectAtMs: attempt.lastReconnectAtMs,
         pushConnected: false,
         parserHealthy: false,
         initialSnapshotComplete: false,
@@ -1289,6 +1315,7 @@ async function attachContext(
       onRealtimeRecovered();
     }
   });
+  context.on?.("close", () => realtime.stop());
   const recoverSmartThingsWebSocket = () => realtime.requestRecovery();
   const observeSmartThingsWebSocketFrame = (direction: "sent" | "received") => {
     if (direction === "received" && canRecoverSocket()) {
@@ -1305,10 +1332,13 @@ async function attachContext(
     onRawWebSocketBinaryFrame: (direction, payload, connectionId) => {
       cameraImages.observeRawWebSocketBinaryFrame(direction, payload, connectionId);
     },
-    // Context-level Playwright websocket events do not identify their page.
-    // Keep received-frame freshness, but handle close recovery only through
-    // page-scoped CDP where the persistent keeper can be distinguished.
-    onSmartThingsWebSocketFrame: observeSmartThingsWebSocketFrame
+    // A command/refresh tab must not mask a stalled persistent keeper.
+    onSmartThingsWebSocketFrame: (direction, _url, _connectionId, page) => {
+      if (page && page === keeperManager.currentKeeper()) observeSmartThingsWebSocketFrame(direction);
+    },
+    onSmartThingsWebSocketClose: (_url, _connectionId, page) => {
+      if (page && page === keeperManager.currentKeeper()) recoverSmartThingsWebSocket();
+    }
   });
   context.on?.("page", (page) => {
     void installCdpForPage(
@@ -1442,20 +1472,18 @@ async function persistSessionStateIfHealthy(
   }
 }
 
-function shouldRecoverStaleSmartThingsWebSocket(
+export function shouldRecoverStaleSmartThingsWebSocket(
   snapshot: RuntimeStatusSnapshot,
   nowMs = Date.now()
 ): boolean {
-  return (
-    snapshot.state === "CONNECTED" &&
-    snapshot.authenticated &&
-    snapshot.keeperPresent &&
-    snapshot.pushConnected &&
-    snapshot.parserHealthy &&
-    snapshot.initialSnapshotComplete &&
-    snapshot.lastPushAtMs !== undefined &&
-    nowMs - snapshot.lastPushAtMs > DEFAULT_PUSH_FRESH_MS
-  );
+  if (!snapshot.authenticated || !snapshot.keeperPresent || !snapshot.chromiumRunning ||
+      !snapshot.dbAvailable || !["CONNECTED", "STALE", "SYNCING", "DISCOVERING_PROTOCOL", "RECONNECTING"].includes(snapshot.state)) {
+    return false;
+  }
+  // Incomplete recovery must remain recoverable; do not require the flags it resets.
+  const lastActivity = Math.max(snapshot.lastPushAtMs ?? 0,
+    snapshot.lastReconnectAtMs ?? 0, snapshot.lastBrowserStartAtMs ?? 0);
+  return lastActivity > 0 && nowMs - lastActivity > DEFAULT_PUSH_FRESH_MS;
 }
 
 function isSettledSmartThingsLocation(value: string): boolean {
@@ -1549,7 +1577,9 @@ async function installCdpForPage(
       onRawWebSocketBinaryFrame: (direction, payload, connectionId) => {
         cameraImages.observeRawWebSocketBinaryFrame(direction, payload, connectionId);
       },
-      onSmartThingsWebSocketFrame,
+      onSmartThingsWebSocketFrame: (direction) => {
+        if (isRealtimeKeeper()) onSmartThingsWebSocketFrame(direction);
+      },
       onSmartThingsWebSocketClose: () => {
         if (isRealtimeKeeper()) onSmartThingsWebSocketClose();
       },
