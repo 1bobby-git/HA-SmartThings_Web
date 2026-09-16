@@ -81,9 +81,11 @@ describe("Home Monitor command stability", () => {
     expect(page.close).toHaveBeenCalledTimes(1);
   });
 
-  test("keeps context-level frame freshness but scopes close recovery to CDP keeper pages", () => {
+  test("scopes Playwright and CDP liveness and close recovery to keeper pages", () => {
     const runtime = readFileSync("bridge/src/runtime.ts", "utf8");
-    expect(runtime).toContain("onSmartThingsWebSocketFrame: observeSmartThingsWebSocketFrame");
+    expect(runtime).toContain("if (page && page === keeperManager.currentKeeper()) observeSmartThingsWebSocketFrame(direction);");
+    expect(runtime).toContain("if (page && page === keeperManager.currentKeeper()) recoverSmartThingsWebSocket();");
+    expect(runtime).toContain("if (isRealtimeKeeper()) onSmartThingsWebSocketFrame(direction);");
     expect(runtime).not.toContain("onSmartThingsWebSocketClose: recoverSmartThingsWebSocket");
     expect(runtime).toContain("if (isRealtimeKeeper()) onSmartThingsWebSocketClose();");
     expect(runtime).toContain("() => false");
