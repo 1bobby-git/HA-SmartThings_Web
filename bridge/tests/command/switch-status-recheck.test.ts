@@ -64,3 +64,16 @@ test("one requested switch cannot authorize another attribute or capability", as
   expect(store.commandState("dev_120", "loc_001", "main", "other", "switch")!.value).toBe("on");
   expect(store.commandState("dev_120", "loc_001", "main", "switchLevel", "level")!.value).toBe(10);
 });
+
+test("reported older status never overwrites a newer live switch event", async () => {
+  const { store, current } = fixture();
+  store.observeAdvancedDeviceSnapshot(row("on", "2026-09-16T10:21:55.669Z"),
+    { source: "LOCATION_EVENT" });
+  const read = vi.fn(async () => row("off", "2026-09-16T09:34:31.708Z"));
+  const observed = await readLightCommandStatus(store, "dev_120", "loc_001", read, undefined, target);
+  expect(observed[0]?.value).toBe("off");
+  expect(current()).toMatchObject({ value: "on", updatedAt: "2026-09-16T10:21:55.669Z",
+    source: "LOCATION_EVENT" });
+  expect(current().commandReadVerified).not.toBe(true);
+  expect(read).toHaveBeenCalledOnce();
+});

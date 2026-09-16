@@ -1,6 +1,7 @@
 /** Read-only reconciliation safety net; transport/session heartbeats are not data. */
 export interface StateSyncObservation {
   decodedDeviceEventCount: number;
+  uniqueLogicalEventCount?: number;
   advancedInventoryLastSyncAtMs?: number | undefined;
 }
 
@@ -43,8 +44,10 @@ export class StateSyncWatchdog {
       this.#retryAtMs = 0;
     }
     this.#lastTickAtMs = now;
-    if (this.#observedCount !== observation.decodedDeviceEventCount) {
-      this.#observedCount = observation.decodedDeviceEventCount;
+    // Duplicate/replayed frames are not evidence of new device state.
+    const progressCount = observation.uniqueLogicalEventCount ?? observation.decodedDeviceEventCount;
+    if (this.#observedCount !== progressCount) {
+      this.#observedCount = progressCount;
       this.#lastProgressAtMs = now;
     }
     this.#lastProgressAtMs ??= now;
@@ -56,7 +59,9 @@ export class StateSyncWatchdog {
     if (this.#inFlight) return this.#inFlight;
     const quiet = now - Math.max(this.#lastProgressAtMs, this.#lastSyncAtMs) >=
       (this.options.quietMs ?? 120_000);
-    const periodic = now - this.#lastSyncAtMs >= this.options.intervalMs;
+    // A noisy sensor must not hide missing updates from other devices for hours.
+    // Preserve shorter intervals; bound partial-stream recovery to 15 minutes.
+    const periodic = now - this.#lastSyncAtMs >= Math.min(this.options.intervalMs, 900_000);
     if ((!quiet && !periodic) || now < this.#retryAtMs || !this.options.canRun()) {
       return Promise.resolve();
     }

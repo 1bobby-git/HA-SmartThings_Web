@@ -198,3 +198,50 @@ describe("light adapter app-client opt in", () => {
     expect(sequenceSession.requests.every((request) => request.preferAppClient === true)).toBe(true);
   });
 });
+
+// Regression: single HA switches previously skipped the live app-client route.
+test.each(["on", "off"])("single switch %s uses app service exactly once", async (command) => {
+  const patch = vi.fn(async () => ({}));
+  setPageWindow({ [Symbol.for("smartthings_web_bridge.api_device_service")]: { patch } });
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+  const page = new ExecutingPage();
+  const session = new AuthenticatedSmartThingsSession({
+    currentKeeper: () => page, openAdvancedPage: vi.fn()
+  });
+  const adapter = new AdvancedCommandAdapter({ session,
+    resolveRawDeviceId: () => "raw-switch",
+    resolveRawIdentifier: alias => alias === "identifier_channel" ? "switch2" : "switch"
+  });
+  const receipt = await adapter.execute({ deviceId: "dev_001", component: "identifier_channel",
+    capability: "identifier_switch", command, arguments: [] });
+  expect(receipt).toMatchObject({ state: "ACCEPTED", transport: "advanced" });
+  expect(patch).toHaveBeenCalledExactlyOnceWith("raw-switch", {
+    query: { execute: true, commands: [{ component: "switch2", capability: "switch", command }] }
+  });
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+test("single switch never retries an ambiguous app-service failure", async () => {
+  const patch = vi.fn(async () => { throw new Error("network interrupted after dispatch"); });
+  setPageWindow({ [Symbol.for("smartthings_web_bridge.api_device_service")]: { patch },
+    _app: { csrfToken: "fixture-only" } });
+  const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
+  const page = new ExecutingPage(); const openAdvancedPage = vi.fn();
+  const session = new AuthenticatedSmartThingsSession({ currentKeeper: () => page, openAdvancedPage });
+  const adapter = new AdvancedCommandAdapter({ session,
+    resolveRawDeviceId: () => "raw-switch", resolveRawIdentifier: () => undefined });
+  await expect(adapter.execute({ deviceId: "dev_001", component: "main", capability: "switch",
+    command: "off", arguments: [] })).rejects.toThrow();
+  expect(patch).toHaveBeenCalledOnce();
+  expect(fetchMock).not.toHaveBeenCalled(); expect(openAdvancedPage).not.toHaveBeenCalled();
+});
+
+test("custom capabilities do not inherit the single-switch app route by command name", async () => {
+  const session = new RecordingSession(1);
+  const adapter = new AdvancedCommandAdapter({ session,
+    resolveRawDeviceId: () => "raw-custom", resolveRawIdentifier: () => undefined });
+  await adapter.execute({ deviceId: "dev_001", component: "main", capability: "vendor.control",
+    command: "on", arguments: [] });
+  expect(session.requests[0]?.preferAppClient).toBeUndefined();
+});

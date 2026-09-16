@@ -1010,7 +1010,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
 
     expect(log.info.mock.calls.slice(0, 14)).toEqual([
-      ["bridge_init:version:1.8.57:home_monitor_direct"],
+      ["bridge_init:version:1.8.58:home_monitor_direct"],
       ["bridge_init:data_paths"],
       ["bridge_init:data_paths:data_dir"],
       ["bridge_init:data_paths:profile_dir"],

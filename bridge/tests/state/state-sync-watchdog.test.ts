@@ -4,7 +4,7 @@ import { StateSyncWatchdog } from "../../src/state/state-sync-watchdog.js";
 function fixture(intervalMs = 21_600_000) {
   let now = 1_000;
   let allowed = true;
-  const observation: { decodedDeviceEventCount: number; advancedInventoryLastSyncAtMs?: number } = {
+  const observation: { decodedDeviceEventCount: number; uniqueLogicalEventCount?: number; advancedInventoryLastSyncAtMs?: number } = {
     decodedDeviceEventCount: 10
   };
   const refresh = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
@@ -45,13 +45,14 @@ describe("state synchronization independent of authenticated heartbeat", () => {
     expect(f.refresh).toHaveBeenCalledOnce();
   });
 
-  test("real device events suppress unnecessary quiet reconciliation", async () => {
+  test("real events suppress quiet reads but cannot hide a partial-stream failure", async () => {
     const f = fixture(); await f.watchdog.tick();
     for (let index = 1; index <= 20; index += 1) {
       f.time(1_000 + index * 60_000); f.observation.decodedDeviceEventCount += 1;
       await f.watchdog.tick();
     }
-    expect(f.refresh).not.toHaveBeenCalled();
+    expect(f.refresh).toHaveBeenCalledOnce();
+    expect(f.diagnostic.mock.calls[0]?.[0].reason).toBe("interval");
   });
 
   test("the configured full reconciliation interval still runs during active events", async () => {
@@ -112,4 +113,24 @@ describe("state synchronization independent of authenticated heartbeat", () => {
     f.time(1_000); await f.watchdog.tick();
     f.time(121_000); await f.watchdog.tick(); expect(f.refresh).toHaveBeenCalledOnce();
   });
+});
+
+test("replayed device frames cannot suppress quiet recovery", async () => {
+  const f = fixture(); f.observation.uniqueLogicalEventCount = 5;
+  await f.watchdog.tick();
+  for (let index = 1; index <= 12; index += 1) {
+    f.time(1_000 + index * 10_000); f.observation.decodedDeviceEventCount += 10;
+    await f.watchdog.tick();
+  }
+  expect(f.refresh).toHaveBeenCalledOnce();
+  expect(f.diagnostic.mock.calls[0]?.[0].reason).toBe("quiet");
+});
+
+test("unique device progress still postpones a quiet read", async () => {
+  const f = fixture(); f.observation.uniqueLogicalEventCount = 5;
+  await f.watchdog.tick();
+  f.time(120_000); f.observation.uniqueLogicalEventCount += 1;
+  await f.watchdog.tick(); expect(f.refresh).not.toHaveBeenCalled();
+  f.time(239_999); await f.watchdog.tick(); expect(f.refresh).not.toHaveBeenCalled();
+  f.time(240_000); await f.watchdog.tick(); expect(f.refresh).toHaveBeenCalledOnce();
 });

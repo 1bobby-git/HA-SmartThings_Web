@@ -95,7 +95,11 @@ export class AdvancedCommandAdapter implements CommandTransport {
             endpoint: "commands",
             method: "POST",
             path: advancedEndpoints.deviceCommands(deviceId),
-            body
+            body,
+            // Use the live application service for single switch commands too.
+            // Only fall back when no application command has been attempted.
+            ...(capability === "switch" && ["on", "off"].includes(request.command)
+              ? { preferAppClient: true } : {})
           },
           (value) => parseReceipt(value, sentAtMs, this.#now())
         );

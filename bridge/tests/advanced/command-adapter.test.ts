@@ -56,6 +56,7 @@ describe("AdvancedCommandAdapter", () => {
         endpoint: "commands",
         method: "POST",
         path: "/advanced/cupcake-api/api/devices/raw-device/commands",
+        preferAppClient: true,
         body: {
           commands: [
             { component: "main", capability: "switch", command: "on", arguments: [] }
