@@ -82,13 +82,7 @@ export function installBrowserObserver(
       socket.on("framesent", (frame) => {
         observeRawTextFrame(options.onRawWebSocketFrame, "sent", frame, connectionId);
         observeRawBinaryFrame(options.onRawWebSocketBinaryFrame, "sent", frame, connectionId);
-        observeSmartThingsWebSocketFrame(
-          options.onSmartThingsWebSocketFrame,
-          "sent",
-          socketUrl,
-          connectionId,
-          owner.page
-        );
+        // Sending does not prove that the server subscription is receiving data.
         write(sink, redact, "playwright-websocket-frame", {
           direction: "sent",
           connectionId,
@@ -98,6 +92,12 @@ export function installBrowserObserver(
       socket.on("framereceived", (frame) => {
         observeRawTextFrame(options.onRawWebSocketFrame, "received", frame, connectionId);
         observeRawBinaryFrame(options.onRawWebSocketBinaryFrame, "received", frame, connectionId);
+        write(sink, redact, "playwright-websocket-frame", {
+          direction: "received",
+          connectionId,
+          frame: normalizePlaywrightFrame(frame, textLimitBytes, redact)
+        });
+        // Only metadata reaches liveness observers, after the sanitized capture.
         observeSmartThingsWebSocketFrame(
           options.onSmartThingsWebSocketFrame,
           "received",
@@ -105,11 +105,6 @@ export function installBrowserObserver(
           connectionId,
           owner.page
         );
-        write(sink, redact, "playwright-websocket-frame", {
-          direction: "received",
-          connectionId,
-          frame: normalizePlaywrightFrame(frame, textLimitBytes, redact)
-        });
       });
       socket.on("close", () => {
         const url = callString(socket, "url");
