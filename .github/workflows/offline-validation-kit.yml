@@ -1,0 +1,35 @@
+name: Prepare isolated validation workspace
+on:
+  push:
+    branches: [fix/release-1.8.57-validation]
+    paths: [.github/workflows/offline-validation-kit.yml]
+permissions:
+  contents: read
+jobs:
+  workspace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - run: npm ci
+      - name: Archive only public tracked source and test dependencies
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/validation-kit/bin"
+          git archive HEAD | tar -x -C "$RUNNER_TEMP/validation-kit"
+          cp -a node_modules "$RUNNER_TEMP/validation-kit/"
+          cp "$(command -v node)" "$RUNNER_TEMP/validation-kit/bin/node"
+          git rev-parse HEAD > "$RUNNER_TEMP/validation-kit/source-commit.txt"
+          tar -czf "$RUNNER_TEMP/validation-kit.tgz" -C "$RUNNER_TEMP/validation-kit" .
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: validation-kit
+          path: ${{ runner.temp }}/validation-kit.tgz
+          retention-days: 1
+          compression-level: 0
