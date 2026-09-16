@@ -247,8 +247,20 @@ class FakeContext extends FakeEmitter {
 
 const runtimes: { stop: () => Promise<void> }[] = [];
 const tempRoots: string[] = [];
+const fixtureTimers: ReturnType<typeof setInterval>[] = [];
+
+async function keepFixtureTransportAlive(page: FakePage): Promise<void> {
+  const socket = new FakeEmitter() as FakeEmitter & { url: () => string };
+  socket.url = () => "wss://my.smartthings.com/socket.io/";
+  await page.emit("websocket", socket);
+  await socket.emit("framereceived", { payload: "2" });
+  fixtureTimers.push(setInterval(() => {
+    void socket.emit("framereceived", { payload: "2" });
+  }, 25_000));
+}
 
 afterEach(async () => {
+  for (const timer of fixtureTimers.splice(0)) clearInterval(timer);
   await Promise.all(runtimes.splice(0).map((runtime) => runtime.stop()));
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { force: true, recursive: true });
@@ -301,6 +313,7 @@ describe("createBridgeRuntime", () => {
     const deps = createDeps(createTempRoot(), {chromium:{launchPersistentContext:vi.fn(async()=>context)}});
     deps.config.keepSignedInEnabled = true;
     const runtime = await createBridgeRuntime(deps); runtimes.push(runtime); await runtime.browserStartup;
+    await keepFixtureTransportAlive(keeper);
     keeper.goto.mockClear();
     await vi.advanceTimersByTimeAsync(16 * 60_000);
     expect(runtime.status.getSnapshot()).toMatchObject({authenticated:true,nativeSessionState:"active",nativeSessionReason:"session_verified",nativeLoginPolicyReason:"session_verified"});
@@ -997,7 +1010,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
 
     expect(log.info.mock.calls.slice(0, 14)).toEqual([
-      ["bridge_init:version:1.8.56:home_monitor_direct"],
+      ["bridge_init:version:1.8.57:home_monitor_direct"],
       ["bridge_init:data_paths"],
       ["bridge_init:data_paths:data_dir"],
       ["bridge_init:data_paths:profile_dir"],
@@ -1239,7 +1252,7 @@ describe("createBridgeRuntime", () => {
     const socket = new FakeEmitter() as FakeEmitter & { url: () => string };
     socket.url = () => "wss://my.smartthings.com/socket.io/";
 
-    await context.emit("websocket", socket);
+    await context.pages()[0]!.emit("websocket", socket);
     for (const delivery of fixture.fixture_deliveries) {
       await socket.emit("framereceived", {
         payload: `42${JSON.stringify([fixture.event_name, delivery])}`
@@ -1284,7 +1297,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
     const socket = new FakeEmitter() as FakeEmitter & { url: () => string };
     socket.url = () => "wss://my.smartthings.com/socket.io/";
-    await context.emit("websocket", socket);
+    await context.pages()[0]!.emit("websocket", socket);
 
     await socket.emit("framereceived", { payload: "2" });
     expect(runtime.status.getSnapshot().lastPushAtMs).toBe(10_000);
@@ -1346,7 +1359,8 @@ describe("createBridgeRuntime", () => {
       parserHealthy: false,
       initialSnapshotComplete: false
     });
-    await socket.emit("framereceived", { payload: "2" });
+    const recoveredSocket = await attachRuntimeSocket(context);
+    await recoveredSocket.emit("framereceived", { payload: "2" });
     await vi.waitFor(() =>
       expect(keeper.advancedRequestCalls.length).toBeGreaterThan(advancedRequestsBeforeRecovery)
     );
@@ -1459,6 +1473,7 @@ describe("createBridgeRuntime", () => {
         browserMaxRestarts: 0, browserRetryDelayMs: 0 }
     }));
     runtimes.push(runtime); await runtime.browserStartup;
+    await keepFixtureTransportAlive(keeper);
     keeper.goto.mockClear();
     runtime.status.update({ authenticated: true, keeperPresent: true, state: "STALE" });
     const pages = context.pages().length;
@@ -1486,7 +1501,8 @@ describe("createBridgeRuntime", () => {
       chromium: { launchPersistentContext: vi.fn(async () => context) }, log,
       config: { dataDir: root, host: "127.0.0.1", port: 0, browserMaxRestarts: 0, heartbeatIntervalMs: 1_000, browserRetryDelayMs: 0 }
     }));
-    runtimes.push(runtime); await runtime.browserStartup; keeper.goto.mockClear();
+    runtimes.push(runtime); await runtime.browserStartup;
+    await keepFixtureTransportAlive(keeper); keeper.goto.mockClear();
     runtime.status.update({ authenticated: true, keeperPresent: true, state: "STALE" });
     await vi.advanceTimersByTimeAsync(301_000);
     expect(runtime.status.getSnapshot()).toMatchObject({ sessionTouchCount: 1, sessionTouchLastOutcome: "failed",
@@ -1517,6 +1533,7 @@ describe("createBridgeRuntime", () => {
       config: { dataDir: root, host: "127.0.0.1", port: 0, browserMaxRestarts: 0, heartbeatIntervalMs: 1_000, browserRetryDelayMs: 0 }
     }));
     runtimes.push(runtime); await runtime.browserStartup;
+    await keepFixtureTransportAlive(keeper);
     runtime.status.update({ authenticated: true, keeperPresent: true, state: "STALE" });
     await vi.advanceTimersByTimeAsync(301_000);
     expect(keeper.sessionTouchOutcome).toBe("ok");
@@ -1533,7 +1550,8 @@ describe("createBridgeRuntime", () => {
       chromium: { launchPersistentContext: vi.fn(async () => new FakeContext([keeper])) },
       config: { dataDir: root, host: "127.0.0.1", port: 0, browserMaxRestarts: 0, heartbeatIntervalMs: 1_000, browserRetryDelayMs: 0 }
     }));
-    runtimes.push(runtime); await runtime.browserStartup; keeper.goto.mockClear();
+    runtimes.push(runtime); await runtime.browserStartup;
+    await keepFixtureTransportAlive(keeper); keeper.goto.mockClear();
     runtime.status.update({ authenticated: true, keeperPresent: true, state: "STALE" });
     await vi.advanceTimersByTimeAsync(301_000);
     expect(runtime.status.getSnapshot().authenticated).toBe(false);
@@ -1665,6 +1683,7 @@ describe("createBridgeRuntime", () => {
     );
     runtimes.push(runtime);
     await runtime.browserStartup;
+    await keepFixtureTransportAlive(keeper);
     keeper.goto.mockClear();
     keeper.evaluate.mockClear();
     keeper.evaluateCalls.length = 0;
@@ -1969,7 +1988,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
     const socket = new FakeEmitter() as FakeEmitter & { url: () => string };
     socket.url = () => "wss://my.smartthings.com/socket.io/";
-    await context.emit("websocket", socket);
+    await context.pages()[0]!.emit("websocket", socket);
     const snapshotFixture = JSON.parse(
       readFileSync("protocol/fixtures/2026-08-20-snapshot-ack-correlations.sanitized.json", "utf8")
     ) as {
@@ -3042,7 +3061,7 @@ function buildRuntimeSnapshotResponse(correlation: {
 async function attachRuntimeSocket(context: FakeContext): Promise<FakeEmitter & { url: () => string }> {
   const socket = new FakeEmitter() as FakeEmitter & { url: () => string };
   socket.url = () => "wss://my.smartthings.com/socket.io/";
-  await context.emit("websocket", socket);
+  await context.pages()[0]!.emit("websocket", socket);
   return socket;
 }
 
@@ -3427,4 +3446,86 @@ test("runtime never flushes full inventory while an Advanced command lane remain
   runtime.status.update({ pendingCommandCount: 0 });
   await vi.advanceTimersByTimeAsync(250);
   expect(whole).toHaveBeenCalledOnce();
+});
+
+test.each(["CONNECTED", "STALE"] as const)(
+  "quiet %s runtime refreshes actual device state despite ongoing session/transport heartbeats",
+  async (state) => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2026-09-16T00:00:00Z"));
+    const keeper = new FakePage("https://my.smartthings.com/location/raw-location-001");
+    const initial = advancedSwitchInventory("raw-passive-device-001", "raw-location-001");
+    keeper.advancedSnapshots = [initial];
+    const context = new FakeContext([keeper]);
+    const newPage = vi.spyOn(context, "newPage");
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const runtime = await createBridgeRuntime(createDeps(createTempRoot(), { log,
+      chromium: { launchPersistentContext: vi.fn(async () => context) } }));
+    runtimes.push(runtime); await runtime.browserStartup;
+    await keepFixtureTransportAlive(keeper);
+    keeper.goto.mockClear();
+    runtime.status.update({ state });
+    const baseUrl = `http://127.0.0.1:${runtime.port}`;
+    const headers = { authorization: `Bearer ${await exchangeBridgeToken(baseUrl)}` };
+    type Inventory = { devices: { states: { attribute: string; value: unknown }[] }[] };
+    const readSwitch = async () => {
+      const data = await fetch(`${baseUrl}/api/v1/inventory`, { headers }).then((r) => r.json()) as Inventory;
+      return data.devices[0]?.states.find((s) => s.attribute === "switch")?.value;
+    };
+    expect(await readSwitch()).toBe("off");
+    keeper.advancedSnapshots = [JSON.parse(JSON.stringify(initial)
+      .replace('"off"', '"on"').replace("2026-09-01", "2026-09-16"))];
+    // Neither a DEVICE_EVENT nor a control request is emitted by this test.
+    await vi.advanceTimersByTimeAsync(131_000);
+    expect(await readSwitch()).toBe("on");
+    expect(runtime.status.getSnapshot()).toMatchObject({ authenticated: true, decodedDeviceEventCount: 0 });
+    expect(log.info.mock.calls.some(([line]) => line.startsWith('state_sync_watchdog:{"outcome":"ok"'))).toBe(true);
+    expect(keeper.advancedRequestCalls.some((r) => (r as { method: string }).method === "POST")).toBe(false);
+    expect(keeper.goto).not.toHaveBeenCalled();
+    expect(newPage).not.toHaveBeenCalled();
+  }
+);
+
+test("runtime passive synchronization defers while a device command is pending", async () => {
+  vi.useFakeTimers(); vi.setSystemTime(10_000);
+  const keeper = new FakePage("https://my.smartthings.com/location/loc-synthetic-001");
+  const context = new FakeContext([keeper]);
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const runtime = await createBridgeRuntime(createDeps(createTempRoot(), { log,
+    chromium: { launchPersistentContext: vi.fn(async () => context) } }));
+  runtimes.push(runtime); await runtime.browserStartup;
+  await keepFixtureTransportAlive(keeper);
+  const requestCount = keeper.advancedRequestCalls.length;
+  runtime.status.update({ pendingCommandCount: 1 });
+  await vi.advanceTimersByTimeAsync(131_000);
+  expect(keeper.advancedRequestCalls).toHaveLength(requestCount);
+  expect(log.info.mock.calls.some(([line]) => line.startsWith("state_sync_watchdog:"))).toBe(false);
+  runtime.status.update({ pendingCommandCount: 0 });
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(keeper.advancedRequestCalls.length).toBeGreaterThan(requestCount);
+  expect(log.info.mock.calls.some(([line]) => line.startsWith('state_sync_watchdog:{"outcome":"ok"'))).toBe(true);
+});
+
+test("temporary and unscoped socket heartbeats cannot hide a stalled keeper", async () => {
+  vi.useFakeTimers(); vi.setSystemTime(10_000);
+  const { context, runtime, socket } = await startReadyRuntime();
+  const keeper = context.pages()[0]!;
+  keeper.goto.mockClear();
+  const temporaryPage = await context.newPage();
+  temporaryPage.currentUrl = "https://my.smartthings.com/advanced";
+  const temporarySocket = new FakeEmitter() as FakeEmitter & { url: () => string };
+  temporarySocket.url = () => "wss://my.smartthings.com/socket.io/";
+  await temporaryPage.emit("websocket", temporarySocket);
+  const unscopedSocket = new FakeEmitter() as FakeEmitter & { url: () => string };
+  unscopedSocket.url = temporarySocket.url;
+  await context.emit("websocket", unscopedSocket);
+  vi.setSystemTime(20_000);
+  await temporarySocket.emit("framereceived", { payload: "2" });
+  await unscopedSocket.emit("framereceived", { payload: "2" });
+  expect(runtime.status.getSnapshot().lastPushAtMs).toBe(10_000);
+  await temporarySocket.emit("close");
+  await unscopedSocket.emit("close");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(keeper.goto).not.toHaveBeenCalled();
+  await socket.emit("framereceived", { payload: "2" });
+  expect(runtime.status.getSnapshot().lastPushAtMs).toBe(20_000);
 });
