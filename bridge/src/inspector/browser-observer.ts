@@ -31,9 +31,10 @@ export interface BrowserObserverOptions {
   onSmartThingsWebSocketFrame?: (
     direction: "sent" | "received",
     url: string,
-    connectionId: string
+    connectionId: string,
+    page?: object
   ) => void;
-  onSmartThingsWebSocketClose?: (url: string, connectionId: string) => void;
+  onSmartThingsWebSocketClose?: (url: string, connectionId: string, page?: object) => void;
 }
 
 export function installBrowserObserver(
@@ -45,6 +46,7 @@ export function installBrowserObserver(
   const textLimitBytes = options.textLimitBytes ?? DEFAULT_CAPTURE_TEXT_LIMIT_BYTES;
   const observedPages = new WeakSet<object>();
   const observedServiceWorkers = new WeakSet<object>();
+  const observedSockets = new WeakMap<object, { page?: object }>();
   let nextWebsocketConnectionId = 1;
 
   context.on("request", (request) => {
@@ -64,7 +66,15 @@ export function installBrowserObserver(
     });
   });
 
-  context.on("websocket", (socket) => {
+  const attachSocket = (socket: unknown, page?: object): void => {
+    if (typeof socket !== "object" || socket === null) return;
+    const existing = observedSockets.get(socket);
+    if (existing) {
+      if (page) existing.page = page;
+      return;
+    }
+    const owner = page ? { page } : {} as { page?: object };
+    observedSockets.set(socket, owner);
     const connectionId = `pw_ws_${nextWebsocketConnectionId++}`;
     const socketUrl = callString(socket, "url");
     write(sink, redact, "playwright-websocket", { url: socketUrl, connectionId });
@@ -76,7 +86,8 @@ export function installBrowserObserver(
           options.onSmartThingsWebSocketFrame,
           "sent",
           socketUrl,
-          connectionId
+          connectionId,
+          owner.page
         );
         write(sink, redact, "playwright-websocket-frame", {
           direction: "sent",
@@ -91,7 +102,8 @@ export function installBrowserObserver(
           options.onSmartThingsWebSocketFrame,
           "received",
           socketUrl,
-          connectionId
+          connectionId,
+          owner.page
         );
         write(sink, redact, "playwright-websocket-frame", {
           direction: "received",
@@ -104,7 +116,8 @@ export function installBrowserObserver(
         observeSmartThingsWebSocketClose(
           options.onSmartThingsWebSocketClose,
           url,
-          connectionId
+          connectionId,
+          owner.page
         );
         write(sink, redact, "playwright-websocket", {
           url: callString(socket, "url"),
@@ -113,7 +126,10 @@ export function installBrowserObserver(
         });
       });
     }
-  });
+  };
+  // Playwright emits websocket on Page, not BrowserContext. Keep context adapters
+  // supported, but deduplicate a socket delivered through both observation paths.
+  context.on("websocket", (socket) => attachSocket(socket));
 
   for (const worker of callArray(context, "serviceWorkers")) {
     attachServiceWorker(worker, sink, redact, observedServiceWorkers);
@@ -122,21 +138,23 @@ export function installBrowserObserver(
   context.on("serviceworker", (worker) => attachServiceWorker(worker, sink, redact, observedServiceWorkers));
 
   for (const page of callArray(context, "pages")) {
-    attachPage(page, sink, redact, observedPages);
+    attachPage(page, sink, redact, observedPages, attachSocket);
   }
 
-  context.on("page", (page) => attachPage(page, sink, redact, observedPages));
+  context.on("page", (page) => attachPage(page, sink, redact, observedPages, attachSocket));
 }
 
 function observeSmartThingsWebSocketFrame(
   observer: BrowserObserverOptions["onSmartThingsWebSocketFrame"],
   direction: "sent" | "received",
   url: string | undefined,
-  connectionId: string
+  connectionId: string,
+  page?: object
 ): void {
   if (!observer || !isSmartThingsSocketIoUrl(url)) return;
   try {
-    observer(direction, url, connectionId);
+    if (page) observer(direction, url, connectionId, page);
+    else observer(direction, url, connectionId);
   } catch {
     // Liveness diagnostics must never interrupt the sanitized capture pipeline.
   }
@@ -181,11 +199,13 @@ export function isSmartThingsSocketIoUrl(value: string | undefined): value is st
 function observeSmartThingsWebSocketClose(
   observer: BrowserObserverOptions["onSmartThingsWebSocketClose"],
   url: string | undefined,
-  connectionId: string
+  connectionId: string,
+  page?: object
 ): void {
   if (!observer || !isSmartThingsSocketIoUrl(url)) return;
   try {
-    observer(url, connectionId);
+    if (page) observer(url, connectionId, page);
+    else observer(url, connectionId);
   } catch {
     // Recovery diagnostics must never interrupt the sanitized capture pipeline.
   }
@@ -216,11 +236,13 @@ function write(sink: CaptureSink, redact: Redact, source: CaptureSource, payload
   sink.write(sanitizeCaptureRecord(source, payload, redact));
 }
 
-function attachPage(page: unknown, sink: CaptureSink, redact: Redact, observedPages: WeakSet<object>): void {
+function attachPage(page: unknown, sink: CaptureSink, redact: Redact, observedPages: WeakSet<object>,
+  attachSocket: (socket: unknown, page?: object) => void): void {
   if (!hasOn(page) || observedPages.has(page)) {
     return;
   }
   observedPages.add(page);
+  page.on("websocket", (socket) => attachSocket(socket, page));
   page.on("console", (message) =>
     write(sink, redact, "page-console", { type: callString(message, "type"), text: callString(message, "text") })
   );

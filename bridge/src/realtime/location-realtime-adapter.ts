@@ -13,6 +13,7 @@ export class LocationRealtimeAdapter {
   #backoffMs = 1_000;
   #recoveryPromise: Promise<void> | undefined;
   #retryTimer: ReturnType<typeof setTimeout> | undefined;
+  #frameTimer: ReturnType<typeof setTimeout> | undefined;
   #stopped = false;
   readonly #now: () => number;
   readonly #recover: (() => Promise<void>) | undefined;
@@ -20,6 +21,7 @@ export class LocationRealtimeAdapter {
   readonly #onRecoveryAttempt: () => void;
   readonly #onRecoveryFailed: () => void;
   readonly #onRecovered: () => void;
+  readonly #recoveredFrameTimeoutMs: number;
 
   constructor(options: {
     now?: () => number;
@@ -28,6 +30,7 @@ export class LocationRealtimeAdapter {
     onRecoveryAttempt?: () => void;
     onRecoveryFailed?: () => void;
     onRecovered?: () => void;
+    recoveredFrameTimeoutMs?: number;
   } = {}) {
     this.#now = options.now ?? Date.now;
     this.#recover = options.recover;
@@ -35,58 +38,75 @@ export class LocationRealtimeAdapter {
     this.#onRecoveryAttempt = options.onRecoveryAttempt ?? (() => undefined);
     this.#onRecoveryFailed = options.onRecoveryFailed ?? (() => undefined);
     this.#onRecovered = options.onRecovered ?? (() => undefined);
+    this.#recoveredFrameTimeoutMs = Math.max(1, options.recoveredFrameTimeoutMs ?? 30_000);
   }
 
   requestRecovery(): void {
-    if (
-      this.#stopped ||
-      !this.#recover ||
-      !this.#canRecover() ||
-      this.#recoveryPromise
-    ) {
+    if (this.#stopped || !this.#recover || this.#recoveryPromise || this.#retryTimer || this.#frameTimer) return;
+    if (!this.#canRecover()) {
+      this.#scheduleRetry(1_000);
       return;
     }
-    if (this.#retryTimer) {
-      clearTimeout(this.#retryTimer);
-      this.#retryTimer = undefined;
-    }
     this.recoveryStarted();
-    this.#onRecoveryAttempt();
-    const operation = this.#recover();
-    this.#recoveryPromise = operation;
-    void operation.then(
-      () => undefined,
+    this.#notify(this.#onRecoveryAttempt);
+    const recover = this.#recover;
+    const operation = Promise.resolve().then(() => {
+      if (!this.#stopped) return recover();
+    }).then(
       () => {
-        this.#onRecoveryFailed();
-        const retry = setTimeout(() => {
-          this.#retryTimer = undefined;
-          this.requestRecovery();
-        }, this.recoveryFailed());
-        retry.unref?.();
-        this.#retryTimer = retry;
+        if (this.#stopped || !this.#awaitingRecoveredFrame) return;
+        // Successful navigation is not proof of a restored subscription.
+        this.#frameTimer = setTimeout(() => {
+          this.#frameTimer = undefined;
+          if (this.#stopped || !this.#awaitingRecoveredFrame) return;
+          this.#notify(this.#onRecoveryFailed);
+          this.#scheduleRetry(this.recoveryFailed());
+        }, this.#recoveredFrameTimeoutMs);
+        this.#frameTimer.unref?.();
+      },
+      () => {
+        if (this.#stopped || !this.#awaitingRecoveredFrame) return;
+        this.#notify(this.#onRecoveryFailed);
+        this.#scheduleRetry(this.recoveryFailed());
       }
-    ).finally(() => {
+    );
+    this.#recoveryPromise = operation;
+    void operation.finally(() => {
       if (this.#recoveryPromise === operation) this.#recoveryPromise = undefined;
     });
   }
 
+  #scheduleRetry(delay: number): void {
+    if (this.#stopped || this.#retryTimer) return;
+    this.#retryTimer = setTimeout(() => {
+      this.#retryTimer = undefined;
+      this.requestRecovery();
+    }, delay);
+    this.#retryTimer.unref?.();
+  }
+
+  #notify(callback: () => void): void {
+    try { callback(); } catch { /* Observers must not break recovery. */ }
+  }
+
   recoveryStarted(): void {
+    if (this.#stopped) return;
     this.#awaitingRecoveredFrame = true;
     this.#reconnectCount += 1;
     this.#lastReconnectAtMs = this.#now();
   }
 
   observeFrame(direction: "sent" | "received"): boolean {
-    if (direction !== "received") return false;
+    if (this.#stopped || direction !== "received") return false;
     this.#lastReceivedAtMs = this.#now();
     if (!this.#awaitingRecoveredFrame) return false;
     this.#awaitingRecoveredFrame = false;
     this.#backoffMs = 1_000;
-    if (this.#retryTimer) {
-      clearTimeout(this.#retryTimer);
-      this.#retryTimer = undefined;
-    }
-    this.#onRecovered();
+    if (this.#retryTimer) clearTimeout(this.#retryTimer);
+    if (this.#frameTimer) clearTimeout(this.#frameTimer);
+    this.#retryTimer = undefined;
+    this.#frameTimer = undefined;
+    this.#notify(this.#onRecovered);
     return true;
   }
 
@@ -98,22 +118,18 @@ export class LocationRealtimeAdapter {
 
   stop(): void {
     this.#stopped = true;
-    if (this.#retryTimer) {
-      clearTimeout(this.#retryTimer);
-      this.#retryTimer = undefined;
-    }
+    if (this.#retryTimer) clearTimeout(this.#retryTimer);
+    if (this.#frameTimer) clearTimeout(this.#frameTimer);
+    this.#retryTimer = undefined;
+    this.#frameTimer = undefined;
   }
 
   snapshot(): LocationRealtimeSnapshot {
     return {
       awaitingRecoveredFrame: this.#awaitingRecoveredFrame,
       reconnectCount: this.#reconnectCount,
-      ...(this.#lastReconnectAtMs === undefined
-        ? {}
-        : { lastReconnectAtMs: this.#lastReconnectAtMs }),
-      ...(this.#lastReceivedAtMs === undefined
-        ? {}
-        : { lastReceivedAtMs: this.#lastReceivedAtMs }),
+      ...(this.#lastReconnectAtMs === undefined ? {} : { lastReconnectAtMs: this.#lastReconnectAtMs }),
+      ...(this.#lastReceivedAtMs === undefined ? {} : { lastReceivedAtMs: this.#lastReceivedAtMs }),
     };
   }
 }
