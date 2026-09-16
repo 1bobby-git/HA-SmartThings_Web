@@ -4,6 +4,15 @@ import { installBrowserObserver } from "../../src/inspector/browser-observer.js"
 
 const url = "wss://my.smartthings.com/socket.io/?transport=websocket";
 
+function redactFixture(value: unknown): unknown {
+  if (typeof value === "string") return value.replaceAll("fixture-private-payload", "[REDACTED]");
+  if (Array.isArray(value)) return value.map(redactFixture);
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, redactFixture(nested)]));
+  }
+  return value;
+}
+
 describe("websocket capture and recovery boundaries", () => {
   test("outbound raw text reaches only the explicit camera observer, not recovery", () => {
     const context = new EventEmitter();
@@ -29,7 +38,7 @@ describe("websocket capture and recovery boundaries", () => {
       if (record.source === "playwright-websocket-frame") order.push("capture");
     });
     const recovery = vi.fn(() => { order.push("recovery"); });
-    installBrowserObserver(context, { write }, () => ({ redacted: true }), {
+    installBrowserObserver(context, { write }, redactFixture, {
       onRawWebSocketFrame: () => { order.push("camera"); },
       onSmartThingsWebSocketFrame: recovery
     });
