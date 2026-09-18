@@ -346,7 +346,6 @@ const devicePattern = /^dev_[0-9]{3,32}$/u;
 const targetPattern = /^(?:dev|loc|identifier)_[A-Za-z0-9_]{3,64}$/u;
 const clientRequestPattern = /^[A-Za-z0-9_-]{8,128}$/u;
 const dedupeLimit = 1_000;
-const SWITCH_FAST_RESYNC_AFTER_MS = 75;
 
 export class SafeCommandService {
   readonly #dedupe = new Map<string, DedupeEntry>();
@@ -883,15 +882,9 @@ export class SafeCommandService {
       executionResult.transport === "advanced";
     const fastSwitchForeground =
       advancedSwitchAccepted && effective.timeout === undefined;
-    const confirmationResyncAfterMs = fastSwitchForeground
-      ? Math.min(
-          this.options.resyncAfterMs ?? SWITCH_FAST_RESYNC_AFTER_MS,
-          SWITCH_FAST_RESYNC_AFTER_MS
-        )
-      : this.options.resyncAfterMs;
     wait.startTimeout(
       configuredTimeoutMs,
-      confirmationResyncAfterMs,
+      this.options.resyncAfterMs,
       Date.now()
     );
     const foreground = fastSwitchForeground && staleSwitchStatus
