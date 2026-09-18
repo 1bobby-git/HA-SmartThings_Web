@@ -92,12 +92,16 @@ function captureCakeClientAtInitialization(): void {
       } catch {
         continue;
       }
-      const kind = source.includes("cake_session") && source.includes("api/device") && source.includes("api/subscription") ? "client"
+      const clientCandidate = source.includes("api/device");
+      const kind = source.includes("cake_session") && clientCandidate && source.includes("api/subscription") ? "client"
         : source.includes("serializableCheck") && source.includes("deviceHealth:") &&
           (source.includes("socketAuthenticated") || (/\breducer\s*:/u.test(source) && /\bclient\s*:/u.test(source) && /\buser\s*:/u.test(source))) ? "store"
         : source.includes("/setLogoutTimer") && source.includes("/reauthenticate") ? "user"
         : source.includes("/updateStayLoggedIn") && source.includes("functionality_settings") ? "settings" : undefined;
-      if (!kind) continue;
+      // SmartThings bundle names around the client have changed before. A factory
+      // that references api/device may be observed, but it is accepted as a
+      // command client only after its naturally produced export exposes service().
+      if (!kind && !clientCandidate) continue;
       // Babel's public method is a small delegate; the auth implementation
       // lives in this naturally loaded factory, not in method.toString().
       const authFactoryVerified = kind === "client" && source.includes('"api/auth"') &&
@@ -109,18 +113,20 @@ function captureCakeClientAtInitialization(): void {
       ): void {
         factory.call(this, module, exports, requireFunction);
         try {
-          if (kind === "client") {
+          if (clientCandidate) {
             const client = findClient(module.exports);
             if (client) Object.defineProperty(pageWindow, clientSymbol, { configurable: true, value: client });
           }
-          const sink = pageWindow[Symbol.for("smartthings_web_bridge.native_session_capture")];
-          if (typeof sink === "function") sink(kind, module.exports, authFactoryVerified);
-          else {
-            // Init-script ordering is unspecified. Queue only the few matched,
-            // naturally loaded exports; never execute a module to inspect it.
-            const key = Symbol.for("smartthings_web_bridge.native_session_modules");
-            const queue = (pageWindow[key] ??= []) as unknown[];
-            if (queue.length < 8) queue.push([kind, module.exports, authFactoryVerified]);
+          if (kind) {
+            const sink = pageWindow[Symbol.for("smartthings_web_bridge.native_session_capture")];
+            if (typeof sink === "function") sink(kind, module.exports, authFactoryVerified);
+            else {
+              // Init-script ordering is unspecified. Queue only the few matched,
+              // naturally loaded exports; never execute a module to inspect it.
+              const key = Symbol.for("smartthings_web_bridge.native_session_modules");
+              const queue = (pageWindow[key] ??= []) as unknown[];
+              if (queue.length < 8) queue.push([kind, module.exports, authFactoryVerified]);
+            }
           }
         } catch { /* Capture must not change native module behavior. */ }
       };

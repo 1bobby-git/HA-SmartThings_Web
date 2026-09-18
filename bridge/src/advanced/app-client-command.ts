@@ -37,6 +37,9 @@ export async function executeAppClientCommand(
         type PageRecord = Record<string | symbol, unknown>;
         type NativeService = { patch?: (id: string, body: unknown) => unknown };
         type NativeClient = { service?: (name: string) => unknown };
+        type WebpackModule = { exports?: unknown };
+        type WebpackRequire = { c?: Record<string, WebpackModule> };
+        type WebpackChunk = [unknown[], Record<string, unknown>, ((value: WebpackRequire) => void)?];
         type PageResult =
           | { kind: "unavailable" }
           | { kind: "result"; result: AppClientCommandResult };
@@ -69,7 +72,8 @@ export async function executeAppClientCommand(
         const clientSymbol = Symbol.for("smartthings_web_bridge.cake_client");
         let service = asService(pageWindow[serviceSymbol]);
         if (!service) {
-          const client = asClient(pageWindow[clientSymbol]);
+          const client = asClient(pageWindow[clientSymbol]) ??
+            recoverClientFromLoadedWebpack(pageWindow, clientSymbol);
           if (!client?.service) return { kind: "unavailable" } as PageResult;
           try {
             service = asService(client.service("api/device"));
@@ -199,6 +203,58 @@ export async function executeAppClientCommand(
           return candidate && typeof candidate.service === "function"
             ? (candidate as unknown as NativeClient)
             : undefined;
+        }
+
+        function recoverClientFromLoadedWebpack(
+          root: PageRecord,
+          symbol: symbol
+        ): NativeClient | undefined {
+          const chunks = root.webpackChunk_smartthings_cake;
+          if (!Array.isArray(chunks) || typeof chunks.push !== "function") return undefined;
+          let recovered: NativeClient | undefined;
+          try {
+            (chunks as WebpackChunk[]).push([
+              [`smartthings_web_bridge_command_recover_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`],
+              {},
+              (runtimeRequire) => {
+                const cache = runtimeRequire.c;
+                if (!cache || typeof cache !== "object") return;
+                let inspected = 0;
+                for (const module of Object.values(cache)) {
+                  if (++inspected > 5_000) break;
+                  const client = findClient(module?.exports);
+                  if (client) {
+                    recovered = client;
+                    break;
+                  }
+                }
+              }
+            ]);
+          } catch {
+            return undefined;
+          }
+          if (recovered) {
+            try {
+              Object.defineProperty(root, symbol, { configurable: true, value: recovered });
+            } catch {
+              // Cache failure only affects the next lookup, never this command.
+            }
+          }
+          return recovered;
+        }
+
+        function findClient(value: unknown): NativeClient | undefined {
+          let candidates: unknown[];
+          try {
+            candidates = record(value) ? [value, ...Object.values(value as Record<string, unknown>)] : [value];
+          } catch {
+            return undefined;
+          }
+          for (const candidate of candidates) {
+            const client = asClient(candidate);
+            if (client) return client;
+          }
+          return undefined;
         }
 
         function asService(value: unknown): NativeService | undefined {
