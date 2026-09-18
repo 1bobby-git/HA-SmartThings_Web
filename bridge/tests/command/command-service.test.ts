@@ -94,6 +94,68 @@ describe("SafeCommandService", () => {
         vi.useRealTimers();
       }
     });
+
+    test("returns accepted-unconfirmed immediately for a stale matching switch read", async () => {
+      vi.useFakeTimers();
+      const store = readyDeviceStore();
+      try {
+        store.observeAdvancedDeviceSnapshot(switchBody("on", "2026-09-18T23:38:40.036Z"));
+        const executeDeviceAction = vi.fn(async () => ({
+          state: "ACCEPTED" as const,
+          transport: "advanced" as const,
+          acceptedAtMs: Date.now(),
+          sentAtMs: Date.now()
+        }));
+        const resync = vi.fn(async (
+          request?: import("../../src/command/command-service.js").CommandResyncRequest
+        ) => ({
+          source: request?.deviceId ? "advanced_device_status" as const : "advanced_inventory" as const,
+          deviceId: request?.deviceId,
+          locationId: request?.deviceId ? "loc_001" : undefined,
+          authoritativeSnapshot: request?.deviceId === undefined,
+          startedAtMs: Date.now(),
+          observedStates: request?.deviceId
+            ? store.commandStatusStates(
+                switchBody("off", "2026-09-18T22:43:37.762Z"),
+                "dev_001",
+                "loc_001"
+              )
+            : undefined
+        }));
+        const service = new SafeCommandService({
+          devices: store,
+          status: connectedStatus(),
+          executor: { executeDeviceAction },
+          timeoutMs: 30_000,
+          resyncAfterMs: 250,
+          resync
+        });
+        const pending = service.execute({
+          ...switchRequest(),
+          clientRequestId: "switch_latency_regression_request"
+        });
+
+        await vi.advanceTimersByTimeAsync(74);
+        expect(resync).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(resync).toHaveBeenCalledWith({
+          deviceId: "dev_001",
+          switchTarget: { component: "main", capability: "identifier_switch" }
+        });
+
+        await expect(pending).resolves.toMatchObject({
+          status: "accepted_unconfirmed",
+          confirmation: "accepted_receipt",
+          lifecycle: "ACCEPTED_UNCONFIRMED",
+          transport: "advanced"
+        });
+        expect(executeDeviceAction).toHaveBeenCalledOnce();
+        expect(resync.mock.calls.some(([request]) => request === undefined)).toBe(true);
+      } finally {
+        await store.close();
+        vi.useRealTimers();
+      }
+    });
   });
 
   test.each([

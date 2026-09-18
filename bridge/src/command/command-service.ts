@@ -346,6 +346,7 @@ const devicePattern = /^dev_[0-9]{3,32}$/u;
 const targetPattern = /^(?:dev|loc|identifier)_[A-Za-z0-9_]{3,64}$/u;
 const clientRequestPattern = /^[A-Za-z0-9_-]{8,128}$/u;
 const dedupeLimit = 1_000;
+const SWITCH_FAST_RESYNC_AFTER_MS = 75;
 
 export class SafeCommandService {
   readonly #dedupe = new Map<string, DedupeEntry>();
@@ -791,6 +792,10 @@ export class SafeCommandService {
       ["on", "off"].includes(effective.nativeCommand ?? effective.command)
       ? { component: executionInput.component, capability: executionInput.capability }
       : undefined;
+    let staleSwitchStatusResolve: (() => void) | undefined;
+    const staleSwitchStatus = switchTarget
+      ? new Promise<void>((resolve) => { staleSwitchStatusResolve = resolve; })
+      : undefined;
     let receiptCommandId: string | undefined;
     let advancedSentAtMs: number | undefined;
     let wait:
@@ -827,10 +832,23 @@ export class SafeCommandService {
             candidate.component === effective.component && candidate.capability === effective.capability && candidate.attribute === attribute) ?? [];
           const cached = this.options.devices.commandState(effective.targetId, device.locationId,
             executionInput.component, executionInput.capability, attribute);
+          const observed = candidates.length === 1 ? candidates[0] : undefined;
+          const observedMatches = observed !== undefined && matchesValue(observed.value, desired);
+          const cacheMatches = cached !== undefined && matchesValue(cached.value, desired);
+          if (
+            staleSwitchStatusResolve &&
+            observedMatches &&
+            !cacheMatches &&
+            typeof observed?.updatedAt === "string" &&
+            typeof cached?.updatedAt === "string" &&
+            Date.parse(observed.updatedAt) < Date.parse(cached.updatedAt)
+          ) {
+            staleSwitchStatusResolve();
+          }
           this.#deviceDiagnostic(effective, "read", deviceStartedAt, { stateCount: candidates.length,
-            matches: candidates.length === 1 && matchesValue(candidates[0]!.value, desired),
-            cacheMatches: cached !== undefined && matchesValue(cached.value, desired),
-            observedUpdatedAt: candidates.length === 1 ? candidates[0]!.updatedAt : null,
+            matches: observedMatches,
+            cacheMatches,
+            observedUpdatedAt: observed?.updatedAt ?? null,
             cachedUpdatedAt: cached?.updatedAt ?? null });
           return evidence;
         },
@@ -855,12 +873,46 @@ export class SafeCommandService {
       wait.cancel();
       throw commandError(error);
     }
+    const configuredTimeoutMs =
+      effective.timeout === undefined ? this.options.timeoutMs : effective.timeout * 1_000;
+    const advancedSwitchAccepted =
+      switchTarget !== undefined &&
+      executionResult !== undefined &&
+      typeof executionResult === "object" &&
+      executionResult.state === "ACCEPTED" &&
+      executionResult.transport === "advanced";
+    const fastSwitchForeground =
+      advancedSwitchAccepted && effective.timeout === undefined;
+    const confirmationResyncAfterMs = fastSwitchForeground
+      ? Math.min(
+          this.options.resyncAfterMs ?? SWITCH_FAST_RESYNC_AFTER_MS,
+          SWITCH_FAST_RESYNC_AFTER_MS
+        )
+      : this.options.resyncAfterMs;
     wait.startTimeout(
-      effective.timeout === undefined ? this.options.timeoutMs : effective.timeout * 1_000,
-      this.options.resyncAfterMs,
+      configuredTimeoutMs,
+      confirmationResyncAfterMs,
       Date.now()
     );
-    const evidence = await wait.result;
+    const foreground = fastSwitchForeground && staleSwitchStatus
+      ? await Promise.race([
+          wait.result.then((evidence) => ({ kind: "confirmed" as const, evidence })),
+          staleSwitchStatus.then(() => ({ kind: "stale_status" as const }))
+        ])
+      : { kind: "confirmed" as const, evidence: await wait.result };
+    if (foreground.kind === "stale_status") {
+      // The exact read says the requested value but is older than the current
+      // cache. It cannot confirm the command, and repeating it for 30 seconds
+      // only blocks HA. Never fabricate state or replay the physical command.
+      wait.cancel();
+      void this.options.resync().catch(() => undefined);
+      return acceptedUnconfirmed(
+        request.clientRequestId,
+        this.options.devices.currentSequence(),
+        transportForExecution(executionResult)
+      );
+    }
+    const evidence = foreground.evidence;
     return confirmed(
       request.clientRequestId,
       evidence.sequence,

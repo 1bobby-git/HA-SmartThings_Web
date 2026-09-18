@@ -80,7 +80,7 @@ async def async_setup_entry(
 
 
 class SmartThingsWebSwitch(SmartThingsWebEntity, SwitchEntity):
-    """One switch confirmed only by the SmartThings push stream."""
+    """One switch driven by observed SmartThings state with bounded command confirmation."""
 
     def __init__(
         self,
@@ -147,11 +147,11 @@ class SmartThingsWebSwitch(SmartThingsWebEntity, SwitchEntity):
         return {"smartthings_raw_value": state.value} if state is not None else {}
 
     async def async_turn_on(self, **kwargs: object) -> None:
-        """Request ON and wait for the Bridge's push confirmation."""
+        """Request ON; the Bridge returns after confirmation or a bounded accepted receipt."""
         await self._async_command("on")
 
     async def async_turn_off(self, **kwargs: object) -> None:
-        """Request OFF and wait for the Bridge's push confirmation."""
+        """Request OFF; the Bridge returns after confirmation or a bounded accepted receipt."""
         await self._async_command("off")
 
     async def _async_command(self, command: str) -> None:
