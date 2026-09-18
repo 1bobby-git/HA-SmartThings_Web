@@ -59,4 +59,38 @@ describe("Cake client capture", () => {
     expect(requireModule).not.toHaveBeenCalled();
     expect(pageWindow[Symbol.for(CAKE_CLIENT_SYMBOL_KEY)]).toBe(client);
   });
+
+  test("captures an api/device client even when surrounding bundle markers change", async () => {
+    let initScript: (() => void) | undefined;
+    const context = {
+      addInitScript: vi.fn(async (script: () => void) => {
+        initScript = script;
+      })
+    };
+    await installCakeClientCapture(context);
+
+    const pageWindow: Record<PropertyKey, unknown> = {};
+    (globalThis as { window?: unknown }).window = pageWindow;
+    initScript?.();
+
+    const client = { service: vi.fn() };
+    const candidateFactory = function changedBundleClient(
+      module: { exports: unknown }
+    ): void {
+      void "api/device";
+      module.exports = { default: client };
+    };
+    const moduleFactories: Record<string, typeof candidateFactory> = {
+      "changed-client": candidateFactory
+    };
+    const chunks = pageWindow.webpackChunk_smartthings_cake as unknown[] & {
+      push: (entry: unknown[]) => number;
+    };
+    chunks.push([[2], moduleFactories]);
+
+    expect(moduleFactories["changed-client"]).not.toBe(candidateFactory);
+    const module = { exports: {} as unknown };
+    moduleFactories["changed-client"]?.(module);
+    expect(pageWindow[Symbol.for(CAKE_CLIENT_SYMBOL_KEY)]).toBe(client);
+  });
 });

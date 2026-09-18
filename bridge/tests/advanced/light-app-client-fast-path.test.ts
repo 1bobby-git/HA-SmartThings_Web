@@ -104,6 +104,51 @@ describe("keeper app-client light fast path", () => {
     ]);
   });
 
+  test("recovers api/device client from already-loaded webpack modules before fetch fallback", async () => {
+    const patch = vi.fn(async () => ({ data: { results: [{ status: "ACCEPTED" }] } }));
+    const runtimeClient = {
+      service: (name: string) => name === "api/device" ? { patch } : undefined
+    };
+    const chunks: unknown[] = [];
+    Object.defineProperty(chunks, "push", {
+      configurable: true,
+      value: vi.fn((entry: [
+        unknown[],
+        Record<string, unknown>,
+        ((runtime: { c?: Record<string, { exports?: unknown }> }) => void)?
+      ]) => {
+        entry[2]?.({
+          c: { loaded: { exports: { default: runtimeClient } } }
+        });
+        return 1;
+      })
+    });
+    const pageWindow: Record<PropertyKey, unknown> = {
+      _app: { csrfToken: "must-not-be-used" },
+      webpackChunk_smartthings_cake: chunks
+    };
+    setPageWindow(pageWindow);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const page = new ExecutingPage();
+    const session = new AuthenticatedSmartThingsSession({
+      currentKeeper: () => page,
+      openAdvancedPage: vi.fn()
+    });
+
+    await expect(session.request({
+      endpoint: "commands",
+      method: "POST",
+      path: "/advanced/cupcake-api/api/devices/raw-device/commands",
+      body: { commands: [{ component: "main", capability: "switch", command: "on", arguments: [] }] },
+      preferAppClient: true
+    }, (value) => value)).resolves.toEqual({ results: [{ status: "ACCEPTED" }] });
+
+    expect(patch).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(pageWindow[Symbol.for("smartthings_web_bridge.cake_client")]).toBe(runtimeClient);
+  });
+
   test("falls back to the unchanged CSRF fetch only before patch is available", async () => {
     setPageWindow({ _app: { csrfToken: "fixture-csrf" } });
     const fetchMock = vi.fn(async () => ({
