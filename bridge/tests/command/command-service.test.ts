@@ -108,20 +108,28 @@ describe("SafeCommandService", () => {
         }));
         const resync = vi.fn(async (
           request?: import("../../src/command/command-service.js").CommandResyncRequest
-        ) => ({
-          source: request?.deviceId ? "advanced_device_status" as const : "advanced_inventory" as const,
-          deviceId: request?.deviceId,
-          locationId: request?.deviceId ? "loc_001" : undefined,
-          authoritativeSnapshot: request?.deviceId === undefined,
-          startedAtMs: Date.now(),
-          observedStates: request?.deviceId
-            ? store.commandStatusStates(
-                switchBody("off", "2026-09-18T22:43:37.762Z"),
-                "dev_001",
-                "loc_001"
-              )
-            : undefined
-        }));
+        ): Promise<CommandResyncEvidence> => {
+          const startedAtMs = Date.now();
+          if (!request?.deviceId) {
+            return {
+              source: "advanced_inventory",
+              authoritativeSnapshot: true,
+              startedAtMs
+            };
+          }
+          return {
+            source: "advanced_device_status",
+            deviceId: request.deviceId,
+            locationId: "loc_001",
+            authoritativeSnapshot: false,
+            startedAtMs,
+            observedStates: store.commandStatusStates(
+              switchBody("off", "2026-09-18T22:43:37.762Z"),
+              "dev_001",
+              "loc_001"
+            )
+          };
+        });
         const service = new SafeCommandService({
           devices: store,
           status: connectedStatus(),
