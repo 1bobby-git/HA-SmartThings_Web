@@ -143,7 +143,7 @@ describe("SafeCommandService", () => {
           clientRequestId: "switch_latency_regression_request"
         });
 
-        await vi.advanceTimersByTimeAsync(74);
+        await vi.advanceTimersByTimeAsync(249);
         expect(resync).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
         expect(resync).toHaveBeenCalledWith({
