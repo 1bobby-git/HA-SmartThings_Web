@@ -904,7 +904,7 @@ export class SafeCommandService {
       );
       const backgroundRequest: CommandResyncRequest = {
         deviceId: effective.targetId,
-        switchTarget
+        ...(switchTarget ? { switchTarget } : {})
       };
       void (async () => {
         for (const delayMs of [150, 300, 600]) {
