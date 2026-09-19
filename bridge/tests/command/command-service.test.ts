@@ -106,6 +106,7 @@ describe("SafeCommandService", () => {
           acceptedAtMs: Date.now(),
           sentAtMs: Date.now()
         }));
+        let deviceReads = 0;
         const resync = vi.fn(async (
           request?: import("../../src/command/command-service.js").CommandResyncRequest
         ): Promise<CommandResyncEvidence> => {
@@ -117,17 +118,24 @@ describe("SafeCommandService", () => {
               startedAtMs
             };
           }
+          deviceReads += 1;
+          const observedStates = store.observeCommandDeviceStatus(
+            switchBody(
+              "off",
+              deviceReads === 1
+                ? "2026-09-18T22:43:37.762Z"
+                : "2026-09-19T00:23:02.315Z"
+            ),
+            "dev_001",
+            "loc_001"
+          );
           return {
             source: "advanced_device_status",
             deviceId: request.deviceId,
             locationId: "loc_001",
             authoritativeSnapshot: false,
             startedAtMs,
-            observedStates: store.commandStatusStates(
-              switchBody("off", "2026-09-18T22:43:37.762Z"),
-              "dev_001",
-              "loc_001"
-            )
+            observedStates
           };
         });
         const service = new SafeCommandService({
@@ -158,7 +166,22 @@ describe("SafeCommandService", () => {
           transport: "advanced"
         });
         expect(executeDeviceAction).toHaveBeenCalledOnce();
-        expect(resync.mock.calls.some(([request]) => request === undefined)).toBe(true);
+        expect(resync.mock.calls.some(([request]) => request === undefined)).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(149);
+        expect(resync).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(resync).toHaveBeenCalledTimes(2);
+        expect(resync).toHaveBeenLastCalledWith({
+          deviceId: "dev_001",
+          switchTarget: { component: "main", capability: "identifier_switch" }
+        });
+        expect(store.commandState(
+          "dev_001", "loc_001", "main", "identifier_switch", "switch"
+        )).toMatchObject({ value: "off", updatedAt: "2026-09-19T00:23:02.315Z" });
+
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(resync).toHaveBeenCalledTimes(2);
       } finally {
         await store.close();
         vi.useRealTimers();

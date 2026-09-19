@@ -898,7 +898,36 @@ export class SafeCommandService {
       // cache. It cannot confirm the command, and repeating it for 30 seconds
       // only blocks HA. Never fabricate state or replay the physical command.
       wait.cancel();
-      void this.options.resync().catch(() => undefined);
+      const backgroundRevision = this.options.devices.commandStateRevision(
+        effective.targetId,
+        device.locationId
+      );
+      const backgroundRequest: CommandResyncRequest = {
+        deviceId: effective.targetId,
+        switchTarget
+      };
+      void (async () => {
+        for (const delayMs of [150, 300, 600]) {
+          await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+          if (
+            this.options.devices.commandStateRevision(
+              effective.targetId,
+              device.locationId
+            ) !== backgroundRevision
+          ) {
+            return;
+          }
+          await this.options.resync(backgroundRequest).catch(() => undefined);
+          if (
+            this.options.devices.commandStateRevision(
+              effective.targetId,
+              device.locationId
+            ) !== backgroundRevision
+          ) {
+            return;
+          }
+        }
+      })();
       return acceptedUnconfirmed(
         request.clientRequestId,
         this.options.devices.currentSequence(),
