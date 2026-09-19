@@ -538,6 +538,36 @@ class SmartThingsWebSwitchTests(unittest.IsolatedAsyncioTestCase):
             arguments=[],
         )
 
+    async def test_accepted_unconfirmed_hides_stale_opposite_state_until_new_observation(self) -> None:
+        device, state = _device(with_control=True)
+        client = SimpleNamespace(
+            async_execute_command=AsyncMock(
+                return_value=SimpleNamespace(status="accepted_unconfirmed")
+            )
+        )
+        entity = SmartThingsWebSwitch(_runtime(device, client), device, state)
+
+        await entity.async_turn_on()
+
+        self.assertIsNone(entity.is_on)
+        self.assertEqual(
+            entity.extra_state_attributes,
+            {
+                "smartthings_raw_value": "off",
+                "smartthings_command_pending": True,
+                "smartthings_pending_target": "on",
+            },
+        )
+
+        state.value = "on"
+        state.updated_at = "2026-09-19T00:23:02.315Z"
+
+        self.assertTrue(entity.is_on)
+        self.assertEqual(
+            entity.extra_state_attributes,
+            {"smartthings_raw_value": "on"},
+        )
+
     async def test_duplicate_detail_alias_uses_canonical_observed_action(self) -> None:
         device, state, action_control_id = _duplicate_toggle_device()
         state.value = "on"

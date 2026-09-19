@@ -91,6 +91,8 @@ class SmartThingsWebSwitch(SmartThingsWebEntity, SwitchEntity):
         name_override: str | None = None,
     ) -> None:
         self.control = control
+        self._pending_target: bool | None = None
+        self._pending_state_marker: tuple[object, str | None, bool] | None = None
         is_primary_control = primary_switch_state(device, state)
         name = (
             name_override
@@ -130,10 +132,35 @@ class SmartThingsWebSwitch(SmartThingsWebEntity, SwitchEntity):
             and safe_generic_toggle_control(control)
         )
 
+    @staticmethod
+    def _state_marker(state: BridgeState | None) -> tuple[object, str | None, bool] | None:
+        """Return the observed fields that distinguish a newer switch state."""
+        if state is None:
+            return None
+        return (state.value, state.updated_at, state.command_read_verified)
+
+    def _pending_waits_for_observation(self, state: BridgeState | None) -> bool:
+        """Keep an accepted command pending only while HA still has the old observation."""
+        if self._pending_target is None:
+            return False
+        if self._state_marker(state) == self._pending_state_marker:
+            return True
+        self._pending_target = None
+        self._pending_state_marker = None
+        return False
+
+    def _write_pending_state(self) -> None:
+        """Refresh HA immediately when command certainty changes."""
+        writer = getattr(self, "async_write_ha_state", None)
+        if callable(writer):
+            writer()
+
     @property
     def is_on(self) -> bool | None:
-        """Return the last pushed switch state."""
+        """Return observed switch state, or unknown while a newer command is pending."""
         state = self.bridge_state
+        if self._pending_waits_for_observation(state):
+            return None
         if state is None:
             return None
         if isinstance(state.value, bool):
@@ -142,9 +169,17 @@ class SmartThingsWebSwitch(SmartThingsWebEntity, SwitchEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
-        """Preserve the exact pushed toggle value on the primary switch entity."""
+        """Expose raw observed state and bounded pending-command diagnostics."""
         state = self.bridge_state
-        return {"smartthings_raw_value": state.value} if state is not None else {}
+        attributes = (
+            {"smartthings_raw_value": state.value} if state is not None else {}
+        )
+        if self._pending_waits_for_observation(state):
+            attributes["smartthings_command_pending"] = True
+            attributes["smartthings_pending_target"] = (
+                "on" if self._pending_target else "off"
+            )
+        return attributes
 
     async def async_turn_on(self, **kwargs: object) -> None:
         """Request ON; the Bridge returns after confirmation or a bounded accepted receipt."""
@@ -171,8 +206,11 @@ class SmartThingsWebSwitch(SmartThingsWebEntity, SwitchEntity):
             raise HomeAssistantError(
                 "SmartThings Web switch has not observed the requested toggle command"
             )
+        self._pending_target = command == "on"
+        self._pending_state_marker = self._state_marker(state)
+        self._write_pending_state()
         try:
-            await self.runtime.client.async_execute_command(
+            result = await self.runtime.client.async_execute_command(
                 target_type="device",
                 target_id=self.device_id,
                 component=self.state_key[0],
@@ -184,4 +222,15 @@ class SmartThingsWebSwitch(SmartThingsWebEntity, SwitchEntity):
                 arguments=[],
             )
         except BridgeClientError as err:
+            self._pending_target = None
+            self._pending_state_marker = None
+            self._write_pending_state()
             raise HomeAssistantError(bridge_error_message("switch command", err)) from err
+
+        status = getattr(result, "status", None)
+        if status not in {"accepted_unconfirmed", "confirmed"}:
+            self._pending_target = None
+            self._pending_state_marker = None
+        else:
+            self._pending_waits_for_observation(self.bridge_state)
+        self._write_pending_state()
