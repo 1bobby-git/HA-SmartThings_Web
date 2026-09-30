@@ -539,8 +539,16 @@ def _updated_at(state: BridgeState | None) -> float:
     if state is None or not state.updated_at:
         return 0
     try:
-        return datetime.fromisoformat(state.updated_at.replace("Z", "+00:00")).timestamp()
+        parsed = datetime.fromisoformat(state.updated_at.replace("Z", "+00:00"))
     except (ValueError, TypeError, OverflowError):
+        return 0
+    # A naive timestamp would be interpreted in local time by .timestamp(), which is
+    # not comparable to the tz-aware SmartThings values; treat it as unusable instead.
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return 0
+    try:
+        return parsed.timestamp()
+    except (ValueError, OverflowError):
         return 0
 
 

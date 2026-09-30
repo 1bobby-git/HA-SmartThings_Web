@@ -473,6 +473,35 @@ class SmartThingsWebMediaPlayerTests(unittest.TestCase):
             before,
         )
 
+    def test_media_position_updated_at_requires_timezone_aware_timestamp(self) -> None:
+        def _player(updated_at: str) -> SmartThingsWebMediaPlayer:
+            elapsed = BridgeState(
+                "main",
+                "mediaPlayback",
+                "elapsedTime",
+                42,
+                None,
+                updated_at,
+            )
+            device = BridgeDevice(
+                "dev_pos",
+                "loc_001",
+                None,
+                "Speaker",
+                None,
+                True,
+                states={elapsed.key: elapsed},
+            )
+            return SmartThingsWebMediaPlayer(object(), device)
+
+        # A naive SmartThings timestamp must not surface as a naive datetime, which
+        # Home Assistant rejects for media_position_updated_at.
+        self.assertIsNone(_player("2026-08-25T00:00:00").media_position_updated_at)
+        aware = _player("2026-08-25T00:00:00Z").media_position_updated_at
+        self.assertIsNotNone(aware)
+        self.assertIsNotNone(aware.tzinfo)
+        self.assertEqual(aware.isoformat(), "2026-08-25T00:00:00+00:00")
+
 
 def _media_controls() -> dict[str, BridgeControl]:
     controls = [

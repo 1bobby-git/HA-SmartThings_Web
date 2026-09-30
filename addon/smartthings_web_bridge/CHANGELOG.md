@@ -1,3 +1,14 @@
+## 1.8.62
+
+SmartThings가 timezone 없는 timestamp를 함께 내려줄 때 발생하던 상태 처리 오류를 보완합니다.
+
+- Cloud/Local 중복 기기를 합칠 때 한쪽 timestamp에 `Z`(offset)가 있고 다른 쪽에는 없으면 `can't compare offset-naive and offset-aware datetimes` 예외로 기기 정규화가 중단될 수 있었습니다. 이제 offset이 없는 naive timestamp는 사용할 수 없는 값으로 처리해, offset이 있는 관측값을 최신으로 유지하며 병합을 계속 진행합니다.
+- media_player의 `media_position_updated_at`이 naive datetime을 반환하면 Home Assistant가 상태 기록을 거부했습니다. offset이 확인된 timestamp만 노출하고, 그렇지 않으면 값을 보고하지 않습니다.
+- 조명의 색상/색온도 최신 판정에서도 naive timestamp를 로컬 시간으로 잘못 해석해 tz-aware 값과 뒤섞이던 문제를 없앴습니다. naive timestamp는 판정에서 제외합니다.
+- 관측된 스위치/조명/미디어 상태, 명령 전송 경로, 재조회·재연결 정책은 1.8.61과 동일하게 유지합니다.
+
+Bridge 앱과 HACS 통합 버전은 1.8.62입니다.
+
 ## 1.8.61
 
 스위치 명령은 빠르게 접수되지만 Home Assistant 표시가 이전 상태에 머무르는 문제를 보완합니다.

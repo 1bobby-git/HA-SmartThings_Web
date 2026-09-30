@@ -196,6 +196,26 @@ class DeviceIdentityTests(unittest.TestCase):
                 self.assertEqual(set(result.devices), set(original))
                 self.assertEqual(result.aliases, {})
 
+    def test_merges_when_cloud_and_local_mix_naive_and_aware_timestamps(self) -> None:
+        # SmartThings can emit tz-aware ("...Z") and tz-naive timestamps for the same
+        # duplicated device; the merge must not raise "can't compare offset-naive and
+        # offset-aware datetimes" and must keep the tz-aware observation as newer.
+        cloud = _fireplace("dev_185", context="CLOUD", parent_device_id=None)
+        local = _fireplace("dev_602", context="LOCAL", parent_device_id="dev_407")
+        switch_key = ("identifier_main", "identifier_switch", "switch")
+        cloud.states[switch_key].value = "on"
+        cloud.states[switch_key].updated_at = "2026-08-31T13:25:16Z"
+        local.states[switch_key].value = "off"
+        local.states[switch_key].updated_at = "2026-08-31T13:00:00"  # naive
+        local.health_updated_at = "2026-08-31T14:01:13"  # naive
+
+        result = _canonicalize({"dev_185": cloud, "dev_602": local})
+
+        self.assertEqual(set(result.devices), {"dev_185"})
+        merged = result.devices["dev_185"]
+        # The tz-aware cloud value wins over the unusable naive local value.
+        self.assertEqual(merged.states[switch_key].value, "on")
+
 
 if __name__ == "__main__":
     unittest.main()

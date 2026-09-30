@@ -148,6 +148,9 @@ def _timestamp(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    # Reject naive timestamps so mixed tz-aware/tz-naive SmartThings values never
+    # raise "can't compare offset-naive and offset-aware datetimes" during merge.
+    return parsed if parsed.tzinfo is not None and parsed.utcoffset() is not None else None

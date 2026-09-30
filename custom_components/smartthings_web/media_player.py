@@ -198,9 +198,14 @@ class SmartThingsWebMediaPlayer(SmartThingsWebDeviceEntity, MediaPlayerEntity):
         if state is None or state.updated_at is None:
             return None
         try:
-            return datetime.fromisoformat(state.updated_at.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(state.updated_at.replace("Z", "+00:00"))
         except ValueError:
             return None
+        # Home Assistant rejects naive datetimes for this attribute; only report a
+        # position timestamp when SmartThings supplied a usable timezone offset.
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return parsed
 
     @property
     def repeat(self) -> str | None:
