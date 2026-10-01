@@ -34,7 +34,7 @@
     "soak:haos:addon": "node dist/tools/haos-soak.js --local-bridge"
   },
   "dependencies": {
-    "playwright-core": "1.62.1"
+    "playwright-core": "1.63.0"
   },
   "devDependencies": {
     "@types/node": "24.13.3",
