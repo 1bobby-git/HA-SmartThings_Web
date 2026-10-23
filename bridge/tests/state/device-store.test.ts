@@ -420,7 +420,11 @@ describe("DeviceStore", () => {
       expect(listener).toHaveBeenCalledWith({
         schemaVersion: 1,
         sequence: 2,
-        type: "inventory"
+        type: "inventory",
+        change: "device_health",
+        deviceId: "dev_001",
+        online: false,
+        healthUpdatedAt: "2026-08-24T21:01:00.000Z"
       });
       store.close();
 

@@ -334,7 +334,9 @@ export class SseEventWriter {
   write(value: unknown, options: { immediateInventory?: boolean } = {}): void {
     if (this.#closed || this.#response.destroyed) return;
     const inventory = asInventoryEvent(value);
-    if (inventory && options.immediateInventory !== true) {
+    // Health markers are deltas: merging them would discard device updates and
+    // manufacture sequence gaps, forcing HA into a costly full resync loop.
+    if (inventory && inventory.change !== "device_health" && options.immediateInventory !== true) {
       if (
         this.#pendingInventory === undefined ||
         inventory.sequence > this.#pendingInventory.sequence
@@ -353,7 +355,7 @@ export class SseEventWriter {
       return;
     }
     this.#flushPendingInventory();
-    this.#enqueue(formatSseData(value));
+    this.#enqueue(formatSseData(inventory ?? value));
   }
 
   writeComment(comment: string): void {
@@ -459,7 +461,15 @@ function asInventoryEvent(
   return {
     schemaVersion: 1,
     sequence: sequence as number,
-    type: "inventory"
+    type: "inventory",
+    ...(value.change === "device_health"
+      && typeof value.deviceId === "string" && /^dev_[A-Za-z0-9]{3,64}$/.test(value.deviceId)
+      && typeof value.online === "boolean"
+      && typeof value.healthUpdatedAt === "string" && value.healthUpdatedAt.length <= 64
+      && Number.isFinite(Date.parse(value.healthUpdatedAt)) ? {
+        change: "device_health" as const, deviceId: value.deviceId,
+        online: value.online, healthUpdatedAt: value.healthUpdatedAt
+      } : {})
   };
 }
 

@@ -1,3 +1,7 @@
+## 1.8.63
+
+Security: refresh system CA trust and pin checksum-verified Node 24.22.1. Preserve ordered SmartThings health deltas from the existing deployment.
+
 ## 1.8.62
 
 SmartThings가 timezone 없는 timestamp를 함께 내려줄 때 발생하던 상태 처리 오류를 보완합니다.

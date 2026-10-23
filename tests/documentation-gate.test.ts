@@ -547,7 +547,7 @@ describe("Phase 1 documentation gate", () => {
     const version = JSON.parse(readFileSync("protocol/version.json", "utf8")) as {
       container_node_version?: string;
     };
-    expect(version.container_node_version).toBe("24.18.1");
+    expect(version.container_node_version).toBe("24.22.1");
     expect(existsSync(duplicatePath)).toBe(true);
     expect(existsSync(duplicateHashPath)).toBe(true);
     const duplicateText = readFileSync(duplicatePath, "utf8");

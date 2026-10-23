@@ -138,7 +138,8 @@ export interface BridgeInventory {
 }
 
 export type BridgeDeviceStoreEvent =
-  | { schemaVersion: 1; sequence: number; type: "inventory" }
+  | { schemaVersion: 1; sequence: number; type: "inventory";
+      change?: "device_health"; deviceId?: string; online?: boolean; healthUpdatedAt?: string }
   | {
       schemaVersion: 1;
       sequence: number;
@@ -1229,6 +1230,7 @@ export class DeviceStore {
     const deviceId = safeId(event?.device_id ?? event?.deviceId, "dev");
     const locationId = safeId(event?.location_id ?? event?.locationId, "loc");
     if (!data || !event || !deviceId || !locationId) return;
+    const deviceWasKnown = this.#devices.has(deviceId);
     const device = this.#ensureDevice(deviceId, locationId);
     const state = stateFromEvent(
       event,
@@ -1253,7 +1255,12 @@ export class DeviceStore {
     this.#setDeviceHealth(device, true, state.updatedAt);
     if (!wasOnline) {
       const sequence = this.#nextSequence();
-      this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
+      this.#publish({ schemaVersion: 1, sequence, type: "inventory",
+        ...(deviceWasKnown && device.healthUpdatedAt ? {
+          change: "device_health" as const, deviceId,
+          online: device.online, healthUpdatedAt: device.healthUpdatedAt
+        } : {})
+      });
     }
     if (semanticStateChanged || momentaryEvent || commandId) {
       const sequence = this.#nextSequence();
@@ -1309,7 +1316,12 @@ export class DeviceStore {
       return;
     }
     const sequence = this.#nextSequence();
-    this.#publish({ schemaVersion: 1, sequence, type: "inventory" });
+    this.#publish({ schemaVersion: 1, sequence, type: "inventory",
+      ...(current && device.healthUpdatedAt ? {
+        change: "device_health" as const, deviceId,
+        online: device.online, healthUpdatedAt: device.healthUpdatedAt
+      } : {})
+    });
     this.#schedulePersist();
   }
 
