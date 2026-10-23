@@ -38,6 +38,24 @@ RUN apt-get update \
     novnc \
   && rm -rf /var/lib/apt/lists/*
 
+ARG NODE_SECURITY_VERSION=24.22.1
+ARG NODE_SECURITY_X64_SHA256=6c172a9ab6718f7b801fb5a7bd486af2ee5e32758086a04b84fcce2aa77095e6
+ARG NODE_SECURITY_ARM64_SHA256=dbabf7a1cbf947e6059ffad2c27b80041db97dea1e553b62afdee7f13fca336e
+RUN set -eux; \
+  dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20260816ubuntu0.26.04.1; \
+  case "$(uname -m)" in \
+    x86_64) node_arch=x64; node_sha256="${NODE_SECURITY_X64_SHA256}" ;; \
+    aarch64) node_arch=arm64; node_sha256="${NODE_SECURITY_ARM64_SHA256}" ;; \
+    *) echo "Unsupported Node.js architecture" >&2; exit 1 ;; \
+  esac; \
+  curl -fsSL "https://nodejs.org/dist/v${NODE_SECURITY_VERSION}/node-v${NODE_SECURITY_VERSION}-linux-${node_arch}.tar.xz" -o /tmp/node-security.tar.xz; \
+  echo "${node_sha256}  /tmp/node-security.tar.xz" | sha256sum -c -; \
+  mkdir /tmp/node-security; \
+  tar -xJf /tmp/node-security.tar.xz -C /tmp/node-security --strip-components=1; \
+  install -m 0755 /tmp/node-security/bin/node /usr/bin/node; \
+  test "$(/usr/bin/node --version)" = "v${NODE_SECURITY_VERSION}"; \
+  rm -rf /tmp/node-security /tmp/node-security.tar.xz
+
 RUN set -eux; \
   id -u pwuser >/dev/null; \
   arch="$(uname -m)"; \
