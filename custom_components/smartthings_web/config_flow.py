@@ -95,10 +95,16 @@ class SmartThingsWebConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         """Pair with the Bridge and select its main device location."""
         errors: dict[str, str] = {}
+        client: SmartThingsWebBridgeClient | None = None
         if user_input is not None:
-            client = SmartThingsWebBridgeClient(
-                async_get_clientsession(self.hass), user_input[CONF_BRIDGE_URL]
-            )
+            try:
+                client = SmartThingsWebBridgeClient(
+                    async_get_clientsession(self.hass), user_input[CONF_BRIDGE_URL]
+                )
+            except (BridgeClientError, ValueError):
+                # The URL is not a local http(s) address; nothing was sent.
+                errors["base"] = "invalid_bridge_url"
+        if user_input is not None and client is not None:
             try:
                 token = await client.async_pair(user_input["pairing_code"])
                 inventory = await client.async_get_inventory()

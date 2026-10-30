@@ -1,3 +1,11 @@
+## 1.8.64
+
+- Bridge: 새로 찾은 장치와 위치의 별칭(`dev_…`, `loc_…`)을 SmartThings ID의 단방향 해시로 만듭니다. 애드온을 다시 설치해 Bridge 데이터가 비어도 같은 장치는 같은 별칭을 다시 받고, 다른 장치가 기존 별칭을 이어받지 않습니다. 지금까지는 빈 데이터에서 순번(`dev_001`부터)을 다시 매겨, 재설치 뒤 기기 카드와 홈 모니터 같은 엔티티가 다른 장치나 다른 집을 가리킬 수 있었습니다. 이미 저장된 별칭은 바꾸지 않습니다. 온도·스위치 같은 기능별 엔티티와 장면의 ID는 여전히 `bridge-secret`에 묶여 있어 재설치하면 새로 만들어집니다. 재설치 대신 문제가 생기기 전의 Home Assistant 백업에서 애드온을 복원하면 모든 ID가 그대로 돌아옵니다.
+- Home Assistant: Bridge가 이 항목의 위치를 더 이상 보고하지 않으면 기기와 엔티티를 지우지 않고 복구 알림(`location_not_found`)을 띄웁니다. 지금까지는 이때 이 항목의 기기를 모두 정리했습니다. 통합 항목을 삭제하면 그 항목의 복구 알림도 지웁니다.
+- Home Assistant: 설정할 때 Bridge 주소 형식이 잘못되면 "알 수 없는 오류" 대신 주소 형식 안내를 보여 줍니다.
+- Home Assistant: 이벤트 스트림에 너무 긴 줄이 오면(aiohttp 3.13.4 이상의 `LineTooLong` 포함) 오류 기록 대신 다시 연결합니다.
+- 문서: SECURITY.md의 신고 방법을 고쳤습니다. 외부 신고자는 보안 권고 초안을 직접 만들 수 없으므로, 비공개 신고가 꺼져 있으면 세부 내용 없이 연락을 요청하는 이슈를 남기도록 안내합니다.
+
 ## 1.8.63
 
 Security: refresh system CA trust and pin checksum-verified Node 24.22.1. Preserve ordered SmartThings health deltas from the existing deployment.

@@ -22,6 +22,7 @@ import {
   PROTOCOL_CONTRACT_VERSION
 } from "../src/inspector/protocol-contract.js";
 import { ProtocolIntegrityStore } from "../src/state/protocol-integrity-store.js";
+import { stableDeviceOrLocationAlias } from "../src/security/alias-store.js";
 import { DeviceStore } from "../src/state/device-store.js";
 import type { RuntimeStatusPatch } from "../src/state/runtime-state.js";
 import { createHealthReport } from "../src/server/health.js";
@@ -1010,7 +1011,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
 
     expect(log.info.mock.calls.slice(0, 14)).toEqual([
-      ["bridge_init:version:1.8.63:home_monitor_direct"],
+      ["bridge_init:version:1.8.64:home_monitor_direct"],
       ["bridge_init:data_paths"],
       ["bridge_init:data_paths:data_dir"],
       ["bridge_init:data_paths:profile_dir"],
@@ -2244,7 +2245,7 @@ describe("createBridgeRuntime", () => {
         }
       });
 
-      const response = await fetchFirstImage(baseUrl, headers);
+      const response = await fetchFirstImage(baseUrl, headers, ["raw-camera-uuid"]);
 
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toBe("image/jpeg");
@@ -2329,7 +2330,7 @@ describe("createBridgeRuntime", () => {
         requestId: "advanced-inventory-camera"
       });
 
-      const response = await fetchFirstImage(baseUrl, headers);
+      const response = await fetchFirstImage(baseUrl, headers, ["raw-camera-inventory"]);
 
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toBe("image/jpeg");
@@ -3114,11 +3115,18 @@ async function exchangeBridgeToken(baseUrl: string): Promise<string> {
 
 async function fetchFirstImage(
   baseUrl: string,
-  headers: { authorization: string }
+  headers: { authorization: string },
+  rawDeviceIds: string[]
 ): Promise<Response> {
+  // Device aliases are derived from the SmartThings identifier (1.8.64). The
+  // public ID is the redactor alias normalized once more by DeviceStore, as in
+  // runtime.ts aliasDeviceId.
+  const deviceIds = rawDeviceIds.map((raw) =>
+    stableDeviceOrLocationAlias("device", stableDeviceOrLocationAlias("device", raw))
+  );
   let lastResponse: Response | undefined;
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    for (const deviceId of ["dev_001", "dev_002", "dev_003", "dev_004", "dev_005"]) {
+    for (const deviceId of deviceIds) {
       const response = await fetch(`${baseUrl}/api/v1/images/${deviceId}`, { headers });
       if (response.status === 200) return response;
       lastResponse = response;

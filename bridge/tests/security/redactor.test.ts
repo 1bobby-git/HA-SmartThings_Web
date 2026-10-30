@@ -3,8 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 
-import { SqliteAliasStore } from "../../src/security/alias-store.js";
+import { SqliteAliasStore, stableDeviceOrLocationAlias } from "../../src/security/alias-store.js";
 import { createRedactor } from "../../src/security/redactor.js";
+
+const dev = (value: string) => stableDeviceOrLocationAlias("device", value);
+const loc = (value: string) => stableDeviceOrLocationAlias("location", value);
+const occurrences = (text: string, value: string) => text.split(value).length - 1;
 
 const raw = {
   locationId: "loc-raw-7d99e9a2",
@@ -58,8 +62,8 @@ describe("redactor", () => {
       expect(text).not.toContain(raw.token);
       expect(text).not.toContain(raw.ip);
       expect(text).not.toContain(raw.csrf);
-      expect(text).toContain("loc_001");
-      expect(text).toContain("dev_001");
+      expect(text).toContain(loc(raw.locationId));
+      expect(text).toContain(dev(raw.device_id));
       expect(text).toMatch(/user_[a-f0-9]{12}/);
       expect(text).toContain("[REDACTED]");
       expect((sanitized as { url: string }).url).toContain("safe=ok");
@@ -85,8 +89,8 @@ describe("redactor", () => {
       expect(text).not.toContain(raw.locationId);
       expect(text).not.toContain(raw.device_id);
       expect(text).not.toContain(raw.token);
-      expect(text.match(/loc_001/g)?.length).toBe(2);
-      expect(text.match(/dev_001/g)?.length).toBe(2);
+      expect(occurrences(text, loc(raw.locationId))).toBe(2);
+      expect(occurrences(text, dev(raw.device_id))).toBe(2);
       expect(text).toContain("[REDACTED]");
     });
   });
@@ -101,8 +105,8 @@ describe("redactor", () => {
       expect(sanitized).not.toContain(raw.ip);
       expect(sanitized).not.toContain(raw.device_id);
       expect(sanitized).not.toContain(raw.locationId);
-      expect(sanitized).toContain("loc_001");
-      expect(sanitized).toContain("dev_001");
+      expect(sanitized).toContain(loc(raw.locationId));
+      expect(sanitized).toContain(dev(raw.device_id));
       expect(sanitized).toContain("[REDACTED]");
     });
   });
@@ -190,10 +194,10 @@ describe("redactor", () => {
       expect(text).not.toContain("account-raw-b");
       expect(text).not.toContain("user-raw-a");
       expect(text).not.toContain("user-raw-b");
-      expect(text).toContain("dev_001");
-      expect(text).toContain("dev_002");
-      expect(text).toContain("loc_001");
-      expect(text).toContain("loc_002");
+      expect(text).toContain(dev("device-raw-a"));
+      expect(text).toContain(dev("device-raw-b"));
+      expect(text).toContain(loc("location-raw-a"));
+      expect(text).toContain(loc("location-raw-b"));
       expect(text).toMatch(/account_[a-f0-9]{12}/);
       expect(text).toMatch(/user_[a-f0-9]{12}/);
     });
@@ -215,8 +219,8 @@ describe("redactor", () => {
       expect(sanitized).not.toContain(embeddedLocation);
       expect(sanitized).not.toContain(embeddedUser);
       expect(sanitized).not.toContain(embeddedToken);
-      expect(sanitized).toContain("dev_001");
-      expect(sanitized).toContain("loc_001");
+      expect(sanitized).toContain(dev(embeddedDevice));
+      expect(sanitized).toContain(loc(embeddedLocation));
       expect(sanitized).toMatch(/user_[a-f0-9]{12}/);
       expect(sanitized).toContain("[REDACTED]");
     });

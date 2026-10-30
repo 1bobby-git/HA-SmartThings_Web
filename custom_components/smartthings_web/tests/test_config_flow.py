@@ -134,6 +134,31 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "form")
         self.assertEqual(values[CONF_BRIDGE_URL], DEFAULT_BRIDGE_URL)
 
+    async def test_manual_flow_reports_an_invalid_bridge_url_on_the_form(self) -> None:
+        class RejectingClient:
+            """The real client validates the URL in its constructor."""
+
+            def __init__(self, _session: object, base_url: str, _token: str | None = None) -> None:
+                if not base_url.strip():
+                    raise ValueError("invalid_bridge_url")
+                raise config_flow.BridgeClientError("invalid_bridge_url")
+
+        original_client = config_flow.SmartThingsWebBridgeClient
+        config_flow.SmartThingsWebBridgeClient = RejectingClient  # type: ignore[assignment]
+        try:
+            for bridge_url in ("", "http://bridge.example.com", "http://localhost:8100/path"):
+                with self.subTest(bridge_url=bridge_url):
+                    flow = SmartThingsWebConfigFlow()
+
+                    result = await flow.async_step_user(
+                        {CONF_BRIDGE_URL: bridge_url, "pairing_code": "12345678"}
+                    )
+
+                    self.assertEqual(result["type"], "form")
+                    self.assertEqual(result["errors"], {"base": "invalid_bridge_url"})
+        finally:
+            config_flow.SmartThingsWebBridgeClient = original_client  # type: ignore[assignment]
+
     async def test_hassio_discovery_prefills_exact_runtime_hostname(self) -> None:
         flow = SmartThingsWebConfigFlow()
 
