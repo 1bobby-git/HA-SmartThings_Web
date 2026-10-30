@@ -277,6 +277,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEnt
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
+async def async_remove_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntry) -> None:
+    """Drop this entry's repairs; deleting the entry is what they ask for."""
+    for translation_key in (REPAIR_LOCATION_NOT_FOUND, REPAIR_SAMSUNG_LOGIN_REQUIRED):
+        ir.async_delete_issue(hass, DOMAIN, f"{entry.entry_id}_{translation_key}")
+
+
 def _subscribe_entity_registry_migration(
     hass: HomeAssistant,
     entry: SmartThingsWebConfigEntry,

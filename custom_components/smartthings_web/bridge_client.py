@@ -12,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
+from aiohttp.http_exceptions import HttpProcessingError
 from yarl import URL
 
 from .const import bridge_url_candidates, normalize_bridge_url
@@ -369,9 +370,17 @@ class SmartThingsWebBridgeClient:
                     value = json.loads(line[6:])
                     if isinstance(value, dict):
                         yield value
-        except (ClientError, TimeoutError, UnicodeError, ValueError) as err:
-            # ValueError covers bad JSON and aiohttp's "Chunk too big" for an
-            # oversized line; the event loop reconnects instead of logging a crash.
+        except (
+            ClientError,
+            HttpProcessingError,
+            TimeoutError,
+            UnicodeError,
+            ValueError,
+        ) as err:
+            # An over-long line raises LineTooLong (an HttpProcessingError) on
+            # aiohttp 3.14 and ValueError("Chunk too big") on older versions;
+            # ValueError also covers bad JSON. The event loop then reconnects
+            # instead of logging a traceback.
             raise BridgeClientError("bridge_event_stream_failed") from err
 
     async def _request_json(

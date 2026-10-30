@@ -57,7 +57,7 @@
     },
     "location_not_found": {
       "title": "SmartThings Web Bridge가 이 위치를 알려 주지 않습니다",
-      "description": "Bridge가 이 항목의 SmartThings 위치를 더 이상 보고하지 않아, 기존 기기와 엔티티를 지우지 않고 설정을 멈췄습니다. Bridge 애드온이 이 위치가 있는 Samsung 계정으로 로그인되어 있는지 확인하세요. 애드온을 다시 설치했거나 데이터가 초기화되었다면 이 항목을 삭제한 뒤 위치를 다시 추가하세요."
+      "description": "Bridge가 이 항목의 SmartThings 위치를 더 이상 보고하지 않습니다. Home Assistant는 이 항목의 기기와 엔티티를 지우지 않고 그대로 두었습니다. Bridge 애드온이 이 위치가 있는 Samsung 계정으로 로그인되어 있는지 확인하세요. 애드온을 다시 설치했거나 데이터가 초기화되었다면, 그 전에 만든 Home Assistant 백업에서 애드온을 복원하세요. 기기 ID가 되돌아옵니다. 그런 백업이 없으면 이 항목을 삭제한 뒤 위치를 다시 추가하세요."
     }
   },
   "entity": {

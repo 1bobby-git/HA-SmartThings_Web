@@ -55,7 +55,7 @@
     },
     "location_not_found": {
       "title": "SmartThings Web Bridge no longer reports this location",
-      "description": "The Bridge no longer reports the SmartThings location of this entry, so setup stopped without deleting its devices and entities. Check that the Bridge add-on is signed in to the Samsung account that owns this location. If you reinstalled the add-on or its data was reset, delete this entry and add the location again."
+      "description": "The Bridge no longer reports the SmartThings location of this entry. Home Assistant kept the entry's devices and entities instead of deleting them. Check that the Bridge add-on is signed in to the Samsung account that owns this location. If the add-on was reinstalled or its data was reset, restore the add-on from a Home Assistant backup made before that, which brings back its device IDs. Without such a backup, delete this entry and add the location again."
     }
   },
   "entity": {

@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import sys
 from types import ModuleType
 from typing import Any
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
-from aiohttp import ClientConnectionError
+from aiohttp import ClientConnectionError, StreamReader
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 package = ModuleType("smartthings_web")
@@ -722,9 +723,13 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
             _ = [event async for event in malformed.async_events()]
 
     async def test_event_stream_maps_an_oversized_line_to_a_reconnectable_failure(self) -> None:
+        # Feed the installed aiohttp's real StreamReader: 3.14 raises LineTooLong,
+        # older versions raise ValueError("Chunk too big").
+        reader = StreamReader(Mock(), 2**16, loop=asyncio.get_running_loop())
+        reader.feed_data(b"data: " + b"x" * (2**20) + b"\n")
+        reader.feed_eof()
         session = _FakeEventSession(200, [])
-        # aiohttp raises a plain ValueError when one line exceeds its read buffer.
-        session._response.content = _FailingEventContent(ValueError("Chunk too big"))
+        session._response.content = reader
         client = SmartThingsWebBridgeClient(session, "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
 
         with self.assertRaisesRegex(BridgeClientError, "bridge_event_stream_failed"):
@@ -1261,17 +1266,6 @@ class _FakeEventContent:
             return next(self._lines)
         except StopIteration as err:
             raise StopAsyncIteration from err
-
-
-class _FailingEventContent:
-    def __init__(self, error: Exception) -> None:
-        self._error = error
-
-    def __aiter__(self) -> "_FailingEventContent":
-        return self
-
-    async def __anext__(self) -> bytes:
-        raise self._error
 
 
 class _FakeEventResponse:

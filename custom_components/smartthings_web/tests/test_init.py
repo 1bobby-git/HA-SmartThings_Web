@@ -5362,5 +5362,140 @@ def slider_number_device(device_id: str, location_id: str, name: str) -> BridgeD
     )
 
 
+class LocationLossTests(unittest.IsolatedAsyncioTestCase):
+    """A Bridge that no longer reports the location keeps every entity."""
+
+    def setUp(self) -> None:
+        self.issues: list[tuple[str, str]] = []
+        self._saved = (
+            integration.ir.async_create_issue,
+            integration.ir.async_delete_issue,
+            integration.SmartThingsWebBridgeClient,
+            integration.async_get_clientsession,
+            integration.er.async_get,
+            integration.er.async_entries_for_config_entry,
+            integration.dr.async_get,
+        )
+        integration.ir.async_create_issue = (
+            lambda _hass, _domain, issue_id, **_kwargs: self.issues.append(("create", issue_id))
+        )
+        integration.ir.async_delete_issue = (
+            lambda _hass, _domain, issue_id: self.issues.append(("delete", issue_id))
+        )
+
+    def tearDown(self) -> None:
+        (
+            integration.ir.async_create_issue,
+            integration.ir.async_delete_issue,
+            integration.SmartThingsWebBridgeClient,
+            integration.async_get_clientsession,
+            integration.er.async_get,
+            integration.er.async_entries_for_config_entry,
+            integration.dr.async_get,
+        ) = self._saved
+
+    @staticmethod
+    def _reset_inventory() -> BridgeInventory:
+        """The same home and lamp after a reinstall, under 1.8.64 aliases."""
+        location = "loc_04512286547896321405"
+        state = BridgeState("main", "switch", "switch", "on", None, "2026-10-30T00:00:00Z")
+        device = BridgeDevice(
+            "dev_18273645546372819201", location, None, "Lamp", "Switch", True,
+            states={state.key: state},
+        )
+        return BridgeInventory(1, True, "1.8.64", "5", {location: "Home"}, {}, {device.device_id: device})
+
+    @staticmethod
+    def _entry() -> SimpleNamespace:
+        return SimpleNamespace(
+            entry_id="entry_001",
+            data={
+                CONF_BRIDGE_URL: "http://bridge.local",
+                CONF_BRIDGE_TOKEN: "x" * 32,
+                CONF_LOCATION_ID: "loc_001",
+            },
+            options={},
+        )
+
+    async def test_setup_stops_with_a_repair_before_touching_the_registry(self) -> None:
+        inventory = self._reset_inventory()
+
+        class FakeClient:
+            base_url = "http://bridge.local"
+
+            def __init__(self, *_args: object) -> None:
+                return None
+
+            async def async_get_inventory(self) -> BridgeInventory:
+                return inventory
+
+        integration.SmartThingsWebBridgeClient = FakeClient  # type: ignore[assignment]
+        integration.async_get_clientsession = lambda _hass: None  # type: ignore[assignment]
+        entry = self._entry()
+
+        with self.assertRaises(integration.ConfigEntryNotReady):
+            await integration.async_setup_entry(object(), entry)  # type: ignore[arg-type]
+
+        self.assertEqual(self.issues, [("create", "entry_001_location_not_found")])
+        self.assertFalse(hasattr(entry, "runtime_data"))
+
+    def test_registry_migration_deletes_nothing_when_the_location_is_gone(self) -> None:
+        def row(entity_id: str, unique_id: str, name: str | None) -> SimpleNamespace:
+            return SimpleNamespace(
+                entity_id=entity_id,
+                domain=entity_id.split(".")[0],
+                platform=DOMAIN,
+                unique_id=unique_id,
+                device_id="uuid_lamp",
+                config_entry_id="entry_001",
+                name=name,
+                disabled_by=None,
+                original_name="Power",
+                object_id_base="power",
+                suggested_object_id=entity_id.split(".")[1],
+            )
+
+        registry = FakeRegistry(
+            [
+                row("switch.lamp", "dev_001_main_switch_switch", None),
+                row("switch.lamp_renamed", "dev_001_main_switch_other", "My lamp"),
+                row("climate.heater", "dev_002_climate", None),
+                row("alarm_control_panel.home", "loc_001_home_monitor", None),
+            ]
+        )
+        removed_devices: list[str] = []
+        device_registry = SimpleNamespace(
+            devices=[
+                SimpleNamespace(
+                    id="uuid_lamp", identifiers={(DOMAIN, "dev_001")}, config_entries={"entry_001"}
+                ),
+            ],
+            async_update_device=lambda *_args, **_kwargs: None,
+            async_remove_device=lambda device_id: removed_devices.append(device_id),
+        )
+        integration.er.async_get = lambda _hass: registry
+        integration.er.async_entries_for_config_entry = (
+            lambda _registry, _entry_id: list(registry.entries)
+        )
+        integration.dr.async_get = lambda _hass: device_registry
+
+        integration._migrate_entity_registry(object(), self._entry(), self._reset_inventory())
+
+        self.assertEqual(registry.removed, [])
+        self.assertEqual(removed_devices, [])
+        self.assertIn(("create", "entry_001_location_not_found"), self.issues)
+
+    async def test_removing_the_entry_clears_its_repairs(self) -> None:
+        await integration.async_remove_entry(object(), SimpleNamespace(entry_id="entry_001"))  # type: ignore[arg-type]
+
+        self.assertEqual(
+            sorted(self.issues),
+            [
+                ("delete", "entry_001_location_not_found"),
+                ("delete", "entry_001_samsung_login_required"),
+            ],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
