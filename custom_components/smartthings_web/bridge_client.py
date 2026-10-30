@@ -378,7 +378,7 @@ class SmartThingsWebBridgeClient:
             ValueError,
         ) as err:
             # An over-long line raises LineTooLong (an HttpProcessingError) on
-            # aiohttp 3.14 and ValueError("Chunk too big") on older versions;
+            # aiohttp 3.13.4+ and ValueError("Chunk too big") on older versions;
             # ValueError also covers bad JSON. The event loop then reconnects
             # instead of logging a traceback.
             raise BridgeClientError("bridge_event_stream_failed") from err

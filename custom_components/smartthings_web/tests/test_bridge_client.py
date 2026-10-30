@@ -723,7 +723,7 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
             _ = [event async for event in malformed.async_events()]
 
     async def test_event_stream_maps_an_oversized_line_to_a_reconnectable_failure(self) -> None:
-        # Feed the installed aiohttp's real StreamReader: 3.14 raises LineTooLong,
+        # Feed the installed aiohttp's real StreamReader: 3.13.4+ raises LineTooLong,
         # older versions raise ValueError("Chunk too big").
         reader = StreamReader(Mock(), 2**16, loop=asyncio.get_running_loop())
         reader.feed_data(b"data: " + b"x" * (2**20) + b"\n")

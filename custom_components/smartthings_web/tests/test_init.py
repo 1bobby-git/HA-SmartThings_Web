@@ -5482,6 +5482,8 @@ class LocationLossTests(unittest.IsolatedAsyncioTestCase):
         integration._migrate_entity_registry(object(), self._entry(), self._reset_inventory())
 
         self.assertEqual(registry.removed, [])
+        self.assertEqual(registry.renamed, [])
+        self.assertEqual(registry.updated, [])
         self.assertEqual(removed_devices, [])
         self.assertIn(("create", "entry_001_location_not_found"), self.issues)
 
