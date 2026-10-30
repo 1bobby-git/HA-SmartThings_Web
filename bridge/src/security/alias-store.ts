@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
@@ -8,13 +8,31 @@ export type AliasKind = "location" | "device" | "account" | "user" | "identifier
 const digestOnlyAliasKinds = new Set<AliasKind>(["account", "user", "identifier"]);
 const digestOnlyMigration = "digest-only-aliases-v1";
 const maxCachedAliases = 2048;
+// Device and location aliases name Home Assistant devices and entities. New
+// ones come from a one-way hash of the SmartThings identifier, so an empty
+// database (for example after the add-on is reinstalled) gives each device its
+// old alias back and can never hand that alias to a different device. Rows
+// created before 1.8.64 keep their sequential dev_NNN/loc_NNN aliases.
+const stableAliasNamespace = "smartthings-web/alias/v2";
+const stableAliasDigits = 20;
+
+export function stableDeviceOrLocationAlias(
+  kind: "location" | "device",
+  rawIdentifier: string
+): string {
+  const prefix = kind === "location" ? "loc" : "dev";
+  const hash = createHash("sha256")
+    .update(`${stableAliasNamespace}/${kind}:${rawIdentifier}`)
+    .digest();
+  // Digits only: command, camera and event routes accept /^dev_[0-9]{3,32}$/.
+  return `${prefix}_${hash.readBigUInt64BE(0).toString().padStart(stableAliasDigits, "0")}`;
+}
 
 export class SqliteAliasStore {
   readonly #db: DatabaseSync;
   readonly #secret: string;
   readonly #lookup: StatementSync;
-  readonly #insert: StatementSync;
-  readonly #count: StatementSync;
+  readonly #bind: StatementSync;
   // Cache HMAC digests, never raw device/account identifiers or credentials.
   readonly #cache = new Map<string, string>();
 
@@ -39,14 +57,18 @@ export class SqliteAliasStore {
     `);
     this.#migrateDigestOnlyAliases();
     this.#lookup = this.#db.prepare("SELECT alias FROM aliases WHERE kind = ? AND digest = ?");
-    this.#insert = this.#db.prepare("INSERT INTO aliases (kind, digest, alias) VALUES (?, ?, ?)");
-    this.#count = this.#db.prepare("SELECT COUNT(*) AS count FROM aliases WHERE kind = ?");
+    // A stable alias that already exists belongs to the same SmartThings
+    // identifier under an earlier bridge secret: move it to the current digest.
+    this.#bind = this.#db.prepare(
+      "INSERT INTO aliases (kind, digest, alias) VALUES (?, ?, ?) " +
+        "ON CONFLICT (kind, alias) DO UPDATE SET digest = excluded.digest"
+    );
   }
 
   alias(kind: AliasKind, rawIdentifier: string): string {
     const digest = this.#digest(kind, rawIdentifier);
     if (digestOnlyAliasKinds.has(kind)) {
-      return this.#createAlias(kind, digest);
+      return `${kind}_${digest.slice(0, 12)}`;
     }
     const key = `${kind}:${digest}`;
     const cached = this.#cache.get(key);
@@ -57,8 +79,8 @@ export class SqliteAliasStore {
       return found.alias;
     }
 
-    const alias = this.#createAlias(kind, digest);
-    this.#insert.run(kind, digest, alias);
+    const alias = stableDeviceOrLocationAlias(kind as "location" | "device", rawIdentifier);
+    this.#bind.run(kind, digest, alias);
     this.#remember(key, alias);
     return alias;
   }
@@ -108,15 +130,5 @@ export class SqliteAliasStore {
     return createHmac("sha256", this.#secret)
       .update(`${kind}:${rawIdentifier}`)
       .digest("hex");
-  }
-
-  #createAlias(kind: AliasKind, digest: string): string {
-    if (kind === "location" || kind === "device") {
-      const prefix = kind === "location" ? "loc" : "dev";
-      const row = this.#count.get(kind) as { count: number };
-      return `${prefix}_${String(row.count + 1).padStart(3, "0")}`;
-    }
-
-    return `${kind}_${digest.slice(0, 12)}`;
   }
 }

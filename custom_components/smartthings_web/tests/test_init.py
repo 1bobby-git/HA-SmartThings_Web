@@ -4439,6 +4439,85 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         self.assertEqual(updates, [])
         self.assertIsNotNone(registry.async_get("sensor.location_status"))
 
+    def test_reset_bridge_without_the_location_keeps_every_device(self) -> None:
+        """A Bridge that no longer reports the location must not delete its devices."""
+        removed_devices: list[str] = []
+        issues: list[tuple[str, str]] = []
+        registry = FakeRegistry(
+            [
+                SimpleNamespace(
+                    entity_id="switch.lamp",
+                    domain="switch",
+                    platform=DOMAIN,
+                    unique_id="dev_001_main_switch_switch",
+                    device_id="uuid_lamp",
+                    config_entry_id="entry_001",
+                    name=None,
+                    disabled_by=None,
+                    original_name="Power",
+                    object_id_base="power",
+                    suggested_object_id="lamp",
+                ),
+            ]
+        )
+        device_registry = SimpleNamespace(
+            devices=[
+                SimpleNamespace(
+                    id="uuid_lamp",
+                    identifiers={(DOMAIN, "dev_001")},
+                    config_entries={"entry_001"},
+                ),
+            ],
+            async_update_device=lambda *_args, **_kwargs: None,
+            async_remove_device=lambda device_id: removed_devices.append(device_id),
+        )
+        original = (
+            integration.dr.async_get,
+            integration.er.async_get,
+            integration.ir.async_create_issue,
+            integration.ir.async_delete_issue,
+        )
+        integration.dr.async_get = lambda _hass: device_registry
+        integration.er.async_get = lambda _hass: registry
+        integration.ir.async_create_issue = (
+            lambda _hass, _domain, issue_id, **_kwargs: issues.append(("create", issue_id))
+        )
+        integration.ir.async_delete_issue = (
+            lambda _hass, _domain, issue_id: issues.append(("delete", issue_id))
+        )
+        try:
+            entry = SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"})
+            # A reinstalled add-on reports the same home under a new alias.
+            new_location = "loc_04512286547896321405"
+            inventory = BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="1.8.64",
+                protocol_version="5",
+                locations={new_location: "Home"},
+                rooms={},
+                devices={
+                    "dev_18273645546372819201": self._bridge_device(
+                        "dev_18273645546372819201", "Lamp", location_id=new_location
+                    ),
+                },
+            )
+
+            integration._remove_orphan_bridge_device_cards(
+                object(), entry, inventory, list(registry.entries), set()
+            )
+        finally:
+            (
+                integration.dr.async_get,
+                integration.er.async_get,
+                integration.ir.async_create_issue,
+                integration.ir.async_delete_issue,
+            ) = original
+
+        self.assertEqual(removed_devices, [])
+        self.assertEqual(registry.removed, [])
+        self.assertEqual(issues, [("create", "entry_001_location_not_found")])
+
     def test_deleted_bridge_card_keeps_foreign_references(self) -> None:
         """Remove only this entry's entity when another integration shares a card."""
         updates: list[tuple[str, str]] = []
@@ -4828,6 +4907,52 @@ class EntityRegistryMigrationTests(unittest.TestCase):
 
 class ControlPlaneTests(unittest.IsolatedAsyncioTestCase):
     """Regression tests for control mode and login repair helpers."""
+
+    def test_location_repair_needs_a_complete_inventory_without_the_location(self) -> None:
+        calls: list[tuple[str, str]] = []
+        original = (integration.ir.async_create_issue, integration.ir.async_delete_issue)
+        integration.ir.async_create_issue = (
+            lambda _hass, _domain, issue_id, **_kwargs: calls.append(("create", issue_id))
+        )
+        integration.ir.async_delete_issue = (
+            lambda _hass, _domain, issue_id: calls.append(("delete", issue_id))
+        )
+        entry = SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"})
+        device = SimpleNamespace(location_id="loc_001")
+
+        def inventory(ready: bool, locations: dict, devices: dict) -> BridgeInventory:
+            return BridgeInventory(1, ready, "1.8.64", "5", locations, {}, devices)
+
+        try:
+            # Missing from a complete view: repair, and the caller stops cleanup.
+            self.assertFalse(
+                integration._async_update_location_issue(
+                    object(), entry, inventory(True, {"loc_002": "Other"}, {})
+                )
+            )
+            # Known only through its devices (location rows failed to load).
+            self.assertTrue(
+                integration._async_update_location_issue(
+                    object(), entry, inventory(True, {}, {"dev_001": device})
+                )
+            )
+            # A cached snapshot is not evidence that the location is gone.
+            self.assertTrue(
+                integration._async_update_location_issue(
+                    object(), entry, inventory(False, {}, {})
+                )
+            )
+        finally:
+            integration.ir.async_create_issue, integration.ir.async_delete_issue = original
+
+        self.assertEqual(
+            calls,
+            [
+                ("create", "entry_001_location_not_found"),
+                ("delete", "entry_001_location_not_found"),
+                ("delete", "entry_001_location_not_found"),
+            ],
+        )
 
     def test_existing_entries_without_option_remain_safe_control(self) -> None:
         entry = SimpleNamespace(data={}, options={})

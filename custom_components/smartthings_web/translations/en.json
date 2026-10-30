@@ -28,7 +28,8 @@
       "cannot_connect": "Could not connect to the Bridge",
       "invalid_pairing_code": "The pairing code is invalid or expired",
       "no_devices": "The Bridge has not discovered any locations",
-      "invalid_location": "Select one of the available locations"
+      "invalid_location": "Select one of the available locations",
+      "invalid_bridge_url": "Enter the Bridge address as a local http(s) URL without a path"
     },
     "abort": {
       "already_configured": "This SmartThings location is already configured",
@@ -51,6 +52,10 @@
     "samsung_login_required": {
       "title": "SmartThings Web Bridge needs Samsung login",
       "description": "Open the Bridge add-on and renew the Samsung web login session. Home Assistant only renews the local Bridge pairing token."
+    },
+    "location_not_found": {
+      "title": "SmartThings Web Bridge no longer reports this location",
+      "description": "The Bridge no longer reports the SmartThings location of this entry, so setup stopped without deleting its devices and entities. Check that the Bridge add-on is signed in to the Samsung account that owns this location. If you reinstalled the add-on or its data was reset, delete this entry and add the location again."
     }
   },
   "entity": {

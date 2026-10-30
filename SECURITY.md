@@ -8,7 +8,7 @@
 
 Samsung 계정 정보, 쿠키, MFA 코드, CAPTCHA, CSRF 값, Authorization 헤더, 브리지 토큰, 실제 기기·위치 식별자가 포함될 수 있으므로 **공개 이슈에 취약점 상세 내용이나 원본 로그를 게시하지 마세요.**
 
-GitHub 저장소의 **Security → Advisories → New draft security advisory**에서 비공개 보안 권고 초안을 만들어 신고해 주세요.
+이 저장소의 **Security** 탭에 **Report a vulnerability**(비공개 신고)가 보이면 그것을 사용해 주세요. 보이지 않으면 공개 이슈에는 재현 방법이나 공격 방법을 적지 말고, 영향받는 구성 요소(통합 또는 Bridge 애드온)와 비공개 연락 요청만 남겨 주세요. 메인테이너가 비공개 보안 권고(GitHub draft security advisory)를 만들어 신고자를 초대하고, 세부 내용은 그 안에서 받습니다. 보안 권고 초안은 저장소 관리자만 만들 수 있습니다.
 
 신고 내용에는 가능한 범위에서 다음 정보를 포함합니다.
 

@@ -34,6 +34,7 @@ from .const import (
     CONTROL_MODE_READ_ONLY,
     CONTROL_MODE_SAFE_CONTROL,
     DOMAIN,
+    REPAIR_LOCATION_NOT_FOUND,
     REPAIR_SAMSUNG_LOGIN_REQUIRED,
 )
 from .entity import device_info_for
@@ -120,6 +121,39 @@ async def _async_recover_empty_location_inventory(
     return inventory
 
 
+def _location_known(inventory: BridgeInventory, location_id: object) -> bool:
+    """Return whether the Bridge reports the location by name or by its devices."""
+    return location_id in inventory.locations or any(
+        device.location_id == location_id for device in inventory.devices.values()
+    )
+
+
+def _async_update_location_issue(
+    hass: object,
+    entry: SmartThingsWebConfigEntry,
+    inventory: BridgeInventory,
+) -> bool:
+    """Raise or clear the repair for a location a complete inventory no longer has.
+
+    A Bridge whose data was reset (for example a reinstalled add-on) or that is
+    signed in to another Samsung account no longer reports this location. Its
+    devices are not orphans then, so destructive cleanup must not run.
+    """
+    issue_id = f"{entry.entry_id}_{REPAIR_LOCATION_NOT_FOUND}"
+    if inventory.ready and not _location_known(inventory, entry.data[CONF_LOCATION_ID]):
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key=REPAIR_LOCATION_NOT_FOUND,
+        )
+        return False
+    ir.async_delete_issue(hass, DOMAIN, issue_id)
+    return True
+
+
 def _persist_canonical_bridge_url(
     hass: HomeAssistant,
     entry: SmartThingsWebConfigEntry,
@@ -157,6 +191,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartThingsWebConfigEntr
     )
     if not inventory.ready and not inventory.devices:
         raise ConfigEntryNotReady("SmartThings Web Bridge has no cached inventory")
+    if not _async_update_location_issue(hass, entry, inventory):
+        raise ConfigEntryNotReady(
+            "SmartThings Web Bridge no longer reports the configured location"
+        )
     await _async_update_repairs(hass, entry, client)
     runtime_client = ReadOnlyBridgeClient(client) if _control_mode(entry) == CONTROL_MODE_READ_ONLY else client
     runtime = SmartThingsWebRuntime(
@@ -1641,6 +1679,10 @@ def _remove_orphan_bridge_device_cards(
     if not inventory.ready:
         # A cached or reconnect snapshot may intentionally retain only the last
         # known devices. Destructive cleanup waits for a current complete view.
+        return
+    if not _async_update_location_issue(hass, entry, inventory):
+        # The Bridge no longer reports this location at all, so its devices
+        # are not orphans. Keep them and show the repair instead.
         return
     device_registry = dr.async_get(hass)
     entity_registry = er.async_get(hass)

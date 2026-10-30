@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
-import { SqliteAliasStore } from "../../src/security/alias-store.js";
+import { SqliteAliasStore, stableDeviceOrLocationAlias } from "../../src/security/alias-store.js";
 
 function withStore(run: (store: SqliteAliasStore, path: string) => void): void {
   const root = mkdtempSync(join(tmpdir(), "stw-alias-cache-"));
@@ -34,7 +34,9 @@ describe("bounded digest-only alias cache", () => {
       expect(reopened.alias("device", "same-value")).toBe(device);
       expect(reopened.alias("location", "same-value")).toBe(location);
       expect(device).not.toBe(location);
-      expect(reopened.alias("device", "second-value")).toBe("dev_002");
+      expect(reopened.alias("device", "second-value")).toBe(
+        stableDeviceOrLocationAlias("device", "second-value")
+      );
     } finally { reopened.close(); }
   }));
 
@@ -73,6 +75,6 @@ describe("bounded digest-only alias cache", () => {
     const run = vi.spyOn(StatementSync.prototype, "run").mockImplementationOnce(() => { throw new Error("synthetic_write_failure"); });
     expect(() => store.alias("device", "new-value")).toThrow("synthetic_write_failure");
     run.mockRestore();
-    expect(store.alias("device", "new-value")).toBe("dev_001");
+    expect(store.alias("device", "new-value")).toBe(stableDeviceOrLocationAlias("device", "new-value"));
   }));
 });

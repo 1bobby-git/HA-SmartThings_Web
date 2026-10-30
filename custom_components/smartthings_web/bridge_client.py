@@ -369,7 +369,9 @@ class SmartThingsWebBridgeClient:
                     value = json.loads(line[6:])
                     if isinstance(value, dict):
                         yield value
-        except (ClientError, TimeoutError, UnicodeError, json.JSONDecodeError) as err:
+        except (ClientError, TimeoutError, UnicodeError, ValueError) as err:
+            # ValueError covers bad JSON and aiohttp's "Chunk too big" for an
+            # oversized line; the event loop reconnects instead of logging a crash.
             raise BridgeClientError("bridge_event_stream_failed") from err
 
     async def _request_json(

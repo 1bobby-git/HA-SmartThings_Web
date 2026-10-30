@@ -721,6 +721,15 @@ class BridgeCommandTimeoutTests(IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(BridgeClientError, "bridge_event_stream_failed"):
             _ = [event async for event in malformed.async_events()]
 
+    async def test_event_stream_maps_an_oversized_line_to_a_reconnectable_failure(self) -> None:
+        session = _FakeEventSession(200, [])
+        # aiohttp raises a plain ValueError when one line exceeds its read buffer.
+        session._response.content = _FailingEventContent(ValueError("Chunk too big"))
+        client = SmartThingsWebBridgeClient(session, "http://bridge.local", "x" * 32)  # type: ignore[arg-type]
+
+        with self.assertRaisesRegex(BridgeClientError, "bridge_event_stream_failed"):
+            _ = [event async for event in client.async_events()]
+
     def test_inventory_parses_locations_scenes_and_non_value_controls(self) -> None:
         parsed = parse_inventory(
             {
@@ -1254,10 +1263,21 @@ class _FakeEventContent:
             raise StopAsyncIteration from err
 
 
+class _FailingEventContent:
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def __aiter__(self) -> "_FailingEventContent":
+        return self
+
+    async def __anext__(self) -> bytes:
+        raise self._error
+
+
 class _FakeEventResponse:
     def __init__(self, status: int, lines: list[bytes]) -> None:
         self.status = status
-        self.content = _FakeEventContent(lines)
+        self.content: Any = _FakeEventContent(lines)
 
     async def __aenter__(self) -> "_FakeEventResponse":
         return self

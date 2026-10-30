@@ -51,6 +51,7 @@ def bridge_url_candidates(value: str) -> tuple[str, ...]:
 DEFAULT_COMMAND_CONFIRMATION_TIMEOUT = 30
 DEFAULT_INVENTORY_RECONCILIATION_INTERVAL = 21600
 REPAIR_SAMSUNG_LOGIN_REQUIRED = "samsung_login_required"
+REPAIR_LOCATION_NOT_FOUND = "location_not_found"
 SERVICE_EXECUTE_COMMAND = "execute_command"
 SERVICE_LIST_COMMANDS = "list_commands"
 SERVICE_RELOAD_INVENTORY = "reload_inventory"
