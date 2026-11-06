@@ -59,7 +59,7 @@ import { createRedactor } from "./security/redactor.js";
 import { installBrowserObserver, type CaptureSink } from "./inspector/browser-observer.js";
 import { installCdpNetworkObserver, type CdpSessionLike } from "./inspector/cdp-network.js";
 import { PROTOCOL_CONTRACT_VERSION, type ProtocolMismatchSurface } from "./inspector/protocol-contract.js";
-import { captureReceivedFrame, summarizeAckFrame, type SnapshotResponseShape } from "./inspector/snapshot-response-diagnostics.js";
+import { captureReceivedFrame, summarizeAckArgs, summarizeAckFrame, type SnapshotResponseShape } from "./inspector/snapshot-response-diagnostics.js";
 import { ProtocolAnalyzer } from "./inspector/protocol-analyzer.js";
 import { createBridgeHttpServer, type BridgeHttpServer } from "./server/http-server.js";
 import {
@@ -118,7 +118,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.66";
+const bridgeVersion = "1.8.67";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -1829,6 +1829,20 @@ function createStatusCapturePipeline(
   let analyzer = new ProtocolAnalyzer({ ttlMs: 300_000, maxEntries: 100_000 });
   let protocolFingerprintObserved = false;
   let protocolBlocked = initiallyProtocolBlocked;
+  let recoveryCandidate = false;
+  if (initiallyProtocolBlocked && protocolIntegrity?.canRecoverPersistedNullDeviceCardsMismatch()) {
+    try {
+      const diagnostics = captures.listSnapshotDiagnostics(PROTOCOL_CONTRACT_VERSION);
+      recoveryCandidate = diagnostics.length === 1 &&
+        diagnostics[0]?.surface === "snapshot:device_cards:response_shape" &&
+        JSON.stringify(diagnostics[0].shape) === JSON.stringify(summarizeAckArgs([null, null]));
+    } catch {
+      // Missing or unreadable evidence must leave the stored mismatch blocked.
+    }
+  }
+  let recoveryEventAtMs: number | undefined;
+  let recoverySnapshotAtMs: number | undefined;
+  let recoveryWriteFailed = false;
   const loggedDiagnosticShapes = new Set<string>();
   let diagnosticWriteWarnings = 0;
   const persistCapture = (record: SanitizedCaptureRecord, force = false): void => {
@@ -1840,6 +1854,8 @@ function createStatusCapturePipeline(
       devices.resetSnapshotSession();
       analyzer.resetSnapshotSession();
       protocolFingerprintObserved = false;
+      recoveryEventAtMs = undefined;
+      recoverySnapshotAtMs = undefined;
     },
     reset: () => {
       physicalActionProbe.fail("runtime_restarted");
@@ -1849,6 +1865,8 @@ function createStatusCapturePipeline(
       analyzer.reset();
       analyzer = new ProtocolAnalyzer({ ttlMs: 300_000, maxEntries: 100_000 });
       protocolFingerprintObserved = false;
+      recoveryEventAtMs = undefined;
+      recoverySnapshotAtMs = undefined;
     },
     sink: {
       write(record) {
@@ -1873,6 +1891,7 @@ function createStatusCapturePipeline(
           };
 
           if (analysis?.kind === "protocol_changed") {
+            recoveryCandidate = false;
             physicalActionProbe.fail("protocol_changed");
             status.update({
               ...basePatch,
@@ -1902,6 +1921,52 @@ function createStatusCapturePipeline(
               physicalActionProbe.observe(analysis);
             } else {
               physicalActionProbe.observeUnsafeEvent();
+            }
+          }
+
+          if (protocolBlocked && recoveryCandidate && !recoveryWriteFailed) {
+            if (analysis?.kind === "new" || analysis?.kind === "duplicate") {
+              recoveryEventAtMs = now;
+            }
+            if (analysis?.kind === "snapshot" && protocol.snapshotComplete) {
+              recoverySnapshotAtMs = now;
+            }
+            if (recoveryEventAtMs !== undefined && recoverySnapshotAtMs !== undefined &&
+                protocol.protocolFingerprint) {
+              try {
+                const recovered = protocolIntegrity?.recoverPersistedNullDeviceCardsMismatch(
+                  protocol.protocolFingerprint
+                );
+                if (recovered) {
+                  recoveryCandidate = false;
+                  protocolBlocked = false;
+                  protocolFingerprintObserved = true;
+                  status.update({
+                    ...basePatch,
+                    protocolVersion: protocolVersionFor(recovered),
+                    protocolChangeCount: recovered.changeCount,
+                    protocolMismatchSurface: undefined,
+                    initialSnapshotComplete: true,
+                    lastSnapshotAtMs: recoverySnapshotAtMs,
+                    lastEventAtMs: recoveryEventAtMs,
+                    lastParserSuccessAtMs: recoveryEventAtMs,
+                    observedDeviceCount: Math.max(
+                      current.observedDeviceCount,
+                      protocol.snapshotCategories.device_cards ?? 0,
+                      protocol.snapshotCategories.device_health ?? 0
+                    ),
+                    parserHealthy: true,
+                    pushConnected: true,
+                    state: "CONNECTED"
+                  });
+                  return;
+                }
+                recoveryCandidate = false;
+              } catch {
+                recoveryWriteFailed = true;
+                recoveryCandidate = false;
+                log.error("protocol_integrity_write_failed");
+              }
             }
           }
 

@@ -325,6 +325,55 @@ describe("SnapshotDetector", () => {
     });
   });
 
+  test("consumes an exact null device ACK without observing a device-card snapshot", () => {
+    const detector = new SnapshotDetector();
+    detector.observeSentFrame('421["find","api/device",{}]', "keeper");
+
+    expect(detector.observeReceivedFrame("431[null,null]", "detail")).toBeNull();
+    expect(detector.snapshot().pendingRequests).toBe(1);
+    expect(detector.observeReceivedFrame("431[null,null]", "keeper")).toBeNull();
+    expect(detector.snapshot()).toEqual({ complete: false, categories: {}, pendingRequests: 0 });
+
+    // A repeated ACK cannot consume a later request with another id.
+    detector.observeSentFrame('422["find","api/device",{}]', "keeper");
+    expect(detector.observeReceivedFrame("431[null,null]", "keeper")).toBeNull();
+    expect(detector.snapshot().pendingRequests).toBe(1);
+    expect(detector.observeReceivedFrame("432[null,{\"data\":[]}]", "keeper")).toEqual({
+      kind: "snapshot", requestEvent: "find", category: "device_cards", count: 0
+    });
+  });
+
+  test("null device ACKs before and after a valid response preserve the observed count", () => {
+    const detector = new SnapshotDetector();
+    detector.observeSentFrame('421["find","api/device",{}]');
+    expect(detector.observeReceivedFrame("431[null,null]")).toBeNull();
+
+    detector.observeSentFrame('422["find","api/device",{}]');
+    expect(detector.observeReceivedFrame(
+      '432[null,{"data":[{"basic":{"deviceId":"device-1","locationId":"location-1"}}]}]'
+    )).toEqual({ kind: "snapshot", requestEvent: "find", category: "device_cards", count: 1 });
+
+    detector.observeSentFrame('423["find","api/device",{}]');
+    expect(detector.observeReceivedFrame("433[null,null]")).toBeNull();
+    expect(detector.snapshot()).toEqual({
+      complete: false, categories: { device_cards: 1 }, pendingRequests: 0
+    });
+  });
+
+  test.each([
+    ["[null]", "device_cards"],
+    ["[null,{}]", "device_cards"],
+    ["[null,null,null]", "device_cards"],
+    ["[null,null]", "rooms"]
+  ])("keeps malformed ACK %s for %s on the response-shape path", (ack, category) => {
+    const detector = new SnapshotDetector();
+    detector.observeSentFrame(`421${JSON.stringify(["find", category === "rooms" ? "api/room" : "api/device", {}])}`);
+    expect(detector.observeReceivedFrame(`431${ack}`)).toEqual({
+      kind: "protocol_changed", surface: `snapshot:${category}:response_shape`
+    });
+    expect(detector.snapshot()).toEqual({ complete: false, categories: {}, pendingRequests: 0 });
+  });
+
   test("accepts device cards in a direct array response", () => {
     const detector = new SnapshotDetector();
     detector.observeSentFrame('421["find","api/device",{}]');

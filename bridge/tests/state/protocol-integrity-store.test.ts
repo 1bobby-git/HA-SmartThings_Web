@@ -29,6 +29,58 @@ afterEach(() => {
 });
 
 describe("ProtocolIntegrityStore", () => {
+  test("recovers only the contract 6 singleton card mismatch and preserves history", () => {
+    const path = tempPath();
+    const store = new ProtocolIntegrityStore(path, { contractVersion: 6 });
+    store.recordMismatch("snapshot:device_cards:response_shape");
+    const restarted = new ProtocolIntegrityStore(path, { contractVersion: 6 });
+    expect(restarted.canRecoverPersistedNullDeviceCardsMismatch()).toBe(true);
+    expect(restarted.recoverPersistedNullDeviceCardsMismatch(fingerprintA)).toMatchObject({
+      baseline: fingerprintA, current: fingerprintA, changeCount: 1, compatible: true, lastMismatch: null
+    });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+      protocol_contract_version: 6, change_count: 1, mismatch_keys: [], last_mismatch: null
+    });
+    expect(new ProtocolIntegrityStore(path, { contractVersion: 6 }).snapshot().compatible).toBe(true);
+  });
+
+  test("refuses other mismatch history and divergent fingerprints", () => {
+    const other = new ProtocolIntegrityStore(tempPath(), { contractVersion: 6 });
+    other.recordMismatch("snapshot:device_cards:response_shape");
+    other.recordMismatch("snapshot:rooms:response_shape");
+    expect(other.canRecoverPersistedNullDeviceCardsMismatch()).toBe(false);
+    expect(other.recoverPersistedNullDeviceCardsMismatch(fingerprintA)).toBeNull();
+    const changed = new ProtocolIntegrityStore(tempPath(), { contractVersion: 6 });
+    changed.observeCompleteFingerprint(fingerprintA);
+    changed.recordMismatch("snapshot:device_cards:response_shape");
+    expect(changed.recoverPersistedNullDeviceCardsMismatch(fingerprintB)).toBeNull();
+    expect(changed.snapshot().compatible).toBe(false);
+    expect(changed.recoverPersistedNullDeviceCardsMismatch(fingerprintA)).toMatchObject({
+      baseline: fingerprintA, current: fingerprintA, changeCount: 1, compatible: true
+    });
+    const fingerprintHistory = new ProtocolIntegrityStore(tempPath(), { contractVersion: 6 });
+    fingerprintHistory.observeCompleteFingerprint(fingerprintA);
+    fingerprintHistory.observeCompleteFingerprint(fingerprintB);
+    fingerprintHistory.recordMismatch("snapshot:device_cards:response_shape");
+    expect(fingerprintHistory.recoverPersistedNullDeviceCardsMismatch(fingerprintA)).toBeNull();
+  });
+
+  test("leaves memory and disk blocked when recovery replacement fails", () => {
+    const path = tempPath();
+    const seeded = new ProtocolIntegrityStore(path, { contractVersion: 6 });
+    seeded.recordMismatch("snapshot:device_cards:response_shape");
+    const before = readFileSync(path, "utf8");
+    const failing = new ProtocolIntegrityStore(path, {
+      contractVersion: 6,
+      atomicWriteHooks: { beforeReplace: () => { throw new Error("injected failure"); } }
+    });
+    expectProtocolIntegrityCode(
+      () => failing.recoverPersistedNullDeviceCardsMismatch(fingerprintA), "atomic_write_failed"
+    );
+    expect(failing.snapshot().compatible).toBe(false);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
   test("establishes the first complete fingerprint as the compatible baseline", () => {
     const path = tempPath();
     const store = new ProtocolIntegrityStore(path, { contractVersion: 1, now: () => 1_000 });

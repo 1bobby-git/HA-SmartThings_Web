@@ -84,6 +84,14 @@ export class SnapshotDetector {
       return null;
     }
     this.#pending.delete(key);
+    if (
+      pending.categoryHint === "device_cards" &&
+      decoded.args.length === 2 &&
+      decoded.args[0] === null &&
+      decoded.args[1] === null
+    ) {
+      return null;
+    }
     if (isSnapshotRequestError(decoded.args)) {
       return null;
     }

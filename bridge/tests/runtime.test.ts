@@ -25,6 +25,7 @@ import { ProtocolIntegrityStore } from "../src/state/protocol-integrity-store.js
 import { stableDeviceOrLocationAlias } from "../src/security/alias-store.js";
 import { DeviceStore } from "../src/state/device-store.js";
 import { CaptureStore } from "../src/state/capture-store.js";
+import { summarizeAckArgs } from "../src/inspector/snapshot-response-diagnostics.js";
 import type { RuntimeStatusPatch } from "../src/state/runtime-state.js";
 import { createHealthReport } from "../src/server/health.js";
 
@@ -1012,7 +1013,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
 
     expect(log.info.mock.calls.slice(0, 14)).toEqual([
-      ["bridge_init:version:1.8.66:home_monitor_direct"],
+      ["bridge_init:version:1.8.67:home_monitor_direct"],
       ["bridge_init:data_paths"],
       ["bridge_init:data_paths:data_dir"],
       ["bridge_init:data_paths:profile_dir"],
@@ -2907,6 +2908,145 @@ describe("createBridgeRuntime", () => {
     expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(false);
   });
 
+  test.each(["event", "snapshot"])("recovers persisted exact null-card mismatch after fresh complete proof, %s last", async (last) => {
+    const root = createTempRoot();
+    seedNullCardRecovery(root);
+    const context = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const runtime = await createBridgeRuntime(createDeps(root, {
+      chromium: { launchPersistentContext: vi.fn(async () => context) }
+    }));
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    expect(runtime.status.getSnapshot()).toMatchObject({ state: "PROTOCOL_CHANGED", initialSnapshotComplete: false });
+    const socket = await attachRuntimeSocket(context);
+    await socket.emit("framesent", { payload: '4277["find","api/device",{}]' });
+    await socket.emit("framereceived", { payload: '4377[null,null]' });
+    expect(runtime.status.getSnapshot().state).toBe("PROTOCOL_CHANGED");
+    if (last === "event") {
+      await emitCompleteSnapshot(socket, { directDeviceCards: true });
+      expect(runtime.status.getSnapshot().state).toBe("PROTOCOL_CHANGED");
+      runtime.status.update({ lastPushAtMs: Date.now() - 130_000 });
+      await emitFirstDeviceEvent(socket);
+    } else {
+      await emitFirstDeviceEvent(socket);
+      expect(runtime.status.getSnapshot().state).toBe("PROTOCOL_CHANGED");
+      runtime.status.update({ lastPushAtMs: Date.now() - 130_000 });
+      await emitCompleteSnapshot(socket, { directDeviceCards: true });
+    }
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      state: "CONNECTED", initialSnapshotComplete: true, parserHealthy: true,
+      pushConnected: true, protocolChangeCount: 1,
+      protocolVersion: `${PROTOCOL_CONTRACT_VERSION}:${PROTOCOL_CONTRACT_FINGERPRINT.slice(0, 16)}`
+    });
+    expect(runtime.status.getSnapshot().lastEventAtMs).toBeDefined();
+    expect(runtime.status.getSnapshot().lastSnapshotAtMs).toBeDefined();
+    expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(true);
+    expect(new ProtocolIntegrityStore(join(root, "protocol-fingerprint.json"), {
+      contractVersion: PROTOCOL_CONTRACT_VERSION
+    }).snapshot()).toMatchObject({ changeCount: 1, compatible: true, lastMismatch: null });
+    if (last === "event") {
+      await runtime.stop();
+      runtimes.splice(runtimes.indexOf(runtime), 1);
+      const restartedContext = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+      const restarted = await createBridgeRuntime(createDeps(root, {
+        chromium: { launchPersistentContext: vi.fn(async () => restartedContext) }
+      }));
+      runtimes.push(restarted);
+      await restarted.browserStartup;
+      expect(restarted.status.getSnapshot()).toMatchObject({ protocolChangeCount: 1 });
+      expect(restarted.status.getSnapshot().state).not.toBe("PROTOCOL_CHANGED");
+    }
+  });
+
+  test("does not recover when the stored diagnostic is absent or not the exact null ACK", async () => {
+    for (const diagnostic of ["absent", "other"] as const) {
+      const root = createTempRoot();
+      const seeded = new ProtocolIntegrityStore(join(root, "protocol-fingerprint.json"), {
+        contractVersion: PROTOCOL_CONTRACT_VERSION
+      });
+      seeded.recordMismatch("snapshot:device_cards:response_shape");
+      if (diagnostic === "other") {
+        const captures = new CaptureStore(join(root, "bridge.sqlite"));
+        captures.writeSnapshotDiagnostic("snapshot:device_cards:response_shape", PROTOCOL_CONTRACT_VERSION,
+          summarizeAckArgs([null, { data: [] }]));
+        captures.close();
+      }
+      const context = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+      const runtime = await createBridgeRuntime(createDeps(root, {
+        chromium: { launchPersistentContext: vi.fn(async () => context) }
+      }));
+      runtimes.push(runtime);
+      await runtime.browserStartup;
+      const socket = await attachRuntimeSocket(context);
+      await emitCompleteSnapshot(socket, { directDeviceCards: true });
+      await emitFirstDeviceEvent(socket);
+      expect(runtime.status.getSnapshot().state).toBe("PROTOCOL_CHANGED");
+    }
+  });
+
+  test("a new malformed response keeps null-card recovery blocked after socket replacement", async () => {
+    const root = createTempRoot();
+    seedNullCardRecovery(root);
+    const context = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const runtime = await createBridgeRuntime(createDeps(root, {
+      chromium: { launchPersistentContext: vi.fn(async () => context) }
+    }));
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    const socket = await attachRuntimeSocket(context);
+    await emitSceneShapeMismatch(socket, 79);
+    await socket.emit("close");
+    const nextSocket = await attachRuntimeSocket(context);
+    await emitCompleteSnapshot(nextSocket, { directDeviceCards: true });
+    await emitFirstDeviceEvent(nextSocket);
+    expect(runtime.status.getSnapshot().state).toBe("PROTOCOL_CHANGED");
+    expect(new ProtocolIntegrityStore(join(root, "protocol-fingerprint.json"), {
+      contractVersion: PROTOCOL_CONTRACT_VERSION
+    }).snapshot().changeCount).toBe(2);
+  });
+
+  test("requires a fresh device event after a runtime reset", async () => {
+    const root = createTempRoot();
+    seedNullCardRecovery(root);
+    const context = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const nextContext = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const runtime = await createBridgeRuntime(createDeps(root, {
+      config: { dataDir: root, host: "127.0.0.1", port: 0, heartbeatIntervalMs: 10_000,
+        browserMaxRestarts: 1, browserRetryDelayMs: 0 },
+      chromium: { launchPersistentContext: vi.fn().mockResolvedValueOnce(context).mockResolvedValueOnce(nextContext) }
+    }));
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    const first = await attachRuntimeSocket(context);
+    await emitFirstDeviceEvent(first);
+    await context.emit("close");
+    const second = await attachRuntimeSocket(nextContext);
+    await emitCompleteSnapshot(second, { directDeviceCards: true });
+    expect(runtime.status.getSnapshot().state).toBe("PROTOCOL_CHANGED");
+    await emitFirstDeviceEvent(second);
+    expect(runtime.status.getSnapshot().state).toBe("CONNECTED");
+  });
+
+  test("a new malformed device event cancels null-card recovery", async () => {
+    const root = createTempRoot();
+    seedNullCardRecovery(root);
+    const context = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const runtime = await createBridgeRuntime(createDeps(root, {
+      chromium: { launchPersistentContext: vi.fn(async () => context) }
+    }));
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    const socket = await attachRuntimeSocket(context);
+    await socket.emit("framereceived", {
+      payload: '42["api/subscription DEVICE_EVENT",{"data":{"event_type":"DEVICE_EVENT"}}]'
+    });
+    await emitCompleteSnapshot(socket, { directDeviceCards: true });
+    await emitFirstDeviceEvent(socket);
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      state: "PROTOCOL_CHANGED", protocolMismatchSurface: "event:device_event:identity"
+    });
+  });
+
   test("blocks an unknown device-card response shape under the current contract", async () => {
     const root = createTempRoot();
     const context = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
@@ -3418,6 +3558,17 @@ async function emitCompleteSnapshot(
       ])}`
     });
   }
+}
+
+function seedNullCardRecovery(root: string): void {
+  const seeded = new ProtocolIntegrityStore(join(root, "protocol-fingerprint.json"), {
+    contractVersion: PROTOCOL_CONTRACT_VERSION
+  });
+  seeded.recordMismatch("snapshot:device_cards:response_shape");
+  const captures = new CaptureStore(join(root, "bridge.sqlite"));
+  captures.writeSnapshotDiagnostic("snapshot:device_cards:response_shape", PROTOCOL_CONTRACT_VERSION,
+    summarizeAckArgs([null, null]));
+  captures.close();
 }
 
 async function emitFirstDeviceEvent(socket: FakeEmitter): Promise<void> {
