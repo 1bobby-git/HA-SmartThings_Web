@@ -154,20 +154,22 @@ function classifySnapshotResponse(
       return null;
     }
     const classified = classifyHomogeneousRecords(
-      objects as Record<string, unknown>[]
+      objects as Record<string, unknown>[],
+      categoryHint
     );
     return acceptHint(classified, categoryHint);
   }
 
   const record = asRecord(data);
   const rawItems = record?.["data"];
-  if (!Array.isArray(rawItems)) {
+  if (!Array.isArray(rawItems) && !asRecord(rawItems)) {
     return null;
   }
-  if (rawItems.length === 0) {
+  const rows = Array.isArray(rawItems) ? rawItems : [rawItems];
+  if (rows.length === 0) {
     return categoryHint === "device_cards" ? { category: "device_cards", count: 0 } : null;
   }
-  const items = rawItems.map(asRecord);
+  const items = rows.map(asRecord);
   if (items.some((value) => value === undefined)) {
     return null;
   }
@@ -200,8 +202,12 @@ function inferSnapshotCategoryHint(
 }
 
 function classifyHomogeneousRecords(
-  records: Record<string, unknown>[]
+  records: Record<string, unknown>[],
+  categoryHint: SnapshotCategory
 ): { category: SnapshotCategory; count: number } | null {
+  if (categoryHint === "device_cards" && records.every(isDeviceCardRecord)) {
+    return { category: "device_cards", count: records.length };
+  }
   const predicates: ReadonlyArray<
     readonly [SnapshotCategory, (record: Record<string, unknown>) => boolean]
   > = [
@@ -236,10 +242,14 @@ function acceptHint(
 }
 
 function isDeviceCardRecord(record: Record<string, unknown>): boolean {
-  return (
-    hasOwn(record, "type") &&
-    (hasOwn(record, "basic") || hasOwn(record, "cloud") || hasOwn(record, "camera"))
-  );
+  const cardSections = ["basic", "cloud", "camera"] as const;
+  const sections = cardSections.filter((key) => hasOwn(record, key));
+  if (sections.length === 0) return false;
+  if (hasOwn(record, "type")) return true;
+  const source = cardSections.map((key) => asRecord(record[key])).find((value) => value !== undefined);
+  return source !== undefined &&
+    typeof source["deviceId"] === "string" && source["deviceId"].length > 0 &&
+    typeof source["locationId"] === "string" && source["locationId"].length > 0;
 }
 
 function hasAll(record: Record<string, unknown>, keys: readonly string[]): boolean {

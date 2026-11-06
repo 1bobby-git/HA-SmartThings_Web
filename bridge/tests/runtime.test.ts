@@ -1011,7 +1011,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
 
     expect(log.info.mock.calls.slice(0, 14)).toEqual([
-      ["bridge_init:version:1.8.64:home_monitor_direct"],
+      ["bridge_init:version:1.8.65:home_monitor_direct"],
       ["bridge_init:data_paths"],
       ["bridge_init:data_paths:data_dir"],
       ["bridge_init:data_paths:profile_dir"],
@@ -2046,6 +2046,57 @@ describe("createBridgeRuntime", () => {
     expect(runtime.status.getSnapshot().state).toBe("CONNECTED");
   });
 
+  test("accepts direct device card arrays after login before pairing and becomes ready after push", async () => {
+    vi.useFakeTimers();
+    const root = createTempRoot();
+    const keeper = new FakePage("https://account.samsung.com/accounts/v1/ST/signInGate");
+    const context = new FakeContext([keeper]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, {
+        config: { dataDir: root, host: "127.0.0.1", port: 0, heartbeatIntervalMs: 1_000,
+          browserMaxRestarts: 0, browserRetryDelayMs: 0 },
+        chromium: { launchPersistentContext: vi.fn(async () => context) }
+      })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    expect(runtime.status.getSnapshot()).toMatchObject({ authenticated: false, state: "LOGIN_REQUIRED" });
+
+    keeper.currentUrl = "https://my.smartthings.com/location/loc-synthetic-001";
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(runtime.status.getSnapshot()).toMatchObject({ authenticated: true, state: "DISCOVERING_PROTOCOL" });
+
+    const socket = await attachRuntimeSocket(context);
+    await emitCompleteSnapshot(socket, { directDeviceCards: true });
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      initialSnapshotComplete: true,
+      parserHealthy: false,
+      protocolChangeCount: 0,
+      state: "SYNCING"
+    });
+    expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(false);
+
+    await emitFirstDeviceEvent(socket);
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      initialSnapshotComplete: true,
+      pushConnected: true,
+      parserHealthy: true,
+      protocolChangeCount: 0,
+      state: "CONNECTED"
+    });
+    expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(true);
+    expect(JSON.parse(readFileSync(join(root, "protocol-fingerprint.json"), "utf8"))).toMatchObject({
+      change_count: 0,
+      protocol_contract_version: PROTOCOL_CONTRACT_VERSION
+    });
+    const baseUrl = `http://127.0.0.1:${runtime.port}`;
+    const token = await exchangeBridgeToken(baseUrl);
+    const inventory = await fetch(`${baseUrl}/api/v1/inventory`, {
+      headers: { authorization: `Bearer ${token}` }
+    }).then((response) => response.json()) as { devices: Array<{ name: string }> };
+    expect(inventory.devices).toContainEqual(expect.objectContaining({ name: "Synthetic direct card" }));
+  });
+
   test("persists the first complete protocol baseline and exposes the safe protocol version", async () => {
     const root = createTempRoot();
     const context = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
@@ -2779,6 +2830,108 @@ describe("createBridgeRuntime", () => {
     ).toBe(1);
   });
 
+  test("migrates a contract 5 device-card mismatch while preserving its historical count", async () => {
+    const root = createTempRoot();
+    const seeded = new ProtocolIntegrityStore(join(root, "protocol-fingerprint.json"), {
+      contractVersion: 5
+    });
+    seeded.recordMismatch("snapshot:device_cards:response_shape");
+    expect(seeded.snapshot()).toMatchObject({ protocolContractVersion: 5, changeCount: 1, compatible: false });
+    expect(PROTOCOL_CONTRACT_VERSION).toBeGreaterThan(5);
+
+    const context = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, { chromium: { launchPersistentContext: vi.fn(async () => context) } })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      protocolVersion: `${PROTOCOL_CONTRACT_VERSION}:discovering`,
+      protocolChangeCount: 1,
+      initialSnapshotComplete: false
+    });
+    expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(false);
+
+    const socket = await attachRuntimeSocket(context);
+    await emitCompleteSnapshot(socket, { directDeviceCards: true });
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      protocolVersion: `${PROTOCOL_CONTRACT_VERSION}:discovering`,
+      protocolChangeCount: 1,
+      initialSnapshotComplete: true,
+      state: "SYNCING"
+    });
+    expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(false);
+
+    await emitFirstDeviceEvent(socket);
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      protocolVersion: `${PROTOCOL_CONTRACT_VERSION}:${PROTOCOL_CONTRACT_FINGERPRINT.slice(0, 16)}`,
+      protocolChangeCount: 1,
+      parserHealthy: true,
+      state: "CONNECTED"
+    });
+    expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(true);
+    expect(JSON.parse(readFileSync(join(root, "protocol-fingerprint.json"), "utf8"))).toMatchObject({
+      protocol_contract_version: PROTOCOL_CONTRACT_VERSION,
+      change_count: 1,
+      mismatch_keys: [],
+      last_mismatch: null
+    });
+  });
+
+  test("keeps a current-contract device-card mismatch blocked after healthy direct-card replay", async () => {
+    const root = createTempRoot();
+    const seeded = new ProtocolIntegrityStore(join(root, "protocol-fingerprint.json"), {
+      contractVersion: PROTOCOL_CONTRACT_VERSION
+    });
+    seeded.recordMismatch("snapshot:device_cards:response_shape");
+
+    const context = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, { chromium: { launchPersistentContext: vi.fn(async () => context) } })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    const socket = await attachRuntimeSocket(context);
+    await emitCompleteSnapshot(socket, { directDeviceCards: true });
+    await emitFirstDeviceEvent(socket);
+
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      state: "PROTOCOL_CHANGED",
+      parserHealthy: false,
+      initialSnapshotComplete: false,
+      pushConnected: false,
+      protocolChangeCount: 1,
+      protocolMismatchSurface: "snapshot:device_cards:response_shape"
+    });
+    expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(false);
+  });
+
+  test("blocks an unknown device-card response shape under the current contract", async () => {
+    const root = createTempRoot();
+    const context = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const runtime = await createBridgeRuntime(
+      createDeps(root, { chromium: { launchPersistentContext: vi.fn(async () => context) } })
+    );
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    const socket = await attachRuntimeSocket(context);
+    await socket.emit("framesent", {
+      payload: `4271${JSON.stringify(["find", "api/device", { locale: null, locationId: null, since: null }])}`
+    });
+    await socket.emit("framereceived", {
+      payload: `4371${JSON.stringify([null, [{ unexpected: "synthetic-unknown-card" }]])}`
+    });
+
+    expect(runtime.status.getSnapshot()).toMatchObject({
+      state: "PROTOCOL_CHANGED",
+      parserHealthy: false,
+      initialSnapshotComplete: false,
+      protocolChangeCount: 1,
+      protocolMismatchSurface: "snapshot:device_cards:response_shape"
+    });
+    expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(false);
+  });
+
   test("recovers after context close without concurrent restart loops and stops at max failures", async () => {
     const root = createTempRoot();
       const first = new FakeContext();
@@ -3190,7 +3343,10 @@ function buildDeviceEventFrame(options: {
   ])}`;
 }
 
-async function emitCompleteSnapshot(socket: FakeEmitter): Promise<void> {
+async function emitCompleteSnapshot(
+  socket: FakeEmitter,
+  options: { directDeviceCards?: boolean } = {}
+): Promise<void> {
   const snapshotFixture = JSON.parse(
     readFileSync("protocol/fixtures/2026-08-20-snapshot-ack-correlations.sanitized.json", "utf8")
   ) as {
@@ -3216,7 +3372,15 @@ async function emitCompleteSnapshot(socket: FakeEmitter): Promise<void> {
       ])}`
     });
     await socket.emit("framereceived", {
-      payload: `43${ackId}${JSON.stringify([null, buildRuntimeSnapshotResponse(correlation)])}`
+      payload: `43${ackId}${JSON.stringify([null,
+        options.directDeviceCards && correlation.response_category === "device_cards"
+          ? Array.from({ length: correlation.response_count }, (_, index) =>
+              index === 0
+                ? { basic: { deviceId: "dev_synthetic001", locationId: "loc_synthetic001",
+                    deviceName: "Synthetic direct card" }, cloud: null, camera: null, type: null }
+                : Object.fromEntries(correlation.response_item_keys.map((key) => [key, null])))
+          : buildRuntimeSnapshotResponse(correlation)
+      ])}`
     });
   }
 }

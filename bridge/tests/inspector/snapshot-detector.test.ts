@@ -325,6 +325,103 @@ describe("SnapshotDetector", () => {
     });
   });
 
+  test("accepts device cards in a direct array response", () => {
+    const detector = new SnapshotDetector();
+    detector.observeSentFrame('421["find","api/device",{}]');
+
+    expect(
+      detector.observeReceivedFrame(
+        `431${JSON.stringify([null, [{ type: "device", basic: { deviceId: "device-1", locationId: "location-1" } }]])}`
+      )
+    ).toEqual({ kind: "snapshot", requestEvent: "find", category: "device_cards", count: 1 });
+  });
+
+  test("accepts device cards without a type when a card section identifies the device", () => {
+    const detector = new SnapshotDetector();
+    detector.observeSentFrame('421["find","api/device",{}]');
+
+    expect(
+      detector.observeReceivedFrame(
+        `431${JSON.stringify([null, { data: [{ cloud: { deviceId: "device-1", locationId: "location-1" } }] }])}`
+      )
+    ).toEqual({ kind: "snapshot", requestEvent: "find", category: "device_cards", count: 1 });
+  });
+
+  test("rejects an unidentifiable device card without a type", () => {
+    const detector = new SnapshotDetector();
+    detector.observeSentFrame('421["find","api/device",{}]');
+
+    expect(
+      detector.observeReceivedFrame(`431${JSON.stringify([null, { data: [{ basic: {} }] }])}`)
+    ).toEqual({ kind: "protocol_changed", surface: "snapshot:device_cards:response_shape" });
+  });
+
+  test("accepts a single device card in a data object", () => {
+    const detector = new SnapshotDetector();
+    detector.observeSentFrame('421["find","api/device",{}]');
+
+    expect(
+      detector.observeReceivedFrame(
+        `431${JSON.stringify([null, { data: { basic: { deviceId: "device-1", locationId: "location-1" } } }])}`
+      )
+    ).toEqual({ kind: "snapshot", requestEvent: "find", category: "device_cards", count: 1 });
+  });
+
+  test("rejects a mixed device-card list with one unidentifiable card", () => {
+    const detector = new SnapshotDetector();
+    detector.observeSentFrame('421["find","api/device",{}]');
+
+    expect(detector.observeReceivedFrame(
+      `431${JSON.stringify([null, { data: [
+        { basic: { deviceId: "device-1", locationId: "location-1" } },
+        { basic: {} }
+      ] }])}`
+    )).toEqual({ kind: "protocol_changed", surface: "snapshot:device_cards:response_shape" });
+  });
+
+  test("rejects device cards when the request was for another category", () => {
+    const detector = new SnapshotDetector();
+    detector.observeSentFrame('421["find","api/room",{}]');
+
+    expect(detector.observeReceivedFrame(
+      `431${JSON.stringify([null, [{ basic: { deviceId: "device-1", locationId: "location-1" } }]])}`
+    )).toEqual({ kind: "protocol_changed", surface: "snapshot:rooms:response_shape" });
+  });
+
+  test("keeps room classification when room records contain extra card-like fields", () => {
+    const detector = new SnapshotDetector();
+    detector.observeSentFrame('421["find","api/room",{}]');
+
+    expect(detector.observeReceivedFrame(
+      `431${JSON.stringify([null, [{
+        roomId: "room-1", locationId: "location-1", type: "room", cloud: {}
+      }]])}`
+    )).toEqual({ kind: "snapshot", requestEvent: "find", category: "rooms", count: 1 });
+  });
+
+  test("keeps device-card classification when cards contain room fields", () => {
+    const detector = new SnapshotDetector();
+    detector.observeSentFrame('421["find","api/device",{}]');
+
+    expect(detector.observeReceivedFrame(
+      `431${JSON.stringify([null, [{
+        roomId: "room-1", locationId: "location-1", type: "device", cloud: {}
+      }]])}`
+    )).toEqual({ kind: "snapshot", requestEvent: "find", category: "device_cards", count: 1 });
+  });
+
+  test("does not skip an earlier invalid card section to accept a later one", () => {
+    const detector = new SnapshotDetector();
+    detector.observeSentFrame('421["find","api/device",{}]');
+
+    expect(detector.observeReceivedFrame(
+      `431${JSON.stringify([null, { data: [{
+        basic: {},
+        cloud: { deviceId: "device-1", locationId: "location-1" }
+      }] }])}`
+    )).toEqual({ kind: "protocol_changed", surface: "snapshot:device_cards:response_shape" });
+  });
+
   test("keeps unrelated and unknown ACK traffic null even when it is snapshot-shaped", () => {
     const detector = new SnapshotDetector();
 
