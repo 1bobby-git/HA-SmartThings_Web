@@ -19,6 +19,25 @@ afterEach(async () => {
 });
 
 describe("createBridgeHttpServer", () => {
+  test("serves pre-pairing protocol diagnostics only to guarded ingress UI requests", async () => {
+    const getProtocolDiagnostics = vi.fn(() => ({
+      schemaVersion: 1 as const, bridgeVersion: "1.8.66", protocolContractVersion: 6,
+      state: "PROTOCOL_CHANGED" as const, ready: false,
+      mismatchSurface: "snapshot:device_cards:response_shape" as const,
+      evidence: "unavailable" as const, rejectedResponses: [], uncorrelatedCandidates: []
+    }));
+    const server = await createBridgeHttpServer({ store: createStore(), host: "127.0.0.1", port: 0, getProtocolDiagnostics });
+    servers.push(server);
+    const url = `http://127.0.0.1:${server.port}/api/v1/diagnostics/protocol`;
+    expect((await fetch(url)).status).toBe(403);
+    expect((await fetch(url, { method: "POST" })).status).toBe(405);
+    expect((await fetch(url, { headers: { "x-stw-ui-action": "protocol-diagnostics", "sec-fetch-site": "cross-site" } })).status).toBe(403);
+    expect(getProtocolDiagnostics).not.toHaveBeenCalled();
+    const response = await fetch(url, { headers: { "x-stw-ui-action": "protocol-diagnostics" } });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual(getProtocolDiagnostics.mock.results[0]?.value);
+  });
   test("native preference recheck is a guarded POST, never a cached page reload or cross-site action", async () => {
     const requestNativeLoginPolicyCheck = vi.fn(async () => "queued" as const);
     const server = await createBridgeHttpServer({

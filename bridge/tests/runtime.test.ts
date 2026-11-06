@@ -24,6 +24,7 @@ import {
 import { ProtocolIntegrityStore } from "../src/state/protocol-integrity-store.js";
 import { stableDeviceOrLocationAlias } from "../src/security/alias-store.js";
 import { DeviceStore } from "../src/state/device-store.js";
+import { CaptureStore } from "../src/state/capture-store.js";
 import type { RuntimeStatusPatch } from "../src/state/runtime-state.js";
 import { createHealthReport } from "../src/server/health.js";
 
@@ -1011,7 +1012,7 @@ describe("createBridgeRuntime", () => {
     await runtime.browserStartup;
 
     expect(log.info.mock.calls.slice(0, 14)).toEqual([
-      ["bridge_init:version:1.8.65:home_monitor_direct"],
+      ["bridge_init:version:1.8.66:home_monitor_direct"],
       ["bridge_init:data_paths"],
       ["bridge_init:data_paths:data_dir"],
       ["bridge_init:data_paths:profile_dir"],
@@ -2930,6 +2931,40 @@ describe("createBridgeRuntime", () => {
       protocolMismatchSurface: "snapshot:device_cards:response_shape"
     });
     expect(createHealthReport(runtime.status.getSnapshot()).ready).toBe(false);
+    const response = await fetch(`http://127.0.0.1:${runtime.port}/api/v1/diagnostics/protocol`, {
+      headers: { "x-stw-ui-action": "protocol-diagnostics" }
+    });
+    expect(response.status).toBe(200);
+    const report = await response.json();
+    expect(report).toMatchObject({ evidence: "exact_rejected", ready: false,
+      mismatchSurface: "snapshot:device_cards:response_shape",
+      rejectedResponses: [{ surface: "snapshot:device_cards:response_shape", shape: { cards: { total: 1, noSection: 1 } } }] });
+    expect(JSON.stringify(report)).not.toContain("synthetic-unknown-card");
+    const stored = new CaptureStore(join(root, "bridge.sqlite"));
+    expect(stored.listSnapshotDiagnostics(PROTOCOL_CONTRACT_VERSION)).toHaveLength(1);
+    stored.close();
+  });
+
+  test("keeps the mismatch blocked and emits safe shape evidence when diagnostic storage is locked", async () => {
+    const root = createTempRoot();
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const context = new FakeContext([new FakePage("https://my.smartthings.com/location/loc-synthetic-001")]);
+    const runtime = await createBridgeRuntime(createDeps(root, { log,
+      chromium: { launchPersistentContext: vi.fn(async () => context) } }));
+    runtimes.push(runtime);
+    await runtime.browserStartup;
+    const socket = await attachRuntimeSocket(context);
+    const locker = new DatabaseSync(join(root, "bridge.sqlite"));
+    try {
+      locker.exec("BEGIN IMMEDIATE");
+      await socket.emit("framesent", { payload: '4272["find","api/device",{}]' });
+      await socket.emit("framereceived", { payload: '4372[null,[{"unknown":"private-raw-value"}]]' });
+      expect(runtime.status.getSnapshot()).toMatchObject({ state: "PROTOCOL_CHANGED", parserHealthy: false });
+      const safeLogs = log.info.mock.calls.map(([message]) => message).filter((message) => message.startsWith("protocol_snapshot_diagnostic:"));
+      expect(safeLogs).toHaveLength(1);
+      expect(safeLogs[0]).not.toContain("private-raw-value");
+      expect(log.warn).toHaveBeenCalledWith("protocol_snapshot_diagnostic_failed");
+    } finally { locker.exec("ROLLBACK"); locker.close(); }
   });
 
   test("recovers after context close without concurrent restart loops and stops at max failures", async () => {

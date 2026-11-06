@@ -1,5 +1,5 @@
 {
-  "bridge_version": "1.8.65",
+  "bridge_version": "1.8.66",
   "protocol_version": 6,
   "playwright_version": "1.62.1",
   "expected_chromium_version": "151.0.7922.34",

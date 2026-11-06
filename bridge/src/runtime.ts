@@ -59,6 +59,7 @@ import { createRedactor } from "./security/redactor.js";
 import { installBrowserObserver, type CaptureSink } from "./inspector/browser-observer.js";
 import { installCdpNetworkObserver, type CdpSessionLike } from "./inspector/cdp-network.js";
 import { PROTOCOL_CONTRACT_VERSION, type ProtocolMismatchSurface } from "./inspector/protocol-contract.js";
+import { captureReceivedFrame, summarizeAckFrame, type SnapshotResponseShape } from "./inspector/snapshot-response-diagnostics.js";
 import { ProtocolAnalyzer } from "./inspector/protocol-analyzer.js";
 import { createBridgeHttpServer, type BridgeHttpServer } from "./server/http-server.js";
 import {
@@ -117,7 +118,7 @@ type ObservableContext = BrowserContextLike & {
   newCDPSession?: (page: BrowserPageLike) => Promise<CdpSessionLike>;
 };
 
-const bridgeVersion = "1.8.65";
+const bridgeVersion = "1.8.66";
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60_000;
 const DETAIL_DISCOVERY_INTERVAL_MS = 15_000;
 const PROFILE_MAINTENANCE_REQUIRED_FILE = ".profile-maintenance-required";
@@ -566,6 +567,36 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
   log.info("bridge_init:http_server");
   const server = await createBridgeHttpServer({
     store: status,
+    getProtocolDiagnostics: () => {
+      const current = status.getSnapshot();
+      const blocked = current.state === "PROTOCOL_CHANGED" || current.protocolMismatchSurface !== undefined ||
+        protocolIntegrity?.snapshot().compatible === false;
+      let rejectedResponses: Array<{ surface: string; shape: SnapshotResponseShape }> = [];
+      let uncorrelatedCandidates: SnapshotResponseShape[] = [];
+      if (blocked) {
+        try { rejectedResponses = captures.listSnapshotDiagnostics(PROTOCOL_CONTRACT_VERSION); } catch { /* Diagnostic reads are optional. */ }
+        if (rejectedResponses.length === 0) {
+          try {
+            for (const payload of captures.recentWebsocketCapturePayloads()) {
+              try {
+                const raw = captureReceivedFrame(JSON.parse(payload));
+                const shape = raw ? summarizeAckFrame(raw) : null;
+                if (shape) uncorrelatedCandidates.push(shape);
+              } catch { /* Skip a malformed capture row. */ }
+              if (uncorrelatedCandidates.length >= 10) break;
+            }
+          } catch { /* Malformed captures cannot affect status or the response. */ }
+        }
+      }
+      return {
+        schemaVersion: 1 as const, bridgeVersion, protocolContractVersion: PROTOCOL_CONTRACT_VERSION,
+        state: current.state, ready: createHealthReport(current).ready,
+        mismatchSurface: current.protocolMismatchSurface ?? null,
+        evidence: !blocked ? "no_mismatch" as const : rejectedResponses.length ? "exact_rejected" as const :
+          uncorrelatedCandidates.length ? "saved_ack_candidates" as const : "unavailable" as const,
+        rejectedResponses, uncorrelatedCandidates
+      };
+    },
     host: deps.config.host,
     port: deps.config.port,
     auth,
@@ -1798,6 +1829,8 @@ function createStatusCapturePipeline(
   let analyzer = new ProtocolAnalyzer({ ttlMs: 300_000, maxEntries: 100_000 });
   let protocolFingerprintObserved = false;
   let protocolBlocked = initiallyProtocolBlocked;
+  const loggedDiagnosticShapes = new Set<string>();
+  let diagnosticWriteWarnings = 0;
   const persistCapture = (record: SanitizedCaptureRecord, force = false): void => {
     if (persistDebugCaptures || force) captures.write(record);
   };
@@ -1846,6 +1879,22 @@ function createStatusCapturePipeline(
               ...recordProtocolMismatch(protocolIntegrity, analysis.surface, log)
             });
             protocolBlocked = true;
+            if (analysis.surface.startsWith("snapshot:") && analysis.surface.endsWith(":response_shape")) {
+              try {
+                const raw = captureReceivedFrame(record.payload);
+                const shape = raw ? summarizeAckFrame(raw) : null;
+                if (shape) {
+                  const safeJson = JSON.stringify({ surface: analysis.surface, shape });
+                  if (!loggedDiagnosticShapes.has(safeJson) && loggedDiagnosticShapes.size < 10) {
+                    loggedDiagnosticShapes.add(safeJson);
+                    log.info(`protocol_snapshot_diagnostic:${safeJson}`);
+                  }
+                  captures.writeSnapshotDiagnostic(analysis.surface, PROTOCOL_CONTRACT_VERSION, shape);
+                }
+              } catch {
+                if (diagnosticWriteWarnings++ === 0) log.warn("protocol_snapshot_diagnostic_failed");
+              }
+            }
             return;
           }
           if (analysis?.kind === "new" || analysis?.kind === "duplicate") {

@@ -358,6 +358,12 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
     .hc-protocol-meta { text-align: right; color: var(--hc-muted); font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
     .hc-protocol-alert { margin: 0 24px 20px; padding: 12px 14px; border-radius: 10px; background: var(--hc-danger-soft); color: var(--hc-danger); }
     .hc-protocol-alert p { margin: 3px 0; }
+    .hc-protocol-diagnostic { padding: 0 24px 20px; }
+    .hc-protocol-diagnostic p { margin: 6px 0 0; color: var(--hc-muted); font-size: 12px; }
+    .hc-protocol-diagnostic .hc-button { min-height: 40px; }
+    .hc-protocol-diagnostic .hc-button:disabled { cursor: wait; opacity: .7; }
+    .hc-protocol-diagnostic textarea { display: block; width: 100%; min-height: 130px; margin-top: 8px; padding: 10px; border: 1px solid var(--hc-line); border-radius: 8px; background: var(--hc-soft); color: var(--hc-ink); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; resize: vertical; }
+    .hc-protocol-diagnostic [hidden] { display: none; }
 
     .hc-details { overflow: hidden; }
     .hc-details summary { min-height: 54px; display: flex; align-items: center; gap: 10px; padding: 0 24px; cursor: pointer; font-weight: 760; list-style: none; }
@@ -403,6 +409,7 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
       .hc-protocol-summary { grid-template-columns: auto minmax(0, 1fr); }
       .hc-protocol-meta { grid-column: 2; text-align: left; }
       .hc-protocol-alert { margin-inline: 16px; }
+      .hc-protocol-diagnostic { padding-inline: 16px; }
       .hc-details summary { padding-inline: 16px; }
       .hc-diagnostic-row { grid-template-columns: 1fr; gap: 2px; padding-inline: 16px; }
       .hc-diagnostic-row dd { text-align: left; }
@@ -585,6 +592,58 @@ export function renderStatusPage(report: HealthReport, options: StatusPageOption
         pairingButton.removeAttribute("aria-busy");
       }
     });
+    const protocolDiagnosticButton = document.getElementById("protocol-diagnostic-copy");
+    const protocolDiagnosticResult = document.getElementById("protocol-diagnostic-result");
+    const protocolDiagnosticManual = document.getElementById("protocol-diagnostic-manual");
+    const protocolDiagnosticText = document.getElementById("protocol-diagnostic-text");
+
+    protocolDiagnosticButton.addEventListener("click", async () => {
+      protocolDiagnosticButton.disabled = true;
+      protocolDiagnosticButton.setAttribute("aria-busy", "true");
+      protocolDiagnosticManual.hidden = true;
+      protocolDiagnosticText.value = "";
+      protocolDiagnosticResult.textContent = "오류 진단을 확인하고 있습니다…";
+      try {
+        const response = await fetch("api/v1/diagnostics/protocol", {
+          method: "GET", credentials: "same-origin", cache: "no-store",
+          headers: { "x-stw-ui-action": "protocol-diagnostics" },
+          signal: AbortSignal.timeout(5000)
+        });
+        if (!response.ok) throw new Error("diagnostic_request_failed");
+        const body = await response.json();
+        if (body?.schemaVersion !== 1 || !["exact_rejected", "saved_ack_candidates", "unavailable", "no_mismatch"].includes(body.evidence)) {
+          throw new Error("diagnostic_response_invalid");
+        }
+        if (body.evidence === "unavailable") {
+          protocolDiagnosticResult.textContent = "저장된 오류 진단이 없습니다. 오류가 표시된 뒤 다시 시도해 주세요.";
+          return;
+        }
+        if (body.evidence === "no_mismatch") {
+          protocolDiagnosticResult.textContent = "현재 표시된 연결 오류가 없습니다. 오류가 표시된 뒤 다시 시도해 주세요.";
+          return;
+        }
+        const summary = JSON.stringify(body, null, 2);
+        const evidenceLabel = body.evidence === "saved_ack_candidates" ? "저장된 응답 후보" : "확인된 오류 응답";
+        try {
+          if (!navigator.clipboard?.writeText) throw new Error("clipboard_unavailable");
+          await navigator.clipboard.writeText(summary);
+          protocolDiagnosticResult.textContent = evidenceLabel + " 진단을 복사했습니다." +
+            (body.evidence === "saved_ack_candidates" ? " 오류 원인은 아직 확정되지 않았습니다." : "");
+        } catch {
+          protocolDiagnosticText.value = summary;
+          protocolDiagnosticManual.hidden = false;
+          protocolDiagnosticText.focus();
+          protocolDiagnosticText.select();
+          protocolDiagnosticResult.textContent = evidenceLabel + " 진단입니다. 아래 내용을 직접 복사해 주세요." +
+            (body.evidence === "saved_ack_candidates" ? " 오류 원인은 아직 확정되지 않았습니다." : "");
+        }
+      } catch {
+        protocolDiagnosticResult.textContent = "오류 진단을 가져오지 못했습니다. 잠시 뒤 다시 시도해 주세요.";
+      } finally {
+        protocolDiagnosticButton.disabled = false;
+        protocolDiagnosticButton.removeAttribute("aria-busy");
+      }
+    });
   </script>
 </body>
 </html>`;
@@ -709,6 +768,15 @@ function renderProtocolPanel(report: HealthReport): string {
       <div class="hc-protocol-meta">버전 ${escapeHtml(report.details.protocolVersion)}<br>변경 ${String(report.details.protocolChangeCount)}회</div>
     </div>
     ${alert}
+    <div class="hc-protocol-diagnostic">
+      <button class="hc-button hc-button-secondary" id="protocol-diagnostic-copy" type="button" aria-describedby="protocol-diagnostic-help protocol-diagnostic-result">오류 진단 복사</button>
+      <p id="protocol-diagnostic-help">오류 응답의 필드 형식과 오류 코드만 확인합니다. 기기 이름이나 식별값은 포함하지 않습니다.</p>
+      <p id="protocol-diagnostic-result" role="status" aria-live="polite"></p>
+      <div id="protocol-diagnostic-manual" hidden>
+        <label for="protocol-diagnostic-text">직접 복사할 오류 진단</label>
+        <textarea id="protocol-diagnostic-text" readonly></textarea>
+      </div>
+    </div>
   </div>`;
 }
 
