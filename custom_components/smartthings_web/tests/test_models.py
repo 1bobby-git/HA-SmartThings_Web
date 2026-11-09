@@ -360,6 +360,55 @@ class SmartThingsWebRuntimeTests(unittest.TestCase):
             31,
         )
 
+    def test_other_location_state_events_advance_sequence_without_refetch(self) -> None:
+        """A shared Bridge streams every location; foreign events must stay cheap."""
+        current = inventory(10, 20, "2026-08-24T21:00:00Z")
+        current.devices["dev_other"] = BridgeDevice(
+            "dev_other", "loc_002", None, "Other home sensor", "sensor", True
+        )
+        current.locations["loc_002"] = "Other home"
+        client = FakeClient()
+        runtime = SmartThingsWebRuntime(client, "loc_001", current)
+        observations: list[int] = []
+        runtime.subscribe(lambda: observations.append(1))
+
+        for sequence in (11, 12, 13):
+            event = state_event(sequence, 90 + sequence, "2026-08-24T21:05:00Z")
+            event["deviceId"] = "dev_other"
+            self.assertFalse(asyncio.run(runtime.handle_event(event)))
+
+        self.assertEqual(client.calls, 0)
+        self.assertEqual(runtime.inventory.sequence, 13)
+        self.assertEqual(runtime.inventory.devices["dev_other"].states, {})
+        self.assertEqual(observations, [])
+
+        # The next event for this location is contiguous, not a gap.
+        self.assertTrue(
+            asyncio.run(runtime.handle_event(state_event(14, 21, "2026-08-24T21:06:00Z")))
+        )
+        self.assertEqual(client.calls, 0)
+        self.assertEqual(sensor_value(runtime), 21)
+
+    def test_other_location_event_after_gap_still_resynchronizes(self) -> None:
+        current = inventory(10, 20, "2026-08-24T21:00:00Z")
+        current.devices["dev_other"] = BridgeDevice(
+            "dev_other", "loc_002", None, "Other", "sensor", True
+        )
+        latest = inventory(11, 22, "2026-08-24T21:02:00Z")
+        latest.devices["dev_other"] = BridgeDevice(
+            "dev_other", "loc_002", None, "Other", "sensor", True
+        )
+        client = FakeClient(latest)
+        runtime = SmartThingsWebRuntime(client, "loc_001", current)
+        event = state_event(12, 99, "2026-08-24T21:03:00Z")
+        event["deviceId"] = "dev_other"
+
+        self.assertTrue(asyncio.run(runtime.handle_event(event)))
+
+        self.assertEqual(client.calls, 1)
+        self.assertEqual(runtime.inventory.sequence, 12)
+        self.assertEqual(sensor_value(runtime), 22)
+
     def test_stale_sequence_and_timestamp_cannot_overwrite_current_state(self) -> None:
         latest = inventory(12, 22, "2026-08-24T21:12:00Z")
         client = FakeClient(latest)
