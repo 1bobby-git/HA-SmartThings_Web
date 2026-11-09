@@ -1,3 +1,9 @@
+## 1.8.68
+
+- 통합: 오래된 Bridge 기기 카드를 정리할 때 기기 레지스트리 전체를 돌며 폐기 예정 속성 `DeviceEntry.config_entries`를 읽던 문제를 수정했습니다. Home Assistant 2026.11에서는 이 속성을 읽을 때마다 콜스택과 모듈 전체를 훑기 때문에, 기기가 많은 설치에서 이벤트 루프 CPU를 크게 썼습니다.
+- 통합: 이 설정 항목의 기기만 레지스트리 인덱스로 가져오고, 소유 항목은 `config_entry_id`로 판단합니다(이전 Core는 `config_entries`). 방 동기화의 소유 판단도 같은 방식입니다. 정리 규칙은 바뀌지 않았습니다.
+- Bridge 앱과 HACS 통합 버전은 1.8.68입니다. Bridge 동작은 바뀌지 않았습니다.
+
 ## 1.8.67
 
 - Bridge: 로그인 후 `find api/device`에 정확히 `[null, null]`이 반환되면 `snapshot:device_cards:response_shape`로 잘못 차단하던 문제를 수정했습니다. 해당 요청의 응답으로 확인된 경우에만 데이터 없는 응답으로 건너뜁니다.

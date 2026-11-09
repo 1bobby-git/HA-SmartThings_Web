@@ -64,7 +64,13 @@ from .models import (
     switch_name_overrides,
 )
 from .services import async_setup_services
-from .room_assignment import resolve_room_area, sync_device_area, subscribe_room_registry_changes
+from .room_assignment import (
+    device_owner_ids,
+    devices_for_config_entry,
+    resolve_room_area,
+    subscribe_room_registry_changes,
+    sync_device_area,
+)
 from .naming import (
     canonical_entity_object_id,
     canonical_primary_control_object_id,
@@ -1720,9 +1726,9 @@ def _remove_orphan_bridge_device_cards(
             and getattr(row, "entity_id", None) not in removed_entity_ids
         ]
 
-    for row in _iter_device_registry_rows(device_registry):
-        if entry.entry_id not in (getattr(row, "config_entries", None) or set()):
-            continue
+    for row in devices_for_config_entry(
+        dr, device_registry, entry.entry_id, _iter_device_registry_rows
+    ):
         row_identifiers = getattr(row, "identifiers", None) or set()
         ours = [
             ident[1]
@@ -1757,9 +1763,7 @@ def _remove_orphan_bridge_device_cards(
                 removed_entity_ids.add(entity_id)
 
         remaining_entries = entries_for_device(row_id)
-        remaining_config_entries = set(
-            getattr(row, "config_entries", None) or set()
-        ) - {entry.entry_id}
+        remaining_config_entries = device_owner_ids(row) - {entry.entry_id}
         if not remaining_entries and not remaining_config_entries:
             remove_device = getattr(device_registry, "async_remove_device", None)
             if callable(remove_device):
