@@ -14,6 +14,40 @@ class NamedArea(Protocol):
     name: str
 
 
+_MISSING = object()
+
+
+def device_owner_ids(device: object) -> set[str]:
+    """Return the config entries that own ``device`` without the deprecated shim.
+
+    Home Assistant 2026.11 gives every stored device a single ``config_entry_id``
+    and deprecates ``DeviceEntry.config_entries``. Each read of that shim runs
+    ``report_usage`` (a full stack and ``sys.modules`` scan), so reading it for
+    every device of a large registry saturates the event loop. Older cores only
+    expose ``config_entries``.
+    """
+    entry_id = getattr(device, "config_entry_id", _MISSING)
+    if entry_id is _MISSING:
+        return set(getattr(device, "config_entries", None) or ())
+    if getattr(device, "is_composite_device", False):
+        # Restored composites keep the multi-entry view and do not warn.
+        return set(getattr(device, "config_entries", None) or ())
+    return {entry_id} if isinstance(entry_id, str) and entry_id else set()
+
+
+def devices_for_config_entry(
+    dr_module: object,
+    device_registry: object,
+    config_entry_id: str,
+    all_rows: Callable[[object], Iterable[object]],
+) -> list[object]:
+    """Devices of one config entry via the registry index, not a full scan."""
+    lookup = getattr(dr_module, "async_entries_for_config_entry", None)
+    if callable(lookup):
+        return list(lookup(device_registry, config_entry_id))
+    return [row for row in all_rows(device_registry) if config_entry_id in device_owner_ids(row)]
+
+
 def room_name_key(value: str) -> str:
     """Normalize Unicode and whitespace, retaining meaningful word boundaries."""
     return " ".join(unicodedata.normalize("NFKC", value).split()).casefold()
@@ -120,13 +154,7 @@ def sync_device_area(
 
 def _owned_device(device: object, config_entry_id: str) -> bool:
     """Refuse shared or contradictory ownership, on old and current registries."""
-    owners = getattr(device, "config_entries", None)
-    owner = getattr(device, "config_entry_id", None)
-    if owners is not None and set(owners) != {config_entry_id}:
-        return False
-    if owner is not None and owner != config_entry_id:
-        return False
-    return owners is not None or owner == config_entry_id
+    return device_owner_ids(device) == {config_entry_id}
 
 
 def subscribe_room_registry_changes(
@@ -164,9 +192,7 @@ def subscribe_room_registry_changes(
             device = dr.async_get(hass).async_get(data.get("device_id"))
             if device is None:
                 return
-            owners = set(getattr(device, "config_entries", ()))
-            owner = getattr(device, "config_entry_id", None)
-            if config_entry_id not in owners and owner != config_entry_id:
+            if config_entry_id not in device_owner_ids(device):
                 return
         if pending is None:
             pending = hass.loop.call_soon(run)

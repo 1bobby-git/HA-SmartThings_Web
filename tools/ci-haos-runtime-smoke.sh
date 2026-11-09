@@ -145,6 +145,22 @@ PY
   esac
 
   if [[ "$case_name" == "clean" ]]; then
+    docker exec -i --user pwuser "$container_name" node --input-type=module <<'JS'
+import assert from 'node:assert/strict';
+const url = 'http://127.0.0.1:8098/api/v1/diagnostics/protocol';
+const headers = { 'x-stw-ui-action': 'protocol-diagnostics' };
+assert.equal((await fetch(url)).status, 403);
+assert.equal((await fetch(url, { method: 'POST', headers })).status, 405);
+const response = await fetch(url, { headers });
+assert.equal(response.status, 200);
+assert.equal(response.headers.get('cache-control'), 'no-store');
+const report = await response.json();
+assert.equal(report.schemaVersion, 1);
+assert.equal(report.evidence, 'no_mismatch');
+assert.deepEqual(report.rejectedResponses, []);
+assert.deepEqual(report.uncorrelatedCandidates, []);
+console.log('Protocol diagnostics before pairing passed');
+JS
     docker cp tools/ci-inventory-worker-smoke.mjs "$container_name:/tmp/ci-inventory-worker-smoke.mjs"
     docker exec --user pwuser "$container_name" node /tmp/ci-inventory-worker-smoke.mjs /app
   fi

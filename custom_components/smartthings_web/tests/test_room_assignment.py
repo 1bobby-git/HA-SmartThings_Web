@@ -83,6 +83,21 @@ class RoomAssignmentTests(unittest.TestCase):
         registry = Registry(SimpleNamespace(id="device", area_id=None, config_entries={"entry", "other"}))
         self.assertFalse(repair(registry, "device", "entry", "bathroom"))
 
+    def test_current_device_never_reads_deprecated_config_entries(self):
+        class SingleOwnerDevice:
+            id = "device"
+            area_id = None
+            config_entry_id = "entry"
+            is_composite_device = False
+
+            @property
+            def config_entries(self):
+                raise AssertionError("deprecated DeviceEntry.config_entries was read")
+
+        registry = Registry(SingleOwnerDevice())
+        self.assertTrue(repair(registry, "device", "entry", "bathroom"))
+        self.assertEqual(module.device_owner_ids(SingleOwnerDevice()), {"entry"})
+
     def test_missing_device_does_not_write(self):
         registry = Registry(None)
         self.assertFalse(repair(registry, "device", "entry", "bathroom"))

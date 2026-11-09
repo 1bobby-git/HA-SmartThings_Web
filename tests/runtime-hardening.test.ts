@@ -11,6 +11,12 @@ describe("runtime hardening", () => {
     expect(coreServer).toContain("return 403;");
   });
 
+  test("keeps protocol diagnostics on the ingress boundary", () => {
+    const nginx = readText("addon/smartthings_web_bridge/rootfs/etc/nginx/nginx.conf");
+    const coreServer = nginx.split("listen 8100;", 2)[1] ?? "";
+    expect(coreServer).toMatch(/location = \/api\/v1\/diagnostics\/protocol\s*\{\s*return 403;/);
+  });
+
   test("starts reauthentication and stops the stale event loop on token rejection", () => {
     const integration = readText("custom_components/smartthings_web/__init__.py");
     expect(integration).toContain("_EVENT_RECONNECT_MIN_DELAY = 1.0");

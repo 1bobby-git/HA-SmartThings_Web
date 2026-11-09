@@ -17,6 +17,21 @@ import { createHealthReport } from "./health.js";
 import type { BridgeAuth } from "./bridge-auth.js";
 import { renderStatusPage } from "./status-page.js";
 import type { RuntimeStatusStore } from "../state/runtime-state.js";
+import type { SnapshotResponseShape } from "../inspector/snapshot-response-diagnostics.js";
+import type { ProtocolMismatchSurface } from "../inspector/protocol-contract.js";
+import type { RuntimeState } from "../state/runtime-state.js";
+
+export interface ProtocolDiagnosticsReport {
+  schemaVersion: 1;
+  bridgeVersion: string;
+  protocolContractVersion: number;
+  state: RuntimeState;
+  ready: boolean;
+  mismatchSurface: ProtocolMismatchSurface | null;
+  evidence: "exact_rejected" | "saved_ack_candidates" | "unavailable" | "no_mismatch";
+  rejectedResponses: Array<{ surface: string; shape: SnapshotResponseShape }>;
+  uncorrelatedCandidates: SnapshotResponseShape[];
+}
 
 export interface BridgeHttpServerOptions {
   store: RuntimeStatusStore;
@@ -33,6 +48,7 @@ export interface BridgeHttpServerOptions {
   images?: Pick<CameraImageStore, "get"> & Partial<Pick<CameraImageStore, "subscribe">>;
   physicalActionProbe?: PhysicalActionCorrelationProbe;
   getProbeEvidence?: () => ProbeRuntimeEvidence;
+  getProtocolDiagnostics?: () => ProtocolDiagnosticsReport;
 }
 
 export interface BridgeHttpServer {
@@ -91,6 +107,15 @@ async function handleBridgeApiRequest(
 ): Promise<void> {
   try {
     const method = request.method ?? "GET";
+    if (path === "/api/v1/diagnostics/protocol") {
+      if (method !== "GET") return writeError(response, 405, "method_not_allowed");
+      if (!isLoopback(request.socket.remoteAddress)) return writeError(response, 403, "ingress_required");
+      if (request.headers["x-stw-ui-action"] !== "protocol-diagnostics" || request.headers["sec-fetch-site"] === "cross-site") {
+        return writeError(response, 403, "same_origin_required");
+      }
+      if (!options.getProtocolDiagnostics) return writeError(response, 503, "diagnostics_unavailable");
+      return writeJson(response, 200, options.getProtocolDiagnostics());
+    }
     if (!options.auth || !options.devices) {
       return writeError(response, 503, "bridge_api_unavailable");
     }

@@ -95,6 +95,8 @@ const persistedKeys = new Set([
 ]);
 const fingerprintPattern = /^[a-f0-9]{64}$/u;
 const mismatchSurfaceSet = new Set<ProtocolMismatchSurface>(PROTOCOL_MISMATCH_SURFACES);
+const nullCardMismatchSurface = "snapshot:device_cards:response_shape";
+const nullCardMismatchKey = `surface:${nullCardMismatchSurface}`;
 
 export class ProtocolIntegrityStore {
   readonly #path: string;
@@ -180,6 +182,36 @@ export class ProtocolIntegrityStore {
       last_mismatch: freezeLastMismatch({ kind: "surface", surface })
     };
     this.#persist();
+    return this.snapshot();
+  }
+
+  canRecoverPersistedNullDeviceCardsMismatch(): boolean {
+    return this.#contractVersion === 6 &&
+      this.#state.protocol_contract_version === 6 &&
+      this.#state.mismatch_keys.length === 1 &&
+      this.#state.mismatch_keys[0] === nullCardMismatchKey &&
+      this.#state.last_mismatch?.kind === "surface" &&
+      this.#state.last_mismatch.surface === nullCardMismatchSurface &&
+      (this.#state.baseline === null || this.#state.current === this.#state.baseline);
+  }
+
+  recoverPersistedNullDeviceCardsMismatch(fingerprint: string): ProtocolIntegritySnapshot | null {
+    if (!isFingerprint(fingerprint)) {
+      throw new ProtocolIntegrityError("invalid_fingerprint");
+    }
+    if (!this.canRecoverPersistedNullDeviceCardsMismatch() ||
+      (this.#state.baseline !== null && this.#state.baseline !== fingerprint)) {
+      return null;
+    }
+    const next: PersistedProtocolIntegrityState = {
+      ...this.#state,
+      baseline: this.#state.baseline ?? fingerprint,
+      current: fingerprint,
+      mismatch_keys: [],
+      last_mismatch: null
+    };
+    writeAtomically(this.#path, next, this.#hooks);
+    this.#state = next;
     return this.snapshot();
   }
 

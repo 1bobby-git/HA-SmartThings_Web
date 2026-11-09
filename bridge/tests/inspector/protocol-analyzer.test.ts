@@ -307,6 +307,37 @@ describe("ProtocolAnalyzer", () => {
     });
   });
 
+  test("null device ACK leaves protocol incomplete until a later valid device snapshot", () => {
+    const analyzer = new ProtocolAnalyzer({ ttlMs: 60_000, maxEntries: 100 });
+    for (const correlation of snapshotFixture.correlations) {
+      if (correlation.response_category === "device_cards") continue;
+      const ackId = Number(correlation.ack_id.split("_")[1]);
+      analyzer.observe(sanitizedFrame(
+        "sent", `42${ackId}${JSON.stringify(["find", correlation.request_query, {}])}`
+      ));
+      analyzer.observe(sanitizedFrame(
+        "received", `43${ackId}${JSON.stringify([null, buildSnapshotResponse(correlation)])}`
+      ));
+    }
+    analyzer.observe(deviceEventRecord(fixture.fixture_deliveries[0]));
+    analyzer.observe(sanitizedFrame("sent", '4291["find","api/device",{}]'));
+    expect(analyzer.observe(sanitizedFrame("received", "4391[null,null]"))).toBeNull();
+    expect(analyzer.snapshot()).toMatchObject({
+      snapshotComplete: false, protocolComplete: false, protocolMismatchCount: 0,
+      pendingSnapshotRequests: 0
+    });
+    expect(analyzer.snapshot().snapshotCategories).not.toHaveProperty("device_cards");
+
+    analyzer.observe(sanitizedFrame("sent", '4292["find","api/device",{}]'));
+    expect(analyzer.observe(sanitizedFrame("received", '4392[null,{"data":[]}]'))).toMatchObject({
+      kind: "snapshot", category: "device_cards", count: 0
+    });
+    expect(analyzer.snapshot()).toMatchObject({
+      snapshotComplete: true, protocolComplete: true, protocolMismatchCount: 0,
+      snapshotCategories: { device_cards: 0 }
+    });
+  });
+
   test("resets snapshot readiness for a new socket session without losing event counters", () => {
     const analyzer = new ProtocolAnalyzer({ ttlMs: 60_000, maxEntries: 100 });
     observeAllSnapshots(analyzer);
@@ -339,7 +370,7 @@ describe("ProtocolAnalyzer", () => {
       "snapshot:scenes:v1"
     ] satisfies SafeProtocolSurface[]);
     expect(new Set(REQUIRED_PROTOCOL_SURFACES).size).toBe(7);
-    expect(PROTOCOL_CONTRACT_VERSION).toBe(5);
+    expect(PROTOCOL_CONTRACT_VERSION).toBe(6);
     expect(PROTOCOL_CONTRACT_FINGERPRINT).toMatch(/^[a-f0-9]{64}$/);
   });
 

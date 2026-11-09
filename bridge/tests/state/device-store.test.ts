@@ -1370,6 +1370,53 @@ describe("DeviceStore", () => {
     }
   });
 
+  test("null device ACK cannot prune restored inventory before a real consumer snapshot", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-device-store-null-ack-prune-"));
+    try {
+      const sqlitePath = join(root, "bridge.sqlite");
+      const first = new DeviceStore({ sqlitePath });
+      observeDeviceSnapshot(first, {
+        deviceId: "dev_cached", locationId: "loc_001", deviceName: "Cached switch",
+        deviceTypeData: { type: "switch" }
+      });
+      first.close();
+
+      const second = new DeviceStore({ sqlitePath });
+      const published: unknown[] = [];
+      second.subscribe((event) => published.push(event));
+      second.observe(sentFrame('424["find","api/device",{}]'));
+      const beforeNull = second.snapshot();
+      second.observe(receivedFrame("434[null,null]"));
+      expect(second.snapshot()).toEqual(beforeNull);
+      expect(published).toEqual([]);
+
+      second.observeAdvancedDeviceSnapshot({ items: [{
+        deviceId: "dev_new", locationId: "loc_001", label: "New switch",
+        deviceTypeName: "switch"
+      }] }, { authoritativeWholeSnapshot: true });
+      expect(second.snapshot().devices.map((device) => device.id)).toEqual([
+        "dev_cached", "dev_new"
+      ]);
+
+      const beforeConsumer = second.snapshot().sequence;
+      const beforeConsumerEvents = published.length;
+      observeDeviceSnapshot(second, {
+        deviceId: "dev_new", locationId: "loc_001", deviceName: "New switch",
+        deviceTypeData: { type: "switch" }
+      });
+      expect(second.snapshot().devices.map((device) => device.id)).toEqual(["dev_new"]);
+      expect(second.snapshot().sequence).toBeGreaterThan(beforeConsumer);
+      expect(published).toHaveLength(beforeConsumerEvents + 1);
+      second.close();
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // Windows may release node:sqlite file handles after the assertion completes.
+      }
+    }
+  });
+
   test("keeps restored devices when only non-device snapshots arrive", () => {
     const root = mkdtempSync(join(tmpdir(), "stw-device-store-partial-session-"));
     try {

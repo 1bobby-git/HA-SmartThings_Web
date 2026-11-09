@@ -1,10 +1,85 @@
-import { describe, expect, test } from "vitest";
+import { runInNewContext } from "node:vm";
+import { describe, expect, test, vi } from "vitest";
 
 import { createHealthReport } from "../../src/server/health.js";
 import { renderStatusPage } from "../../src/server/status-page.js";
 import { RuntimeStatusStore, type RuntimeStatusPatch } from "../../src/state/runtime-state.js";
 
 describe("renderStatusPage", () => {
+  test("offers an explicit, accessible protocol diagnosis copy action with a manual fallback", () => {
+    const html = renderStatusPage(reportFor({ state: "PROTOCOL_CHANGED", dbAvailable: true }));
+
+    expect(html).toContain('id="protocol-diagnostic-copy" type="button"');
+    expect(html).toContain('aria-describedby="protocol-diagnostic-help protocol-diagnostic-result"');
+    expect(html).toContain('id="protocol-diagnostic-result" role="status" aria-live="polite"');
+    expect(html).toContain('id="protocol-diagnostic-manual" hidden');
+    expect(html).toContain('id="protocol-diagnostic-text" readonly');
+    expect(html).toContain('fetch("api/v1/diagnostics/protocol", {');
+    expect(html).toContain('"x-stw-ui-action": "protocol-diagnostics"');
+    expect(html).toContain('credentials: "same-origin", cache: "no-store"');
+    expect(html).toContain('signal: AbortSignal.timeout(5000)');
+    expect(html).toContain('navigator.clipboard.writeText(summary)');
+    expect(html).toContain('protocolDiagnosticText.select()');
+    expect(html).toContain("저장된 응답 후보");
+    expect(html).toContain("오류가 표시된 뒤 다시 시도해 주세요");
+    expect(html).not.toMatch(/https?:|deviceId|locationId|token|secret|raw-/i);
+  });
+
+  test("requests diagnostics only on click and copies the returned summary", async () => {
+    const summary = protocolSummary("exact_rejected");
+    const fetch = vi.fn(async () => ({ ok: true, json: async () => summary }));
+    const writeText = vi.fn(async () => undefined);
+    const ui = mountStatusScript(fetch, { writeText });
+
+    expect(fetch).not.toHaveBeenCalled();
+    await ui.click();
+
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledWith("api/v1/diagnostics/protocol", expect.objectContaining({
+      method: "GET", credentials: "same-origin", cache: "no-store",
+      headers: { "x-stw-ui-action": "protocol-diagnostics" }, signal: expect.any(AbortSignal)
+    }));
+    expect(writeText).toHaveBeenCalledWith(JSON.stringify(summary, null, 2));
+    expect(ui.result.textContent).toContain("확인된 오류 응답 진단을 복사했습니다");
+    expect(ui.manual.hidden).toBe(true);
+    expect(ui.button.disabled).toBe(false);
+    expect(ui.button.attributes.has("aria-busy")).toBe(false);
+  });
+
+  test("offers selectable manual copy when the clipboard rejects a saved candidate", async () => {
+    const summary = protocolSummary("saved_ack_candidates");
+    const ui = mountStatusScript(
+      vi.fn(async () => ({ ok: true, json: async () => summary })),
+      { writeText: vi.fn(async () => { throw new Error("denied"); }) }
+    );
+
+    await ui.click();
+
+    expect(ui.manual.hidden).toBe(false);
+    expect(ui.text.value).toBe(JSON.stringify(summary, null, 2));
+    expect(ui.text.focused).toBe(true);
+    expect(ui.text.selected).toBe(true);
+    expect(ui.result.textContent).toContain("저장된 응답 후보");
+    expect(ui.result.textContent).toContain("직접 복사해 주세요");
+    expect(ui.result.textContent).toContain("원인은 아직 확정되지 않았습니다");
+  });
+
+  test("clears an earlier manual summary when a later request fails", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => protocolSummary("exact_rejected") })
+      .mockRejectedValueOnce(new Error("offline"));
+    const ui = mountStatusScript(fetch);
+
+    await ui.click();
+    expect(ui.manual.hidden).toBe(false);
+    await ui.click();
+
+    expect(ui.manual.hidden).toBe(true);
+    expect(ui.text.value).toBe("");
+    expect(ui.result.textContent).toContain("가져오지 못했습니다");
+    expect(ui.button.disabled).toBe(false);
+  });
+
   test("rechecks the browser through an explicit UI POST and distinguishes unknown from OFF", () => {
     const html = renderStatusPage(reportFor({state:"CONNECTED",dbAvailable:true,authenticated:true,
       nativeLoginPolicyState:"attention",nativeLoginPolicyReason:"settings_not_found"}));
@@ -271,4 +346,60 @@ function reportFor(patch: RuntimeStatusPatch) {
     }
   });
   return createHealthReport(store.getSnapshot(), { nowMs: now });
+}
+
+function protocolSummary(evidence: "exact_rejected" | "saved_ack_candidates") {
+  return {
+    schemaVersion: 1, bridgeVersion: "0.1.0", protocolContractVersion: 6,
+    state: "PROTOCOL_CHANGED", ready: false,
+    mismatchSurface: "snapshot:device_cards:response_shape", evidence,
+    rejectedResponses: [], uncorrelatedCandidates: []
+  };
+}
+
+class ScriptNode {
+  disabled = false;
+  hidden = true;
+  value = "";
+  textContent = "";
+  focused = false;
+  selected = false;
+  dataset: Record<string, string> = {};
+  attributes = new Map<string, string>();
+  readonly listeners = new Map<string, () => Promise<void>>();
+
+  addEventListener(event: string, callback: () => Promise<void>): void { this.listeners.set(event, callback); }
+  setAttribute(name: string, value: string): void { this.attributes.set(name, value); }
+  removeAttribute(name: string): void { this.attributes.delete(name); }
+  querySelector(): ScriptNode { return new ScriptNode(); }
+  focus(): void { this.focused = true; }
+  select(): void { this.selected = true; }
+}
+
+function mountStatusScript(
+  fetch: ReturnType<typeof vi.fn>,
+  clipboard?: { writeText: ReturnType<typeof vi.fn> }
+) {
+  const html = renderStatusPage(reportFor({ state: "PROTOCOL_CHANGED", dbAvailable: true }));
+  const script = html.match(/<script>([\s\S]*?)<\/script>/u)?.[1];
+  if (!script) throw new Error("status script missing");
+  const nodes = new Map<string, ScriptNode>();
+  const get = (id: string) => {
+    if (!nodes.has(id)) nodes.set(id, new ScriptNode());
+    return nodes.get(id)!;
+  };
+  runInNewContext(script, {
+    document: { getElementById: get }, fetch, navigator: { clipboard }, AbortSignal,
+    window: { location: { reload: vi.fn() } }, setTimeout
+  });
+  const button = get("protocol-diagnostic-copy");
+  return {
+    button, result: get("protocol-diagnostic-result"), manual: get("protocol-diagnostic-manual"),
+    text: get("protocol-diagnostic-text"),
+    click: async () => {
+      const handler = button.listeners.get("click");
+      if (!handler) throw new Error("diagnostic click handler missing");
+      await handler();
+    }
+  };
 }

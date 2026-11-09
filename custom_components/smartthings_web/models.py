@@ -281,7 +281,14 @@ class SmartThingsWebRuntime:
                 return changed
             if sequence > self.inventory.sequence + 1:
                 return changed
-        if _state_event_needs_inventory(self.inventory, self.location_id, event):
+        if _state_event_for_other_location(self.inventory, self.location_id, event):
+            # One Bridge serves every location, so each config entry sees the
+            # other entries' state events. They only advance the shared sequence
+            # (so this entry's next event is not mistaken for a gap); a device
+            # moving between locations is announced by an inventory event.
+            self.inventory.sequence = sequence
+            return changed
+        if _state_event_needs_inventory(self.inventory, event):
             changed = self.apply_inventory(await self.client.async_get_inventory()) or changed
             if sequence <= self.inventory.sequence:
                 return changed
@@ -2559,16 +2566,32 @@ def _event_sequence(event: dict[str, Any]) -> int | None:
     return sequence if isinstance(sequence, int) and not isinstance(sequence, bool) and sequence >= 0 else None
 
 
-def _state_event_needs_inventory(
+def _state_event_device(
+    inventory: BridgeInventory,
+    event: dict[str, Any],
+) -> tuple[bool, BridgeDevice | None]:
+    """Return whether this is a device state event, and its known device."""
+    device_id = event.get("deviceId")
+    if not isinstance(device_id, str) or not isinstance(event.get("state"), dict):
+        return False, None
+    return True, inventory.devices.get(device_id)
+
+
+def _state_event_for_other_location(
     inventory: BridgeInventory,
     location_id: str,
     event: dict[str, Any],
 ) -> bool:
-    device_id = event.get("deviceId")
-    if not isinstance(device_id, str) or not isinstance(event.get("state"), dict):
-        return False
-    device = inventory.devices.get(device_id)
-    return device is None or device.location_id != location_id
+    is_state, device = _state_event_device(inventory, event)
+    return is_state and device is not None and device.location_id != location_id
+
+
+def _state_event_needs_inventory(
+    inventory: BridgeInventory,
+    event: dict[str, Any],
+) -> bool:
+    is_state, device = _state_event_device(inventory, event)
+    return is_state and device is None
 
 
 def _state_is_newer(candidate: BridgeState, current: BridgeState) -> bool:

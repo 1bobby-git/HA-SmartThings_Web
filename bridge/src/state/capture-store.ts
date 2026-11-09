@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { validateSnapshotResponseShape, type SnapshotResponseShape } from "../inspector/snapshot-response-diagnostics.js";
+import { REQUIRED_SNAPSHOT_CATEGORIES } from "../inspector/snapshot-detector.js";
 
 export type CaptureSource =
   | "unit"
@@ -61,7 +63,11 @@ export class CaptureStore {
   readonly #recent: StatementSync;
   readonly #ping: StatementSync;
   readonly #prune: StatementSync;
+  readonly #upsertDiagnostic: StatementSync;
+  readonly #listDiagnostics: StatementSync;
+  readonly #scanCandidates: StatementSync;
   readonly #lastPayloadHashBySource = new Map<CaptureSource, string>();
+  readonly #lastDiagnosticJsonBySurface = new Map<string, string>();
   #writesSincePrune = 0;
 
   constructor(path: string) {
@@ -80,6 +86,11 @@ export class CaptureStore {
         received_at TEXT NOT NULL,
         payload_json TEXT NOT NULL,
         payload_hash TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS snapshot_response_diagnostics (
+        surface TEXT PRIMARY KEY,
+        contract_version INTEGER NOT NULL,
+        shape_json TEXT NOT NULL
       )
     `);
     this.#insert = this.#db.prepare(
@@ -96,6 +107,10 @@ export class CaptureStore {
         0
       )
     `);
+    this.#upsertDiagnostic = this.#db.prepare(`INSERT INTO snapshot_response_diagnostics(surface, contract_version, shape_json)
+      VALUES (?, ?, ?) ON CONFLICT(surface) DO UPDATE SET contract_version=excluded.contract_version, shape_json=excluded.shape_json`);
+    this.#listDiagnostics = this.#db.prepare("SELECT surface, shape_json AS shapeJson FROM snapshot_response_diagnostics WHERE contract_version = ? LIMIT 6");
+    this.#scanCandidates = this.#db.prepare("SELECT payload_json AS payload FROM captures WHERE source IN ('playwright-websocket-frame','cdp-websocket-frame') ORDER BY id DESC LIMIT 1000");
     this.#pruneOldCaptures();
   }
 
@@ -130,6 +145,39 @@ export class CaptureStore {
     return this.#recent.all(limit) as unknown as CaptureRow[];
   }
 
+  writeSnapshotDiagnostic(surface: string, contractVersion: number, shape: SnapshotResponseShape): void {
+    if (!isSnapshotSurface(surface) || !Number.isSafeInteger(contractVersion) || contractVersion < 0) throw new Error("invalid_diagnostic");
+    const safe = validateSnapshotResponseShape(shape);
+    if (!safe) throw new Error("invalid_diagnostic");
+    const serialized = JSON.stringify(safe);
+    const fingerprint = `${contractVersion}:${serialized}`;
+    if (this.#lastDiagnosticJsonBySurface.get(surface) === fingerprint) return;
+    this.#upsertDiagnostic.run(surface, contractVersion, serialized);
+    this.#lastDiagnosticJsonBySurface.set(surface, fingerprint);
+  }
+
+  listSnapshotDiagnostics(contractVersion: number): Array<{ surface: string; shape: SnapshotResponseShape }> {
+    const result: Array<{ surface: string; shape: SnapshotResponseShape }> = [];
+    for (const row of this.#listDiagnostics.iterate(contractVersion) as Iterable<{ surface: string; shapeJson: string }>) {
+      if (!isSnapshotSurface(row.surface) || typeof row.shapeJson !== "string" || row.shapeJson.length > 8192) continue;
+      try {
+        const shape = validateSnapshotResponseShape(JSON.parse(row.shapeJson));
+        if (shape) result.push({ surface: row.surface, shape });
+      } catch { /* A damaged diagnostic is excluded. */ }
+    }
+    return result;
+  }
+
+  *recentWebsocketCapturePayloads(): Generator<string> {
+    let bytes = 0;
+    for (const row of this.#scanCandidates.iterate() as Iterable<{ payload: string }>) {
+      if (typeof row.payload !== "string") continue;
+      bytes += Buffer.byteLength(row.payload);
+      if (bytes > 10 * 1024 * 1024) break;
+      yield row.payload;
+    }
+  }
+
   ping(): boolean {
     this.#ping.get();
     return true;
@@ -148,6 +196,10 @@ export class CaptureStore {
     this.#prune.run(maxPersistedCaptureRows - 1);
     this.#writesSincePrune = 0;
   }
+}
+
+function isSnapshotSurface(surface: string): boolean {
+  return REQUIRED_SNAPSHOT_CATEGORIES.some((category) => surface === `snapshot:${category}:response_shape`);
 }
 
 function isSqliteBusyError(error: unknown): boolean {

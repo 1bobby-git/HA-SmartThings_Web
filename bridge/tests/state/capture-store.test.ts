@@ -5,8 +5,40 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, test } from "vitest";
 
 import { CaptureStore, sanitizeCaptureRecord } from "../../src/state/capture-store.js";
+import { summarizeAckFrame } from "../../src/inspector/snapshot-response-diagnostics.js";
 
 describe("CaptureStore", () => {
+  test("persists only safe current-contract rejected shapes across restart", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-capture-"));
+    const path = join(root, "capture.sqlite");
+    try {
+      const shape = summarizeAckFrame('431[{"name":"NotAuthenticated","message":"secret","rawId":"sensitive"}]');
+      expect(shape).not.toBeNull();
+      const store = new CaptureStore(path);
+      store.writeSnapshotDiagnostic("snapshot:device_cards:response_shape", 6, shape!);
+      store.close();
+      const reopened = new CaptureStore(path);
+      expect(reopened.listSnapshotDiagnostics(5)).toEqual([]);
+      const rows = reopened.listSnapshotDiagnostics(6);
+      expect(rows).toHaveLength(1);
+      expect(JSON.stringify(rows)).not.toMatch(/secret|sensitive|rawId/);
+      reopened.close();
+    } finally { rmSync(root, { force: true, recursive: true }); }
+  });
+
+  test("excludes damaged stored diagnostic JSON", () => {
+    const root = mkdtempSync(join(tmpdir(), "stw-capture-"));
+    const path = join(root, "capture.sqlite");
+    try {
+      const store = new CaptureStore(path);
+      const db = new DatabaseSync(path);
+      db.prepare("INSERT INTO snapshot_response_diagnostics(surface, contract_version, shape_json) VALUES (?, ?, ?)")
+        .run("snapshot:device_cards:response_shape", 6, '{"bodyType":"secret"}');
+      expect(store.listSnapshotDiagnostics(6)).toEqual([]);
+      db.close();
+      store.close();
+    } finally { rmSync(root, { force: true, recursive: true }); }
+  });
   test("persists only records that went through the sanitizer boundary", () => {
     const root = mkdtempSync(join(tmpdir(), "stw-capture-"));
     try {
