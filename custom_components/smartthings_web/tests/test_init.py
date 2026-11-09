@@ -4439,6 +4439,93 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         self.assertEqual(updates, [])
         self.assertIsNotNone(registry.async_get("sensor.location_status"))
 
+    def test_stale_card_cleanup_uses_registry_index_without_deprecated_shim(self) -> None:
+        """HA 2026.11: single-owner devices; DeviceEntry.config_entries must not be read."""
+        from unittest.mock import patch
+
+        class SingleOwnerDevice:
+            is_composite_device = False
+
+            def __init__(self, device_id: str, alias: str, owner: str) -> None:
+                self.id = device_id
+                self.identifiers = {(DOMAIN, alias)}
+                self.config_entry_id = owner
+
+            @property
+            def config_entries(self) -> set[str]:
+                raise AssertionError("deprecated DeviceEntry.config_entries was read")
+
+        removed_devices: list[str] = []
+        lookups: list[str] = []
+        registry = FakeRegistry(
+            [
+                SimpleNamespace(
+                    entity_id="sensor.deleted_battery",
+                    domain="sensor",
+                    platform=DOMAIN,
+                    unique_id="dev_999_main_battery_battery",
+                    device_id="uuid_orphan",
+                    config_entry_id="entry_001",
+                    name=None,
+                    disabled_by=None,
+                    original_name="Battery",
+                    object_id_base="battery",
+                    suggested_object_id="deleted_battery",
+                )
+            ]
+        )
+        devices = [
+            SingleOwnerDevice("uuid_active", "dev_001", "entry_001"),
+            SingleOwnerDevice("uuid_orphan", "dev_999", "entry_001"),
+            # Another location's stale alias is not this entry's to remove.
+            SingleOwnerDevice("uuid_foreign", "dev_998", "entry_other"),
+        ]
+        device_registry = SimpleNamespace(
+            devices=devices,
+            async_update_device=lambda device_id, *, remove_config_entry: None,
+            async_remove_device=lambda device_id: removed_devices.append(device_id),
+        )
+
+        def entries_for_config_entry(current_registry, entry_id):
+            lookups.append(entry_id)
+            return [d for d in current_registry.devices if d.config_entry_id == entry_id]
+
+        def entries_for_device(current_registry, device_id, include_disabled_entities=False):
+            return [
+                row
+                for row in current_registry.entries
+                if getattr(row, "device_id", None) == device_id
+            ]
+
+        entry = SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"})
+        inventory = BridgeInventory(
+            sequence=1,
+            ready=True,
+            bridge_version="0.1.120",
+            protocol_version="4",
+            locations={"loc_001": "Home"},
+            rooms={},
+            devices={"dev_001": self._bridge_device("dev_001", "Active")},
+        )
+
+        # Patch module stubs only for this test so single-owner devices never leak.
+        with patch.object(
+            integration.dr, "async_entries_for_config_entry", entries_for_config_entry, create=True
+        ), patch.object(
+            integration.dr, "async_get", lambda _hass: device_registry
+        ), patch.object(
+            integration.er, "async_get", lambda _hass: registry
+        ), patch.object(
+            integration.er, "async_entries_for_device", entries_for_device, create=True
+        ):
+            integration._remove_orphan_bridge_device_cards(
+                object(), entry, inventory, list(registry.entries), set()
+            )
+
+        self.assertEqual(lookups, ["entry_001"])
+        self.assertEqual(registry.removed, ["sensor.deleted_battery"])
+        self.assertEqual(removed_devices, ["uuid_orphan"])
+
     def test_reset_bridge_without_the_location_keeps_every_device(self) -> None:
         """A Bridge that no longer reports the location must not delete its devices."""
         removed_devices: list[str] = []
