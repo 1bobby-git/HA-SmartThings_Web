@@ -259,10 +259,10 @@ describe("Home Assistant add-on metadata", () => {
     expect(config).not.toHaveProperty("docker_api");
     expect(config).not.toHaveProperty("privileged");
     expect(config).not.toHaveProperty("ports");
-    expect(dockerfile).toContain("sha256:af843e6c2a9ad4df5daa8a68268fb59d28ab5ef55203f67c1573e4d0e154e176");
-    expect(dockerfile).toContain("sha256:13d069848a305570be16443bb904132fef75fcd897703022a1a1c7841e0abac9");
+    expect(dockerfile).toContain("sha256:fb9978a801599ea0a57079eb642ad75cb52dbe1b162c8bf1fc989a603aa39218");
+    expect(dockerfile).toContain("sha256:e5102c23235cc3a8ce10465c7d921dd90c59850f2c2eab62de7bb36dd96ddbf6");
     expect(dockerfile).toContain("s6-overlay");
-    expect(dockerfile).toContain("PLAYWRIGHT_VERSION=1.62.1");
+    expect(dockerfile).toContain("PLAYWRIGHT_VERSION=1.65.0");
   });
 
   test("verifies exact s6-overlay checksums before extracting tarballs", () => {
@@ -287,7 +287,7 @@ describe("Home Assistant add-on metadata", () => {
 
     expect(dockerfile).toContain("CHROME_DEVEL_SANDBOX=/usr/local/sbin/chrome-devel-sandbox");
     expect(dockerfile).toContain("chrome-linux64/chrome_sandbox");
-    expect(dockerfile).toContain("chrome-linux/chrome_sandbox");
+    expect(dockerfile).toContain("chrome-linux-arm64/chrome_sandbox");
     expect(dockerfile).toContain('chown root:root "${sandbox}"');
     expect(dockerfile).toContain('chmod 4755 "${sandbox}"');
     expect(dockerfile).toContain('ln -s "${sandbox}" /usr/local/sbin/chrome-devel-sandbox');
@@ -468,21 +468,21 @@ describe("Home Assistant add-on metadata", () => {
     expect(apparmor).toContain("/bin/sleep ix,");
     expect(apparmor).toContain("/usr/bin/sleep ix,");
     expect(apparmor).toContain("/usr/sbin/nginx ix,");
-    expect(apparmor).toContain("/ms-playwright/chromium-1234/{,**} rm,");
+    expect(apparmor).toContain("/ms-playwright/chromium-1254/{,**} rm,");
     expect(apparmor).toContain(
-      "/ms-playwright/chromium-1234/chrome-linux64/chrome rix,"
+      "/ms-playwright/chromium-1254/chrome-linux64/chrome rix,"
     );
     expect(apparmor).toContain(
-      "/ms-playwright/chromium-1234/chrome-linux64/chrome_crashpad_handler rix,"
+      "/ms-playwright/chromium-1254/chrome-linux64/chrome_crashpad_handler rix,"
     );
     expect(apparmor).toContain(
-      "/ms-playwright/chromium-1234/chrome-linux64/chrome_sandbox rix,"
+      "/ms-playwright/chromium-1254/chrome-linux64/chrome_sandbox rix,"
     );
-    expect(apparmor).toContain("/ms-playwright/chromium-1234/chrome-linux/chrome rix,");
+    expect(apparmor).toContain("/ms-playwright/chromium-1254/chrome-linux-arm64/chrome rix,");
     expect(apparmor).toContain(
-      "/ms-playwright/chromium-1234/chrome-linux/chrome_crashpad_handler rix,"
+      "/ms-playwright/chromium-1254/chrome-linux-arm64/chrome_crashpad_handler rix,"
     );
-    expect(apparmor).toContain("/ms-playwright/chromium-1234/chrome-linux/chrome_sandbox rix,");
+    expect(apparmor).toContain("/ms-playwright/chromium-1254/chrome-linux-arm64/chrome_sandbox rix,");
     expect(apparmor).toContain("/usr/local/sbin/chrome-devel-sandbox rix,");
     expect(apparmor).not.toContain("/ms-playwright/** rix,");
     expect(apparmor).not.toContain("/usr/sbin/** ix,");
@@ -552,9 +552,9 @@ describe("standalone Docker container", () => {
     const dockerfile = standaloneDockerfile();
 
     expect(dockerfile).toContain(
-      "FROM mcr.microsoft.com/playwright:v1.62.1-resolute@sha256:aebd85bce8056dcdc2269853fd94ea432b6a201da4f0ef125b509489ecd52ddb",
+      "FROM mcr.microsoft.com/playwright:v1.65.0-resolute@sha256:4d70b558dbaff71611b2f3e7a32aa2b4d42cfc892078ad368cb7ea229c2ffd1f",
     );
-    expect(dockerfile).not.toContain("sha256:af843e6c2a9ad4df5daa8a68268fb59d28ab5ef55203f67c1573e4d0e154e176");
+    expect(dockerfile).not.toContain("sha256:fb9978a801599ea0a57079eb642ad75cb52dbe1b162c8bf1fc989a603aa39218");
     expect(dockerfile).toContain("DISPLAY=:99");
     expect(dockerfile).toContain("STW_HOST=127.0.0.1");
     expect(dockerfile).toContain("STW_PORT=8098");

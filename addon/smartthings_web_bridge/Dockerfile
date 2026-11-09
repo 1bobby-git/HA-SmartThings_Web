@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1.7
 
 ARG BUILD_ARCH
-ARG PLAYWRIGHT_VERSION=1.62.1
-ARG PLAYWRIGHT_BASE_AMD64=mcr.microsoft.com/playwright:v1.62.1-resolute@sha256:af843e6c2a9ad4df5daa8a68268fb59d28ab5ef55203f67c1573e4d0e154e176
-ARG PLAYWRIGHT_BASE_AARCH64=mcr.microsoft.com/playwright:v1.62.1-resolute@sha256:13d069848a305570be16443bb904132fef75fcd897703022a1a1c7841e0abac9
+ARG PLAYWRIGHT_VERSION=1.65.0
+ARG PLAYWRIGHT_BASE_AMD64=mcr.microsoft.com/playwright:v1.65.0-resolute@sha256:fb9978a801599ea0a57079eb642ad75cb52dbe1b162c8bf1fc989a603aa39218
+ARG PLAYWRIGHT_BASE_AARCH64=mcr.microsoft.com/playwright:v1.65.0-resolute@sha256:e5102c23235cc3a8ce10465c7d921dd90c59850f2c2eab62de7bb36dd96ddbf6
 
 FROM ${PLAYWRIGHT_BASE_AMD64} AS amd64
 FROM ${PLAYWRIGHT_BASE_AARCH64} AS aarch64
@@ -60,8 +60,8 @@ RUN set -eux; \
   id -u pwuser >/dev/null; \
   arch="$(uname -m)"; \
   case "${arch}" in \
-    x86_64) sandbox="/ms-playwright/chromium-1234/chrome-linux64/chrome_sandbox" ;; \
-    aarch64) sandbox="/ms-playwright/chromium-1234/chrome-linux/chrome_sandbox" ;; \
+    x86_64) sandbox="/ms-playwright/chromium-1254/chrome-linux64/chrome_sandbox" ;; \
+    aarch64) sandbox="/ms-playwright/chromium-1254/chrome-linux-arm64/chrome_sandbox" ;; \
     *) echo "Unsupported Chromium sandbox architecture: ${arch}" >&2; exit 1 ;; \
   esac; \
   test -f "${sandbox}"; \
