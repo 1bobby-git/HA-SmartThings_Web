@@ -2064,7 +2064,7 @@ describe("DeviceStore", () => {
     // Every periodic reconciliation rebuilds the catalog after the snapshot.
     store.observeAdvancedCommandCatalog("dev_001", [], []);
 
-    expect(store.snapshot().devices[0]?.controls.map((control) => control.id)).toEqual([
+    expect(store.snapshot().devices[0]?.controls?.map((control) => control.id)).toEqual([
       "advanced:refresh:identifier_main:identifier_refresh"
     ]);
   });
