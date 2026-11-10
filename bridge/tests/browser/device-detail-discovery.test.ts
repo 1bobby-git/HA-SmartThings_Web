@@ -38,7 +38,7 @@ describe("DeviceDetailDiscovery", () => {
     });
   });
 
-  test("inspects devices that already have actionable detail controls once per session", async () => {
+  test("skips devices whose detail controls are already complete, such as after a restart", async () => {
     const inspectDeviceDetails = vi.fn(async () => undefined);
     const discovery = new DeviceDetailDiscovery({
       inventory: () => actionableControlInventory(),
@@ -46,15 +46,22 @@ describe("DeviceDetailDiscovery", () => {
       canInspect: () => true
     });
 
-    expect(await discovery.runOne()).toBe("inspected");
     expect(await discovery.runOne()).toBe("idle");
-    expect(inspectDeviceDetails).toHaveBeenCalledTimes(1);
-    expect(inspectDeviceDetails).toHaveBeenCalledWith({
-      deviceName: "거실창문센서",
-      locationId: "loc_001",
-      locationNames: { loc_001: "Home" },
-      roomName: "거실"
+    discovery.reset();
+    expect(await discovery.runOne()).toBe("idle");
+    expect(inspectDeviceDetails).not.toHaveBeenCalled();
+  });
+
+  test("still inspects camera image devices whose detail controls are complete", async () => {
+    const inspectDeviceDetails = vi.fn(async () => undefined);
+    const discovery = new DeviceDetailDiscovery({
+      inventory: () => completeCameraInventory(),
+      inspector: { inspectDeviceDetails },
+      canInspect: () => true
     });
+
+    expect(await discovery.runOne()).toBe("inspected");
+    expect(inspectDeviceDetails).toHaveBeenCalledTimes(1);
   });
 
   test("does not treat a refresh-only control as completed discovery", async () => {
@@ -99,8 +106,8 @@ describe("DeviceDetailDiscovery", () => {
       canInspect: () => true
     });
 
-    expect(await discovery.runOne()).toBe("inspected");
     expect(await discovery.runOne()).toBe("idle");
+    expect(inspectDeviceDetails).not.toHaveBeenCalled();
   });
 
   test("prioritizes refresh-worthy value-only devices over generic undiscovered devices", async () => {
@@ -187,7 +194,7 @@ describe("DeviceDetailDiscovery", () => {
   test("enforces max attempts for the per-session detail sweep", async () => {
     const inspectDeviceDetails = vi.fn(async () => undefined);
     const discovery = new DeviceDetailDiscovery({
-      inventory: () => actionableControlInventory(),
+      inventory: () => undiscoveredOnlyInventory(),
       inspector: { inspectDeviceDetails },
       canInspect: () => true,
       maxAttempts: 1
@@ -457,6 +464,28 @@ function actionableControlInventory(): BridgeInventory {
         ...(device.controls ?? []),
         {
           id: "switch",
+          kind: "toggle" as const,
+          label: "Power",
+          component: "main",
+          capability: "switch",
+          attribute: "switch",
+          command: "on"
+        }
+      ]
+    }))
+  };
+}
+
+function completeCameraInventory(): BridgeInventory {
+  const inventory = cameraInventory();
+  return {
+    ...inventory,
+    devices: inventory.devices.map((device) => ({
+      ...device,
+      controls: [
+        ...(device.controls ?? []),
+        {
+          id: "camera_power",
           kind: "toggle" as const,
           label: "Power",
           component: "main",

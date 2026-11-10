@@ -106,8 +106,11 @@ export class DeviceDetailDiscovery {
   #needsInspection(device: BridgeDevice): boolean {
     const attempts = this.#attempts.get(device.id) ?? 0;
     if (attempts >= this.#maxAttempts) return false;
-    if (attempts === 0) return true;
-    return !discoveryComplete(device) || isCameraImageDevice(device);
+    // Controls persist across Bridge restarts, so a device whose detail
+    // controls are already complete needs no page visit. Re-inspecting every
+    // device on each restart kept Chromium busy for hours.
+    if (isCameraImageDevice(device)) return true;
+    return !discoveryComplete(device);
   }
 }
 
