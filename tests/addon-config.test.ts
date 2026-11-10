@@ -10,22 +10,22 @@ const standaloneDockerfile = () => readText("docker/Dockerfile");
 const composeConfig = () => YAML.parse(readText("docker/compose.example.yaml")) as Record<string, unknown>;
 
 describe("Home Assistant add-on metadata", () => {
-  test("packages the runtime registry removal guard as version 1.8.73", () => {
+  test("packages the Bridge resync control and type fix as version 1.8.74", () => {
     const config = addonConfig();
     const packageMetadata = JSON.parse(readText("package.json")) as Record<string, unknown>;
     const protocolMetadata = JSON.parse(readText("protocol/version.json")) as Record<string, unknown>;
     const runtime = readText("bridge/src/runtime.ts");
     const changelog = readText("addon/smartthings_web_bridge/CHANGELOG.md");
 
-    expect(config.version).toBe("1.8.73");
+    expect(config.version).toBe("1.8.74");
     expect(config.homeassistant_api).toBe(true);
     expect(config.hassio_api).toBe(true);
     expect(config.discovery).toEqual(["smartthings_web"]);
-    expect(packageMetadata.version).toBe("1.8.73");
-    expect(protocolMetadata.bridge_version).toBe("1.8.73");
+    expect(packageMetadata.version).toBe("1.8.74");
+    expect(protocolMetadata.bridge_version).toBe("1.8.74");
     expect(protocolMetadata.protocol_version).toBe(6);
-    expect(runtime).toContain('const bridgeVersion = "1.8.73";');
-    expect(changelog).toContain("## 1.8.73");
+    expect(runtime).toContain('const bridgeVersion = "1.8.74";');
+    expect(changelog).toContain("## 1.8.74");
     expect(changelog).toContain("## 1.8.38");
     expect(changelog).toContain("## 1.8.37");
     expect(changelog).toContain("## 1.8.12");
