@@ -2034,6 +2034,69 @@ describe("DeviceStore", () => {
     ]);
   });
 
+  test("keeps Advanced refresh buttons when the command catalog is applied", () => {
+    const store = new DeviceStore({
+      normalizeAdvancedAlias: (kind, value) => {
+        if (kind === "device") return "dev_001";
+        if (kind === "location") return "loc_001";
+        return `identifier_${value}`;
+      },
+      identifierRole: (value) =>
+        value === "identifier_refresh" ? "refresh" : undefined
+    });
+    observeDeviceSnapshot(store, {
+      deviceId: "dev_001",
+      locationId: "loc_001",
+      deviceName: "거실 창문센서",
+      roomId: "identifier_room",
+      deviceTypeData: { type: "contact_sensor" }
+    });
+    store.observeAdvancedDeviceSnapshot({
+      items: [
+        {
+          deviceId: "raw-device",
+          locationId: "raw-location",
+          components: [{ id: "main", capabilities: [{ id: "refresh", status: {} }] }]
+        }
+      ]
+    });
+
+    // Every periodic reconciliation rebuilds the catalog after the snapshot.
+    store.observeAdvancedCommandCatalog("dev_001", [], []);
+
+    expect(store.snapshot().devices[0]?.controls.map((control) => control.id)).toEqual([
+      "advanced:refresh:identifier_main:identifier_refresh"
+    ]);
+  });
+
+  test("keeps the device card type when an Advanced row reports its integration type", () => {
+    const store = new DeviceStore({
+      normalizeAdvancedAlias: (kind, value) => {
+        if (kind === "device") return "dev_001";
+        if (kind === "location") return "loc_001";
+        return `identifier_${value}`;
+      }
+    });
+    observeDeviceSnapshot(store, {
+      deviceId: "dev_001",
+      locationId: "loc_001",
+      deviceName: "세탁기",
+      roomId: "identifier_room",
+      deviceTypeData: { type: "washer" }
+    });
+
+    store.observeAdvancedInventorySnapshot(
+      {
+        devices: [
+          { deviceId: "raw-device", locationId: "raw-location", deviceType: "OCF", components: [] }
+        ]
+      },
+      { authoritativeWholeSnapshot: true }
+    );
+
+    expect(store.snapshot().devices[0]?.type).toBe("washer");
+  });
+
   test("merges advanced status components as states and keeps newer values", () => {
     const store = new DeviceStore({
       identifierRole: (value) =>

@@ -833,8 +833,13 @@ export class DeviceStore {
     const parsedCommands = parseAdvancedCommandDescriptors(update.commands, { dropInvalid: true });
     const parsedOmissions = parseAdvancedCommandOmissions(update.omissions);
     if (!parsedCommands || !parsedOmissions) return false;
+    // The catalog owns only the projected Advanced switch toggles. Refresh
+    // buttons come from the inventory snapshot; dropping them here made them
+    // disappear after every periodic reconciliation.
     const nextControls = new Map(
-      [...device.controls.entries()].filter(([id]) => !id.startsWith("advanced:"))
+      [...device.controls.entries()].filter(
+        ([id]) => !id.startsWith("advanced:") || id.startsWith("advanced:refresh:")
+      )
     );
     const projected = projectedAdvancedSwitchControls(device, parsedCommands);
     for (const control of projected) nextControls.set(control.id, control);
@@ -1135,10 +1140,15 @@ export class DeviceStore {
         device.roomSource = "advanced";
         changed = true;
       }
+      // `deviceTypeName` is a semantic type and may refine the card's type.
+      // The other fields often carry the integration type (OCF, ZIGBEE, ...);
+      // they only fill a missing type, because overwriting the card's type
+      // flipped appliance classification on every periodic resync.
       const nextType =
-        safeName(row.deviceTypeName ?? row.deviceType ?? row.type ?? row.deviceTypeId) ??
-        device.type;
-      const presentation = advancedDevicePresentation(row) ?? device.presentation;
+        safeName(row.deviceTypeName) ??
+        device.type ??
+        safeName(row.deviceType ?? row.type ?? row.deviceTypeId);
+      const presentation = device.presentation ?? advancedDevicePresentation(row);
       if (
         device.name !== nextName ||
         device.roomId !== nextRoomId ||
