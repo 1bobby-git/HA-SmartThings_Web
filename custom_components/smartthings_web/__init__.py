@@ -304,12 +304,22 @@ def _subscribe_entity_registry_migration(
     runtime = entry.runtime_data
     last_topology: tuple[object, ...] | None = None
 
+    # Removal is allowed until one pass has run on a ready inventory (the
+    # setup topology: its immediate pass and settled retry). Later topology
+    # changes come from live inventory updates and only repair names.
+    removal_allowed = True
+    ready_cleanup_done = False
+
     def run_migration() -> None:
-        nonlocal scheduled
+        nonlocal scheduled, ready_cleanup_done
         scheduled = False
         if not active:
             return
-        _migrate_entity_registry(hass, entry, runtime.inventory)
+        _migrate_entity_registry(
+            hass, entry, runtime.inventory, allow_removal=removal_allowed
+        )
+        if removal_allowed and runtime.inventory.ready:
+            ready_cleanup_done = True
 
     def schedule_migration() -> None:
         nonlocal scheduled
@@ -327,6 +337,9 @@ def _subscribe_entity_registry_migration(
         )
         if topology == last_topology:
             return
+        nonlocal removal_allowed
+        if ready_cleanup_done:
+            removal_allowed = False
         last_topology = topology
         for handle in delayed_handles:
             cancel = getattr(handle, "cancel", None)
@@ -537,8 +550,16 @@ def _migrate_entity_registry(
     hass: HomeAssistant,
     entry: SmartThingsWebConfigEntry,
     inventory: BridgeInventory,
+    *,
+    allow_removal: bool = True,
 ) -> None:
-    """Repair only this integration's old unique IDs and binary switch artifacts."""
+    """Repair only this integration's old unique IDs and binary switch artifacts.
+
+    ``allow_removal`` is False for passes triggered by inventory changes after
+    setup: a periodic Bridge resync can publish a partial inventory for a few
+    seconds, and the platforms never re-add an entity they already created in
+    this run, so a removal then would last until the next start.
+    """
     registry = er.async_get(hass)
     registry_entries = list(er.async_entries_for_config_entry(registry, entry.entry_id))
     current_entity_ids = {
@@ -721,7 +742,7 @@ def _migrate_entity_registry(
 
     def remove_registry_entity(entity_id: str) -> None:
         """Remove one row and release its ID for this same migration pass."""
-        if not inventory.ready:
+        if not inventory.ready or not allow_removal:
             return
         if registry.async_get(entity_id) is None:
             return
@@ -1102,7 +1123,10 @@ def _migrate_entity_registry(
         existing = registry.async_get_entity_id(entity_entry.domain, DOMAIN, new_unique_id)
         if existing is None and registry.async_get(registry_entity_id) is not None:
             registry.async_update_entity(registry_entity_id, new_unique_id=new_unique_id)
-    _remove_orphan_bridge_device_cards(hass, entry, inventory, registry_entries, removed_entity_ids)
+    if allow_removal:
+        _remove_orphan_bridge_device_cards(
+            hass, entry, inventory, registry_entries, removed_entity_ids
+        )
 
 
 def _rename_generated_registry_entity(
