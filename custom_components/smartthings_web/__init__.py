@@ -37,6 +37,7 @@ from .const import (
     REPAIR_LOCATION_NOT_FOUND,
     REPAIR_SAMSUNG_LOGIN_REQUIRED,
 )
+from .command_controls import catalog_commands, command_suffix
 from .entity import device_info_for
 from .models import (
     BridgeInventory,
@@ -58,6 +59,7 @@ from .models import (
     primary_switch_state,
     room_free_display_name,
     secondary_switch_name_overrides,
+    select_controls,
     sensor_state_allowed,
     sensor_state_owned_by_primary_domain,
     state_has_entity_value,
@@ -622,6 +624,10 @@ def _migrate_entity_registry(
             active_number_ids.add(state_unique_id)
             duplicate_number_ids.add(control_unique_id)
             old_to_new[control_unique_id] = state_unique_id
+        for command in catalog_commands(device, "number"):
+            active_number_ids.add(
+                f"{device.device_id}_{command_suffix('number', command)}"
+            )
 
     stale_registry_number_ids = _stale_registry_number_ids(
         registry_entries,
@@ -672,6 +678,15 @@ def _migrate_entity_registry(
             expected_uids.add(f"{device.device_id}_button_{control.control_id}")
         for control in number_controls(device):
             expected_uids.add(f"{device.device_id}_number_{control.control_id}")
+        for control in select_controls(device):
+            expected_uids.add(f"{device.device_id}_select_{control.control_id}")
+        # Command-only entities from the Advanced catalog are current rows
+        # too; without them every start deleted what the platforms just made.
+        for kind in ("button", "select", "number"):
+            for command in catalog_commands(device, kind):
+                expected_uids.add(
+                    f"{device.device_id}_{command_suffix(kind, command)}"
+                )
         if is_fan_device(device):
             expected_uids.add(f"{device.device_id}_fan")
         if is_media_device(device):
