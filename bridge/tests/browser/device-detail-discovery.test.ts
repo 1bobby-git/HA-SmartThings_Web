@@ -38,7 +38,7 @@ describe("DeviceDetailDiscovery", () => {
     });
   });
 
-  test("inspects devices that already have actionable detail controls once per session", async () => {
+  test("skips devices whose detail controls are already complete, such as after a restart", async () => {
     const inspectDeviceDetails = vi.fn(async () => undefined);
     const discovery = new DeviceDetailDiscovery({
       inventory: () => actionableControlInventory(),
@@ -46,15 +46,109 @@ describe("DeviceDetailDiscovery", () => {
       canInspect: () => true
     });
 
-    expect(await discovery.runOne()).toBe("inspected");
     expect(await discovery.runOne()).toBe("idle");
-    expect(inspectDeviceDetails).toHaveBeenCalledTimes(1);
-    expect(inspectDeviceDetails).toHaveBeenCalledWith({
-      deviceName: "거실창문센서",
-      locationId: "loc_001",
-      locationNames: { loc_001: "Home" },
-      roomName: "거실"
+    discovery.reset();
+    expect(await discovery.runOne()).toBe("idle");
+    expect(inspectDeviceDetails).not.toHaveBeenCalled();
+  });
+
+  test("still inspects camera image devices whose detail controls are complete", async () => {
+    const inspectDeviceDetails = vi.fn(async () => undefined);
+    const discovery = new DeviceDetailDiscovery({
+      inventory: () => completeCameraInventory(),
+      inspector: { inspectDeviceDetails },
+      canInspect: () => true
     });
+
+    expect(await discovery.runOne()).toBe("inspected");
+    expect(inspectDeviceDetails).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not revisit incomplete devices after a restart once their attempts are exhausted", async () => {
+    const store = memoryStore();
+    let nowMs = 1_000;
+    const inspectDeviceDetails = vi.fn(async () => undefined);
+    const create = () =>
+      new DeviceDetailDiscovery({
+        inventory: () => undiscoveredOnlyInventory(),
+        inspector: { inspectDeviceDetails },
+        canInspect: () => true,
+        exhaustionStore: store,
+        now: () => nowMs
+      });
+
+    const first = create();
+    expect(await first.runOne()).toBe("inspected");
+    expect(await first.runOne()).toBe("inspected");
+    expect(await first.runOne()).toBe("idle");
+
+    const restarted = create();
+    expect(await restarted.runOne()).toBe("idle");
+    restarted.reset();
+    expect(await restarted.runOne()).toBe("idle");
+    expect(inspectDeviceDetails).toHaveBeenCalledTimes(2);
+
+    nowMs += 7 * 24 * 60 * 60 * 1_000;
+    expect(await create().runOne()).toBe("inspected");
+  });
+
+  test("revisits an exhausted device when its name changes", async () => {
+    const store = memoryStore();
+    const inspectDeviceDetails = vi.fn(async () => undefined);
+    let current = undiscoveredOnlyInventory();
+    const create = () =>
+      new DeviceDetailDiscovery({
+        inventory: () => current,
+        inspector: { inspectDeviceDetails },
+        canInspect: () => true,
+        exhaustionStore: store,
+        now: () => 1_000
+      });
+
+    const first = create();
+    await first.runOne();
+    await first.runOne();
+    current = {
+      ...current,
+      devices: current.devices.map((device) => ({ ...device, name: "Renamed sensor" }))
+    };
+    expect(await create().runOne()).toBe("inspected");
+  });
+
+  test("does not record a preempted visit as exhausted", async () => {
+    const store = memoryStore();
+    const inspectDeviceDetails = vi.fn(async () => {
+      throw new Error("detail_discovery_preempted");
+    });
+    const discovery = new DeviceDetailDiscovery({
+      inventory: () => undiscoveredOnlyInventory(),
+      inspector: { inspectDeviceDetails },
+      canInspect: () => true,
+      maxAttempts: 1,
+      exhaustionStore: store,
+      now: () => 1_000
+    });
+
+    expect(await discovery.runOne()).toBe("blocked");
+    expect(store.load().size).toBe(0);
+  });
+
+  test("keeps inspecting camera image devices after a restart", async () => {
+    const store = memoryStore();
+    const inspectDeviceDetails = vi.fn(async () => undefined);
+    const create = () =>
+      new DeviceDetailDiscovery({
+        inventory: () => cameraInventory(),
+        inspector: { inspectDeviceDetails },
+        canInspect: () => true,
+        exhaustionStore: store,
+        now: () => 1_000
+      });
+
+    const first = create();
+    await first.runOne();
+    await first.runOne();
+    expect(await create().runOne()).toBe("inspected");
   });
 
   test("does not treat a refresh-only control as completed discovery", async () => {
@@ -99,8 +193,8 @@ describe("DeviceDetailDiscovery", () => {
       canInspect: () => true
     });
 
-    expect(await discovery.runOne()).toBe("inspected");
     expect(await discovery.runOne()).toBe("idle");
+    expect(inspectDeviceDetails).not.toHaveBeenCalled();
   });
 
   test("prioritizes refresh-worthy value-only devices over generic undiscovered devices", async () => {
@@ -187,7 +281,7 @@ describe("DeviceDetailDiscovery", () => {
   test("enforces max attempts for the per-session detail sweep", async () => {
     const inspectDeviceDetails = vi.fn(async () => undefined);
     const discovery = new DeviceDetailDiscovery({
-      inventory: () => actionableControlInventory(),
+      inventory: () => undiscoveredOnlyInventory(),
       inspector: { inspectDeviceDetails },
       canInspect: () => true,
       maxAttempts: 1
@@ -457,6 +551,38 @@ function actionableControlInventory(): BridgeInventory {
         ...(device.controls ?? []),
         {
           id: "switch",
+          kind: "toggle" as const,
+          label: "Power",
+          component: "main",
+          capability: "switch",
+          attribute: "switch",
+          command: "on"
+        }
+      ]
+    }))
+  };
+}
+
+function memoryStore() {
+  let records = new Map<string, { nameHash: string; exhaustedAtMs: number }>();
+  return {
+    load: () => new Map(records),
+    save: (next: ReadonlyMap<string, { nameHash: string; exhaustedAtMs: number }>) => {
+      records = new Map(next);
+    }
+  };
+}
+
+function completeCameraInventory(): BridgeInventory {
+  const inventory = cameraInventory();
+  return {
+    ...inventory,
+    devices: inventory.devices.map((device) => ({
+      ...device,
+      controls: [
+        ...(device.controls ?? []),
+        {
+          id: "camera_power",
           kind: "toggle" as const,
           label: "Power",
           component: "main",
