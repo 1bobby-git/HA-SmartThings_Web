@@ -63,6 +63,7 @@ def _install_homeassistant_stubs() -> None:
     exceptions = ModuleType("homeassistant.exceptions")
     exceptions.ConfigEntryAuthFailed = type("ConfigEntryAuthFailed", (Exception,), {})
     exceptions.ConfigEntryNotReady = type("ConfigEntryNotReady", (Exception,), {})
+    exceptions.HomeAssistantError = type("HomeAssistantError", (Exception,), {})
     sys.modules["homeassistant.exceptions"] = exceptions
 
     helpers = ModuleType("homeassistant.helpers")
@@ -673,6 +674,65 @@ class EntityRegistryMigrationTests(unittest.TestCase):
             ],
         )
         self.assertEqual(registry.updated, [])
+
+    def test_keeps_catalog_command_and_select_control_entities(self) -> None:
+        from smartthings_web.command_controls import command_suffix
+        from smartthings_web.models import BridgeCommandArgument, BridgeCommandDescriptor
+
+        def descriptor(command: str, capability: str, schema: dict | None = None) -> BridgeCommandDescriptor:
+            args = () if schema is None else (BridgeCommandArgument("value", True, False, schema),)
+            return BridgeCommandDescriptor(
+                "identifier_c9246e0ac435", capability, 1, command, args, "advanced",
+                "accepted_receipt" if not args else "state", command, "capability", "main",
+            )
+
+        select_command = descriptor("setFreeze", "identifier_0f4a0e165316", {"type": "string", "enum": ["on", "off"]})
+        number_command = descriptor("setPeopleCounter", "identifier_24b23b825273", {"type": "integer", "minimum": 0, "maximum": 65535})
+        button_command = descriptor("push", "identifier_df9ead01127d")
+        state = BridgeState("main", "temperatureMeasurement", "temperature", 21, "C", "2026-08-25T00:00:00Z")
+        device = BridgeDevice(
+            device_id="dev_344",
+            location_id="loc_001",
+            room_id=None,
+            name="Counter",
+            device_type=None,
+            online=True,
+            states={state.key: state},
+            controls={
+                "mode": BridgeControl(
+                    "mode", "enumerated", "Mode",
+                    component="main", capability="identifier_aaaa", attribute="mode",
+                    commands=("setMode",), options=("eco", "fast"),
+                ),
+            },
+            commands=(select_command, number_command, button_command),
+        )
+        registry = FakeRegistry(
+            [
+                entity("select.counter_set_freeze", "select", f"dev_344_{command_suffix('select', select_command)}"),
+                entity("number.counter_set_people_counter", "number", f"dev_344_{command_suffix('number', number_command)}"),
+                entity("button.counter_push", "button", f"dev_344_{command_suffix('button', button_command)}"),
+                entity("select.counter_mode", "select", "dev_344_select_mode"),
+                entity("select.counter_gone", "select", "dev_344_select_gone"),
+            ]
+        )
+        self.patch_registry(registry)
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}),
+            BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.38",
+                protocol_version="2",
+                locations={"loc_001": "Home"},
+                rooms={},
+                devices={"dev_344": device},
+            ),
+        )
+
+        self.assertEqual(registry.removed, ["select.counter_gone"])
 
     def test_updates_control_number_unique_id_when_state_number_is_missing(self) -> None:
         registry = FakeRegistry(
