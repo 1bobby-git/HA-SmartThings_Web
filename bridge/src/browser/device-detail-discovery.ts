@@ -1,4 +1,13 @@
+import { createHash } from "node:crypto";
+
+import type {
+  DetailDiscoveryExhaustion,
+  DetailDiscoveryExhaustionStore
+} from "../state/detail-discovery-store.js";
 import type { BridgeDevice, BridgeInventory } from "../state/device-store.js";
+
+/** How long an exhausted, still-incomplete device is left alone across restarts. */
+export const DETAIL_DISCOVERY_EXHAUSTED_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
 
 interface DeviceDetailInspector {
   inspectDeviceDetails(input: {
@@ -17,6 +26,8 @@ interface DeviceDetailDiscoveryOptions {
   canInspect: () => boolean;
   resolveCameraImageUrl?: (deviceId: string) => string | undefined;
   maxAttempts?: number;
+  exhaustionStore?: DetailDiscoveryExhaustionStore;
+  now?: () => number;
 }
 
 export type DeviceDetailDiscoveryResult =
@@ -36,9 +47,19 @@ export class DeviceDetailDiscovery {
   readonly #maxAttempts: number;
   #running = false;
   #lastFailure: DeviceDetailDiscoveryFailure | undefined;
+  readonly #exhausted: Map<string, DetailDiscoveryExhaustion>;
+  readonly #now: () => number;
 
   constructor(private readonly options: DeviceDetailDiscoveryOptions) {
     this.#maxAttempts = options.maxAttempts ?? 2;
+    this.#now = options.now ?? Date.now;
+    let loaded = new Map<string, DetailDiscoveryExhaustion>();
+    try {
+      loaded = options.exhaustionStore?.load() ?? loaded;
+    } catch {
+      // A missing or unreadable ledger only means devices get visited again.
+    }
+    this.#exhausted = loaded;
   }
 
   reset(): void {
@@ -85,6 +106,7 @@ export class DeviceDetailDiscovery {
         ...(cameraImageUrl ? { cameraImageUrl } : {})
       });
       this.#lastFailure = undefined;
+      this.#recordExhaustion(device);
       return "inspected";
     } catch (error) {
       if (error instanceof Error && error.message === "detail_discovery_preempted") {
@@ -97,6 +119,7 @@ export class DeviceDetailDiscovery {
         deviceId: device.id,
         reason: safeFailureReason(error)
       };
+      this.#recordExhaustion(device);
       return "failed";
     } finally {
       this.#running = false;
@@ -110,8 +133,37 @@ export class DeviceDetailDiscovery {
     // controls are already complete needs no page visit. Re-inspecting every
     // device on each restart kept Chromium busy for hours.
     if (isCameraImageDevice(device)) return true;
-    return !discoveryComplete(device);
+    if (discoveryComplete(device)) return false;
+    return !this.#recentlyExhausted(device);
   }
+
+  #recentlyExhausted(device: BridgeDevice): boolean {
+    const record = this.#exhausted.get(device.id);
+    return (
+      record !== undefined &&
+      record.nameHash === nameHash(device.name) &&
+      this.#now() - record.exhaustedAtMs < DETAIL_DISCOVERY_EXHAUSTED_RETRY_MS
+    );
+  }
+
+  #recordExhaustion(device: BridgeDevice): void {
+    // Cameras are visited every session for their image, so they never count.
+    if (!this.options.exhaustionStore || isCameraImageDevice(device)) return;
+    if ((this.#attempts.get(device.id) ?? 0) < this.#maxAttempts) return;
+    this.#exhausted.set(device.id, {
+      nameHash: nameHash(device.name),
+      exhaustedAtMs: this.#now()
+    });
+    try {
+      this.options.exhaustionStore.save(this.#exhausted);
+    } catch {
+      // Persisting is best effort; the in-memory ledger still applies.
+    }
+  }
+}
+
+function nameHash(name: string): string {
+  return createHash("sha256").update(name).digest("hex");
 }
 
 function safeFailureReason(error: unknown): string {

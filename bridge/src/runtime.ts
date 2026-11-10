@@ -23,6 +23,7 @@ import { SessionMaintenanceGate } from "./browser/session-maintenance.js";
 import { BrowserSupervisor } from "./browser/browser-supervisor.js";
 import { SmartThingsWebUiCommandExecutor } from "./browser/command-page.js";
 import { DeviceDetailDiscovery } from "./browser/device-detail-discovery.js";
+import { FileDetailDiscoveryStore } from "./state/detail-discovery-store.js";
 import { AuthenticatedSmartThingsSession } from "./advanced/authenticated-session.js";
 import { AdvancedInventoryAdapter } from "./advanced/inventory-adapter.js";
 import { AdvancedCommandAdapter } from "./advanced/command-adapter.js";
@@ -550,6 +551,7 @@ export async function createBridgeRuntime(deps: BridgeRuntimeDependencies): Prom
     inventory: () => devices.snapshot(),
     inspector: legacyCommandExecutor,
     resolveCameraImageUrl: (deviceId) => cameraImages.thumbnailRequestUrl(deviceId),
+    exhaustionStore: new FileDetailDiscoveryStore(paths.dataDir),
     canInspect: () => {
       const report = createHealthReport(status.getSnapshot());
       return (
