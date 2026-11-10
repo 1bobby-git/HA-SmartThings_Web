@@ -53,9 +53,11 @@ from .models import (
     is_fan_device,
     is_image_device,
     is_media_device,
+    is_readonly_appliance_switch,
     location_name,
     number_controls,
     noncanonical_refresh_controls,
+    occupancy_source_states,
     primary_switch_state,
     room_free_display_name,
     secondary_switch_name_overrides,
@@ -572,10 +574,23 @@ def _migrate_entity_registry(
             for state in device.states.values()
         ):
             stale_null_update_ids.add(f"{device.device_id}_firmware_update")
+        firmware_keys = {state.key for state in firmware.values()}
         for state in firmware.values():
             stale_firmware_sensor_ids.add(entity_unique_id(device.device_id, state))
         for state in device.states.values():
-            if state.attribute in FIRMWARE_ATTRIBUTES:
+            # Same rule as the sensor platform: firmware-named attributes are
+            # only firmware when they belong to a coherent firmware group.
+            # Otherwise the platform creates them and removing them here made
+            # them flap on every start.
+            if state.attribute in FIRMWARE_ATTRIBUTES and not (
+                state_has_entity_value(state)
+                and sensor_state_allowed(
+                    state.attribute,
+                    firmware=state.key in firmware_keys,
+                    image_device=image_device,
+                    primary_domain=sensor_state_owned_by_primary_domain(device, state),
+                )
+            ):
                 stale_firmware_sensor_ids.add(entity_unique_id(device.device_id, state))
             if state.attribute == "button":
                 stale_event_sensor_ids.add(entity_unique_id(device.device_id, state))
@@ -605,7 +620,10 @@ def _migrate_entity_registry(
             old_unique_id = f"{new_unique_id}_{state.attribute}"
             old_to_new[old_unique_id] = new_unique_id
             if state.attribute == "switch":
-                switch_ids.update((old_unique_id, new_unique_id))
+                switch_ids.add(old_unique_id)
+                # Read-only appliance power is a binary_sensor by design.
+                if not is_readonly_appliance_switch(device):
+                    switch_ids.add(new_unique_id)
                 if control_kind(device, state) is None:
                     stale_unobserved_switch_ids.add(new_unique_id)
                 if is_media_device(device) or is_fan_device(device):
@@ -695,6 +713,8 @@ def _migrate_entity_registry(
             expected_uids.add(f"{device.device_id}_image")
         if firmware_states(device):
             expected_uids.add(f"{device.device_id}_firmware_update")
+        for state in occupancy_source_states(device):
+            expected_uids.add(f"{device.device_id}_{state.component}_occupancy")
 
     stale_duplicate_rows: list[object] = []
     removed_entity_ids: set[str] = set()
