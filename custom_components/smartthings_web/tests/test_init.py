@@ -734,6 +734,60 @@ class EntityRegistryMigrationTests(unittest.TestCase):
 
         self.assertEqual(registry.removed, ["select.counter_gone"])
 
+    def test_keeps_entities_the_platforms_create_on_every_start(self) -> None:
+        def st(component: str, capability: str, attribute: str, value: object) -> BridgeState:
+            return BridgeState(component, capability, attribute, value, None, "2026-11-10T00:00:00Z")
+
+        def dev(device_id: str, name: str, device_type: str | None, *states: BridgeState) -> BridgeDevice:
+            return BridgeDevice(
+                device_id=device_id, location_id="loc_001", room_id=None, name=name,
+                device_type=device_type, online=True, states={s.key: s for s in states},
+            )
+
+        monitor_state = st("main", "identifier_2f71", "state", "off")
+        monitor_update = st("main", "identifier_5176", "updateAvailable", False)
+        dryer_power = st("main", "switch", "switch", "off")
+        occupancy = st("main", "occupancySensor", "occupancy", "occupied")
+        fw = (
+            st("main", "firmwareUpdate", "currentVersion", "1.0"),
+            st("main", "firmwareUpdate", "availableVersion", "1.1"),
+            st("main", "firmwareUpdate", "state", "normalOperation"),
+        )
+        devices = {
+            "dev_452": dev("dev_452", "Monitor", None, monitor_state, monitor_update),
+            "dev_318": dev("dev_318", "Dryer", "dryer", dryer_power),
+            "dev_344": dev("dev_344", "Counter", None, occupancy),
+            "dev_900": dev("dev_900", "Hub", None, *fw),
+        }
+        registry = FakeRegistry(
+            [
+                entity("sensor.monitor_state", "sensor", "dev_452_main_identifier_2f71_state"),
+                entity("sensor.monitor_update_available", "sensor", "dev_452_main_identifier_5176_updateAvailable"),
+                entity("binary_sensor.dryer_power", "binary_sensor", "dev_318_main_switch_switch"),
+                entity("binary_sensor.counter_occupancy", "binary_sensor", "dev_344_main_occupancy"),
+                entity("sensor.hub_firmware_state", "sensor", "dev_900_main_firmwareUpdate_state"),
+            ]
+        )
+        self.patch_registry(registry)
+
+        _migrate_entity_registry(
+            object(),
+            SimpleNamespace(entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"}),
+            BridgeInventory(
+                sequence=1,
+                ready=True,
+                bridge_version="0.1.38",
+                protocol_version="2",
+                locations={"loc_001": "Home"},
+                rooms={},
+                devices=devices,
+            ),
+        )
+
+        # Only the raw sensor of a coherent firmware group is stale; the update
+        # entity owns it. Everything else is what the platforms create.
+        self.assertEqual(registry.removed, ["sensor.hub_firmware_state"])
+
     def test_updates_control_number_unique_id_when_state_number_is_missing(self) -> None:
         registry = FakeRegistry(
             [
