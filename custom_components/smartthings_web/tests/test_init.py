@@ -788,6 +788,80 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         # entity owns it. Everything else is what the platforms create.
         self.assertEqual(registry.removed, ["sensor.hub_firmware_state"])
 
+    def test_runtime_inventory_change_never_removes_entities(self) -> None:
+        """A periodic Bridge resync can publish a partial inventory for a moment.
+
+        Only the setup passes may remove rows; later topology changes defer
+        removal to the next start, because platforms never re-add an entity
+        they already created in this run.
+        """
+        from smartthings_web.command_controls import command_suffix
+        from smartthings_web.models import BridgeCommandDescriptor
+
+        button_command = BridgeCommandDescriptor(
+            "identifier_c9246e0ac435", "identifier_df9ead01127d", 1, "refresh", (), "advanced",
+            "accepted_receipt", "refresh", "capability", "main",
+        )
+        state = BridgeState("main", "temperatureMeasurement", "temperature", 21, "C", "2026-11-10T00:00:00Z")
+
+        def device(commands: tuple, device_type: str | None) -> BridgeDevice:
+            return BridgeDevice(
+                device_id="dev_344", location_id="loc_001", room_id=None, name="Counter",
+                device_type=device_type, online=True, states={state.key: state}, commands=commands,
+            )
+
+        def inventory(dev: BridgeDevice, sequence: int) -> BridgeInventory:
+            return BridgeInventory(
+                sequence=sequence, ready=True, bridge_version="1.8.72", protocol_version="6",
+                locations={"loc_001": "Home"}, rooms={}, devices={"dev_344": dev},
+            )
+
+        button_uid = f"dev_344_{command_suffix('button', button_command)}"
+        registry = FakeRegistry(
+            [
+                entity("button.counter_refresh", "button", button_uid),
+                entity("select.counter_gone", "select", "dev_344_select_gone"),
+            ]
+        )
+        self.patch_registry(registry)
+        scheduled: list[Callable[[], None]] = []
+        delayed: list[tuple[float, Callable[[], None]]] = []
+        hass = SimpleNamespace(
+            loop=SimpleNamespace(
+                call_soon=lambda callback: scheduled.append(callback),
+                call_later=lambda delay, callback: (
+                    delayed.append((delay, callback)) or SimpleNamespace(cancel=lambda: None)
+                ),
+            ),
+        )
+        callbacks: list[Callable[[], None]] = []
+        runtime = SimpleNamespace(
+            inventory=inventory(device((button_command,), "counter"), 1),
+            subscribe=lambda callback: callbacks.append(callback) or (lambda: None),
+        )
+        entry = SimpleNamespace(
+            entry_id="entry_001", data={CONF_LOCATION_ID: "loc_001"},
+            runtime_data=runtime, async_on_unload=lambda callback: None,
+        )
+
+        _subscribe_entity_registry_migration(hass, entry)
+        scheduled.pop(0)()
+        delayed.pop(0)[1]()
+        scheduled.pop(0)()
+        # Setup passes still clean up rows the inventory no longer produces.
+        self.assertEqual(registry.removed, ["select.counter_gone"])
+
+        # Resync: same device, metadata and command catalog not rebuilt yet.
+        runtime.inventory = inventory(device((), None), 2)
+        callbacks[0]()
+        while scheduled or delayed:
+            if scheduled:
+                scheduled.pop(0)()
+            else:
+                delayed.pop(0)[1]()
+
+        self.assertEqual(registry.removed, ["select.counter_gone"])
+
     def test_updates_control_number_unique_id_when_state_number_is_missing(self) -> None:
         registry = FakeRegistry(
             [
@@ -1388,7 +1462,7 @@ class EntityRegistryMigrationTests(unittest.TestCase):
         migrations: list[int] = []
         original_migration = integration._migrate_entity_registry
         integration._migrate_entity_registry = (
-            lambda _hass, _entry, inventory: migrations.append(inventory.sequence)
+            lambda _hass, _entry, inventory, **_kwargs: migrations.append(inventory.sequence)
         )
         try:
             unsubscribe = _subscribe_entity_registry_migration(hass, entry)
