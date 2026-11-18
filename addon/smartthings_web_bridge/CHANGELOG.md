@@ -1,3 +1,9 @@
+## 1.8.76
+
+- 보안: Bridge 컨테이너의 Node.js를 체크섬 검증된 24.22.3으로 올렸습니다. 2026-11-11 Node.js 보안 릴리스(CVE-2026-123864 HTTPS 힙 노출, CVE-2026-123877 `https.Agent` TLS 세션 재사용 인증서 검증 우회, CVE-2026-123872 TLS 재협상 servername 변경 등 HTTP/2·TLS 취약점 16건)를 반영합니다. CI도 같은 버전을 씁니다.
+- nginx(NGINX2Root, 2026-11-18): Bridge의 nginx는 HA ingress용 평문 HTTP(8099/8100)만 듣고 HTTP/2·TLS·QUIC·resolver·mail·stream·`try_files`를 쓰지 않아 공개된 취약 경로에 해당하지 않습니다. Ubuntu 패키지 수정판이 나오면 이미지 재빌드로 반영합니다.
+- 이 변경은 Bridge 앱 업데이트가 필요합니다. Bridge 앱과 HACS 통합 버전은 1.8.76입니다. 통합 코드와 Bridge 동작은 바뀌지 않았습니다.
+
 ## 1.8.75
 
 - Bridge: Bridge가 시작될 때마다 상세 조회가 모든 기기의 SmartThings 페이지를 다시 열어, 시작 후 약 3시간 동안 Bridge CPU가 30~40%로 높던 문제를 수정했습니다(239대 기준 약 319회 조회). 조회가 끝나면 2~3%로 돌아왔습니다.
