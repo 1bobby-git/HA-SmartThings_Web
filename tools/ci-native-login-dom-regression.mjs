@@ -142,7 +142,7 @@ try {
     assert.equal(await toggles(page), 0);
   });
   await scenario('large dashboard OFF -> ON uses only the actual switch once', { large: true }, async page => {
-    assert.deepEqual(await ensureNativeKeepSignedIn(page, target, { enabled: true }), {
+    assert.deepEqual(await ensureNativeKeepSignedIn(page, target, { enabled: true, timeoutMs: 5_000 }), {
       report: { state: 'enabled', reason: 'enabled_and_verified' }, clean: true
     });
     assert.equal(await toggles(page), 1);
