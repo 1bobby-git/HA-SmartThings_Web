@@ -81,9 +81,12 @@ export async function ensureNativeKeepSignedIn(
   if (!options.enabled) return report("disabled", "automation_disabled");
   if (!nativeLoginTarget(target) || page.url() !== target || page.isClosed()) return report("attention", "invalid_target", false);
   if (!supportsNativeLoginPolicy(page)) return report("attention", "browser_unsupported");
+  // One per-step budget for every DOM probe of this run. The guard scans the whole document; a fixed 1.5 s
+  // bound timed out on large dashboards on slow hosts while every later probe already allowed `timeout`.
+  const timeout = Math.max(100, Math.min(5_000, options.timeoutMs ?? 3_000));
   let settingsOpen = false;
   try {
-    const guard = await bounded(page.evaluate!(inspectLoginSettingsDom, { action: "guard", marker: "", target }), 1_500);
+    const guard = await bounded(page.evaluate!(inspectLoginSettingsDom, { action: "guard", marker: "", target }), timeout);
     settingsOpen = guard.settingsOpen === true;
     if (guard.result === "blocked" || guard.result === "ambiguous") return report("attention", guard.reason ?? (guard.result === "ambiguous" ? "ambiguous" : "blocked"), false);
   } catch { return report("attention", "ui_timeout", false); }
@@ -96,7 +99,6 @@ export async function ensureNativeKeepSignedIn(
   if (existingPreference?.state === "enabled") return { report: existingPreference, clean: !settingsOpen };
   const marker = randomUUID();
   const selector = `[${MARKER}="${marker}"]`;
-  const timeout = Math.max(100, Math.min(5_000, options.timeoutMs ?? 3_000));
   const valid = () => !page.isClosed() && page.url() === target && (options.canContinue?.() ?? true);
   const focusOwnedPage = async () => {
     if (!valid()) throw new Error("page_changed");
