@@ -1,9 +1,9 @@
 {
-  "bridge_version": "1.8.75",
+  "bridge_version": "1.8.76",
   "protocol_version": 6,
   "playwright_version": "1.65.0",
   "expected_chromium_version": "158.0.8127.18",
   "expected_chromium_revision": "1254",
   "local_node_version": "24.15.0",
-  "container_node_version": "24.22.1"
+  "container_node_version": "24.22.3"
 }
